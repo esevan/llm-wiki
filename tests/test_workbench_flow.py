@@ -32,9 +32,17 @@ class FakeProvider:
                 "detail": "## Context\nDecisions are scattered.\n\n## Desired outcome\nTrusted decisions are easy to find.",
             }
         if schema_name == "problems refinement":
-            return {"title": "Find approved decisions", "detail": "## Context\nDecisions are scattered.\n\n## Impact\nPeople lose time finding trusted decisions.\n\n## Evidence\nThe team reports difficulty finding decisions.\n\n## Desired outcome\nDecisions are easy to find.\n\n## Boundaries\nNo migration is assumed.\n\n## Open questions\nNot yet known."}
+            return {
+                "title": "Find approved decisions",
+                "detail": "## Context\nDecisions are scattered.\n\n## Impact\nPeople lose time finding trusted decisions.\n\n## Evidence\nThe team reports difficulty finding decisions.\n\n## Desired outcome\nDecisions are easy to find.\n\n## Boundaries\nNo migration is assumed.\n\n## Open questions\nNot yet known.",
+            }
         if schema_name == "problems draft":
-            return {"title": "One decision home", "outcome": "Approved decisions are easy to find", "non_goals": "No migration", "validation_criteria": "- [ ] A person can find an approved decision"}
+            return {
+                "title": "One decision home",
+                "outcome": "Approved decisions are easy to find",
+                "non_goals": "No migration",
+                "validation_criteria": "- [ ] A person can find an approved decision",
+            }
         if schema_name == "features refinement":
             return {"title": "One decision home", "detail": "People find trusted decisions"}
         raise AssertionError(f"Unexpected schema: {schema_name}")
@@ -76,9 +84,7 @@ def test_workbench_chat_allows_explanations_beyond_the_old_240_character_limit(t
         response = client.post(f"/api/captures/{capture['id']}/chat", json={"message": "Help me understand this"})
 
     streamed_text = "".join(
-        line.removeprefix("data: ")
-        for line in response.text.splitlines()
-        if line.startswith("data: x")
+        line.removeprefix("data: ") for line in response.text.splitlines() if line.startswith("data: x")
     )
     assert len(streamed_text) == 1_200
 
@@ -97,7 +103,11 @@ def test_problem_chat_receives_the_same_visible_focus_as_preview(tmp_path: Path,
 
     assert response.status_code == 200
     visible_focus = ", ".join(item["label"] for item in preview["focus"])
-    focus_messages = [message["content"] for message in FocusCapturingProvider.messages if "visible Refinement Preview" in message["content"]]
+    focus_messages = [
+        message["content"]
+        for message in FocusCapturingProvider.messages
+        if "visible Refinement Preview" in message["content"]
+    ]
     assert len(focus_messages) == 1
     assert visible_focus in focus_messages[0]
     assert "only on this focus group" in focus_messages[0]
@@ -117,7 +127,11 @@ def test_live_chat_uses_request_start_locale_once(tmp_path: Path, monkeypatch) -
             headers={"X-LLM-Wiki-Locale": "ko"},
         )
     assert response.status_code == 200
-    locale_messages = [message["content"] for message in FocusCapturingProvider.messages if "Respond only in natural" in message["content"]]
+    locale_messages = [
+        message["content"]
+        for message in FocusCapturingProvider.messages
+        if "Respond only in natural" in message["content"]
+    ]
     assert len(locale_messages) == 1
     assert "Korean" in locale_messages[0]
 
@@ -129,11 +143,20 @@ def test_one_bilingual_draft_call_supplies_stored_problem_versions(tmp_path: Pat
     BilingualDraftProvider.calls = 0
     with TestClient(app) as client:
         capture = client.post("/api/captures", json={"text": "결정이 흩어져 있다"}).json()
-        draft = finish(client, app, client.post(f"/api/captures/{capture['id']}/draft", headers={"X-LLM-Wiki-Locale": "ko"}), BilingualDraftProvider())
+        draft = finish(
+            client,
+            app,
+            client.post(f"/api/captures/{capture['id']}/draft", headers={"X-LLM-Wiki-Locale": "ko"}),
+            BilingualDraftProvider(),
+        )
         assert set(draft["localized_versions"]) == {"ko", "en"}
         problem = client.post(
             f"/api/captures/{capture['id']}/promote",
-            json={"statement": draft["title"], "detail": draft["detail"], "localized_versions": draft["localized_versions"]},
+            json={
+                "statement": draft["title"],
+                "detail": draft["detail"],
+                "localized_versions": draft["localized_versions"],
+            },
         ).json()
         english = client.get("/api/board", headers={"X-LLM-Wiki-Locale": "en"}).json()["problems"][0]
         korean = client.get("/api/board", headers={"X-LLM-Wiki-Locale": "ko"}).json()["problems"][0]
@@ -150,11 +173,24 @@ def test_workbench_ai_and_human_actions_follow_the_inbox_to_problem_flow(tmp_pat
 
     with TestClient(app) as client:
         capture = client.post("/api/captures", json={"text": "Decisions are scattered"}).json()
-        assert client.post(f"/api/captures/{capture['id']}/chat", json={"message": "It affects my team"}).status_code == 200
+        assert (
+            client.post(f"/api/captures/{capture['id']}/chat", json={"message": "It affects my team"}).status_code
+            == 200
+        )
         refinement = finish(client, app, client.post(f"/api/captures/{capture['id']}/refine"), FakeProvider())
         assert refinement["source_note"] == "Decisions are scattered"
-        assert client.put(f"/api/items/captures/{capture['id']}", json={"title": refinement["title"], "detail": ""}).status_code == 204
-        assert client.post(f"/api/captures/{capture['id']}/next-chat", json={"message": "People need trusted decisions"}).status_code == 200
+        assert (
+            client.put(
+                f"/api/items/captures/{capture['id']}", json={"title": refinement["title"], "detail": ""}
+            ).status_code
+            == 204
+        )
+        assert (
+            client.post(
+                f"/api/captures/{capture['id']}/next-chat", json={"message": "People need trusted decisions"}
+            ).status_code
+            == 200
+        )
         problem_draft = finish(client, app, client.post(f"/api/captures/{capture['id']}/draft"), FakeProvider())
         problem = client.post(
             f"/api/captures/{capture['id']}/promote",
@@ -165,21 +201,45 @@ def test_workbench_ai_and_human_actions_follow_the_inbox_to_problem_flow(tmp_pat
         assert board["problems"][0]["id"] == problem["id"]
         refined_problem = finish(client, app, client.post(f"/api/problems/{problem['id']}/refine"), FakeProvider())
         assert "## Context" in refined_problem["detail"]
-        assert client.put(f"/api/items/problems/{problem['id']}", json={"title": refined_problem["title"], "detail": refined_problem["detail"]}).status_code == 204
+        assert (
+            client.put(
+                f"/api/items/problems/{problem['id']}",
+                json={"title": refined_problem["title"], "detail": refined_problem["detail"]},
+            ).status_code
+            == 204
+        )
         assert "## Context" in client.get("/api/board").json()["problems"][0]["detail"]
         assert client.post(f"/api/problems/{problem['id']}/approve").status_code == 204
 
         feature_draft = finish(client, app, client.post(f"/api/problems/{problem['id']}/draft"), FakeProvider())
         feature = client.post(f"/api/problems/{problem['id']}/features", json=feature_draft).json()
-        assert client.put(f"/api/features/{feature['id']}/conflict", json={"state": "clear", "citation": "context.md#Current"}).status_code == 200
+        assert (
+            client.put(
+                f"/api/features/{feature['id']}/conflict", json={"state": "clear", "citation": "context.md#Current"}
+            ).status_code
+            == 200
+        )
         assert client.post(f"/api/features/{feature['id']}/approve").status_code == 204
-        entry = client.post(f"/api/features/{feature['id']}/progress", json={"body": "Reviewed the decision home", "image_data": "aGVsbG8=", "image_media_type": "image/png"}).json()
-        assert client.post(f"/api/progress/{entry['id']}/comments", json={"body": "The current state is ready for review."}).status_code == 201
+        entry = client.post(
+            f"/api/features/{feature['id']}/progress",
+            json={"body": "Reviewed the decision home", "image_data": "aGVsbG8=", "image_media_type": "image/png"},
+        ).json()
+        assert (
+            client.post(
+                f"/api/progress/{entry['id']}/comments", json={"body": "The current state is ready for review."}
+            ).status_code
+            == 201
+        )
         progress = client.get(f"/api/features/{feature['id']}/progress").json()
         assert progress["entries"][0]["body"] == "Reviewed the decision home"
         assert progress["entries"][0]["comments"][0]["body"] == "The current state is ready for review."
         checklist = client.post(f"/api/features/{feature['id']}/checklist", json={"body": "Confirm the review"}).json()
-        assert client.put(f"/api/checklist/{checklist['id']}", json={"body": "Confirm the review", "checked": True}).status_code == 204
+        assert (
+            client.put(
+                f"/api/checklist/{checklist['id']}", json={"body": "Confirm the review", "checked": True}
+            ).status_code
+            == 204
+        )
         assert client.get(f"/api/features/{feature['id']}/handoff").status_code == 200
 
 

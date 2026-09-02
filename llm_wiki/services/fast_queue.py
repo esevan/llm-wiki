@@ -8,7 +8,6 @@ from dataclasses import dataclass, field
 
 from llm_wiki.adapters.provider import AsyncOpenAICompatibleProvider
 
-
 FastOperation = Callable[[asyncio.Event], AsyncIterator[str]]
 
 
@@ -105,7 +104,9 @@ class FastQueueServer:
                 try:
                     mode = str(payload.get("mode", "stream"))
                     if mode == "json":
-                        result = await provider.complete_json(list(payload["messages"]), str(payload.get("schema_name", "response")))
+                        result = await provider.complete_json(
+                            list(payload["messages"]), str(payload.get("schema_name", "response"))
+                        )
                         yield json.dumps(result, ensure_ascii=False)
                         return
                     if mode == "models":
@@ -143,19 +144,42 @@ class FastQueueClient:
         self.host = host
         self.port = port
 
-    async def stream(self, *, base_url: str, api_key: str, model: str, messages: list[dict[str, object]]) -> AsyncIterator[str]:
-        async for chunk in self._request({"mode": "stream", "base_url": base_url, "api_key": api_key, "model": model, "messages": messages}):
+    async def stream(
+        self, *, base_url: str, api_key: str, model: str, messages: list[dict[str, object]]
+    ) -> AsyncIterator[str]:
+        async for chunk in self._request(
+            {"mode": "stream", "base_url": base_url, "api_key": api_key, "model": model, "messages": messages}
+        ):
             yield chunk
 
-    async def complete_json(self, *, base_url: str, api_key: str, model: str, messages: list[dict[str, object]], schema_name: str) -> dict[str, object]:
-        chunks = [chunk async for chunk in self._request({"mode": "json", "base_url": base_url, "api_key": api_key, "model": model, "messages": messages, "schema_name": schema_name})]
+    async def complete_json(
+        self, *, base_url: str, api_key: str, model: str, messages: list[dict[str, object]], schema_name: str
+    ) -> dict[str, object]:
+        chunks = [
+            chunk
+            async for chunk in self._request(
+                {
+                    "mode": "json",
+                    "base_url": base_url,
+                    "api_key": api_key,
+                    "model": model,
+                    "messages": messages,
+                    "schema_name": schema_name,
+                }
+            )
+        ]
         value = json.loads("".join(chunks))
         if not isinstance(value, dict):
             raise ValueError("Fast Queue JSON result was not an object")
         return value
 
     async def models(self, *, base_url: str, api_key: str, model: str) -> list[str]:
-        chunks = [chunk async for chunk in self._request({"mode": "models", "base_url": base_url, "api_key": api_key, "model": model, "messages": []})]
+        chunks = [
+            chunk
+            async for chunk in self._request(
+                {"mode": "models", "base_url": base_url, "api_key": api_key, "model": model, "messages": []}
+            )
+        ]
         value = json.loads("".join(chunks))
         return [str(item) for item in value]
 

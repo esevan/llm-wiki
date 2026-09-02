@@ -8,8 +8,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
-from llm_wiki.services.jobs import Job, JobNotification
-
+from llm_wiki.core.jobs import Job, JobNotification
 
 router = APIRouter(prefix="/api")
 
@@ -59,7 +58,9 @@ async def job_events(request: Request) -> StreamingResponse:
         sequence = 0
         while not await request.is_disconnected():
             jobs = await request.app.state.job_repository.list()
-            fingerprint = "|".join(f"{job.id}:{job.status.value}:{job.progress_completed}:{job.progress_total}" for job in jobs)
+            fingerprint = "|".join(
+                f"{job.id}:{job.status.value}:{job.progress_completed}:{job.progress_total}" for job in jobs
+            )
             if fingerprint != previous:
                 sequence += 1
                 yield f"id: {sequence}\nevent: jobs\ndata: {json.dumps({'sequence': sequence})}\n\n"
@@ -82,7 +83,12 @@ async def get_job_result(job_id: str, request: Request) -> dict[str, Any]:
     job = await request.app.state.job_repository.get(job_id)
     if not job:
         raise HTTPException(404, "AI job not found")
-    return {"job_id": job.id, "status": job.status.value, "result_interface": job.descriptor.result_interface, "result": job.result}
+    return {
+        "job_id": job.id,
+        "status": job.status.value,
+        "result_interface": job.descriptor.result_interface,
+        "result": job.result,
+    }
 
 
 @router.post("/jobs/{job_id}/cancel")
@@ -104,7 +110,10 @@ async def retry_job(job_id: str, request: Request) -> dict[str, Any]:
 @router.get("/notifications")
 async def list_notifications(request: Request, unread_only: bool = False) -> dict[str, Any]:
     items = await request.app.state.job_repository.notifications(unread_only=unread_only)
-    return {"notifications": [notification_view(item) for item in items], "unread_count": sum(item.read_at is None and item.dismissed_at is None for item in items)}
+    return {
+        "notifications": [notification_view(item) for item in items],
+        "unread_count": sum(item.read_at is None and item.dismissed_at is None for item in items),
+    }
 
 
 @router.post("/notifications/{notification_id}/read")

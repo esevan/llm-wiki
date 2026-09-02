@@ -1,6 +1,5 @@
 import pytest
 
-from llm_wiki.services.handlers.validation import validate_draft, validate_refinement
 from llm_wiki.services.conversation import (
     bilingual_draft_prompt,
     bilingual_refinement_prompt,
@@ -9,6 +8,7 @@ from llm_wiki.services.conversation import (
     refinement_prompt,
     system_prompt,
 )
+from llm_wiki.services.handlers.validation import validate_draft, validate_refinement
 from llm_wiki.services.localization import response_language_instruction
 
 
@@ -69,10 +69,14 @@ def test_live_response_language_instruction_is_single_locale_and_preserves_evide
 
 
 def test_visible_preview_focus_constrains_the_actual_next_question() -> None:
-    prompt = refinement_focus_prompt({"focus": [
-        {"key": "outcome", "label": "Intended outcome", "status": "missing"},
-        {"key": "validation", "label": "Validation criteria", "status": "weak"},
-    ]})
+    prompt = refinement_focus_prompt(
+        {
+            "focus": [
+                {"key": "outcome", "label": "Intended outcome", "status": "missing"},
+                {"key": "validation", "label": "Validation criteria", "status": "weak"},
+            ]
+        }
+    )
     assert "Intended outcome, Validation criteria" in prompt
     assert "only on this focus group" in prompt
     assert "exactly one sharp, open-ended question" in prompt
@@ -98,4 +102,7 @@ def test_drafts_require_the_stage_structure() -> None:
 
 def test_refinement_stays_on_the_current_stage() -> None:
     assert "Do not advance" in refinement_prompt("captures", "Thought", "")
-    assert validate_refinement("features", {"title": "Outcome", "detail": "Detailed intended outcome"})["title"] == "Outcome"
+    assert (
+        validate_refinement("features", {"title": "Outcome", "detail": "Detailed intended outcome"})["title"]
+        == "Outcome"
+    )

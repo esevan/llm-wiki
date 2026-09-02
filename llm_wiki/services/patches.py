@@ -40,7 +40,7 @@ def propose_section_patch(current: str, operation: str, heading: str, content: s
             proposed = current[:index] + f"# {heading}\n\n{content.rstrip()}\n" + current[end:]
         else:
             line_end = current.find("\n", index)
-            proposed = current[:line_end + 1] + f"\n{content.rstrip()}\n" + current[line_end + 1:]
+            proposed = current[: line_end + 1] + f"\n{content.rstrip()}\n" + current[line_end + 1 :]
     return SectionPatch(operation, heading, content, digest(current), current, proposed)
 
 

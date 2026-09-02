@@ -2,7 +2,9 @@ from llm_wiki.services.markdown import parse_markdown
 
 
 def test_obsidian_markdown_signals_are_extracted() -> None:
-    doc = parse_markdown("projects/roadmap.md", """---
+    doc = parse_markdown(
+        "projects/roadmap.md",
+        """---
 aliases: [Plan 2026, roadmap]
 tags:
   - work/strategy
@@ -13,7 +15,8 @@ Use [[prior/decision#Keep it local|the decision]], ![[diagram.png]], and [[note#
 ```md
 # not-a-heading
 ```
-""")
+""",
+    )
     assert doc.aliases == ("Plan 2026", "roadmap")
     assert doc.headings == ("Direction",)
     assert set(doc.tags) == {"work/strategy", "urgent/today"}

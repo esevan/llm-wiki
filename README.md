@@ -95,7 +95,12 @@ default. Every choice remains user-configurable in Advanced options.
 Every specification, plan, implementation, and review must pass the Product Spirit Review Gate in
 the [project constitution](.specify/memory/constitution.md).
 
+Backend layers, dependency direction, and the authoritative AI task module map are documented in
+the [backend architecture guide](docs/architecture.md).
+
 ```text
+uv run ruff check .
+uv run ruff format --check .
 uv run pytest -q
 uv run python benchmarks.py
 ```

@@ -3,13 +3,15 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from typing import Any
 
-from llm_wiki.services.handlers.registry import HandlerRegistry
-from llm_wiki.services.handlers.worker import AsyncJobWorker
-from llm_wiki.services.handlers.workflow import WorkflowJobHandlers
-from llm_wiki.services.handlers.localization import LocalizationJobHandlers
 from llm_wiki.services.completion_archive import CompletionArchivePublisher
+from llm_wiki.services.handlers.catalog import (
+    register_translation_handlers,
+    register_workflow_handlers,
+)
 from llm_wiki.services.handlers.completion_report import CompletionReportHandler
 from llm_wiki.services.handlers.lineage import LineageInferenceHandler
+from llm_wiki.services.handlers.registry import HandlerRegistry
+from llm_wiki.services.handlers.worker import AsyncJobWorker
 
 
 class AsyncJSONProvider:
@@ -75,21 +77,32 @@ class FastAdapter:
 
 async def run_workflow_job(app: object, job_id: str, provider: object) -> None:
     registry = HandlerRegistry()
-    WorkflowJobHandlers(app.state.workflow, app.state.provider_settings, lambda _task: AsyncAdapter(provider)).register(registry)  # type: ignore[attr-defined]
+    register_workflow_handlers(
+        registry,
+        app.state.workflow,  # type: ignore[attr-defined]
+        app.state.provider_settings,  # type: ignore[attr-defined]
+        lambda _task: AsyncAdapter(provider),
+    )
     assert await AsyncJobWorker(app.state.job_repository, registry).run_job(job_id)  # type: ignore[attr-defined]
 
 
 async def run_localization_job(app: object, job_id: str, provider: object) -> None:
     registry = HandlerRegistry()
-    handlers = LocalizationJobHandlers(app.state.workflow, app.state.provider_settings, app.state.vault)  # type: ignore[attr-defined]
-    handlers._provider = lambda: AsyncAdapter(provider)  # type: ignore[method-assign]
-    handlers.register(registry)
+    register_translation_handlers(
+        registry,
+        app.state.workflow,  # type: ignore[attr-defined]
+        app.state.provider_settings,  # type: ignore[attr-defined]
+        app.state.vault,  # type: ignore[attr-defined]
+        lambda _task: AsyncAdapter(provider),
+    )
     assert await AsyncJobWorker(app.state.job_repository, registry).run_job(job_id)  # type: ignore[attr-defined]
 
 
 async def run_completion_report_job(app: object, job_id: str, provider: object) -> None:
     registry = HandlerRegistry()
-    publisher = CompletionArchivePublisher(app.state.workflow, app.state.retrieval, app.state.vault, app.state.knowledge_cache)  # type: ignore[attr-defined]
+    publisher = CompletionArchivePublisher(
+        app.state.workflow, app.state.retrieval, app.state.vault, app.state.knowledge_cache
+    )  # type: ignore[attr-defined]
     handler = CompletionReportHandler(publisher, app.state.provider_settings, lambda: AsyncAdapter(provider))  # type: ignore[attr-defined]
     handler.register(registry)
     assert await AsyncJobWorker(app.state.job_repository, registry).run_job(job_id)  # type: ignore[attr-defined]

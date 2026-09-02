@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import sqlite3
 import hashlib
+import sqlite3
 
 import pytest
 
@@ -95,8 +95,20 @@ def test_localized_store_overlays_registered_fields_and_preserves_legacy_origina
 def test_localized_store_bulk_overlay_and_manual_partial_supplement_fall_back_per_field() -> None:
     store = LocalizedContentStore(database())
     rows = [
-        {"id": "feature-1", "title": "Original one", "outcome": "Outcome one", "non_goals": "None", "validation_criteria": "- [ ] One"},
-        {"id": "feature-2", "title": "Original two", "outcome": "Outcome two", "non_goals": "None", "validation_criteria": "- [ ] Two"},
+        {
+            "id": "feature-1",
+            "title": "Original one",
+            "outcome": "Outcome one",
+            "non_goals": "None",
+            "validation_criteria": "- [ ] One",
+        },
+        {
+            "id": "feature-2",
+            "title": "Original two",
+            "outcome": "Outcome two",
+            "non_goals": "None",
+            "validation_criteria": "- [ ] Two",
+        },
     ]
     store.supplement("features", "feature-1", "ko", {"title": "첫 번째"})
 
@@ -161,14 +173,17 @@ def test_knowledge_cache_hits_only_the_exact_path_locale_and_source_hash() -> No
 def test_knowledge_cache_rejects_changed_source_at_commit_and_supports_invalidation() -> None:
     cache = KnowledgeTranslationCache(database())
 
-    assert cache.put(
-        "Knowledge/Result.md",
-        "ko",
-        "old-hash",
-        "stale translation",
-        "test-model",
-        current_source_hash="new-hash",
-    ) is False
+    assert (
+        cache.put(
+            "Knowledge/Result.md",
+            "ko",
+            "old-hash",
+            "stale translation",
+            "test-model",
+            current_source_hash="new-hash",
+        )
+        is False
+    )
     assert cache.get("Knowledge/Result.md", "ko", "old-hash") is None
     assert cache.put("Knowledge/Result.md", "ko", "new-hash", "현재 번역", "test-model") is True
     assert cache.invalidate("Knowledge/Result.md") == 1

@@ -14,11 +14,11 @@ _CODE_FENCE = re.compile(r"^```.*?^```[ \t]*$", re.MULTILINE | re.DOTALL)
 
 
 def _scalar(value: str) -> object:
-    value = value.strip().strip('"\'')
+    value = value.strip().strip("\"'")
     if value.lower() in {"true", "false"}:
         return value.lower() == "true"
     if value.startswith("[") and value.endswith("]"):
-        return [part.strip().strip('"\'') for part in value[1:-1].split(",") if part.strip()]
+        return [part.strip().strip("\"'") for part in value[1:-1].split(",") if part.strip()]
     return value
 
 
@@ -39,15 +39,20 @@ def parse_frontmatter(text: str) -> tuple[dict[str, object], str]:
             key, value = raw.split(":", 1)
             active_list = key.strip()
             data[active_list] = _scalar(value) if value.strip() else []
-    return data, text[match.end():]
+    return data, text[match.end() :]
 
 
 def parse_wikilink(raw: str, embed: bool = False) -> Link:
     target_label, *label = raw.split("|", 1)
     target, sep, anchor = target_label.strip().partition("#")
     block_id = anchor[1:] if anchor.startswith("^") else None
-    return Link(target=target, label=label[0].strip() if label else None,
-                anchor=anchor if sep and not block_id else None, block_id=block_id, embed=embed)
+    return Link(
+        target=target,
+        label=label[0].strip() if label else None,
+        anchor=anchor if sep and not block_id else None,
+        block_id=block_id,
+        embed=embed,
+    )
 
 
 def parse_markdown(path: str, text: str) -> ParsedDocument:
@@ -64,9 +69,17 @@ def parse_markdown(path: str, text: str) -> ParsedDocument:
     aliases = frontmatter.get("aliases", [])
     if isinstance(aliases, str):
         aliases = [aliases]
-    return ParsedDocument(path=path, title=Path(path).stem, content=text, body=body,
-                          frontmatter=frontmatter, headings=headings, tags=tuple(sorted(tags)),
-                          links=links, aliases=tuple(str(a) for a in aliases if a))
+    return ParsedDocument(
+        path=path,
+        title=Path(path).stem,
+        content=text,
+        body=body,
+        frontmatter=frontmatter,
+        headings=headings,
+        tags=tuple(sorted(tags)),
+        links=links,
+        aliases=tuple(str(a) for a in aliases if a),
+    )
 
 
 def content_hash(content: str) -> str:

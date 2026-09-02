@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
+from llm_wiki.core.jobs import JobStatus, TaskDescriptor
 from llm_wiki.repositories.jobs import JobRepository
-from llm_wiki.services.jobs import JobStatus, TaskDescriptor
 
 
 def run(coroutine):
@@ -17,7 +17,11 @@ def run(coroutine):
 def test_job_repository_records_terminal_synchronous_work(tmp_path: Path) -> None:
     repository = JobRepository(tmp_path / "jobs.sqlite")
     run(repository.initialize())
-    job = run(repository.create(TaskDescriptor("workflow_draft", "captures", "capture-1"), {"locale": "ko"}, execution_mode="synchronous"))
+    job = run(
+        repository.create(
+            TaskDescriptor("workflow_draft", "captures", "capture-1"), {"locale": "ko"}, execution_mode="synchronous"
+        )
+    )
     lease = run(repository.claim(job.id, "request-1", lease_seconds=30))
     assert lease is not None
     run(repository.complete(job.id, lease.lease_token, {"title": "Draft"}))
@@ -61,7 +65,11 @@ def test_checkpoint_is_reused_only_for_same_source_and_model(tmp_path: Path) -> 
     job = run(repository.create(TaskDescriptor("knowledge_translation", "knowledge", "note.md"), {}))
     lease = run(repository.claim(job.id, "worker", lease_seconds=30))
     assert lease is not None
-    run(repository.save_checkpoint(job.id, lease.lease_token, "paragraph-1", "hash-a", "model-a", 0, {"markdown": "번역"}))
+    run(
+        repository.save_checkpoint(
+            job.id, lease.lease_token, "paragraph-1", "hash-a", "model-a", 0, {"markdown": "번역"}
+        )
+    )
     assert run(repository.checkpoints(job.id, source_hash="hash-a", model="model-a"))[0].result["markdown"] == "번역"
     assert run(repository.checkpoints(job.id, source_hash="hash-b", model="model-a")) == []
 
@@ -83,15 +91,17 @@ def test_review_completion_and_notification_commit_atomically(tmp_path: Path) ->
     job = run(repository.create(descriptor, {}))
     lease = run(repository.claim(job.id, "worker", lease_seconds=30))
     assert lease is not None
-    run(repository.complete(
-        job.id,
-        lease.lease_token,
-        {"report": "ready"},
-        awaiting_review=True,
-        notification_kind="review_ready",
-        notification_title="Completion review is ready",
-        notification_target={"feature_id": "feature-1"},
-    ))
+    run(
+        repository.complete(
+            job.id,
+            lease.lease_token,
+            {"report": "ready"},
+            awaiting_review=True,
+            notification_kind="review_ready",
+            notification_title="Completion review is ready",
+            notification_target={"feature_id": "feature-1"},
+        )
+    )
     assert run(repository.get(job.id)).status is JobStatus.AWAITING_REVIEW  # type: ignore[union-attr]
     notices = run(repository.notifications(unread_only=True))
     assert len(notices) == 1 and notices[0].job_id == job.id
@@ -103,21 +113,25 @@ def test_automatic_result_and_publication_record_commit_together(tmp_path: Path)
     job = run(repository.create(TaskDescriptor("image_summary", "progress", "entry-1"), {}, source_hash="source-a"))
     lease = run(repository.claim(job.id, "worker", lease_seconds=30))
     assert lease is not None
-    run(repository.complete(
-        job.id,
-        lease.lease_token,
-        {"summary": "done"},
-        publication_kind="solution_work_summary",
-        publication_destination="progress:entry-1",
-        publication_revision="source-a",
-    ))
+    run(
+        repository.complete(
+            job.id,
+            lease.lease_token,
+            {"summary": "done"},
+            publication_kind="solution_work_summary",
+            publication_destination="progress:entry-1",
+            publication_revision="source-a",
+        )
+    )
     publications = run(repository.publications(job.id))
-    assert publications == [{
-        "publication_kind": "solution_work_summary",
-        "target_revision": "source-a",
-        "destination": "progress:entry-1",
-        "published_at": publications[0]["published_at"],
-    }]
+    assert publications == [
+        {
+            "publication_kind": "solution_work_summary",
+            "target_revision": "source-a",
+            "destination": "progress:entry-1",
+            "published_at": publications[0]["published_at"],
+        }
+    ]
 
 
 def test_concurrent_workers_cannot_claim_the_same_job(tmp_path: Path) -> None:

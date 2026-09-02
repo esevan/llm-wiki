@@ -81,7 +81,12 @@ Markdown으로 유지하고, 한국어 열람본은 휴대 가능한 원본을 �
 모든 Spec·Plan·구현·리뷰는 [프로젝트 Constitution](.specify/memory/constitution.md)의 Product
 Spirit Review Gate를 통과해야 합니다.
 
+백엔드 계층, 의존성 방향, AI 작업별 단일 모듈 지도는
+[백엔드 아키텍처 안내](docs/architecture.ko.md)에 정리되어 있습니다.
+
 ```text
+uv run ruff check .
+uv run ruff format --check .
 uv run pytest -q
 uv run python benchmarks.py
 ```

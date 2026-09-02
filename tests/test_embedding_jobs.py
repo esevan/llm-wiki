@@ -4,16 +4,18 @@ import asyncio
 import struct
 from pathlib import Path
 
+from llm_wiki.core.jobs import JobStatus, TaskDescriptor
 from llm_wiki.repositories.jobs import JobRepository
 from llm_wiki.services.handlers.embeddings import EmbeddingJobHandler
 from llm_wiki.services.handlers.registry import HandlerRegistry
 from llm_wiki.services.handlers.worker import AsyncJobWorker
-from llm_wiki.services.jobs import JobStatus, TaskDescriptor
 from llm_wiki.services.retrieval import RetrievalEngine
 from llm_wiki.services.vault import MarkdownVaultAdapter
 
 
-def test_embedding_refresh_is_durable_checkpointed_and_keeps_lexical_search_available(tmp_path: Path, monkeypatch) -> None:
+def test_embedding_refresh_is_durable_checkpointed_and_keeps_lexical_search_available(
+    tmp_path: Path, monkeypatch
+) -> None:
     async def scenario() -> None:
         vault_path = tmp_path / "vault"
         vault_path.mkdir()
@@ -36,7 +38,12 @@ def test_embedding_refresh_is_durable_checkpointed_and_keeps_lexical_search_avai
         repository = JobRepository(db_path)
         await repository.initialize()
         descriptor = TaskDescriptor("embedding_refresh", "vault", "documents", "embedding_coverage")
-        job = await repository.create(descriptor, {"manifest_hash": engine.manifest_hash()}, source_hash=engine.manifest_hash(), model="local-semantic-embedder")
+        job = await repository.create(
+            descriptor,
+            {"manifest_hash": engine.manifest_hash()},
+            source_hash=engine.manifest_hash(),
+            model="local-semantic-embedder",
+        )
         registry = HandlerRegistry()
         EmbeddingJobHandler(engine).register(registry)
         assert engine.search("local")[0].path == "decision.md"

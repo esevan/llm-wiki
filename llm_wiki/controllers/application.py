@@ -1,250 +1,114 @@
-"""HTTP controllers and application dependency wiring."""
+"""HTTP routes bound to an application runtime."""
 
 from __future__ import annotations
 
-from contextlib import asynccontextmanager
-from datetime import date
 import asyncio
 import json
 import sqlite3
+from contextlib import asynccontextmanager
+from datetime import date
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
-from fastapi.responses import PlainTextResponse
-from pydantic import BaseModel, Field
+from fastapi.responses import (
+    FileResponse,
+    JSONResponse,
+    PlainTextResponse,
+    Response,
+    StreamingResponse,
+)
 
-from llm_wiki.services.retrieval import RetrievalEngine
-from llm_wiki.services.vault import MarkdownVaultAdapter
-from llm_wiki.services.workflow import WorkflowEngine, WorkflowError, TRANSITIONS, available_transitions
-from llm_wiki.services.patches import PatchConflict, SectionPatch, apply_reviewed_patch, propose_section_patch
-from llm_wiki.services.patches import digest
-from llm_wiki.services.settings import ProviderSettings
+from llm_wiki.controllers.jobs import job_view
+from llm_wiki.controllers.jobs import router as jobs_router
+from llm_wiki.controllers.schemas import (
+    CaptureIn,
+    ChatIn,
+    CompletionIn,
+    ConflictIn,
+    EnrichIn,
+    FeatureIn,
+    FeatureStageIn,
+    GoalIn,
+    ImportanceIn,
+    LineageCorrectionIn,
+    LineageRegenerateIn,
+    LocaleIn,
+    LocalizedSupplementIn,
+    ManualUpdateIn,
+    PatchIn,
+    ProblemCompletionIn,
+    ProblemIn,
+    ProviderConfigIn,
+    SolutionChecklistIn,
+    SolutionCommentIn,
+    SolutionProgressIn,
+    TransitionIn,
+    WorkbenchCategoryIn,
+    WorkbenchImportanceIn,
+)
+from llm_wiki.core.jobs import TaskDescriptor
 from llm_wiki.services.conversation import refinement_focus_prompt, system_prompt
+from llm_wiki.services.handlers.conflict_review import conflict_source_hash
+from llm_wiki.services.handlers.lineage import lineage_source_hash
+from llm_wiki.services.handlers.organization import organization_items
 from llm_wiki.services.localization import (
-    KnowledgeTranslationCache,
-    VaultKnowledgeTranslationCache,
-    LocaleSettings,
     SUPPORTED_LOCALES,
     load_locale_resources,
     localize_descriptor,
     normalize_locale,
     response_language_instruction,
 )
-from llm_wiki.repositories.jobs import JobRepository
-from llm_wiki.services.jobs import TaskDescriptor
-from llm_wiki.controllers.jobs import job_view, router as jobs_router
-from llm_wiki.services.fast_queue import FastQueueClient
-from llm_wiki.services.handlers.organization import organization_items
-from llm_wiki.services.handlers.conflict_review import conflict_source_hash
-from llm_wiki.services.completion_archive import CompletionArchivePublisher
-from llm_wiki.services.handlers.lineage import lineage_source_hash
-
+from llm_wiki.services.patches import (
+    PatchConflict,
+    SectionPatch,
+    apply_reviewed_patch,
+    digest,
+    propose_section_patch,
+)
+from llm_wiki.services.runtime import ApplicationRuntime
+from llm_wiki.services.workflow import TRANSITIONS, WorkflowError, available_transitions
 
 CHAT_RESPONSE_CHARACTER_LIMIT = 1_200
 
 
-class CaptureIn(BaseModel):
-    text: str = Field(min_length=1, max_length=20_000)
+def create_http_app(runtime: ApplicationRuntime) -> FastAPI:
+    vault = runtime.vault
+    retrieval = runtime.retrieval
+    workflow = runtime.workflow
+    provider_settings = runtime.provider_settings
+    locale_settings = runtime.locale_settings
+    knowledge_cache = runtime.knowledge_cache
+    completion_archive = runtime.completion_archive
+    job_repository = runtime.job_repository
+    fast_queue = runtime.fast_queue
+    job_submission = runtime.job_submission
 
-
-class ProblemIn(BaseModel):
-    statement: str | None = Field(default=None, max_length=20_000)
-    detail: str = Field(default="", max_length=20_000)
-    localized_versions: dict[str, dict[str, str]] | None = None
-
-
-class FeatureIn(BaseModel):
-    title: str = Field(min_length=1, max_length=500)
-    outcome: str = Field(min_length=1, max_length=10_000)
-    non_goals: str = Field(default="", max_length=10_000)
-    validation_criteria: str = Field(min_length=1, max_length=10_000)
-    localized_versions: dict[str, dict[str, str]] | None = None
-
-
-class ConflictAddressIn(BaseModel):
-    basis: str
-    disposition: str | None = None
-    summary: str = Field(default="", max_length=10_000)
-    evidence_source_type: str = Field(default="", max_length=100)
-    evidence_source_id: str = Field(default="", max_length=200)
-    conflict_report_id: str = Field(default="", max_length=200)
-
-
-class ConflictIn(BaseModel):
-    state: str
-    citation: str = Field(default="", max_length=10_000)
-    address: ConflictAddressIn | None = None
-
-
-class LineageRegenerateIn(BaseModel):
-    include_inference: bool = True
-
-
-class LineageCorrectionIn(BaseModel):
-    text: str = Field(min_length=1, max_length=20_000)
-    reason: str = Field(default="", max_length=10_000)
-    current_revision_id: str = Field(default="", max_length=200)
-
-
-class SolutionProgressIn(BaseModel):
-    body: str = Field(default="", max_length=20_000)
-    image_data: str = Field(default="", max_length=12_000_000)
-    image_media_type: str = Field(default="", max_length=100)
-
-
-class SolutionCommentIn(BaseModel):
-    body: str = Field(min_length=1, max_length=10_000)
-
-
-class SolutionChecklistIn(BaseModel):
-    body: str = Field(min_length=1, max_length=10_000)
-    checked: bool = False
-
-
-class ImportanceIn(BaseModel):
-    alignment: int = Field(ge=0, le=5); impact: int = Field(ge=0, le=5); urgency: int = Field(ge=0, le=5); leverage: int = Field(ge=0, le=5)
-    evidence: str = Field(min_length=1, max_length=10_000)
-
-
-class GoalIn(BaseModel):
-    title: str = Field(min_length=1, max_length=500)
-    description: str = Field(default="", max_length=10_000)
-
-
-class CompletionIn(BaseModel):
-    evidence: str = Field(min_length=1, max_length=20_000)
-    report: str = Field(min_length=1, max_length=20_000)
-    no_update_reason: str = Field(default="", max_length=10_000)
-
-
-class PatchIn(BaseModel):
-    path: str = Field(min_length=1)
-    operation: str
-    heading: str = Field(min_length=1)
-    content: str = Field(min_length=1, max_length=50_000)
-
-
-class ProviderConfigIn(BaseModel):
-    base_url: str
-    model: str = ""
-    advanced_model: str = ""
-    api_key: str | None = Field(default=None, min_length=1)
-    advanced_tasks: dict[str, bool] = Field(default_factory=dict)
-    report_language: str | None = Field(default=None, pattern="^(ko|en)$")
-    async_worker_count: int = Field(default=2, ge=1, le=32)
-
-
-class WorkbenchCategoryIn(BaseModel):
-    entity_type: str
-    entity_id: str
-    category: str = Field(min_length=1, max_length=80)
-
-
-class WorkbenchImportanceIn(BaseModel):
-    entity_type: str
-    entity_id: str
-    important: bool
-
-
-class FeatureStageIn(BaseModel):
-    state: str
-
-
-class ProblemCompletionIn(BaseModel):
-    """A human may complete a partially resolved problem and record why."""
-    reason: str = Field(default="", max_length=10_000)
-    review_id: str = Field(default="", max_length=200)
-
-
-class EnrichIn(BaseModel):
-    statement: str = Field(min_length=1, max_length=20_000)
-    citations: list[str] = []
-
-
-class ChatIn(BaseModel):
-    message: str = Field(min_length=1, max_length=10_000)
-
-
-class ManualUpdateIn(BaseModel):
-    title: str = Field(min_length=1, max_length=10_000)
-    detail: str = Field(default="", max_length=10_000)
-    localized_versions: dict[str, dict[str, str]] | None = None
-
-
-class LocaleIn(BaseModel):
-    locale: str
-
-
-class LocalizedSupplementIn(BaseModel):
-    locale: str
-    fields: dict[str, str]
-
-
-class TransitionIn(BaseModel):
-    """A menu-only Workflow Transition with its required input form fields."""
-    transition_id: str = Field(min_length=1, max_length=100)
-    fields: dict[str, object] = Field(default_factory=dict)
-
-
-
-def create_app(vault_path: Path, db_path: Path, *, fast_queue_client: FastQueueClient | None = None) -> FastAPI:
-    vault = MarkdownVaultAdapter(vault_path)
-    retrieval = RetrievalEngine(db_path, vault)
-    workflow = WorkflowEngine(retrieval.db)
-    provider_settings = ProviderSettings(retrieval.db)
-    locale_settings = LocaleSettings(retrieval.db)
-    legacy_knowledge_cache = KnowledgeTranslationCache(retrieval.db)
-    knowledge_cache = VaultKnowledgeTranslationCache(vault, legacy_knowledge_cache)
-    completion_archive = CompletionArchivePublisher(workflow, retrieval, vault, knowledge_cache)
-    job_repository = JobRepository(db_path)
-    fast_queue = fast_queue_client or FastQueueClient()
-    async def enqueue(descriptor: TaskDescriptor, payload: dict[str, object], *, idempotency_key: str = "", source_hash: str = "", model_task: str | None = None) -> JSONResponse:
-        job = await job_repository.create(
+    async def enqueue(
+        descriptor: TaskDescriptor,
+        payload: dict[str, object],
+        *,
+        idempotency_key: str = "",
+        source_hash: str = "",
+        model_task: str | None = None,
+    ) -> JSONResponse:
+        job = await job_submission.enqueue(
             descriptor,
-            {**payload, "entity_type": descriptor.entity_type, "entity_id": descriptor.entity_id},
+            payload,
             idempotency_key=idempotency_key,
             source_hash=source_hash,
-            model=provider_settings.model_for(model_task or descriptor.task_kind),
+            model_task=model_task,
         )
         return JSONResponse(job_view(job), status_code=202)
 
-    async def enqueue_derived(entity_type: str, entity_id: str, field: str, source: str, source_locale: str) -> None:
-        if not source.strip():
-            return
-        source_hash = digest(source)
-        await job_repository.create(
-            TaskDescriptor("derived_translation", entity_type, entity_id, "owning_content"),
-            {"entity_type": entity_type, "entity_id": entity_id, "field": field, "source": source, "source_locale": source_locale},
-            idempotency_key=f"derived-translation:{entity_type}:{entity_id}:{field}:{source_hash}",
-            source_hash=source_hash,
-            model=provider_settings.model_for("knowledge_translation"),
-        )
-
-    async def enqueue_embeddings() -> None:
-        manifest = retrieval.manifest_hash()
-        await job_repository.create(
-            TaskDescriptor("embedding_refresh", "vault", "documents", "embedding_coverage"),
-            {"entity_type": "vault", "entity_id": "documents", "manifest_hash": manifest},
-            idempotency_key=f"embedding-refresh:{manifest}",
-            source_hash=manifest,
-            model="local-semantic-embedder",
-        )
-
-    async def enqueue_completion_report(problem_id: str, *, refresh_lineage: bool) -> str:
-        lineages = completion_archive.lineages(problem_id, refresh=refresh_lineage)
-        source_hash = digest(json.dumps(lineages, sort_keys=True, ensure_ascii=False))
-        job = await job_repository.create(
-            TaskDescriptor("completion_report", "problems", problem_id, "completed_knowledge"),
-            {"entity_type": "problems", "entity_id": problem_id, "refresh_lineage": False},
-            idempotency_key=f"completion-report:{problem_id}:{source_hash}",
-            source_hash=source_hash,
-            model=provider_settings.model_for("completion_report"),
-        )
-        return job.id
+    enqueue_derived = job_submission.enqueue_derived_translation
+    enqueue_embeddings = job_submission.enqueue_embeddings
+    enqueue_completion_report = job_submission.enqueue_completion_report
 
     async def watch_vault() -> None:
-        from watchfiles import awatch  # keep file-watching out of local request hot paths
+        from watchfiles import (
+            awatch,  # keep file-watching out of local request hot paths
+        )
+
         async for _changes in awatch(vault.root):
             knowledge_cache.cleanup()
             await asyncio.to_thread(retrieval.index_changed)
@@ -332,13 +196,23 @@ def create_app(vault_path: Path, db_path: Path, *, fast_queue_client: FastQueueC
                     await app.state.index_condition.wait_for(lambda: app.state.index_revision != revision)
                     revision = app.state.index_revision
                 yield f"event: indexed\ndata: {revision}\n\n"
+
         return StreamingResponse(stream(), media_type="text/event-stream", headers={"Cache-Control": "no-cache"})
 
     @app.get("/api/search")
-    async def search(q: str = Query(min_length=1, max_length=500), limit: int = Query(20, ge=1, le=100), offset: int = Query(0, ge=0), semantic: bool = False) -> dict[str, object]:
+    async def search(
+        q: str = Query(min_length=1, max_length=500),
+        limit: int = Query(20, ge=1, le=100),
+        offset: int = Query(0, ge=0),
+        semantic: bool = False,
+    ) -> dict[str, object]:
         if semantic and retrieval.status()["semantic_ready"] < retrieval.status()["documents"]:
             await enqueue_embeddings()
-        return {"query": q, "offset": offset, "results": [result.__dict__ for result in retrieval.search(q, limit, semantic, offset)]}
+        return {
+            "query": q,
+            "offset": offset,
+            "results": [result.__dict__ for result in retrieval.search(q, limit, semantic, offset)],
+        }
 
     @app.post("/api/captures", status_code=201)
     async def capture(data: CaptureIn, request: Request) -> dict[str, str]:
@@ -363,7 +237,9 @@ def create_app(vault_path: Path, db_path: Path, *, fast_queue_client: FastQueueC
         return {"transitions": localize_descriptor(TRANSITIONS, request.state.locale)}
 
     @app.get("/api/transitions/{entity_type}/{entity_id}")
-    def list_transitions_for_item(entity_type: str, entity_id: str, request: Request) -> dict[str, list[dict[str, object]]]:
+    def list_transitions_for_item(
+        entity_type: str, entity_id: str, request: Request
+    ) -> dict[str, list[dict[str, object]]]:
         """Return transitions available for a specific item, filtered by its current state."""
         try:
             entity = None
@@ -373,7 +249,9 @@ def create_app(vault_path: Path, db_path: Path, *, fast_queue_client: FastQueueC
                     entity = dict(row)
             if entity is None:
                 raise WorkflowError("Item not found")
-            return {"transitions": localize_descriptor(available_transitions(entity_type, entity), request.state.locale)}
+            return {
+                "transitions": localize_descriptor(available_transitions(entity_type, entity), request.state.locale)
+            }
         except WorkflowError as error:
             raise HTTPException(404, str(error)) from error
 
@@ -388,11 +266,17 @@ def create_app(vault_path: Path, db_path: Path, *, fast_queue_client: FastQueueC
             result = workflow.apply_transition(data.transition_id, entity_type, entity_id, data.fields)
             # The solution_to_completed transition completes the Problem and writes
             # the completion playbook, so the frontend gets the archive path back.
-            if data.transition_id == "solution_to_completed" and "problem_id" in result and not result.get("note_skipped"):
+            if (
+                data.transition_id == "solution_to_completed"
+                and "problem_id" in result
+                and not result.get("note_skipped")
+            ):
                 try:
                     playbook = write_completion_playbook(str(result["problem_id"]), refresh_lineage=True)
                     result["playbook"] = playbook
-                    result["report_job_id"] = await enqueue_completion_report(str(result["problem_id"]), refresh_lineage=False)
+                    result["report_job_id"] = await enqueue_completion_report(
+                        str(result["problem_id"]), refresh_lineage=False
+                    )
                 except (WorkflowError, OSError) as error:
                     # The Problem is already completed; the playbook failure is non-fatal.
                     result["playbook_error"] = str(error)
@@ -439,7 +323,9 @@ def create_app(vault_path: Path, db_path: Path, *, fast_queue_client: FastQueueC
         return {"documents": [dict(row) for row in rows]}
 
     @app.get("/api/workbench/completed-solutions")
-    def completed_solutions(request: Request, limit: int = Query(default=5, ge=1, le=50)) -> dict[str, list[dict[str, object]]]:
+    def completed_solutions(
+        request: Request, limit: int = Query(default=5, ge=1, le=50)
+    ) -> dict[str, list[dict[str, object]]]:
         solutions = workflow.recent_completed_solutions(limit, request.state.locale)
         for solution in solutions:
             path = solution.get("completion_playbook_path", "")
@@ -485,7 +371,11 @@ def create_app(vault_path: Path, db_path: Path, *, fast_queue_client: FastQueueC
     @app.put("/api/items/{entity_type}/{entity_id}/localizations", status_code=204)
     def supplement_localization(entity_type: str, entity_id: str, data: LocalizedSupplementIn) -> None:
         try:
-            row = workflow.db.execute(f"SELECT 1 FROM {entity_type} WHERE id=?", (entity_id,)).fetchone() if entity_type in {"problems", "features"} else None
+            row = (
+                workflow.db.execute(f"SELECT 1 FROM {entity_type} WHERE id=?", (entity_id,)).fetchone()
+                if entity_type in {"problems", "features"}
+                else None
+            )
             if not row:
                 raise WorkflowError("Item not found")
             workflow.localized.supplement(entity_type, entity_id, data.locale, data.fields)
@@ -497,7 +387,11 @@ def create_app(vault_path: Path, db_path: Path, *, fast_queue_client: FastQueueC
     async def chat(entity_type: str, entity_id: str, data: ChatIn, request: Request) -> StreamingResponse:
         try:
             context = workflow.context_for(entity_type, entity_id, request.state.locale)
-            task = {"captures": "capture_assistance", "problems": "problem_assistance", "features": "solution_assistance"}.get(entity_type)
+            task = {
+                "captures": "capture_assistance",
+                "problems": "problem_assistance",
+                "features": "solution_assistance",
+            }.get(entity_type)
             base_url, api_key, model = provider_settings.credentials(task)
         except (WorkflowError, ValueError) as error:
             raise HTTPException(400, str(error)) from error
@@ -505,11 +399,18 @@ def create_app(vault_path: Path, db_path: Path, *, fast_queue_client: FastQueueC
         async def stream():
             output: list[str] = []
             sent = 0
-            assessment = workflow.refinement_structure_assessment(entity_type, entity_id) if entity_type in {"problems", "features"} else {}
+            assessment = (
+                workflow.refinement_structure_assessment(entity_type, entity_id)
+                if entity_type in {"problems", "features"}
+                else {}
+            )
             messages = [
                 {"role": "system", "content": system_prompt(entity_type)},
                 {"role": "system", "content": response_language_instruction(request.state.locale)},
-                {"role": "system", "content": f"Current {context['type']}: {context['title']}\nKnown detail: {context['detail']}"},
+                {
+                    "role": "system",
+                    "content": f"Current {context['type']}: {context['title']}\nKnown detail: {context['detail']}",
+                },
                 *([{"role": "system", "content": refinement_focus_prompt(assessment)}] if assessment else []),
                 *workflow.chat_history(entity_type, entity_id),
                 {"role": "user", "content": data.message},
@@ -530,6 +431,7 @@ def create_app(vault_path: Path, db_path: Path, *, fast_queue_client: FastQueueC
                 return
             workflow.record_ai_run(entity_type, entity_id, "workflow_chat", data.message, "".join(output))
             yield "event: done\ndata: done\n\n"
+
         return StreamingResponse(stream(), media_type="text/event-stream", headers={"Cache-Control": "no-cache"})
 
     @app.post("/api/{entity_type}/{entity_id}/next-chat")
@@ -540,7 +442,9 @@ def create_app(vault_path: Path, db_path: Path, *, fast_queue_client: FastQueueC
             raise HTTPException(400, "Solutions do not have a next workflow stage")
         try:
             context = workflow.context_for(entity_type, entity_id, request.state.locale)
-            base_url, api_key, model = provider_settings.credentials("problem_drafting" if next_stage == "problems" else "solution_drafting")
+            base_url, api_key, model = provider_settings.credentials(
+                "problem_drafting" if next_stage == "problems" else "solution_drafting"
+            )
         except (WorkflowError, ValueError) as error:
             raise HTTPException(400, str(error)) from error
 
@@ -550,7 +454,10 @@ def create_app(vault_path: Path, db_path: Path, *, fast_queue_client: FastQueueC
             messages = [
                 {"role": "system", "content": system_prompt(next_stage)},
                 {"role": "system", "content": response_language_instruction(request.state.locale)},
-                {"role": "system", "content": f"Source {context['type']}: {context['title']}\nKnown detail: {context['detail']}"},
+                {
+                    "role": "system",
+                    "content": f"Source {context['type']}: {context['title']}\nKnown detail: {context['detail']}",
+                },
                 *workflow.chat_history(entity_type, entity_id),
                 {"role": "user", "content": data.message},
             ]
@@ -568,6 +475,7 @@ def create_app(vault_path: Path, db_path: Path, *, fast_queue_client: FastQueueC
                 return
             workflow.record_ai_run(entity_type, entity_id, "workflow_chat", data.message, "".join(output))
             yield "event: done\ndata: done\n\n"
+
         return StreamingResponse(stream(), media_type="text/event-stream", headers={"Cache-Control": "no-cache"})
 
     @app.post("/api/features/{feature_id}/completed-chat")
@@ -586,8 +494,7 @@ def create_app(vault_path: Path, db_path: Path, *, fast_queue_client: FastQueueC
             evidence = {
                 "completed_solution": solution,
                 "work_log": [
-                    {key: value for key, value in entry.items() if key != "image_data"}
-                    for entry in progress["entries"]
+                    {key: value for key, value in entry.items() if key != "image_data"} for entry in progress["entries"]
                 ],
                 "checklist": progress["checklist"],
             }
@@ -658,7 +565,11 @@ def create_app(vault_path: Path, db_path: Path, *, fast_queue_client: FastQueueC
             {"locale": request.state.locale, "surface_id": surface_id},
             idempotency_key=f"refine:{entity_type}:{entity_id}:{source_hash}:{surface_id}",
             source_hash=source_hash,
-            model_task={"captures": "capture_assistance", "problems": "problem_assistance", "features": "solution_assistance"}[entity_type],
+            model_task={
+                "captures": "capture_assistance",
+                "problems": "problem_assistance",
+                "features": "solution_assistance",
+            }[entity_type],
         )
 
     @app.get("/api/{entity_type}/{entity_id}/refinement-context")
@@ -686,7 +597,9 @@ def create_app(vault_path: Path, db_path: Path, *, fast_queue_client: FastQueueC
     @app.post("/api/problems/{problem_id}/features", status_code=201)
     def feature(problem_id: str, data: FeatureIn) -> dict[str, str]:
         try:
-            return workflow.create_feature(problem_id, data.title, data.outcome, data.non_goals, data.validation_criteria, data.localized_versions)
+            return workflow.create_feature(
+                problem_id, data.title, data.outcome, data.non_goals, data.validation_criteria, data.localized_versions
+            )
         except (WorkflowError, ValueError) as error:
             raise HTTPException(400, str(error)) from error
 
@@ -748,7 +661,15 @@ def create_app(vault_path: Path, db_path: Path, *, fast_queue_client: FastQueueC
             raise HTTPException(404, "Conflict review not found")
         if job.status.value in {"completed", "awaiting_review"}:
             return job.result
-        return {"run_id": job.id, "status": job.status.value, "phase": job.status.value, "progress": (job.progress_completed / job.progress_total if job.progress_total else 0), "recommended_state": "reviewing", "findings": [], "candidates": []}
+        return {
+            "run_id": job.id,
+            "status": job.status.value,
+            "phase": job.status.value,
+            "progress": (job.progress_completed / job.progress_total if job.progress_total else 0),
+            "recommended_state": "reviewing",
+            "findings": [],
+            "candidates": [],
+        }
 
     @app.delete("/api/conflict-reviews/{run_id}")
     async def cancel_conflict_review(run_id: str) -> dict[str, object]:
@@ -782,7 +703,9 @@ def create_app(vault_path: Path, db_path: Path, *, fast_queue_client: FastQueueC
     async def add_solution_progress(feature_id: str, data: SolutionProgressIn, request: Request) -> dict[str, object]:
         try:
             entry = workflow.add_solution_progress(feature_id, data.body, data.image_data, data.image_media_type)
-            await enqueue_derived("solution_progress_entries", str(entry["id"]), "body", data.body, request.state.locale)
+            await enqueue_derived(
+                "solution_progress_entries", str(entry["id"]), "body", data.body, request.state.locale
+            )
             return entry
         except WorkflowError as error:
             raise HTTPException(400, str(error)) from error
@@ -790,7 +713,9 @@ def create_app(vault_path: Path, db_path: Path, *, fast_queue_client: FastQueueC
     @app.post("/api/progress/{entry_id}/summarize-image", status_code=202)
     async def summarize_solution_image(entry_id: str, request: Request) -> JSONResponse:
         """Queue an image summary; the handler attaches it to the exact Work entry."""
-        row = workflow.db.execute("SELECT image_data,image_media_type FROM solution_progress_entries WHERE id=?", (entry_id,)).fetchone()
+        row = workflow.db.execute(
+            "SELECT image_data,image_media_type FROM solution_progress_entries WHERE id=?", (entry_id,)
+        ).fetchone()
         if not row:
             raise HTTPException(404, "Progress record not found")
         if not row[0]:
@@ -808,7 +733,9 @@ def create_app(vault_path: Path, db_path: Path, *, fast_queue_client: FastQueueC
     async def add_solution_comment(entry_id: str, data: SolutionCommentIn, request: Request) -> dict[str, object]:
         try:
             comment = workflow.add_solution_comment(entry_id, data.body)
-            await enqueue_derived("solution_progress_comments", str(comment["id"]), "body", data.body, request.state.locale)
+            await enqueue_derived(
+                "solution_progress_comments", str(comment["id"]), "body", data.body, request.state.locale
+            )
             return comment
         except WorkflowError as error:
             raise HTTPException(400, str(error)) from error
@@ -832,7 +759,9 @@ def create_app(vault_path: Path, db_path: Path, *, fast_queue_client: FastQueueC
     @app.post("/api/problems/{problem_id}/importance")
     def importance(problem_id: str, data: ImportanceIn) -> dict[str, object]:
         try:
-            return workflow.assess_importance(problem_id, data.alignment, data.impact, data.urgency, data.leverage, data.evidence)
+            return workflow.assess_importance(
+                problem_id, data.alignment, data.impact, data.urgency, data.leverage, data.evidence
+            )
         except WorkflowError as error:
             raise HTTPException(400, str(error)) from error
 
@@ -976,7 +905,9 @@ def create_app(vault_path: Path, db_path: Path, *, fast_queue_client: FastQueueC
 
     @app.delete("/api/problems/{problem_id}/completion-playbook", status_code=204)
     def delete_completion_playbook(problem_id: str, force: bool = False) -> None:
-        row = workflow.db.execute("SELECT path,source_hash FROM completion_playbooks WHERE problem_id=?", (problem_id,)).fetchone()
+        row = workflow.db.execute(
+            "SELECT path,source_hash FROM completion_playbooks WHERE problem_id=?", (problem_id,)
+        ).fetchone()
         if not row:
             raise HTTPException(404, "Completed-work document is not tracked for this Problem")
         path = str(row["path"])
@@ -986,7 +917,10 @@ def create_app(vault_path: Path, db_path: Path, *, fast_queue_client: FastQueueC
         except FileNotFoundError:
             pass
         if externally_modified and not force:
-            raise HTTPException(409, "This completed-work document was modified outside LLM Wiki. Delete anyway to remove the document, Raw Data, and generated captures.")
+            raise HTTPException(
+                409,
+                "This completed-work document was modified outside LLM Wiki. Delete anyway to remove the document, Raw Data, and generated captures.",
+            )
         directory, filename = path.rsplit("/", 1)
         raw_path = f"{directory}/assets/{filename[:-3]}.raw.md"
         legacy_raw_path = f"{directory}/Raw/{filename[:-3]}.raw.md"
@@ -1015,7 +949,10 @@ def create_app(vault_path: Path, db_path: Path, *, fast_queue_client: FastQueueC
             if managed and request.state.locale == "ko":
                 base_url, api_key, model = provider_settings.credentials("knowledge_translation")
                 normalized = await fast_queue.complete_json(
-                    base_url=base_url, api_key=api_key, model=model, messages=[
+                    base_url=base_url,
+                    api_key=api_key,
+                    model=model,
+                    messages=[
                         {
                             "role": "system",
                             "content": (
@@ -1025,13 +962,23 @@ def create_app(vault_path: Path, db_path: Path, *, fast_queue_client: FastQueueC
                             ),
                         },
                         {"role": "user", "content": content},
-                    ], schema_name="knowledge English normalization",
+                    ],
+                    schema_name="knowledge English normalization",
                 )
                 content = str(normalized.get("content", "")).strip()
                 if not content:
                     raise ValueError("Knowledge English normalization was empty")
             patch = propose_section_patch(before, data.operation, data.heading, content)
-            return workflow.save_patch_proposal(feature_id, data.path, data.operation, data.heading, content, patch.base_hash, patch.before, patch.proposed)
+            return workflow.save_patch_proposal(
+                feature_id,
+                data.path,
+                data.operation,
+                data.heading,
+                content,
+                patch.base_hash,
+                patch.before,
+                patch.proposed,
+            )
         except (WorkflowError, ValueError, OSError) as error:
             raise HTTPException(400, str(error)) from error
 
@@ -1039,7 +986,14 @@ def create_app(vault_path: Path, db_path: Path, *, fast_queue_client: FastQueueC
     def apply_patch(patch_id: str) -> None:
         try:
             stored = workflow.patch(patch_id)
-            patch = SectionPatch(stored["operation"], stored["heading"], stored["content"], stored["base_hash"], stored["before_text"], stored["proposed_text"])
+            patch = SectionPatch(
+                stored["operation"],
+                stored["heading"],
+                stored["content"],
+                stored["base_hash"],
+                stored["before_text"],
+                stored["proposed_text"],
+            )
             apply_reviewed_patch(vault, stored["path"], patch)
             knowledge_cache.invalidate(stored["path"])
             workflow.mark_patch_applied(patch_id)
@@ -1064,7 +1018,15 @@ def create_app(vault_path: Path, db_path: Path, *, fast_queue_client: FastQueueC
     @app.put("/api/provider/config")
     def save_provider_config(data: ProviderConfigIn) -> dict[str, object]:
         try:
-            provider_settings.save(data.base_url, data.model, data.api_key, data.advanced_model, data.advanced_tasks, data.report_language, data.async_worker_count)
+            provider_settings.save(
+                data.base_url,
+                data.model,
+                data.api_key,
+                data.advanced_model,
+                data.advanced_tasks,
+                data.report_language,
+                data.async_worker_count,
+            )
             return provider_settings.public()
         except Exception as error:
             raise HTTPException(400, f"Could not save provider configuration: {error}") from error
@@ -1087,7 +1049,15 @@ def create_app(vault_path: Path, db_path: Path, *, fast_queue_client: FastQueueC
                 base_url=base_url,
                 api_key=api_key,
                 model=model,
-                messages=[{"role": "user", "content": "Return JSON only with normalized_problem, pain, non_goals, categories, and importance_rationale. Use only the cited context. Never change workflow state or provide implementation steps.\nProblem: " + statement + "\nCitations: " + ", ".join(data.citations[:8])}],
+                messages=[
+                    {
+                        "role": "user",
+                        "content": "Return JSON only with normalized_problem, pain, non_goals, categories, and importance_rationale. Use only the cited context. Never change workflow state or provide implementation steps.\nProblem: "
+                        + statement
+                        + "\nCitations: "
+                        + ", ".join(data.citations[:8]),
+                    }
+                ],
                 schema_name="problem enrichment",
             )
             required = {"normalized_problem", "pain", "non_goals", "categories", "importance_rationale"}
@@ -1124,7 +1094,13 @@ def create_app(vault_path: Path, db_path: Path, *, fast_queue_client: FastQueueC
             return {**base, "markdown": canonical}
         cached = knowledge_cache.get(path, "ko", source_hash)
         if cached:
-            return {**base, "markdown": cached["translated_markdown"], "served_locale": "ko", "translated": True, "cache_status": "hit"}
+            return {
+                **base,
+                "markdown": cached["translated_markdown"],
+                "served_locale": "ko",
+                "translated": True,
+                "cache_status": "hit",
+            }
         if not translate:
             return {**base, "markdown": canonical, "cache_status": "pending"}
         job = await job_repository.create(
@@ -1158,7 +1134,9 @@ def create_app(vault_path: Path, db_path: Path, *, fast_queue_client: FastQueueC
             path, content = workflow.projection(entity_type, entity_id)
             try:
                 existing = vault.read_text(path)
-                previous = retrieval.db.execute("SELECT source_hash FROM mirror_files WHERE entity_type=? AND entity_id=?", (entity_type, entity_id)).fetchone()
+                previous = retrieval.db.execute(
+                    "SELECT source_hash FROM mirror_files WHERE entity_type=? AND entity_id=?", (entity_type, entity_id)
+                ).fetchone()
                 if not previous or digest(existing) != previous[0]:
                     raise WorkflowError("Generated file was modified externally; import or regenerate after review")
             except FileNotFoundError:
@@ -1186,6 +1164,8 @@ def create_app(vault_path: Path, db_path: Path, *, fast_queue_client: FastQueueC
     def shell() -> FileResponse:
         # The local single-file shell changes frequently while the workbench evolves;
         # do not leave a long-lived browser tab on an obsolete UI bundle.
-        return FileResponse(Path(__file__).parent.parent / "static" / "index.html", headers={"Cache-Control": "no-store"})
+        return FileResponse(
+            Path(__file__).parent.parent / "static" / "index.html", headers={"Cache-Control": "no-store"}
+        )
 
     return app

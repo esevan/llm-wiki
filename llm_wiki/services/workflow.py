@@ -1,15 +1,15 @@
 from __future__ import annotations
 
 import ast
-import sqlite3
-import uuid
+import base64
 import json
 import re
-import base64
+import sqlite3
+import uuid
 from datetime import date
 
-from llm_wiki.services.localization import LocalizedContentStore
 from llm_wiki.services.lineage import LINEAGE_SCHEMA_VERSION, build_lineage_document, render_lineage_markdown
+from llm_wiki.services.localization import LocalizedContentStore
 
 
 class WorkflowError(ValueError):
@@ -27,8 +27,20 @@ TRANSITIONS: list[dict[str, object]] = [
         "source_type": "captures",
         "description": "Create the next Problem directly when AI assistance is unavailable.",
         "fields": [
-            {"name": "statement", "label": "Problem statement", "type": "text", "required": True, "placeholder": "What needs to change?"},
-            {"name": "detail", "label": "Context", "type": "textarea", "required": False, "placeholder": "Evidence, impact, constraints, or open questions"},
+            {
+                "name": "statement",
+                "label": "Problem statement",
+                "type": "text",
+                "required": True,
+                "placeholder": "What needs to change?",
+            },
+            {
+                "name": "detail",
+                "label": "Context",
+                "type": "textarea",
+                "required": False,
+                "placeholder": "Evidence, impact, constraints, or open questions",
+            },
         ],
     },
     {
@@ -38,10 +50,35 @@ TRANSITIONS: list[dict[str, object]] = [
         "source_type": "problems",
         "description": "Create a Solution directly from this approved Problem without using AI.",
         "fields": [
-            {"name": "title", "label": "Solution name", "type": "text", "required": True, "placeholder": "A short, outcome-focused name"},
-            {"name": "outcome", "label": "Intended outcome", "type": "textarea", "required": True, "placeholder": "What will be true when this works?"},
-            {"name": "non_goals", "label": "Non-goals", "type": "textarea", "required": False, "placeholder": "What is intentionally out of scope?"},
-            {"name": "validation_criteria", "label": "Validation criteria", "type": "textarea", "required": True, "placeholder": "- [ ] Observable result", "help": "Add at least one checklist item using - [ ]."},
+            {
+                "name": "title",
+                "label": "Solution name",
+                "type": "text",
+                "required": True,
+                "placeholder": "A short, outcome-focused name",
+            },
+            {
+                "name": "outcome",
+                "label": "Intended outcome",
+                "type": "textarea",
+                "required": True,
+                "placeholder": "What will be true when this works?",
+            },
+            {
+                "name": "non_goals",
+                "label": "Non-goals",
+                "type": "textarea",
+                "required": False,
+                "placeholder": "What is intentionally out of scope?",
+            },
+            {
+                "name": "validation_criteria",
+                "label": "Validation criteria",
+                "type": "textarea",
+                "required": True,
+                "placeholder": "- [ ] Observable result",
+                "help": "Add at least one checklist item using - [ ].",
+            },
         ],
     },
     {
@@ -51,12 +88,32 @@ TRANSITIONS: list[dict[str, object]] = [
         "source_type": "features",
         "description": "Move this Solution to In progress without an AI conflict review.",
         "fields": [
-            {"name": "approval_path", "label": "Conflict check", "type": "select", "required": True, "options": [
-                {"value": "checked", "label": "Already checked"},
-                {"value": "skip", "label": "Skip with a reason"},
-            ]},
-            {"name": "citation", "label": "Review basis", "type": "textarea", "required_when": {"approval_path": "checked"}, "visible_when": {"approval_path": "checked"}, "placeholder": "Vault path, Workbench item, or review note"},
-            {"name": "skip_reason", "label": "Skip reason", "type": "textarea", "required_when": {"approval_path": "skip"}, "visible_when": {"approval_path": "skip"}, "placeholder": "Why is it safe to start without a conflict check?"},
+            {
+                "name": "approval_path",
+                "label": "Conflict check",
+                "type": "select",
+                "required": True,
+                "options": [
+                    {"value": "checked", "label": "Already checked"},
+                    {"value": "skip", "label": "Skip with a reason"},
+                ],
+            },
+            {
+                "name": "citation",
+                "label": "Review basis",
+                "type": "textarea",
+                "required_when": {"approval_path": "checked"},
+                "visible_when": {"approval_path": "checked"},
+                "placeholder": "Vault path, Workbench item, or review note",
+            },
+            {
+                "name": "skip_reason",
+                "label": "Skip reason",
+                "type": "textarea",
+                "required_when": {"approval_path": "skip"},
+                "visible_when": {"approval_path": "skip"},
+                "placeholder": "Why is it safe to start without a conflict check?",
+            },
         ],
     },
     {
@@ -66,14 +123,46 @@ TRANSITIONS: list[dict[str, object]] = [
         "source_type": "features",
         "description": "Complete and archive this work directly without an AI completion review.",
         "fields": [
-            {"name": "evidence", "label": "Completion evidence", "type": "textarea", "required": True, "placeholder": "What proves the intended outcome was reached?"},
-            {"name": "completion_path", "label": "Knowledge record", "type": "select", "required": True, "options": [
-                {"value": "report", "label": "Add completion note"},
-                {"value": "no_update", "label": "Skip note"},
-            ]},
-            {"name": "report", "label": "Completion note", "type": "textarea", "required_when": {"completion_path": "report"}, "visible_when": {"completion_path": "report"}, "placeholder": "Summarize what changed and what was learned"},
-            {"name": "no_update_reason", "label": "No-update reason", "type": "textarea", "required_when": {"completion_path": "no_update"}, "visible_when": {"completion_path": "no_update"}, "placeholder": "Why is no reusable knowledge update needed?"},
-            {"name": "reason", "label": "Decision note", "type": "textarea", "required": False, "placeholder": "Optional: why this Problem can close now"},
+            {
+                "name": "evidence",
+                "label": "Completion evidence",
+                "type": "textarea",
+                "required": True,
+                "placeholder": "What proves the intended outcome was reached?",
+            },
+            {
+                "name": "completion_path",
+                "label": "Knowledge record",
+                "type": "select",
+                "required": True,
+                "options": [
+                    {"value": "report", "label": "Add completion note"},
+                    {"value": "no_update", "label": "Skip note"},
+                ],
+            },
+            {
+                "name": "report",
+                "label": "Completion note",
+                "type": "textarea",
+                "required_when": {"completion_path": "report"},
+                "visible_when": {"completion_path": "report"},
+                "placeholder": "Summarize what changed and what was learned",
+            },
+            {
+                "name": "no_update_reason",
+                "label": "No-update reason",
+                "type": "textarea",
+                "required_when": {"completion_path": "no_update"},
+                "visible_when": {"completion_path": "no_update"},
+                "placeholder": "Why is no reusable knowledge update needed?",
+            },
+            {
+                "name": "reason",
+                "label": "Decision note",
+                "type": "textarea",
+                "required": False,
+                "placeholder": "Optional: why this Problem can close now",
+            },
         ],
     },
 ]
@@ -100,7 +189,6 @@ def available_transitions(entity_type: str, entity: dict[str, object] | None = N
 
 class WorkflowEngine:
     """Human-operated workflow state. This service has no provider or vault dependency."""
-
 
     def __init__(self, db: sqlite3.Connection):
         self.db = db
@@ -275,10 +363,14 @@ class WorkflowEngine:
         }.items():
             if name not in playbook_columns:
                 self.db.execute(f"ALTER TABLE completion_playbooks ADD COLUMN {name} {declaration}")
-        self.db.execute("CREATE INDEX IF NOT EXISTS idx_lineage_snapshots_feature ON lineage_snapshots(feature_id,version DESC)")
+        self.db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_lineage_snapshots_feature ON lineage_snapshots(feature_id,version DESC)"
+        )
         self.db.execute("CREATE INDEX IF NOT EXISTS idx_lineage_claims_snapshot ON lineage_claims(snapshot_id)")
         self.db.execute("CREATE INDEX IF NOT EXISTS idx_lineage_evidence_claim ON lineage_evidence(claim_id)")
-        self.db.execute("CREATE INDEX IF NOT EXISTS idx_lineage_revisions_claim ON lineage_revisions(claim_id,is_current)")
+        self.db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_lineage_revisions_claim ON lineage_revisions(claim_id,is_current)"
+        )
         self.db.commit()
 
     def capture(self, text: str) -> str:
@@ -287,7 +379,13 @@ class WorkflowEngine:
         self.db.commit()
         return capture_id
 
-    def promote_capture(self, capture_id: str, statement: str | None = None, detail: str = "", localized_versions: dict[str, dict[str, str]] | None = None) -> dict[str, str]:
+    def promote_capture(
+        self,
+        capture_id: str,
+        statement: str | None = None,
+        detail: str = "",
+        localized_versions: dict[str, dict[str, str]] | None = None,
+    ) -> dict[str, str]:
         capture = self.db.execute("SELECT text FROM captures WHERE id=?", (capture_id,)).fetchone()
         if not capture:
             raise WorkflowError("Capture not found")
@@ -295,11 +393,16 @@ class WorkflowEngine:
         if existing:
             # Promotion is idempotent: repair any older record that predates
             # the Inbox-hide rule instead of leaving the Capture in both lanes.
-            self.db.execute("INSERT OR REPLACE INTO deleted_entities(entity_type,entity_id) VALUES ('captures', ?)", (capture_id,))
+            self.db.execute(
+                "INSERT OR REPLACE INTO deleted_entities(entity_type,entity_id) VALUES ('captures', ?)", (capture_id,)
+            )
             self.db.commit()
             return dict(existing)
         problem_id = str(uuid.uuid4())
-        self.db.execute("INSERT INTO problems(id, capture_id, statement, detail) VALUES (?, ?, ?, ?)", (problem_id, capture_id, statement or capture[0], detail))
+        self.db.execute(
+            "INSERT INTO problems(id, capture_id, statement, detail) VALUES (?, ?, ?, ?)",
+            (problem_id, capture_id, statement or capture[0], detail),
+        )
         if localized_versions:
             problem_versions = {
                 locale: {
@@ -314,7 +417,9 @@ class WorkflowEngine:
                 self.localized.save_versions("problems", problem_id, problem_versions, complete=True)
         self._inherit_workbench_category("captures", capture_id, "problems", problem_id, str(capture[0]))
         # A promoted capture stays linked for audit/history but leaves the active inbox.
-        self.db.execute("INSERT OR REPLACE INTO deleted_entities(entity_type,entity_id) VALUES ('captures', ?)", (capture_id,))
+        self.db.execute(
+            "INSERT OR REPLACE INTO deleted_entities(entity_type,entity_id) VALUES ('captures', ?)", (capture_id,)
+        )
         self.db.commit()
         return dict(self.db.execute("SELECT * FROM problems WHERE id=?", (problem_id,)).fetchone())
 
@@ -323,9 +428,11 @@ class WorkflowEngine:
             raise WorkflowError("Problem not found")
         self.db.execute("UPDATE problems SET state='approved' WHERE id=?", (problem_id,))
         self._approval("problem", problem_id, "approved")
-        importance = self.db.execute("SELECT importance FROM importance_assessments WHERE problem_id=?", (problem_id,)).fetchone()
+        importance = self.db.execute(
+            "SELECT importance FROM importance_assessments WHERE problem_id=?", (problem_id,)
+        ).fetchone()
         if importance:
-            self.award("problem", problem_id, float(importance[0]) * .10, "problem_approved")
+            self.award("problem", problem_id, float(importance[0]) * 0.10, "problem_approved")
 
     def _record_solution_decision(
         self,
@@ -357,7 +464,15 @@ class WorkflowEngine:
         )
         return event_id
 
-    def create_feature(self, problem_id: str, title: str, outcome: str, non_goals: str = "", validation_criteria: str = "", localized_versions: dict[str, dict[str, str]] | None = None) -> dict[str, str]:
+    def create_feature(
+        self,
+        problem_id: str,
+        title: str,
+        outcome: str,
+        non_goals: str = "",
+        validation_criteria: str = "",
+        localized_versions: dict[str, dict[str, str]] | None = None,
+    ) -> dict[str, str]:
         problem = self.db.execute("SELECT state, statement FROM problems WHERE id=?", (problem_id,)).fetchone()
         if not problem:
             raise WorkflowError("Problem not found")
@@ -366,7 +481,10 @@ class WorkflowEngine:
         if not validation_criteria.strip():
             raise WorkflowError("A Solution requires at least one Validation Criteria bullet")
         feature_id = str(uuid.uuid4())
-        self.db.execute("INSERT INTO features(id,problem_id,title,outcome,non_goals,validation_criteria) VALUES (?,?,?,?,?,?)", (feature_id, problem_id, title, outcome, non_goals, validation_criteria))
+        self.db.execute(
+            "INSERT INTO features(id,problem_id,title,outcome,non_goals,validation_criteria) VALUES (?,?,?,?,?,?)",
+            (feature_id, problem_id, title, outcome, non_goals, validation_criteria),
+        )
         if localized_versions:
             if set(localized_versions) == {"ko", "en"}:
                 self.localized.save_bilingual("features", feature_id, localized_versions)
@@ -395,7 +513,10 @@ class WorkflowEngine:
             raise WorkflowError("A clear evaluation requires a cited current-context basis")
         self.db.execute("UPDATE features SET conflict_state=? WHERE id=?", (state, feature_id))
         report_id = str(uuid.uuid4())
-        self.db.execute("INSERT INTO conflict_reports(id,feature_id,state,citation) VALUES (?,?,?,?)", (report_id, feature_id, state, citation))
+        self.db.execute(
+            "INSERT INTO conflict_reports(id,feature_id,state,citation) VALUES (?,?,?,?)",
+            (report_id, feature_id, state, citation),
+        )
         if commit:
             self.db.commit()
         return report_id
@@ -433,7 +554,17 @@ class WorkflowEngine:
             """INSERT INTO conflict_addresses(
                  id,feature_id,conflict_report_id,status,basis,disposition,summary,evidence_source_type,evidence_source_id
                ) VALUES (?,?,?,?,?,?,?,?,?)""",
-            (address_id, feature_id, conflict_report_id, status, basis, disposition, summary.strip(), evidence_source_type.strip(), evidence_source_id.strip()),
+            (
+                address_id,
+                feature_id,
+                conflict_report_id,
+                status,
+                basis,
+                disposition,
+                summary.strip(),
+                evidence_source_type.strip(),
+                evidence_source_id.strip(),
+            ),
         )
         self._record_solution_decision(
             feature_id,
@@ -452,13 +583,19 @@ class WorkflowEngine:
         if not self.db.execute("SELECT 1 FROM features WHERE id=?", (feature_id,)).fetchone():
             raise WorkflowError("Solution not found")
         run_id = str(uuid.uuid4())
-        self.db.execute("INSERT INTO conflict_review_runs(id,feature_id,status,query) VALUES (?,?,?,?)", (run_id, feature_id, "running", query))
+        self.db.execute(
+            "INSERT INTO conflict_review_runs(id,feature_id,status,query) VALUES (?,?,?,?)",
+            (run_id, feature_id, "running", query),
+        )
         self.db.commit()
         return run_id
 
     def finish_conflict_review(self, run_id: str, candidates: object, report: object, error: str = "") -> None:
         status = "failed" if error else "ready"
-        self.db.execute("UPDATE conflict_review_runs SET status=?,candidates_json=?,report_json=?,error=?,updated_at=CURRENT_TIMESTAMP WHERE id=?", (status, __import__("json").dumps(candidates), __import__("json").dumps(report), error, run_id))
+        self.db.execute(
+            "UPDATE conflict_review_runs SET status=?,candidates_json=?,report_json=?,error=?,updated_at=CURRENT_TIMESTAMP WHERE id=?",
+            (status, __import__("json").dumps(candidates), __import__("json").dumps(report), error, run_id),
+        )
         self.db.commit()
 
     def cancel_conflict_review(self, run_id: str, report: object) -> None:
@@ -489,10 +626,15 @@ class WorkflowEngine:
             raise WorkflowError("Feature approval requires a clear current conflict report")
         self.db.execute("UPDATE features SET state='approved' WHERE id=?", (feature_id,))
         self._approval("feature", feature_id, "approved")
-        self._record_solution_decision(feature_id, "approved", {"state": "proposed"}, {"state": "approved"}, "", "approval", feature_id)
-        importance = self.db.execute("SELECT i.importance FROM importance_assessments i JOIN features f ON f.problem_id=i.problem_id WHERE f.id=?", (feature_id,)).fetchone()
+        self._record_solution_decision(
+            feature_id, "approved", {"state": "proposed"}, {"state": "approved"}, "", "approval", feature_id
+        )
+        importance = self.db.execute(
+            "SELECT i.importance FROM importance_assessments i JOIN features f ON f.problem_id=i.problem_id WHERE f.id=?",
+            (feature_id,),
+        ).fetchone()
         if importance:
-            self.award("feature", feature_id, float(importance[0]) * .20, "feature_approved")
+            self.award("feature", feature_id, float(importance[0]) * 0.20, "feature_approved")
 
     def set_feature_stage(self, feature_id: str, state: str) -> None:
         if state not in {"proposed", "approved"}:
@@ -505,7 +647,9 @@ class WorkflowEngine:
         self.db.execute("UPDATE features SET state=? WHERE id=?", (state, feature_id))
         self._approval("feature", feature_id, f"moved_to_{state}")
 
-    def apply_transition(self, transition_id: str, entity_type: str, entity_id: str, fields: dict[str, object]) -> dict[str, object]:
+    def apply_transition(
+        self, transition_id: str, entity_type: str, entity_id: str, fields: dict[str, object]
+    ) -> dict[str, object]:
         """Apply a Workflow Transition with its required input form.
 
         This is the single entry point for menu-only transitions. Each transition
@@ -533,7 +677,11 @@ class WorkflowEngine:
             if field_def.get("required") and not str(fields.get(name, "")).strip():
                 raise WorkflowError(f"{field_def['label']} is required")
             condition = field_def.get("required_when")
-            if condition and all(str(fields.get(key, "")) == str(value) for key, value in condition.items()) and not str(fields.get(name, "")).strip():
+            if (
+                condition
+                and all(str(fields.get(key, "")) == str(value) for key, value in condition.items())
+                and not str(fields.get(name, "")).strip()
+            ):
                 raise WorkflowError(f"{field_def['label']} is required")
 
         if transition_id == "capture_to_problem":
@@ -634,8 +782,6 @@ class WorkflowEngine:
             "note_skipped": bool(no_update_reason) and not bool(report),
         }
 
-
-
     def board(self, locale: str = "en") -> dict[str, list[dict[str, object]]]:
         return {
             "captures": self.localized.overlay_many("captures", self._active("captures"), locale),
@@ -683,25 +829,43 @@ class WorkflowEngine:
         """Persist a transparent local attention ordering; it never changes workflow state."""
         problems = self._active("problems")
         problem_categories = {problem["id"]: self._category(problem["statement"]) for problem in problems}
-        importance = {row["problem_id"]: int(row["importance"]) for row in self.db.execute("SELECT problem_id, importance FROM importance_assessments")}
+        importance = {
+            row["problem_id"]: int(row["importance"])
+            for row in self.db.execute("SELECT problem_id, importance FROM importance_assessments")
+        }
         candidates: list[tuple[str, str, str, int, str]] = []
         for capture in self._active("captures"):
-            override = self.db.execute("SELECT category FROM workbench_category_overrides WHERE entity_type='captures' AND entity_id=?", (capture["id"],)).fetchone()
+            override = self.db.execute(
+                "SELECT category FROM workbench_category_overrides WHERE entity_type='captures' AND entity_id=?",
+                (capture["id"],),
+            ).fetchone()
             category = str(override[0]) if override else self._category(capture["text"])
             candidates.append(("captures", capture["id"], category, 60, "Untriaged inbox item"))
         for problem in problems:
             base = 100 if problem["state"] == "draft" else 75
             score = base + importance.get(problem["id"], 0)
             reason = "Needs a human decision" if problem["state"] == "draft" else "Approved direction"
-            override = self.db.execute("SELECT category FROM workbench_category_overrides WHERE entity_type='problems' AND entity_id=?", (problem["id"],)).fetchone()
+            override = self.db.execute(
+                "SELECT category FROM workbench_category_overrides WHERE entity_type='problems' AND entity_id=?",
+                (problem["id"],),
+            ).fetchone()
             category = str(override[0]) if override else problem_categories[problem["id"]]
             candidates.append(("problems", problem["id"], category, score, reason))
         for feature in self._active("features"):
-            override = self.db.execute("SELECT category FROM workbench_category_overrides WHERE entity_type='features' AND entity_id=?", (feature["id"],)).fetchone()
-            category = str(override[0]) if override else problem_categories.get(feature["problem_id"], self._category(feature["title"]))
+            override = self.db.execute(
+                "SELECT category FROM workbench_category_overrides WHERE entity_type='features' AND entity_id=?",
+                (feature["id"],),
+            ).fetchone()
+            category = (
+                str(override[0])
+                if override
+                else problem_categories.get(feature["problem_id"], self._category(feature["title"]))
+            )
             base = 95 if feature["state"] == "approved" else 70
             score = base + (10 if feature["conflict_state"] == "clear" else 0)
-            reason = "Approved work in progress" if feature["state"] == "approved" else "Needs conflict review or approval"
+            reason = (
+                "Approved work in progress" if feature["state"] == "approved" else "Needs conflict review or approval"
+            )
             candidates.append(("features", feature["id"], category, score, reason))
         self.db.executemany(
             """INSERT INTO workbench_priorities(entity_type,entity_id,category,attention_rank,rationale)
@@ -729,7 +893,10 @@ class WorkflowEngine:
             if (entity_type, entity_id) not in valid_ids:
                 continue
             category = str(entry.get("category", "General")).strip()[:80] or "General"
-            category_override = self.db.execute("SELECT category FROM workbench_category_overrides WHERE entity_type=? AND entity_id=?", (entity_type, entity_id)).fetchone()
+            category_override = self.db.execute(
+                "SELECT category FROM workbench_category_overrides WHERE entity_type=? AND entity_id=?",
+                (entity_type, entity_id),
+            ).fetchone()
             if category_override:
                 category = str(category_override[0])
             try:
@@ -737,7 +904,10 @@ class WorkflowEngine:
             except (TypeError, ValueError):
                 rank = 0
             rationale = str(entry.get("rationale", "AI-organized attention priority")).strip()[:400]
-            override = self.db.execute("SELECT manual_priority FROM workbench_priority_overrides WHERE entity_type=? AND entity_id=?", (entity_type, entity_id)).fetchone()
+            override = self.db.execute(
+                "SELECT manual_priority FROM workbench_priority_overrides WHERE entity_type=? AND entity_id=?",
+                (entity_type, entity_id),
+            ).fetchone()
             if override and int(override[0]) == 1:
                 rank = max(rank, 90)
                 rationale = "Manually marked important"
@@ -866,22 +1036,30 @@ class WorkflowEngine:
         if not feature:
             raise WorkflowError("Solution not found")
         self.seed_solution_checklist(feature_id, str(feature[0] or ""))
-        entry_rows = list(self.db.execute(
-            "SELECT * FROM solution_progress_entries WHERE feature_id=? ORDER BY created_at DESC", (feature_id,)
-        ))
+        entry_rows = list(
+            self.db.execute(
+                "SELECT * FROM solution_progress_entries WHERE feature_id=? ORDER BY created_at DESC", (feature_id,)
+            )
+        )
         entries = self.localized.overlay_many("solution_progress_entries", entry_rows, locale)
         for entry in entries:
-            comment_rows = list(self.db.execute(
-                "SELECT * FROM solution_progress_comments WHERE entry_id=? ORDER BY created_at", (entry["id"],)
-            ))
+            comment_rows = list(
+                self.db.execute(
+                    "SELECT * FROM solution_progress_comments WHERE entry_id=? ORDER BY created_at", (entry["id"],)
+                )
+            )
             entry["comments"] = self.localized.overlay_many("solution_progress_comments", comment_rows, locale)
-        checklist_rows = list(self.db.execute(
-            "SELECT * FROM solution_checklist_items WHERE feature_id=? ORDER BY checked, created_at", (feature_id,)
-        ))
+        checklist_rows = list(
+            self.db.execute(
+                "SELECT * FROM solution_checklist_items WHERE feature_id=? ORDER BY checked, created_at", (feature_id,)
+            )
+        )
         checklist = self.localized.overlay_many("solution_checklist_items", checklist_rows, locale)
         return {"entries": entries, "checklist": checklist}
 
-    def add_solution_progress(self, feature_id: str, body: str = "", image_data: str = "", image_media_type: str = "") -> dict[str, object]:
+    def add_solution_progress(
+        self, feature_id: str, body: str = "", image_data: str = "", image_media_type: str = ""
+    ) -> dict[str, object]:
         feature = self.db.execute("SELECT state FROM features WHERE id=?", (feature_id,)).fetchone()
         if not feature:
             raise WorkflowError("Solution not found")
@@ -903,7 +1081,10 @@ class WorkflowEngine:
         if not self.db.execute("SELECT 1 FROM solution_progress_entries WHERE id=?", (entry_id,)).fetchone():
             raise WorkflowError("Progress record not found")
         comment_id = str(uuid.uuid4())
-        self.db.execute("INSERT INTO solution_progress_comments(id,entry_id,body) VALUES (?,?,?)", (comment_id, entry_id, body.strip()))
+        self.db.execute(
+            "INSERT INTO solution_progress_comments(id,entry_id,body) VALUES (?,?,?)",
+            (comment_id, entry_id, body.strip()),
+        )
         self.db.commit()
         return dict(self.db.execute("SELECT * FROM solution_progress_comments WHERE id=?", (comment_id,)).fetchone())
 
@@ -913,13 +1094,18 @@ class WorkflowEngine:
         if not self.db.execute("SELECT 1 FROM features WHERE id=?", (feature_id,)).fetchone():
             raise WorkflowError("Solution not found")
         item_id = str(uuid.uuid4())
-        self.db.execute("INSERT INTO solution_checklist_items(id,feature_id,body) VALUES (?,?,?)", (item_id, feature_id, body.strip()))
+        self.db.execute(
+            "INSERT INTO solution_checklist_items(id,feature_id,body) VALUES (?,?,?)",
+            (item_id, feature_id, body.strip()),
+        )
         self.db.commit()
         return dict(self.db.execute("SELECT * FROM solution_checklist_items WHERE id=?", (item_id,)).fetchone())
 
     def seed_solution_checklist(self, feature_id: str, validation_criteria: str) -> int:
         """Import only Validation Criteria bullets once, never general Solution bullets."""
-        existing = self.db.execute("SELECT count(*) FROM solution_checklist_items WHERE feature_id=?", (feature_id,)).fetchone()
+        existing = self.db.execute(
+            "SELECT count(*) FROM solution_checklist_items WHERE feature_id=?", (feature_id,)
+        ).fetchone()
         if not existing or existing[0]:
             return 0
         found: list[tuple[str, bool]] = []
@@ -945,7 +1131,13 @@ class WorkflowEngine:
     def update_solution_checklist_item(self, item_id: str, body: str, checked: bool) -> None:
         if not body.strip():
             raise WorkflowError("Checklist item cannot be empty")
-        if self.db.execute("UPDATE solution_checklist_items SET body=?,checked=?,updated_at=CURRENT_TIMESTAMP WHERE id=?", (body.strip(), int(checked), item_id)).rowcount != 1:
+        if (
+            self.db.execute(
+                "UPDATE solution_checklist_items SET body=?,checked=?,updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                (body.strip(), int(checked), item_id),
+            ).rowcount
+            != 1
+        ):
             raise WorkflowError("Checklist item not found")
         self.db.commit()
 
@@ -967,15 +1159,11 @@ class WorkflowEngine:
         if set(versions) != {"ko", "en"}:
             raise ValueError("Image Summary requires complete Korean and English versions")
         summaries = {
-            item_locale: str(fields.get("image_summary", "")).strip()
-            for item_locale, fields in versions.items()
+            item_locale: str(fields.get("image_summary", "")).strip() for item_locale, fields in versions.items()
         }
         if any(not summary for summary in summaries.values()):
             raise ValueError("Image Summary versions cannot be empty")
-        normalized = {
-            item_locale: {"image_summary": summaries[item_locale]}
-            for item_locale in ("ko", "en")
-        }
+        normalized = {item_locale: {"image_summary": summaries[item_locale]} for item_locale in ("ko", "en")}
         try:
             self.localized.save_versions("solution_progress_entries", entry_id, normalized, complete=False)
             self.db.execute(
@@ -1004,17 +1192,21 @@ class WorkflowEngine:
             (limit,),
         ).fetchall()
         solutions = self.localized.overlay_many("features", rows, locale)
-        problems = {
-            str(row["id"]): row
-            for row in self.localized.overlay_many(
-                "problems",
-                self.db.execute(
-                    f"SELECT * FROM problems WHERE id IN ({','.join('?' for _ in solutions)})",
-                    tuple(str(row["problem_id"]) for row in solutions),
-                ).fetchall(),
-                locale,
-            )
-        } if solutions else {}
+        problems = (
+            {
+                str(row["id"]): row
+                for row in self.localized.overlay_many(
+                    "problems",
+                    self.db.execute(
+                        f"SELECT * FROM problems WHERE id IN ({','.join('?' for _ in solutions)})",
+                        tuple(str(row["problem_id"]) for row in solutions),
+                    ).fetchall(),
+                    locale,
+                )
+            }
+            if solutions
+            else {}
+        )
         for solution in solutions:
             problem = problems.get(str(solution["problem_id"]))
             if problem:
@@ -1028,7 +1220,9 @@ class WorkflowEngine:
             raise WorkflowError("Item not found")
         items = [(entity_type, entity_id)]
         if entity_type == "problems":
-            feature_ids = [row[0] for row in self.db.execute("SELECT id FROM features WHERE problem_id=?", (entity_id,))]
+            feature_ids = [
+                row[0] for row in self.db.execute("SELECT id FROM features WHERE problem_id=?", (entity_id,))
+            ]
             items.extend(("features", feature_id) for feature_id in feature_ids)
         self.db.executemany("INSERT OR REPLACE INTO deleted_entities(entity_type,entity_id) VALUES (?,?)", items)
         self.db.commit()
@@ -1043,12 +1237,27 @@ class WorkflowEngine:
         row = self.db.execute(f"SELECT * FROM {entity_type} WHERE id=?", (entity_id,)).fetchone()
         if not row:
             raise WorkflowError("Item not found")
-        values = self.localized.overlay(entity_type, row, locale) if entity_type in {"problems", "features"} else dict(row)
-        title = values.get("statement") or values.get("title") or values.get("outcome") or values.get("text") or "Workflow item"
+        values = (
+            self.localized.overlay(entity_type, row, locale) if entity_type in {"problems", "features"} else dict(row)
+        )
+        title = (
+            values.get("statement")
+            or values.get("title")
+            or values.get("outcome")
+            or values.get("text")
+            or "Workflow item"
+        )
         detail = values.get("detail") or values.get("outcome") or values.get("text") or ""
         return {"type": entity_type[:-1], "title": str(title), "detail": str(detail)}
 
-    def update_manual(self, entity_type: str, entity_id: str, title: str, detail: str, localized_versions: dict[str, dict[str, str]] | None = None) -> None:
+    def update_manual(
+        self,
+        entity_type: str,
+        entity_id: str,
+        title: str,
+        detail: str,
+        localized_versions: dict[str, dict[str, str]] | None = None,
+    ) -> None:
         if entity_type == "captures":
             sql, values = "UPDATE captures SET text=? WHERE id=?", (title, entity_id)
         elif entity_type == "problems":
@@ -1085,7 +1294,10 @@ class WorkflowEngine:
         self.db.commit()
 
     def record_ai_run(self, entity_type: str, entity_id: str, kind: str, input_text: str, output_text: str) -> None:
-        self.db.execute("INSERT INTO ai_runs(id,entity_type,entity_id,kind,input_text,output_text) VALUES (?,?,?,?,?,?)", (str(uuid.uuid4()), entity_type, entity_id, kind, input_text, output_text))
+        self.db.execute(
+            "INSERT INTO ai_runs(id,entity_type,entity_id,kind,input_text,output_text) VALUES (?,?,?,?,?,?)",
+            (str(uuid.uuid4()), entity_type, entity_id, kind, input_text, output_text),
+        )
         self.db.commit()
 
     def _context_lineage_sources(self, entity_type: str, entity_id: str) -> list[tuple[str, str, str]]:
@@ -1350,7 +1562,11 @@ class WorkflowEngine:
                 return None
         if not isinstance(value, dict):
             return None
-        fields = ("title", "detail") if entity_type == "captures" else ("title", "outcome", "non_goals", "validation_criteria")
+        fields = (
+            ("title", "detail")
+            if entity_type == "captures"
+            else ("title", "outcome", "non_goals", "validation_criteria")
+        )
         draft = {field: str(value.get(field) or "").strip() for field in fields}
         if any(not draft[field] for field in fields):
             return None
@@ -1421,17 +1637,47 @@ class WorkflowEngine:
         sections: dict[str, list[str]] = {}
         current = ""
         known = {
-            "context", "background", "impact", "evidence", "desired outcome", "intended outcome",
-            "boundaries", "scope", "non-goals", "non goals", "evidence and prior context",
-            "trade-offs", "tradeoffs", "dependencies", "validation criteria", "risks", "open questions",
-            "맥락", "배경", "영향", "근거", "증거", "목표", "의도한 결과", "범위", "제외 범위",
-            "트레이드오프", "의존성", "검증 기준", "위험", "미결 질문",
+            "context",
+            "background",
+            "impact",
+            "evidence",
+            "desired outcome",
+            "intended outcome",
+            "boundaries",
+            "scope",
+            "non-goals",
+            "non goals",
+            "evidence and prior context",
+            "trade-offs",
+            "tradeoffs",
+            "dependencies",
+            "validation criteria",
+            "risks",
+            "open questions",
+            "맥락",
+            "배경",
+            "영향",
+            "근거",
+            "증거",
+            "목표",
+            "의도한 결과",
+            "범위",
+            "제외 범위",
+            "트레이드오프",
+            "의존성",
+            "검증 기준",
+            "위험",
+            "미결 질문",
         }
         for raw_line in str(value or "").splitlines():
             line = raw_line.strip()
             heading = re.match(r"^(?:#{1,6}\s*)?(?:\*\*)?([^:#*]{2,48})(?:\*\*)?\s*:?\s*$", line)
             name = re.sub(r"\s+", " ", heading.group(1)).strip().casefold() if heading else ""
-            formatted = line.startswith("#") or (line.startswith("**") and line.rstrip(":").endswith("**")) or line.endswith(":")
+            formatted = (
+                line.startswith("#")
+                or (line.startswith("**") and line.rstrip(":").endswith("**"))
+                or line.endswith(":")
+            )
             if heading and len(line.split()) <= 7 and (formatted or name in known):
                 current = name
                 sections.setdefault(current, [])
@@ -1481,46 +1727,142 @@ class WorkflowEngine:
             cleaned = self._refinement_context_text(value)
             if cleaned and not placeholder.match(cleaned):
                 contains_unknown = bool(re.search(r"\b(?:not yet known|unknown|tbd|to be determined)\b", cleaned, re.I))
-                status = "complete" if len(cleaned) >= threshold and (unknown_is_content or not contains_unknown) else "weak"
+                status = (
+                    "complete" if len(cleaned) >= threshold and (unknown_is_content or not contains_unknown) else "weak"
+                )
                 return {"key": key, "label": label, "status": status, "text": cleaned[:220]}
             matched = ""
             if aliases and user_context:
                 sentences = re.split(r"(?<=[.!?。！？])\s+|\n+", user_context)
-                matched = next((sentence.strip() for sentence in sentences if any(alias.casefold() in sentence.casefold() for alias in aliases)), "")
+                matched = next(
+                    (
+                        sentence.strip()
+                        for sentence in sentences
+                        if any(alias.casefold() in sentence.casefold() for alias in aliases)
+                    ),
+                    "",
+                )
             if matched:
-                return {"key": key, "label": label, "status": "weak", "text": self._refinement_context_text(matched)[:220]}
+                return {
+                    "key": key,
+                    "label": label,
+                    "status": "weak",
+                    "text": self._refinement_context_text(matched)[:220],
+                }
             return {"key": key, "label": label, "status": "missing", "text": "Not yet known"}
 
         if entity_type == "problems":
             structure = [
                 field("statement", "Problem statement", str(item.get("statement") or ""), threshold=8),
-                field("context", "Context", section_value("context", "background", "맥락", "배경") or (detail if not sections else ""), aliases=("context", "background", "맥락", "배경")),
-                field("impact", "Impact", section_value("impact", "영향"), aliases=("impact", "affected", "cost", "영향", "불편", "손실")),
-                field("evidence", "Evidence", section_value("evidence", "근거", "증거"), aliases=("evidence", "observed", "data", "근거", "증거", "피드백")),
-                field("desired_outcome", "Desired outcome", section_value("desired outcome", "outcome", "목표", "결과"), aliases=("outcome", "success", "결과", "목표", "성공")),
-                field("boundaries", "Boundaries", section_value("boundar", "non-goal", "scope", "범위", "제외"), aliases=("boundary", "scope", "non-goal", "범위", "제외")),
-                field("open_questions", "Open questions", section_value("open question", "미결", "질문"), aliases=("unknown", "question", "미정", "질문"), unknown_is_content=True),
+                field(
+                    "context",
+                    "Context",
+                    section_value("context", "background", "맥락", "배경") or (detail if not sections else ""),
+                    aliases=("context", "background", "맥락", "배경"),
+                ),
+                field(
+                    "impact",
+                    "Impact",
+                    section_value("impact", "영향"),
+                    aliases=("impact", "affected", "cost", "영향", "불편", "손실"),
+                ),
+                field(
+                    "evidence",
+                    "Evidence",
+                    section_value("evidence", "근거", "증거"),
+                    aliases=("evidence", "observed", "data", "근거", "증거", "피드백"),
+                ),
+                field(
+                    "desired_outcome",
+                    "Desired outcome",
+                    section_value("desired outcome", "outcome", "목표", "결과"),
+                    aliases=("outcome", "success", "결과", "목표", "성공"),
+                ),
+                field(
+                    "boundaries",
+                    "Boundaries",
+                    section_value("boundar", "non-goal", "scope", "범위", "제외"),
+                    aliases=("boundary", "scope", "non-goal", "범위", "제외"),
+                ),
+                field(
+                    "open_questions",
+                    "Open questions",
+                    section_value("open question", "미결", "질문"),
+                    aliases=("unknown", "question", "미정", "질문"),
+                    unknown_is_content=True,
+                ),
             ]
             priority = ["evidence", "desired_outcome", "impact", "boundaries", "context", "open_questions"]
             bundles = [{"impact", "evidence"}, {"desired_outcome", "boundaries"}]
         else:
             problem = self.db.execute("SELECT statement FROM problems WHERE id=?", (item.get("problem_id"),)).fetchone()
             raw_outcome = str(item.get("outcome") or "")
-            intended = section_value("intended outcome", "desired outcome", "의도", "목표") or (raw_outcome if not sections else "")
+            intended = section_value("intended outcome", "desired outcome", "의도", "목표") or (
+                raw_outcome if not sections else ""
+            )
             structure = [
                 field("title", "Solution title", str(item.get("title") or ""), threshold=8),
                 field("problem", "Problem this supports", str(problem[0]) if problem else "", threshold=8),
-                field("intended_outcome", "Intended outcome", intended, aliases=("outcome", "success", "결과", "목표", "성공")),
+                field(
+                    "intended_outcome",
+                    "Intended outcome",
+                    intended,
+                    aliases=("outcome", "success", "결과", "목표", "성공"),
+                ),
                 field("scope", "Scope", section_value("scope", "범위"), aliases=("scope", "include", "범위", "포함")),
-                field("non_goals", "Non-goals", str(item.get("non_goals") or "") or section_value("non-goal", "제외"), aliases=("non-goal", "out of scope", "제외", "하지 않")),
-                field("evidence", "Evidence & prior context", section_value("evidence", "prior context", "근거", "증거"), aliases=("evidence", "feedback", "data", "근거", "증거", "피드백")),
-                field("tradeoffs_risks", "Trade-offs & risks", section_value("trade-off", "tradeoff", "risk", "위험", "트레이드"), aliases=("trade-off", "risk", "cost", "위험", "부작용")),
-                field("dependencies", "Dependencies", section_value("dependenc", "의존"), aliases=("depend", "blocked", "의존", "선행")),
-                field("validation_criteria", "Validation criteria", str(item.get("validation_criteria") or "") or section_value("validation", "acceptance", "검증"), aliases=("validate", "criterion", "measure", "검증", "확인", "측정")),
-                field("open_questions", "Open questions", section_value("open question", "미결", "질문"), aliases=("unknown", "question", "미정", "질문"), unknown_is_content=True),
+                field(
+                    "non_goals",
+                    "Non-goals",
+                    str(item.get("non_goals") or "") or section_value("non-goal", "제외"),
+                    aliases=("non-goal", "out of scope", "제외", "하지 않"),
+                ),
+                field(
+                    "evidence",
+                    "Evidence & prior context",
+                    section_value("evidence", "prior context", "근거", "증거"),
+                    aliases=("evidence", "feedback", "data", "근거", "증거", "피드백"),
+                ),
+                field(
+                    "tradeoffs_risks",
+                    "Trade-offs & risks",
+                    section_value("trade-off", "tradeoff", "risk", "위험", "트레이드"),
+                    aliases=("trade-off", "risk", "cost", "위험", "부작용"),
+                ),
+                field(
+                    "dependencies",
+                    "Dependencies",
+                    section_value("dependenc", "의존"),
+                    aliases=("depend", "blocked", "의존", "선행"),
+                ),
+                field(
+                    "validation_criteria",
+                    "Validation criteria",
+                    str(item.get("validation_criteria") or "") or section_value("validation", "acceptance", "검증"),
+                    aliases=("validate", "criterion", "measure", "검증", "확인", "측정"),
+                ),
+                field(
+                    "open_questions",
+                    "Open questions",
+                    section_value("open question", "미결", "질문"),
+                    aliases=("unknown", "question", "미정", "질문"),
+                    unknown_is_content=True,
+                ),
             ]
-            priority = ["intended_outcome", "validation_criteria", "scope", "non_goals", "tradeoffs_risks", "dependencies", "evidence", "open_questions"]
-            bundles = [{"intended_outcome", "validation_criteria"}, {"scope", "non_goals"}, {"tradeoffs_risks", "dependencies"}]
+            priority = [
+                "intended_outcome",
+                "validation_criteria",
+                "scope",
+                "non_goals",
+                "tradeoffs_risks",
+                "dependencies",
+                "evidence",
+                "open_questions",
+            ]
+            bundles = [
+                {"intended_outcome", "validation_criteria"},
+                {"scope", "non_goals"},
+                {"tradeoffs_risks", "dependencies"},
+            ]
 
         by_key = {item["key"]: item for item in structure}
         # Field importance wins over cosmetic completeness: a thin intended outcome is
@@ -1530,26 +1872,38 @@ class WorkflowEngine:
         if incomplete:
             first = incomplete[0]
             bundle = next((group for group in bundles if first in group), {first})
-            focus_keys = [key for key in priority if key in bundle and by_key[key]["status"] != "complete"][:3] or [first]
+            focus_keys = [key for key in priority if key in bundle and by_key[key]["status"] != "complete"][:3] or [
+                first
+            ]
         chat_count = sum(1 for run in refinement_runs if run[0] == "workflow_chat")
         refinement_count = sum(1 for run in refinement_runs if run[0] == "workflow_refinement")
         meaningful_sections = sum(1 for value in sections.values() if value and not placeholder.match(value))
         view_mode = "structure" if chat_count >= 2 or refinement_count or meaningful_sections >= 2 else "context"
-        counts = {status: sum(1 for item in structure if item["status"] == status) for status in ("complete", "weak", "missing")}
+        counts = {
+            status: sum(1 for item in structure if item["status"] == status)
+            for status in ("complete", "weak", "missing")
+        }
         return {
             "view_mode": view_mode,
             "structure": structure,
-            "focus": [{"key": key, "label": by_key[key]["label"], "status": by_key[key]["status"]} for key in focus_keys],
+            "focus": [
+                {"key": key, "label": by_key[key]["label"], "status": by_key[key]["status"]} for key in focus_keys
+            ],
             "readiness": counts,
         }
 
-    def assess_importance(self, problem_id: str, alignment: int, impact: int, urgency: int, leverage: int, evidence: str) -> dict[str, object]:
+    def assess_importance(
+        self, problem_id: str, alignment: int, impact: int, urgency: int, leverage: int, evidence: str
+    ) -> dict[str, object]:
         if not self.db.execute("SELECT 1 FROM problems WHERE id=?", (problem_id,)).fetchone():
             raise WorkflowError("Problem not found")
         if not all(0 <= factor <= 5 for factor in (alignment, impact, urgency, leverage)) or not evidence.strip():
             raise WorkflowError("Each 0–5 importance factor requires evidence")
-        importance = round(20 * (.35 * alignment + .30 * impact + .20 * urgency + .15 * leverage))
-        self.db.execute("INSERT OR REPLACE INTO importance_assessments(id,problem_id,alignment,impact,urgency,leverage,evidence,importance) VALUES (?,?,?,?,?,?,?,?)", (str(uuid.uuid4()), problem_id, alignment, impact, urgency, leverage, evidence, importance))
+        importance = round(20 * (0.35 * alignment + 0.30 * impact + 0.20 * urgency + 0.15 * leverage))
+        self.db.execute(
+            "INSERT OR REPLACE INTO importance_assessments(id,problem_id,alignment,impact,urgency,leverage,evidence,importance) VALUES (?,?,?,?,?,?,?,?)",
+            (str(uuid.uuid4()), problem_id, alignment, impact, urgency, leverage, evidence, importance),
+        )
         self.db.commit()
         return {"importance": importance, "evidence": evidence}
 
@@ -1559,8 +1913,13 @@ class WorkflowEngine:
         self.db.commit()
         return dict(self.db.execute("SELECT * FROM compass_goals WHERE id=?", (goal_id,)).fetchone())
 
-    def award(self, entity_type: str, entity_id: str, points: float, event_type: str, goal_id: str | None = None) -> None:
-        self.db.execute("INSERT INTO score_events(id,entity_type,entity_id,goal_id,points,event_type) VALUES (?,?,?,?,?,?)", (str(uuid.uuid4()), entity_type, entity_id, goal_id, points, event_type))
+    def award(
+        self, entity_type: str, entity_id: str, points: float, event_type: str, goal_id: str | None = None
+    ) -> None:
+        self.db.execute(
+            "INSERT INTO score_events(id,entity_type,entity_id,goal_id,points,event_type) VALUES (?,?,?,?,?,?)",
+            (str(uuid.uuid4()), entity_type, entity_id, goal_id, points, event_type),
+        )
         self._refresh_periods()
         self.db.commit()
 
@@ -1571,12 +1930,18 @@ class WorkflowEngine:
 
     def dashboard(self) -> dict[str, object]:
         return {
-            "goals": [dict(row) for row in self.db.execute("SELECT * FROM compass_goals WHERE active=1 ORDER BY created_at")],
+            "goals": [
+                dict(row) for row in self.db.execute("SELECT * FROM compass_goals WHERE active=1 ORDER BY created_at")
+            ],
             "scores": [dict(row) for row in self.db.execute("SELECT * FROM score_periods ORDER BY period DESC")],
-            "events": [dict(row) for row in self.db.execute("SELECT * FROM score_events ORDER BY created_at DESC LIMIT 50")],
+            "events": [
+                dict(row) for row in self.db.execute("SELECT * FROM score_events ORDER BY created_at DESC LIMIT 50")
+            ],
         }
 
-    def record_completion(self, feature_id: str, evidence: str, report: str, no_update_reason: str = "") -> dict[str, str]:
+    def record_completion(
+        self, feature_id: str, evidence: str, report: str, no_update_reason: str = ""
+    ) -> dict[str, str]:
         feature = self.db.execute("SELECT state FROM features WHERE id=?", (feature_id,)).fetchone()
         if not feature or feature[0] != "approved":
             raise WorkflowError("Completion requires an approved feature")
@@ -1584,7 +1949,10 @@ class WorkflowEngine:
             raise WorkflowError("Completion needs implementation evidence and a report")
         status = "not_needed" if no_update_reason.strip() else "pending"
         completion_id = str(uuid.uuid4())
-        self.db.execute("INSERT OR REPLACE INTO completions(id,feature_id,evidence,report,knowledge_status,no_update_reason) VALUES (?,?,?,?,?,?)", (completion_id, feature_id, evidence, report, status, no_update_reason))
+        self.db.execute(
+            "INSERT OR REPLACE INTO completions(id,feature_id,evidence,report,knowledge_status,no_update_reason) VALUES (?,?,?,?,?,?)",
+            (completion_id, feature_id, evidence, report, status, no_update_reason),
+        )
         self._record_solution_decision(
             feature_id,
             "completed",
@@ -1598,20 +1966,28 @@ class WorkflowEngine:
         return dict(self.db.execute("SELECT * FROM completions WHERE feature_id=?", (feature_id,)).fetchone())
 
     def verify_completion(self, feature_id: str) -> None:
-        completion = self.db.execute("SELECT knowledge_status FROM completions WHERE feature_id=?", (feature_id,)).fetchone()
+        completion = self.db.execute(
+            "SELECT knowledge_status FROM completions WHERE feature_id=?", (feature_id,)
+        ).fetchone()
         if not completion or completion[0] not in {"integrated", "not_needed"}:
             raise WorkflowError("Completion needs approved knowledge integration or an explicit no-update reason")
         self.db.execute("UPDATE completions SET state='verified' WHERE feature_id=?", (feature_id,))
-        importance = self.db.execute("SELECT i.importance FROM importance_assessments i JOIN features f ON f.problem_id=i.problem_id WHERE f.id=?", (feature_id,)).fetchone()
+        importance = self.db.execute(
+            "SELECT i.importance FROM importance_assessments i JOIN features f ON f.problem_id=i.problem_id WHERE f.id=?",
+            (feature_id,),
+        ).fetchone()
         if importance:
-            self.award("feature", feature_id, float(importance[0]) * .70, "implementation_verified_and_integrated")
+            self.award("feature", feature_id, float(importance[0]) * 0.70, "implementation_verified_and_integrated")
         self._approval("completion", feature_id, "verified")
 
     def save_completion_review(self, feature_id: str, report: object) -> str:
         if not self.db.execute("SELECT 1 FROM features WHERE id=?", (feature_id,)).fetchone():
             raise WorkflowError("Solution not found")
         review_id = str(uuid.uuid4())
-        self.db.execute("INSERT INTO completion_reviews(id,feature_id,report_json) VALUES (?,?,?)", (review_id, feature_id, __import__("json").dumps(report)))
+        self.db.execute(
+            "INSERT INTO completion_reviews(id,feature_id,report_json) VALUES (?,?,?)",
+            (review_id, feature_id, __import__("json").dumps(report)),
+        )
         self.db.commit()
         return review_id
 
@@ -1689,7 +2065,13 @@ class WorkflowEngine:
             self.db.execute(
                 """INSERT INTO lineage_revisions(id,claim_id,author_type,text,is_current)
                    VALUES (?,?,?,?,?)""",
-                (initial_revision, claim_id, "ai" if claim["classification"] == "inferred" else "deterministic", claim["text"], 0 if carried else 1),
+                (
+                    initial_revision,
+                    claim_id,
+                    "ai" if claim["classification"] == "inferred" else "deterministic",
+                    claim["text"],
+                    0 if carried else 1,
+                ),
             )
             current_revision = initial_revision
             current_text = str(claim["text"])
@@ -1750,15 +2132,17 @@ class WorkflowEngine:
         for collection in ("decision_changes", "conflicts", "completion_evidence"):
             for item in document[collection]:
                 item["claim_id"] = claim_id_by_key.pop(item.pop("claim_key"))
-        document.update({
-            "snapshot_id": snapshot_id,
-            "feature_id": feature_id,
-            "version": version,
-            "status": "ready_without_inference",
-            "claims": claims_payload,
-            "evidence": evidence_payload,
-            "generation": {"schema_version": LINEAGE_SCHEMA_VERSION, "inference_error": ""},
-        })
+        document.update(
+            {
+                "snapshot_id": snapshot_id,
+                "feature_id": feature_id,
+                "version": version,
+                "status": "ready_without_inference",
+                "claims": claims_payload,
+                "evidence": evidence_payload,
+                "generation": {"schema_version": LINEAGE_SCHEMA_VERSION, "inference_error": ""},
+            }
+        )
         self.db.execute(
             "UPDATE lineage_snapshots SET status='ready_without_inference',document_json=? WHERE id=?",
             (json.dumps(document, ensure_ascii=False, sort_keys=True), snapshot_id),
@@ -1800,26 +2184,39 @@ class WorkflowEngine:
                     stage["occurred_at"] = completed["created_at"]
         claims: dict[str, dict[str, object]] = {}
         evidence: dict[str, dict[str, object]] = {}
-        for claim_row in self.db.execute("SELECT * FROM lineage_claims WHERE snapshot_id=? ORDER BY rowid", (snapshot["id"],)).fetchall():
+        for claim_row in self.db.execute(
+            "SELECT * FROM lineage_claims WHERE snapshot_id=? ORDER BY rowid", (snapshot["id"],)
+        ).fetchall():
             claim = dict(claim_row)
-            revisions = [dict(row) for row in self.db.execute(
-                "SELECT * FROM lineage_revisions WHERE claim_id=? ORDER BY created_at,rowid", (claim["id"],)
-            ).fetchall()]
+            revisions = [
+                dict(row)
+                for row in self.db.execute(
+                    "SELECT * FROM lineage_revisions WHERE claim_id=? ORDER BY created_at,rowid", (claim["id"],)
+                ).fetchall()
+            ]
             current = next((item for item in revisions if item["is_current"]), revisions[-1])
             evidence_ids: list[str] = []
-            for item in self.db.execute("SELECT * FROM lineage_evidence WHERE claim_id=? ORDER BY rowid", (claim["id"],)).fetchall():
+            for item in self.db.execute(
+                "SELECT * FROM lineage_evidence WHERE claim_id=? ORDER BY rowid", (claim["id"],)
+            ).fetchall():
                 value = dict(item)
                 evidence_ids.append(value["id"])
                 live_available = False
                 if value["live_entity_type"] in {"captures", "problems", "features"}:
-                    live_available = bool(self.db.execute(
-                        f"SELECT 1 FROM {value['live_entity_type']} WHERE id=?", (value["source_id"],)
-                    ).fetchone())
-                value["live_record"] = {
-                    "available": live_available,
-                    "entity_type": value["live_entity_type"],
-                    "entity_id": value["source_id"],
-                } if value["live_entity_type"] else None
+                    live_available = bool(
+                        self.db.execute(
+                            f"SELECT 1 FROM {value['live_entity_type']} WHERE id=?", (value["source_id"],)
+                        ).fetchone()
+                    )
+                value["live_record"] = (
+                    {
+                        "available": live_available,
+                        "entity_type": value["live_entity_type"],
+                        "entity_id": value["source_id"],
+                    }
+                    if value["live_entity_type"]
+                    else None
+                )
                 evidence[value["id"]] = value
             claims[claim["id"]] = {
                 **claim,
@@ -1830,26 +2227,31 @@ class WorkflowEngine:
                 "evidence_ids": evidence_ids,
                 "revisions": revisions,
             }
-        document.update({
-            "snapshot_id": snapshot["id"],
-            "feature_id": feature_id,
-            "version": snapshot["version"],
-            "status": snapshot["status"],
-            "source_hash": snapshot["source_hash"],
-            "claims": claims,
-            "evidence": evidence,
-            "generation": {
-                "schema_version": snapshot["schema_version"],
-                "created_at": snapshot["created_at"],
-                "inference_error": snapshot["inference_error"],
-            },
-        })
+        document.update(
+            {
+                "snapshot_id": snapshot["id"],
+                "feature_id": feature_id,
+                "version": snapshot["version"],
+                "status": snapshot["status"],
+                "source_hash": snapshot["source_hash"],
+                "claims": claims,
+                "evidence": evidence,
+                "generation": {
+                    "schema_version": snapshot["schema_version"],
+                    "created_at": snapshot["created_at"],
+                    "inference_error": snapshot["inference_error"],
+                },
+            }
+        )
         return document
 
     def lineages_for_problem(self, problem_id: str, ensure: bool = True) -> list[dict[str, object]]:
-        feature_ids = [str(row[0]) for row in self.db.execute(
-            "SELECT id FROM features WHERE problem_id=? ORDER BY created_at,rowid", (problem_id,)
-        ).fetchall()]
+        feature_ids = [
+            str(row[0])
+            for row in self.db.execute(
+                "SELECT id FROM features WHERE problem_id=? ORDER BY created_at,rowid", (problem_id,)
+            ).fetchall()
+        ]
         result: list[dict[str, object]] = []
         for feature_id in feature_ids:
             try:
@@ -1902,7 +2304,9 @@ class WorkflowEngine:
         self.db.commit()
         return dict(self.db.execute("SELECT * FROM lineage_revisions WHERE id=?", (revision_id,)).fetchone())
 
-    def add_lineage_inferences(self, feature_id: str, snapshot_id: str, inferences: list[dict[str, object]]) -> dict[str, object]:
+    def add_lineage_inferences(
+        self, feature_id: str, snapshot_id: str, inferences: list[dict[str, object]]
+    ) -> dict[str, object]:
         snapshot = self.db.execute(
             "SELECT * FROM lineage_snapshots WHERE id=? AND feature_id=?", (snapshot_id, feature_id)
         ).fetchone()
@@ -1910,7 +2314,8 @@ class WorkflowEngine:
             raise WorkflowError("Lineage snapshot not found")
         document = json.loads(snapshot["document_json"])
         evidence_ids = {
-            str(row[0]) for row in self.db.execute(
+            str(row[0])
+            for row in self.db.execute(
                 "SELECT le.id FROM lineage_evidence le JOIN lineage_claims lc ON lc.id=le.claim_id WHERE lc.snapshot_id=?",
                 (snapshot_id,),
             )
@@ -1954,7 +2359,17 @@ class WorkflowEngine:
                     """INSERT INTO lineage_evidence(
                          id,claim_id,source_type,source_id,field_name,excerpt,source_hash,live_entity_type,captured_at
                        ) VALUES (?,?,?,?,?,?,?,?,?)""",
-                    (clone_id, claim_id, source["source_type"], source["source_id"], source["field_name"], source["excerpt"], source["source_hash"], source["live_entity_type"], source["captured_at"]),
+                    (
+                        clone_id,
+                        claim_id,
+                        source["source_type"],
+                        source["source_id"],
+                        source["field_name"],
+                        source["excerpt"],
+                        source["source_hash"],
+                        source["live_entity_type"],
+                        source["captured_at"],
+                    ),
                 )
             document.setdefault("decision_changes", []).append({"claim_id": claim_id, "event_type": "ai_inferred"})
         document["status"] = "ready"
@@ -2000,14 +2415,33 @@ class WorkflowEngine:
             self.db.execute("SELECT * FROM features WHERE problem_id=? ORDER BY created_at", (problem_id,)).fetchall(),
             "en",
         )
-        decisions = self.db.execute("SELECT * FROM problem_completion_decisions WHERE problem_id=? ORDER BY created_at", (problem_id,)).fetchall()
-        run_rows = self.db.execute("SELECT * FROM ai_runs WHERE entity_id IN (SELECT id FROM features WHERE problem_id=?) OR entity_id=? ORDER BY created_at", (problem_id, problem_id)).fetchall()
-        reviews = self.db.execute("SELECT cr.* FROM completion_reviews cr JOIN features f ON f.id=cr.feature_id WHERE f.problem_id=? ORDER BY cr.created_at", (problem_id,)).fetchall()
-        conflict_rows = self.db.execute("SELECT c.* FROM conflict_reports c JOIN features f ON f.id=c.feature_id WHERE f.problem_id=? ORDER BY c.created_at", (problem_id,)).fetchall()
+        decisions = self.db.execute(
+            "SELECT * FROM problem_completion_decisions WHERE problem_id=? ORDER BY created_at", (problem_id,)
+        ).fetchall()
+        run_rows = self.db.execute(
+            "SELECT * FROM ai_runs WHERE entity_id IN (SELECT id FROM features WHERE problem_id=?) OR entity_id=? ORDER BY created_at",
+            (problem_id, problem_id),
+        ).fetchall()
+        reviews = self.db.execute(
+            "SELECT cr.* FROM completion_reviews cr JOIN features f ON f.id=cr.feature_id WHERE f.problem_id=? ORDER BY cr.created_at",
+            (problem_id,),
+        ).fetchall()
+        conflict_rows = self.db.execute(
+            "SELECT c.* FROM conflict_reports c JOIN features f ON f.id=c.feature_id WHERE f.problem_id=? ORDER BY c.created_at",
+            (problem_id,),
+        ).fetchall()
         # Archive names are read by people, so remove workflow-state prefixes and
         # never expose the database UUID in the document name or frontmatter.
         title = str(problem["statement"]).replace("\n", " ").strip()[:90] or "Completed work"
-        title = re.sub(r"^(?:(?:in[ -]?progress|proposed|completed)\s+)?(?:solution|problem)\s*[:\-–—]*\s*", "", title, flags=re.IGNORECASE).strip() or "Completed work"
+        title = (
+            re.sub(
+                r"^(?:(?:in[ -]?progress|proposed|completed)\s+)?(?:solution|problem)\s*[:\-–—]*\s*",
+                "",
+                title,
+                flags=re.IGNORECASE,
+            ).strip()
+            or "Completed work"
+        )
         safe_title = "".join(char if char.isalnum() or char in " -_" else "" for char in title).strip() or problem_id
         path = f"{directory.strip('/')}/{safe_title}.md"
         raw_path = f"{directory.strip('/')}/assets/{safe_title}.raw.md"
@@ -2019,12 +2453,37 @@ class WorkflowEngine:
             "Image summaries recorded during work are the canonical visual summary at completion; do not create a second completion summary for those captures.",
         ]
         lines = [
-            "---", "type: completed-work-playbook", "status: completed", "llm_wiki_managed: true", "canonical_locale: en",
-            "tags: [llm-wiki, completed-work, playbook]", "---", "", f"# {title}", "", "## Summary", *[f"- {item}" for item in summary],
-            "", "## Problem context", str(problem["detail"] or problem["statement"]), "", "## Approved solutions and decisions",
+            "---",
+            "type: completed-work-playbook",
+            "status: completed",
+            "llm_wiki_managed: true",
+            "canonical_locale: en",
+            "tags: [llm-wiki, completed-work, playbook]",
+            "---",
+            "",
+            f"# {title}",
+            "",
+            "## Summary",
+            *[f"- {item}" for item in summary],
+            "",
+            "## Problem context",
+            str(problem["detail"] or problem["statement"]),
+            "",
+            "## Approved solutions and decisions",
         ]
         for feature in features:
-            lines.extend([f"### {feature['title']}", f"- Intended outcome: {feature['outcome']}", f"- Non-goals: {feature['non_goals'] or 'None recorded.'}", "- Validation Criteria:", feature["validation_criteria"] or "Not recorded.", f"- Conflict state: {feature['conflict_state']}", f"- Workflow state: {feature['state']}", ""])
+            lines.extend(
+                [
+                    f"### {feature['title']}",
+                    f"- Intended outcome: {feature['outcome']}",
+                    f"- Non-goals: {feature['non_goals'] or 'None recorded.'}",
+                    "- Validation Criteria:",
+                    feature["validation_criteria"] or "Not recorded.",
+                    f"- Conflict state: {feature['conflict_state']}",
+                    f"- Workflow state: {feature['state']}",
+                    "",
+                ]
+            )
         lines.extend(["## Solution progress records"])
         for feature in features:
             progress = self.solution_progress(feature["id"])
@@ -2033,7 +2492,9 @@ class WorkflowEngine:
                 lines.extend([f"- {entry['created_at']}: {entry['body'] or 'Image capture recorded.'}"])
                 if entry["image_data"]:
                     media_type = str(entry["image_media_type"] or "image/png")
-                    extension = {"image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "image/gif": "gif"}.get(media_type, "bin")
+                    extension = {"image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "image/gif": "gif"}.get(
+                        media_type, "bin"
+                    )
                     # Raw Markdown lives beside these image files in assets/.
                     # A filename-only Obsidian embed avoids resolving assets/
                     # twice from an already nested Raw document.
@@ -2058,7 +2519,11 @@ class WorkflowEngine:
             lines.extend([f"- {report.get('resolution', 'review')}: {report.get('summary', 'No summary recorded.')}"])
         lines.extend(["", "## Human completion decision"])
         for row in decisions:
-            lines.extend([f"- {row['created_at']}: {row['reason'] or 'Completed after human review; no additional reason recorded.'}"])
+            lines.extend(
+                [
+                    f"- {row['created_at']}: {row['reason'] or 'Completed after human review; no additional reason recorded.'}"
+                ]
+            )
         lines.extend(["", "## Feedback and workflow history"])
         for row in run_rows:
             lines.extend([f"### {row['kind']} · {row['created_at']}", row["output_text"] or row["input_text"], ""])
@@ -2068,13 +2533,16 @@ class WorkflowEngine:
 
         related: list[str] = []
         title_terms = {word.casefold() for word in re.findall(r"[\w-]{4,}", title)}
-        for row in self.db.execute("SELECT path FROM completion_playbooks WHERE problem_id<>? ORDER BY created_at DESC", (problem_id,)):
+        for row in self.db.execute(
+            "SELECT path FROM completion_playbooks WHERE problem_id<>? ORDER BY created_at DESC", (problem_id,)
+        ):
             candidate = str(row["path"])
             candidate_terms = {word.casefold() for word in re.findall(r"[\w-]{4,}", candidate)}
             if len(title_terms & candidate_terms) >= 2:
                 related.append(candidate)
             if len(related) == 3:
                 break
+
         # Keep this document genuinely useful without inventing a retrospective.
         # Every sentence below is either a workflow field or a count from the
         # preserved record.  The full, unabridged material remains in Raw Data.
@@ -2093,19 +2561,34 @@ class WorkflowEngine:
             progress_counts["checked"] += sum(1 for item in progress["checklist"] if item["checked"])
 
         main_lines = [
-            "---", "type: completed-work-playbook", "status: completed", "llm_wiki_managed: true", "canonical_locale: en",
-            "tags: [llm-wiki, completed-work, playbook]", "---", "", f"# {title}", "", "## Executive Summary",
-            "", "### Purpose", concise(problem["statement"], 220), "", "### What was recorded for completion",
+            "---",
+            "type: completed-work-playbook",
+            "status: completed",
+            "llm_wiki_managed: true",
+            "canonical_locale: en",
+            "tags: [llm-wiki, completed-work, playbook]",
+            "---",
+            "",
+            f"# {title}",
+            "",
+            "## Executive Summary",
+            "",
+            "### Purpose",
+            concise(problem["statement"], 220),
+            "",
+            "### What was recorded for completion",
         ]
         problem_detail = concise(problem["detail"], 240)
         if problem_detail and problem_detail != concise(problem["statement"], 220):
             main_lines.extend(["", "### Context recorded", problem_detail])
         if features:
             for feature in features:
-                main_lines.extend([
-                    f"- **{concise(feature['title'], 100)}** — intended outcome: {concise(feature['outcome'], 220)}",
-                    f"  - Workflow record: {feature['state']}; conflict record: {feature['conflict_state']}.",
-                ])
+                main_lines.extend(
+                    [
+                        f"- **{concise(feature['title'], 100)}** — intended outcome: {concise(feature['outcome'], 220)}",
+                        f"  - Workflow record: {feature['state']}; conflict record: {feature['conflict_state']}.",
+                    ]
+                )
         else:
             main_lines.append("- No Solution record was attached to this completed Problem.")
 
@@ -2116,7 +2599,9 @@ class WorkflowEngine:
             f"{progress_counts['checklist']} checklist item{'s' if progress_counts['checklist'] != 1 else ''} ({progress_counts['checked']} checked)",
         ]
         if progress_counts["images"]:
-            evidence_bits.append(f"{progress_counts['images']} original image capture{'s' if progress_counts['images'] != 1 else ''}")
+            evidence_bits.append(
+                f"{progress_counts['images']} original image capture{'s' if progress_counts['images'] != 1 else ''}"
+            )
         main_lines.append("- Retained: " + "; ".join(evidence_bits) + ".")
         if reviews:
             latest_review = reviews[-1]
@@ -2124,38 +2609,78 @@ class WorkflowEngine:
                 review = json.loads(latest_review["report_json"])
             except (TypeError, json.JSONDecodeError):
                 review = {"summary": latest_review["report_json"]}
-            main_lines.append(f"- Latest completion review: {concise(review.get('executive_summary') or review.get('summary') or review.get('resolution') or 'Recorded without a summary.')}.")
+            main_lines.append(
+                f"- Latest completion review: {concise(review.get('executive_summary') or review.get('summary') or review.get('resolution') or 'Recorded without a summary.')}."
+            )
         else:
             main_lines.append("- No completion-review summary was recorded.")
         if decisions:
             latest_decision = decisions[-1]
             reason = concise(latest_decision["reason"], 180)
-            main_lines.append(f"- Human completion decision ({latest_decision['created_at']}): {reason or 'No additional reason recorded.'}")
+            main_lines.append(
+                f"- Human completion decision ({latest_decision['created_at']}): {reason or 'No additional reason recorded.'}"
+            )
 
-        main_lines.extend([
-            "", "### Reuse note",
-            "- Recorded AI Image Summaries are the canonical visual summaries; do not create a second completion-time image summary.",
-        ])
+        main_lines.extend(
+            [
+                "",
+                "### Reuse note",
+                "- Recorded AI Image Summaries are the canonical visual summaries; do not create a second completion-time image summary.",
+            ]
+        )
         if executive_summary.strip():
             # The AI summary is a compact retrieval index; the narrative stays
             # in a separate report body so future conflict checks can read it first.
             main_lines = [
-                "---", "type: completed-work-playbook", "status: completed", "llm_wiki_managed: true", "canonical_locale: en",
-                "tags: [llm-wiki, completed-work, playbook]", "---", "", f"# {title}", "", "## Executive Summary", "", executive_summary.strip(),
+                "---",
+                "type: completed-work-playbook",
+                "status: completed",
+                "llm_wiki_managed: true",
+                "canonical_locale: en",
+                "tags: [llm-wiki, completed-work, playbook]",
+                "---",
+                "",
+                f"# {title}",
+                "",
+                "## Executive Summary",
+                "",
+                executive_summary.strip(),
             ]
             if report_body.strip():
                 main_lines.extend(["", "## Completion Report", "", report_body.strip()])
         else:
             # Offline fallback: concise, factual, and deliberately separate
             # from the detailed Raw Data rather than copying it into a report.
-            completed_outcomes = [f"- {concise(feature['title'], 100)}: {concise(feature['outcome'], 180)}" for feature in features]
+            completed_outcomes = [
+                f"- {concise(feature['title'], 100)}: {concise(feature['outcome'], 180)}" for feature in features
+            ]
             main_lines = [
-                "---", "type: completed-work-playbook", "status: completed", "llm_wiki_managed: true", "canonical_locale: en",
-                "tags: [llm-wiki, completed-work, playbook]", "---", "", f"# {title}", "", "## Executive Summary", "",
-                "### Why", concise(problem["statement"], 220), "", "### What changed", *(completed_outcomes or ["- No Solution record was attached."]),
-                "", "### How the work was carried out", f"- The preserved work record contains {progress_counts['entries']} work logs and {progress_counts['comments']} comments.",
-                "", "### Final verification", f"- {progress_counts['checklist']} checklist items were recorded; {progress_counts['checked']} are checked.",
-                "", "### Decision and risks", "- The human completion decision and any unresolved evidence are preserved in Raw Data.",
+                "---",
+                "type: completed-work-playbook",
+                "status: completed",
+                "llm_wiki_managed: true",
+                "canonical_locale: en",
+                "tags: [llm-wiki, completed-work, playbook]",
+                "---",
+                "",
+                f"# {title}",
+                "",
+                "## Executive Summary",
+                "",
+                "### Why",
+                concise(problem["statement"], 220),
+                "",
+                "### What changed",
+                *(completed_outcomes or ["- No Solution record was attached."]),
+                "",
+                "### How the work was carried out",
+                f"- The preserved work record contains {progress_counts['entries']} work logs and {progress_counts['comments']} comments.",
+                "",
+                "### Final verification",
+                f"- {progress_counts['checklist']} checklist items were recorded; {progress_counts['checked']} are checked.",
+                "",
+                "### Decision and risks",
+                "- The human completion decision and any unresolved evidence are preserved in Raw Data.",
             ]
         for lineage in lineages or []:
             main_lines.extend(["", *render_lineage_markdown(lineage)])
@@ -2175,7 +2700,9 @@ class WorkflowEngine:
         assets: list[tuple[str, bytes]] = []
         for row in rows:
             media_type = str(row["image_media_type"] or "image/png")
-            extension = {"image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "image/gif": "gif"}.get(media_type, "bin")
+            extension = {"image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "image/gif": "gif"}.get(
+                media_type, "bin"
+            )
             try:
                 data = base64.b64decode(str(row["image_data"]), validate=True)
             except ValueError:
@@ -2216,15 +2743,48 @@ class WorkflowEngine:
         self.db.commit()
 
     def handoff(self, feature_id: str) -> str:
-        feature = self.db.execute("SELECT f.*,p.statement FROM features f JOIN problems p ON p.id=f.problem_id WHERE f.id=?", (feature_id,)).fetchone()
+        feature = self.db.execute(
+            "SELECT f.*,p.statement FROM features f JOIN problems p ON p.id=f.problem_id WHERE f.id=?", (feature_id,)
+        ).fetchone()
         if not feature or feature["state"] != "approved":
             raise WorkflowError("Handoff requires an approved feature")
-        lines = ["# Implementation handoff", "", "## Approved problem", feature["statement"], "", "## Approved solution", feature["title"], feature["outcome"], "", "## Constraints and non-goals", feature["non_goals"] or "None recorded.", "", "## Definition of done", "Review the intended outcome and validation criteria recorded in the Solution.", "", "## Unanswered questions", "None recorded."]
+        lines = [
+            "# Implementation handoff",
+            "",
+            "## Approved problem",
+            feature["statement"],
+            "",
+            "## Approved solution",
+            feature["title"],
+            feature["outcome"],
+            "",
+            "## Constraints and non-goals",
+            feature["non_goals"] or "None recorded.",
+            "",
+            "## Definition of done",
+            "Review the intended outcome and validation criteria recorded in the Solution.",
+            "",
+            "## Unanswered questions",
+            "None recorded.",
+        ]
         return "\n".join(lines)
 
-    def save_patch_proposal(self, feature_id: str, path: str, operation: str, heading: str, content: str, base_hash: str, before: str, proposed: str) -> dict[str, str]:
+    def save_patch_proposal(
+        self,
+        feature_id: str,
+        path: str,
+        operation: str,
+        heading: str,
+        content: str,
+        base_hash: str,
+        before: str,
+        proposed: str,
+    ) -> dict[str, str]:
         patch_id = str(uuid.uuid4())
-        self.db.execute("INSERT INTO patch_proposals(id,feature_id,path,operation,heading,content,base_hash,before_text,proposed_text) VALUES (?,?,?,?,?,?,?,?,?)", (patch_id, feature_id, path, operation, heading, content, base_hash, before, proposed))
+        self.db.execute(
+            "INSERT INTO patch_proposals(id,feature_id,path,operation,heading,content,base_hash,before_text,proposed_text) VALUES (?,?,?,?,?,?,?,?,?)",
+            (patch_id, feature_id, path, operation, heading, content, base_hash, before, proposed),
+        )
         self.db.commit()
         return dict(self.db.execute("SELECT * FROM patch_proposals WHERE id=?", (patch_id,)).fetchone())
 
@@ -2236,8 +2796,12 @@ class WorkflowEngine:
 
     def mark_patch_applied(self, patch_id: str) -> None:
         patch = self.patch(patch_id)
-        self.db.execute("UPDATE patch_proposals SET status='applied',reverse_text=? WHERE id=?", (patch["before_text"], patch_id))
-        self.db.execute("UPDATE completions SET knowledge_status='integrated' WHERE feature_id=?", (patch["feature_id"],))
+        self.db.execute(
+            "UPDATE patch_proposals SET status='applied',reverse_text=? WHERE id=?", (patch["before_text"], patch_id)
+        )
+        self.db.execute(
+            "UPDATE completions SET knowledge_status='integrated' WHERE feature_id=?", (patch["feature_id"],)
+        )
         self.db.commit()
 
     def undo_patch(self, patch_id: str) -> dict[str, str]:
@@ -2256,17 +2820,28 @@ class WorkflowEngine:
         values = dict(row)
         if entity_type in {"problems", "features"}:
             values = self.localized.overlay(entity_type, values, "en")
-        title = values["statement"] if entity_type == "problems" else values.get("title", values.get("question", singular))
-        safe_title = "".join(char if char.isalnum() or char in " -_" else "" for char in str(title)).strip()[:80] or entity_id
+        title = (
+            values["statement"] if entity_type == "problems" else values.get("title", values.get("question", singular))
+        )
+        safe_title = (
+            "".join(char if char.isalnum() or char in " -_" else "" for char in str(title)).strip()[:80] or entity_id
+        )
         number = {"questions": "10. Questions", "problems": "20. Problems", "features": "30. Features"}[entity_type]
         path = f"{date.today().year}/{number}/{safe_title}.md"
         frontmatter = f"---\nllm_wiki_id: {entity_id}\nllm_wiki_managed: true\ncanonical_locale: en\ntype: {singular}\nstate: {row['state']}\n---\n"
         metadata = {"content_locale", "available_locales", "fallback_used", "localized_versions"}
-        body = "\n".join(f"- **{key.replace('_', ' ').title()}**: {value}" for key, value in values.items() if key not in {"id", "capture_id", "problem_id", "feature_id", "created_at", *metadata} and value)
+        body = "\n".join(
+            f"- **{key.replace('_', ' ').title()}**: {value}"
+            for key, value in values.items()
+            if key not in {"id", "capture_id", "problem_id", "feature_id", "created_at", *metadata} and value
+        )
         return path, f"{frontmatter}\n# {title}\n\n{body}\n"
 
     def mirror(self, entity_type: str, entity_id: str, path: str, source_hash: str) -> None:
-        self.db.execute("INSERT OR REPLACE INTO mirror_files(entity_type,entity_id,path,source_hash) VALUES (?,?,?,?)", (entity_type, entity_id, path, source_hash))
+        self.db.execute(
+            "INSERT OR REPLACE INTO mirror_files(entity_type,entity_id,path,source_hash) VALUES (?,?,?,?)",
+            (entity_type, entity_id, path, source_hash),
+        )
         self.db.commit()
 
     def archive(self, entity_type: str, entity_id: str) -> str:
@@ -2274,7 +2849,9 @@ class WorkflowEngine:
             verified = self.db.execute("SELECT state FROM completions WHERE feature_id=?", (entity_id,)).fetchone()
             if not verified or verified[0] != "verified":
                 raise WorkflowError("A feature can be archived only after verified completion")
-        mirror = self.db.execute("SELECT path FROM mirror_files WHERE entity_type=? AND entity_id=?", (entity_type, entity_id)).fetchone()
+        mirror = self.db.execute(
+            "SELECT path FROM mirror_files WHERE entity_type=? AND entity_id=?", (entity_type, entity_id)
+        ).fetchone()
         if not mirror:
             raise WorkflowError("Create a generated projection before archiving")
         self.db.execute(f"UPDATE {entity_type} SET state='archived' WHERE id=?", (entity_id,))
@@ -2282,5 +2859,8 @@ class WorkflowEngine:
         return str(mirror[0])
 
     def _approval(self, entity_type: str, entity_id: str, action: str) -> None:
-        self.db.execute("INSERT INTO approvals(id,entity_type,entity_id,action) VALUES (?,?,?,?)", (str(uuid.uuid4()), entity_type, entity_id, action))
+        self.db.execute(
+            "INSERT INTO approvals(id,entity_type,entity_id,action) VALUES (?,?,?,?)",
+            (str(uuid.uuid4()), entity_type, entity_id, action),
+        )
         self.db.commit()

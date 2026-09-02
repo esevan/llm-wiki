@@ -1,13 +1,19 @@
+import asyncio
 import json
 import re
 import threading
-import asyncio
 from pathlib import Path
 
 from fastapi.testclient import TestClient
 
 from llm_wiki.web.app import create_app
-from tests.fakes.ai_provider import FastAdapter, run_completion_report_job, run_lineage_job, run_localization_job, run_workflow_job
+from tests.fakes.ai_provider import (
+    FastAdapter,
+    run_completion_report_job,
+    run_lineage_job,
+    run_localization_job,
+    run_workflow_job,
+)
 
 
 def test_api_is_usable_without_ai_or_embeddings(tmp_path: Path) -> None:
@@ -54,8 +60,14 @@ def test_locale_resources_setting_and_localized_board_are_persistent_and_provide
             json={"statement": "한글 문제", "detail": "한글 맥락", "localized_versions": versions},
         )
         assert created.status_code == 201
-        assert client.get("/api/board", headers={"X-LLM-Wiki-Locale": "en"}).json()["problems"][0]["statement"] == "English problem"
-        assert client.get("/api/board", headers={"X-LLM-Wiki-Locale": "ko"}).json()["problems"][0]["statement"] == "한글 문제"
+        assert (
+            client.get("/api/board", headers={"X-LLM-Wiki-Locale": "en"}).json()["problems"][0]["statement"]
+            == "English problem"
+        )
+        assert (
+            client.get("/api/board", headers={"X-LLM-Wiki-Locale": "ko"}).json()["problems"][0]["statement"]
+            == "한글 문제"
+        )
 
     with TestClient(create_app(tmp_path, db_path)) as client:
         restored_setting = client.get("/api/settings/locale", params={"browser_locale": "ko-KR"})
@@ -81,7 +93,9 @@ def test_legacy_content_falls_back_unchanged_and_can_be_manually_supplemented(tm
         assert supplemented["id"] == problem["id"]
 
 
-def test_image_summary_generates_both_locales_once_and_progress_reads_use_stored_versions(tmp_path: Path, monkeypatch) -> None:
+def test_image_summary_generates_both_locales_once_and_progress_reads_use_stored_versions(
+    tmp_path: Path, monkeypatch
+) -> None:
     class SummaryProvider:
         calls = 0
         messages: list[dict[str, object]] = []
@@ -125,12 +139,12 @@ def test_image_summary_generates_both_locales_once_and_progress_reads_use_stored
         prompt = str(SummaryProvider.messages[0]["content"][0]["text"])
         assert '"ko"' in prompt and '"en"' in prompt
 
-        korean = client.get(
-            f"/api/features/{feature['id']}/progress", headers={"X-LLM-Wiki-Locale": "ko"}
-        ).json()["entries"][0]
-        english = client.get(
-            f"/api/features/{feature['id']}/progress", headers={"X-LLM-Wiki-Locale": "en"}
-        ).json()["entries"][0]
+        korean = client.get(f"/api/features/{feature['id']}/progress", headers={"X-LLM-Wiki-Locale": "ko"}).json()[
+            "entries"
+        ][0]
+        english = client.get(f"/api/features/{feature['id']}/progress", headers={"X-LLM-Wiki-Locale": "en"}).json()[
+            "entries"
+        ][0]
         assert korean["image_summary"] == "화면에 완료 상태가 보입니다."
         assert english["image_summary"] == "The screen shows the completed state."
         assert korean["body"] == english["body"] == "원문 작업 기록"
@@ -145,9 +159,9 @@ def test_image_summary_generates_both_locales_once_and_progress_reads_use_stored
         failed_id = failed.json()["id"]
         asyncio.run(run_workflow_job(app, failed_id, SummaryProvider()))
         assert client.get(f"/api/jobs/{failed_id}").json()["status"] == "failed"
-        preserved = client.get(
-            f"/api/features/{feature['id']}/progress", headers={"X-LLM-Wiki-Locale": "en"}
-        ).json()["entries"][0]
+        preserved = client.get(f"/api/features/{feature['id']}/progress", headers={"X-LLM-Wiki-Locale": "en"}).json()[
+            "entries"
+        ][0]
         assert preserved["image_summary"] == "The screen shows the completed state."
 
 
@@ -184,7 +198,9 @@ def test_managed_knowledge_korean_translation_cache_tracks_canonical_hash(tmp_pa
         assert TranslationProvider.calls == 1
 
 
-def test_progressive_knowledge_read_is_provider_free_then_streams_complete_paragraphs(tmp_path: Path, monkeypatch) -> None:
+def test_progressive_knowledge_read_is_provider_free_then_streams_complete_paragraphs(
+    tmp_path: Path, monkeypatch
+) -> None:
     class ParagraphProvider:
         calls = 0
 
@@ -208,9 +224,7 @@ def test_progressive_knowledge_read_is_provider_free_then_streams_complete_parag
     monkeypatch.setattr(app.state.provider_settings, "_secret", lambda: "secret")
 
     with TestClient(app) as client:
-        fast = client.get(
-            "/api/knowledge", params={"path": path, "locale": "ko", "translate": "false"}
-        ).json()
+        fast = client.get("/api/knowledge", params={"path": path, "locale": "ko", "translate": "false"}).json()
         assert fast["cache_status"] == "pending"
         assert fast["markdown"] == target.read_text(encoding="utf-8")
         assert ParagraphProvider.calls == 0
@@ -220,9 +234,7 @@ def test_progressive_knowledge_read_is_provider_free_then_streams_complete_parag
         asyncio.run(run_localization_job(app, response.json()["id"], ParagraphProvider()))
         assert ParagraphProvider.calls == 2
 
-        cached = client.get(
-            "/api/knowledge", params={"path": path, "locale": "ko", "translate": "false"}
-        ).json()
+        cached = client.get("/api/knowledge", params={"path": path, "locale": "ko", "translate": "false"}).json()
         assert cached["cache_status"] == "hit"
         assert "첫 문단." in cached["markdown"]
         derived = tmp_path / "Translations/ko" / path
@@ -317,7 +329,9 @@ def test_korean_managed_knowledge_patch_is_normalized_before_review_and_apply(tm
         "---\nllm_wiki_managed: true\ncanonical_locale: en\n---\n# Result\n\n## Notes\nOriginal.\n",
         encoding="utf-8",
     )
-    app = create_app(tmp_path, tmp_path / "knowledge-patch.sqlite", fast_queue_client=FastAdapter(NormalizingProvider()))
+    app = create_app(
+        tmp_path, tmp_path / "knowledge-patch.sqlite", fast_queue_client=FastAdapter(NormalizingProvider())
+    )
     app.state.provider_settings.save("http://provider.test/v1", "test-model", None)
     monkeypatch.setattr(app.state.provider_settings, "_secret", lambda: "secret")
 
@@ -325,7 +339,12 @@ def test_korean_managed_knowledge_patch_is_normalized_before_review_and_apply(tm
         proposal = client.post(
             "/api/features/feature-1/patches",
             headers={"X-LLM-Wiki-Locale": "ko"},
-            json={"path": "Knowledge/patch.md", "operation": "insert_after_heading", "heading": "Notes", "content": "한국어 보강 `code_id`."},
+            json={
+                "path": "Knowledge/patch.md",
+                "operation": "insert_after_heading",
+                "heading": "Notes",
+                "content": "한국어 보강 `code_id`.",
+            },
         )
         assert proposal.status_code == 201
         patch = proposal.json()
@@ -367,7 +386,11 @@ def test_bilingual_problem_refinement_updates_both_stored_versions(tmp_path: Pat
         assert set(draft["localized_versions"]) == {"ko", "en"}
         response = client.put(
             f"/api/items/problems/{problem['id']}",
-            json={"title": draft["title"], "detail": draft["detail"], "localized_versions": draft["localized_versions"]},
+            json={
+                "title": draft["title"],
+                "detail": draft["detail"],
+                "localized_versions": draft["localized_versions"],
+            },
         )
         assert response.status_code == 204
         korean = client.get("/api/board", headers={"X-LLM-Wiki-Locale": "ko"}).json()["problems"][0]
@@ -393,10 +416,13 @@ def test_manual_problem_update_persists_title_and_multiline_detail(tmp_path: Pat
         capture = client.post("/api/captures", json={"text": "Original"}).json()
         problem = client.post(f"/api/captures/{capture['id']}/promote", json={}).json()
 
-        response = client.put(f"/api/items/problems/{problem['id']}", json={
-            "title": "Updated owner's problem",
-            "detail": "Updated line one\nUpdated line two",
-        })
+        response = client.put(
+            f"/api/items/problems/{problem['id']}",
+            json={
+                "title": "Updated owner's problem",
+                "detail": "Updated line one\nUpdated line two",
+            },
+        )
 
         assert response.status_code == 204
         saved = next(item for item in client.get("/api/board").json()["problems"] if item["id"] == problem["id"])
@@ -417,7 +443,9 @@ def test_recent_archive_panel_data_comes_from_the_vault_index(tmp_path: Path) ->
 def test_promoted_capture_leaves_the_active_inbox_but_remains_linked(tmp_path: Path) -> None:
     with TestClient(create_app(tmp_path, tmp_path / "db.sqlite")) as client:
         capture = client.post("/api/captures", json={"text": "A raw thought"}).json()
-        problem = client.post(f"/api/captures/{capture['id']}/promote", json={"statement": "A reviewable problem"}).json()
+        problem = client.post(
+            f"/api/captures/{capture['id']}/promote", json={"statement": "A reviewable problem"}
+        ).json()
         assert client.post(f"/api/captures/{capture['id']}/promote", json={}).status_code == 201
         board = client.get("/api/board").json()
         assert board["captures"] == []
@@ -457,13 +485,33 @@ def test_completed_problem_archives_full_work_log_checklist_and_image_capture(tm
         capture = client.post("/api/captures", json={"text": "Keep the work record"}).json()
         problem = client.post(f"/api/captures/{capture['id']}/promote", json={}).json()
         assert client.post(f"/api/problems/{problem['id']}/approve").status_code == 204
-        solution = client.post(f"/api/problems/{problem['id']}/features", json={"title": "Preserve history", "outcome": "Review the record", "non_goals": "None", "validation_criteria": "- [ ] Review the record"}).json()
-        assert client.put(f"/api/features/{solution['id']}/conflict", json={"state": "clear", "citation": "Human review"}).status_code == 200
+        solution = client.post(
+            f"/api/problems/{problem['id']}/features",
+            json={
+                "title": "Preserve history",
+                "outcome": "Review the record",
+                "non_goals": "None",
+                "validation_criteria": "- [ ] Review the record",
+            },
+        ).json()
+        assert (
+            client.put(
+                f"/api/features/{solution['id']}/conflict", json={"state": "clear", "citation": "Human review"}
+            ).status_code
+            == 200
+        )
         assert client.post(f"/api/features/{solution['id']}/approve").status_code == 204
-        entry = client.post(f"/api/features/{solution['id']}/progress", json={"body": "Captured the final state", "image_data": "aGVsbG8=", "image_media_type": "image/png"}).json()
-        assert client.post(f"/api/progress/{entry['id']}/comments", json={"body": "Keep this evidence"}).status_code == 201
+        entry = client.post(
+            f"/api/features/{solution['id']}/progress",
+            json={"body": "Captured the final state", "image_data": "aGVsbG8=", "image_media_type": "image/png"},
+        ).json()
+        assert (
+            client.post(f"/api/progress/{entry['id']}/comments", json={"body": "Keep this evidence"}).status_code == 201
+        )
         client.app.state.workflow.set_solution_progress_summary(entry["id"], "The final state is captured.")
-        response = client.post(f"/api/problems/{problem['id']}/complete", json={"reason": "Archive the full work record"})
+        response = client.post(
+            f"/api/problems/{problem['id']}/complete", json={"reason": "Archive the full work record"}
+        )
         assert response.status_code == 200
         playbook = tmp_path / response.json()["path"]
         content = playbook.read_text(encoding="utf-8")
@@ -519,7 +567,9 @@ def test_completed_solution_can_explicitly_create_a_follow_up_problem(tmp_path: 
         workflow.record_conflict_evaluation(solution["id"], "clear", "Human review")
         workflow.approve_feature(solution["id"])
         workflow.record_completion(solution["id"], "Done", "Recorded")
-        workflow.db.execute("UPDATE completions SET knowledge_status='integrated' WHERE feature_id=?", (solution["id"],))
+        workflow.db.execute(
+            "UPDATE completions SET knowledge_status='integrated' WHERE feature_id=?", (solution["id"],)
+        )
         workflow.db.commit()
         workflow.verify_completion(solution["id"])
         workflow.complete_problem(problem["id"], "Finished")
@@ -556,14 +606,19 @@ def test_completion_generates_final_document_from_lineage_context(tmp_path: Path
     monkeypatch.setattr(app.state.provider_settings, "_secret", lambda: "test-key")
     with TestClient(app) as client:
         capture = client.post("/api/captures", json={"text": "Original lineage feedback"}).json()
-        problem = client.post(f"/api/captures/{capture['id']}/promote", json={"detail": "## Desired outcome\nTrace the origin"}).json()
+        problem = client.post(
+            f"/api/captures/{capture['id']}/promote", json={"detail": "## Desired outcome\nTrace the origin"}
+        ).json()
         client.post(f"/api/problems/{problem['id']}/approve")
-        solution = client.post(f"/api/problems/{problem['id']}/features", json={
-            "title": "Trace completed work",
-            "outcome": "The final record includes Lineage",
-            "non_goals": "No extra workflow stage",
-            "validation_criteria": "- [ ] Four stages are present",
-        }).json()
+        solution = client.post(
+            f"/api/problems/{problem['id']}/features",
+            json={
+                "title": "Trace completed work",
+                "outcome": "The final record includes Lineage",
+                "non_goals": "No extra workflow stage",
+                "validation_criteria": "- [ ] Four stages are present",
+            },
+        ).json()
         client.put(f"/api/features/{solution['id']}/conflict", json={"state": "clear", "citation": "Human review"})
         client.post(f"/api/features/{solution['id']}/approve")
         client.post(f"/api/features/{solution['id']}/progress", json={"body": "Browser persistence verified"})
@@ -574,7 +629,12 @@ def test_completion_generates_final_document_from_lineage_context(tmp_path: Path
         asyncio.run(run_completion_report_job(app, completed.json()["report_job_id"], RecordingProvider()))
         lineage = client.get(f"/api/features/{solution['id']}/lineage")
         assert lineage.status_code == 200
-        assert [stage["kind"] for stage in lineage.json()["lineage"]["stages"]] == ["capture", "problem", "solution", "complete"]
+        assert [stage["kind"] for stage in lineage.json()["lineage"]["stages"]] == [
+            "capture",
+            "problem",
+            "solution",
+            "complete",
+        ]
         assert client.get(f"/api/items/captures/{capture['id']}").json()["kind"] == "capture"
         assert client.get(f"/api/items/problems/{problem['id']}").json()["kind"] == "problem"
         assert client.get(f"/api/items/features/{solution['id']}").json()["kind"] == "solution"
@@ -612,7 +672,9 @@ def test_completed_document_regeneration_rebuilds_current_lineage(tmp_path: Path
         problem = workflow.promote_capture(workflow.capture("Original lifecycle context"))
         workflow.approve_problem(problem["id"])
         solution = workflow.create_feature(
-            problem["id"], "Initial direction", "The current document is traceable",
+            problem["id"],
+            "Initial direction",
+            "The current document is traceable",
             validation_criteria="- [ ] Current Lineage is included",
         )
         workflow.record_conflict_evaluation(solution["id"], "clear", "Human review")
@@ -621,7 +683,9 @@ def test_completed_document_regeneration_rebuilds_current_lineage(tmp_path: Path
         completed = client.post(f"/api/problems/{problem['id']}/complete", json={"reason": "Human reviewed"})
         assert completed.status_code == 200
         first = client.get(f"/api/features/{solution['id']}/lineage").json()
-        workflow.update_manual("features", solution["id"], "Current direction", "The regenerated document follows current Lineage")
+        workflow.update_manual(
+            "features", solution["id"], "Current direction", "The regenerated document follows current Lineage"
+        )
 
         regenerated = client.post(f"/api/problems/{problem['id']}/completion-playbook/regenerate")
         assert regenerated.status_code == 202
@@ -641,7 +705,9 @@ def test_external_document_conflict_does_not_advance_lineage(tmp_path: Path) -> 
         problem = workflow.promote_capture(workflow.capture("Keep document and Lineage together"))
         workflow.approve_problem(problem["id"])
         solution = workflow.create_feature(
-            problem["id"], "One lifecycle", "Lineage and document move together",
+            problem["id"],
+            "One lifecycle",
+            "Lineage and document move together",
             validation_criteria="- [ ] External edits are protected",
         )
         workflow.record_conflict_evaluation(solution["id"], "clear", "Human review")
@@ -670,12 +736,16 @@ def test_lineage_regeneration_and_correction_preserve_audit_history(tmp_path: Pa
             if label == "lineage inference":
                 context = json.loads(str(messages[1]["content"]))
                 evidence_id = context["lineage_snapshots"][0]["referenced_evidence"][0]["id"]
-                return {"claims": [{
-                    "claim_key": "inferred:likely-rationale",
-                    "text": "Likely rationale based on the cited record",
-                    "confidence": "medium",
-                    "evidence_ids": [evidence_id],
-                }]}
+                return {
+                    "claims": [
+                        {
+                            "claim_key": "inferred:likely-rationale",
+                            "text": "Likely rationale based on the cited record",
+                            "confidence": "medium",
+                            "evidence_ids": [evidence_id],
+                        }
+                    ]
+                }
             return {"executive_summary_markdown": "", "report_body_markdown": ""}
 
     app = create_app(tmp_path, tmp_path / "db.sqlite")
@@ -685,20 +755,35 @@ def test_lineage_regeneration_and_correction_preserve_audit_history(tmp_path: Pa
         workflow = client.app.state.workflow
         problem = workflow.promote_capture(workflow.capture("Correct an interpretation"))
         workflow.approve_problem(problem["id"])
-        solution = workflow.create_feature(problem["id"], "Correct safely", "Knowledge stays accurate", validation_criteria="- [ ] Correction is current")
+        solution = workflow.create_feature(
+            problem["id"],
+            "Correct safely",
+            "Knowledge stays accurate",
+            validation_criteria="- [ ] Correction is current",
+        )
         workflow.record_conflict_evaluation(solution["id"], "clear", "Human review")
         workflow.approve_feature(solution["id"])
         workflow.complete_problem(problem["id"], "Reviewed")
         workflow.create_lineage_snapshot(solution["id"])
 
-        regenerated = client.post(f"/api/features/{solution['id']}/lineage/regenerate", json={"include_inference": True})
+        regenerated = client.post(
+            f"/api/features/{solution['id']}/lineage/regenerate", json={"include_inference": True}
+        )
         assert regenerated.status_code == 202
         asyncio.run(run_lineage_job(app, regenerated.json()["id"], InferenceProvider()))
         result = client.get(f"/api/jobs/{regenerated.json()['id']}/result").json()["result"]
-        inferred = next(claim for claim in result["claims"].values() if claim["classification"] == "inferred" and claim["claim_key"].startswith("inferred:"))
+        inferred = next(
+            claim
+            for claim in result["claims"].values()
+            if claim["classification"] == "inferred" and claim["claim_key"].startswith("inferred:")
+        )
         corrected = client.post(
             f"/api/features/{solution['id']}/lineage/claims/{inferred['id']}/corrections",
-            json={"text": "The user explicitly corrected this interpretation", "reason": "Audit correction", "current_revision_id": inferred["current_revision_id"]},
+            json={
+                "text": "The user explicitly corrected this interpretation",
+                "reason": "Audit correction",
+                "current_revision_id": inferred["current_revision_id"],
+            },
         )
         assert corrected.status_code == 201
         current = client.get(f"/api/features/{solution['id']}/lineage").json()["claims"][inferred["id"]]
@@ -711,23 +796,33 @@ def test_conflict_address_api_does_not_allow_ai_to_mark_addressed(tmp_path: Path
         workflow = client.app.state.workflow
         problem = workflow.promote_capture(workflow.capture("Conflicting requirement"))
         workflow.approve_problem(problem["id"])
-        solution = workflow.create_feature(problem["id"], "Choose safely", "A decision is supported", validation_criteria="- [ ] Basis is recorded")
-        detected = client.put(f"/api/features/{solution['id']}/conflict", json={"state": "conflicted", "citation": "Requirements differ"})
+        solution = workflow.create_feature(
+            problem["id"], "Choose safely", "A decision is supported", validation_criteria="- [ ] Basis is recorded"
+        )
+        detected = client.put(
+            f"/api/features/{solution['id']}/conflict", json={"state": "conflicted", "citation": "Requirements differ"}
+        )
         assert detected.status_code == 200
 
-        rejected = client.put(f"/api/features/{solution['id']}/conflict", json={
-            "state": "clear",
-            "citation": "AI guessed",
-            "address": {
-                "basis": "ai_inferred",
-                "disposition": "modified",
-                "summary": "Likely addressed",
-                "evidence_source_type": "conflict_report",
-                "evidence_source_id": detected.json()["report_id"],
+        rejected = client.put(
+            f"/api/features/{solution['id']}/conflict",
+            json={
+                "state": "clear",
+                "citation": "AI guessed",
+                "address": {
+                    "basis": "ai_inferred",
+                    "disposition": "modified",
+                    "summary": "Likely addressed",
+                    "evidence_source_type": "conflict_report",
+                    "evidence_source_id": detected.json()["report_id"],
+                },
             },
-        })
+        )
         assert rejected.status_code == 400
-        assert workflow.db.execute("SELECT conflict_state FROM features WHERE id=?", (solution["id"],)).fetchone()[0] == "conflicted"
+        assert (
+            workflow.db.execute("SELECT conflict_state FROM features WHERE id=?", (solution["id"],)).fetchone()[0]
+            == "conflicted"
+        )
 
 
 def test_completed_chat_rejects_an_active_solution(tmp_path: Path) -> None:
@@ -747,7 +842,15 @@ def test_provider_configuration_route_is_not_captured_as_an_item_update(tmp_path
     vault = tmp_path / "vault"
     vault.mkdir()
     with TestClient(create_app(vault, tmp_path / "db.sqlite3")) as client:
-        response = client.put("/api/provider/config", json={"base_url": "http://127.0.0.1:8317/v1", "model": "test-model", "advanced_model": "advanced-model", "advanced_tasks": {}})
+        response = client.put(
+            "/api/provider/config",
+            json={
+                "base_url": "http://127.0.0.1:8317/v1",
+                "model": "test-model",
+                "advanced_model": "advanced-model",
+                "advanced_tasks": {},
+            },
+        )
         assert response.status_code == 200
         assert response.json()["model"] == "test-model"
 

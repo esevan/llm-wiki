@@ -13,11 +13,10 @@ from pathlib import Path
 import uvicorn
 from platformdirs import user_data_path
 
-from llm_wiki.web.app import create_app
 from llm_wiki.services.fast_queue import FastQueueServer
 from llm_wiki.services.job_runtime import run_async_workers
 from llm_wiki.services.settings import ProviderSettings
-
+from llm_wiki.web.app import create_app
 
 SERVICE_LABEL = "com.llm-wiki"
 
@@ -46,7 +45,13 @@ def launch_agent_definition(project_root: Path, vault: Path, log_dir: Path) -> d
     """A per-user macOS service; no network listener beyond loopback is configured."""
     return {
         "Label": SERVICE_LABEL,
-        "ProgramArguments": [str(project_root / ".venv" / "bin" / "llm-wiki"), "serve", "--vault", str(vault), "--no-browser"],
+        "ProgramArguments": [
+            str(project_root / ".venv" / "bin" / "llm-wiki"),
+            "serve",
+            "--vault",
+            str(vault),
+            "--no-browser",
+        ],
         "WorkingDirectory": str(project_root),
         "RunAtLoad": True,
         "KeepAlive": {"Crashed": True},

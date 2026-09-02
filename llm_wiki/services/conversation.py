@@ -2,8 +2,6 @@ from __future__ import annotations
 
 from importlib.resources import files
 
-
-
 _STAGES = frozenset({"captures", "problems", "features"})
 
 
@@ -76,7 +74,7 @@ def bilingual_draft_prompt(entity_type: str, title: str, detail: str) -> str:
     return (
         f"{base}\n\nThis proposal will become durable content after human review. Return both natural Korean "
         "and English versions in one response so switching languages never requires another model call. "
-        f"Return JSON only with exactly this outer shape: {{\"ko\":{fields[entity_type]},\"en\":{fields[entity_type]}}}. "
+        f'Return JSON only with exactly this outer shape: {{"ko":{fields[entity_type]},"en":{fields[entity_type]}}}. '
         "Both versions must preserve the same facts, boundaries, checklist meaning, citations, code, and identifiers."
     )
 

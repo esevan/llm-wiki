@@ -7,14 +7,13 @@ from pathlib import Path
 from typing import Any
 
 from llm_wiki.adapters.provider import AsyncOpenAICompatibleProvider
+from llm_wiki.core.jobs import StaleJobError, TaskDescriptor
 from llm_wiki.services.handlers.registry import HandlerContext, HandlerRegistry
-from llm_wiki.services.jobs import StaleJobError, TaskDescriptor
 from llm_wiki.services.localization import response_language_instruction
+from llm_wiki.services.patches import digest
 from llm_wiki.services.retrieval import RetrievalEngine
 from llm_wiki.services.settings import ProviderSettings
-from llm_wiki.services.patches import digest
 from llm_wiki.services.workflow import WorkflowEngine, WorkflowError
-
 
 STATE_MEANINGS = {
     "potential_conflict": "At least one evidence-backed potential conflict was found.",
@@ -28,7 +27,13 @@ def _hash(value: object) -> str:
 
 
 def _claims(feature: dict[str, object], problem: dict[str, object]) -> list[dict[str, str]]:
-    fields = (("scope", feature.get("title")), ("requirement", feature.get("outcome")), ("non_goal", feature.get("non_goals")), ("validation", feature.get("validation_criteria")), ("constraint", problem.get("statement")))
+    fields = (
+        ("scope", feature.get("title")),
+        ("requirement", feature.get("outcome")),
+        ("non_goal", feature.get("non_goals")),
+        ("validation", feature.get("validation_criteria")),
+        ("constraint", problem.get("statement")),
+    )
     result: list[dict[str, str]] = []
     for kind, raw in fields:
         for text in str(raw or "").splitlines():
@@ -54,7 +59,14 @@ def _search(retrieval: RetrievalEngine, claims: list[dict[str, str]]) -> list[di
                 passage = retrieval.best_passage(result.path, claim["text"])
             except KeyError:
                 continue
-            merged[key] = {**passage, "id": f"evidence-{len(merged) + 1}", "claim_id": claim["id"], "claim": claim["text"], "score": result.score, "matched_by": list(result.matched_by)}
+            merged[key] = {
+                **passage,
+                "id": f"evidence-{len(merged) + 1}",
+                "claim_id": claim["id"],
+                "claim": claim["text"],
+                "score": result.score,
+                "matched_by": list(result.matched_by),
+            }
     return sorted(merged.values(), key=lambda item: float(item["score"]), reverse=True)[:12]
 
 
@@ -64,7 +76,10 @@ def conflict_source_hash(workflow: WorkflowEngine, retrieval: RetrievalEngine, f
     if not feature:
         raise WorkflowError("Solution not found")
     problem = next((item for item in board["problems"] if item["id"] == feature["problem_id"]), {})
-    return digest(json.dumps({"feature": feature, "problem": problem}, sort_keys=True, ensure_ascii=False) + retrieval.manifest_hash())
+    return digest(
+        json.dumps({"feature": feature, "problem": problem}, sort_keys=True, ensure_ascii=False)
+        + retrieval.manifest_hash()
+    )
 
 
 class ConflictReviewJobHandler:
@@ -79,36 +94,133 @@ class ConflictReviewJobHandler:
     async def __call__(self, context: HandlerContext) -> dict[str, Any]:
         feature_id = str(context.payload.get("entity_id", ""))
         locale = str(context.payload.get("locale", "en"))
-        board = self.workflow.board(locale)
-        feature = next((item for item in board["features"] if item["id"] == feature_id), None)
-        if not feature:
-            raise WorkflowError("Solution not found")
-        problem = next((item for item in board["problems"] if item["id"] == feature["problem_id"]), {})
-        if context.source_hash != conflict_source_hash(self.workflow, self.retrieval, feature_id, locale):
-            raise StaleJobError("Conflict review source changed before execution")
+        feature, problem = self._feature_context(feature_id, locale)
+        self._require_current_source(context, feature_id, locale, "before execution")
         claims = _claims(feature, problem)
-        query = json.dumps({"solution_hash": _hash({"feature": feature, "problem": problem}), "vault_hash": self.retrieval.manifest_hash()}, sort_keys=True)
+        query = self._query(feature, problem)
         cached = self.workflow.cached_conflict_review(query)
         if cached:
             return {**cached, "cached": True}
         candidates = await asyncio.to_thread(_search, self.retrieval, claims)
         scope = self.retrieval.status()
-        coverage = round(scope["semantic_ready"] / scope["documents"], 4) if scope["documents"] else 0.0
+        coverage = self._coverage(scope)
+        retained = await self._screen_candidates(feature, problem, claims, candidates, locale)
+        findings = await self._review_candidates(context, feature, problem, retained, locale)
+        state = self._recommended_state(findings, candidates, coverage)
+        self._require_current_source(context, feature_id, locale, "during execution")
+        report = self._report(
+            feature_id,
+            query,
+            scope,
+            coverage,
+            claims,
+            candidates,
+            retained,
+            findings,
+            state,
+        )
+        self.workflow.finish_conflict_review(report["run_id"], candidates, report)
+        return report
+
+    def _feature_context(self, feature_id: str, locale: str) -> tuple[dict[str, object], dict[str, object]]:
+        board = self.workflow.board(locale)
+        feature = next((item for item in board["features"] if item["id"] == feature_id), None)
+        if not feature:
+            raise WorkflowError("Solution not found")
+        problem = next((item for item in board["problems"] if item["id"] == feature["problem_id"]), {})
+        return feature, problem
+
+    def _require_current_source(
+        self,
+        context: HandlerContext,
+        feature_id: str,
+        locale: str,
+        phase: str,
+    ) -> None:
+        current = conflict_source_hash(self.workflow, self.retrieval, feature_id, locale)
+        if context.source_hash != current:
+            raise StaleJobError(f"Conflict review source changed {phase}")
+
+    def _query(self, feature: dict[str, object], problem: dict[str, object]) -> str:
+        return json.dumps(
+            {
+                "solution_hash": _hash({"feature": feature, "problem": problem}),
+                "vault_hash": self.retrieval.manifest_hash(),
+            },
+            sort_keys=True,
+        )
+
+    @staticmethod
+    def _coverage(scope: dict[str, object]) -> float:
+        documents = int(scope["documents"])
+        return round(int(scope["semantic_ready"]) / documents, 4) if documents else 0.0
+
+    async def _screen_candidates(
+        self,
+        feature: dict[str, object],
+        problem: dict[str, object],
+        claims: list[dict[str, str]],
+        candidates: list[dict[str, object]],
+        locale: str,
+    ) -> list[dict[str, object]]:
+        if not candidates:
+            return []
         base_url, api_key, weak_model = self.settings.credentials(None)
         provider = AsyncOpenAICompatibleProvider.with_client(base_url, api_key, weak_model)
-        retained = candidates
         try:
-            if candidates:
-                response = await provider.complete_json([
-                    {"role": "system", "content": "Screen all evidence candidates. Return JSON {decisions:[{evidence_id,disposition:'non_conflict|retain',reason}]}. Exclude only explicit evidence-grounded non-conflicts; retain uncertainty."},
+            response = await provider.complete_json(
+                [
+                    {
+                        "role": "system",
+                        "content": (
+                            "Screen all evidence candidates. Return JSON "
+                            "{decisions:[{evidence_id,disposition:'non_conflict|retain',reason}]}. "
+                            "Exclude only explicit evidence-grounded non-conflicts; retain uncertainty."
+                        ),
+                    },
                     {"role": "system", "content": response_language_instruction(locale)},
-                    {"role": "user", "content": json.dumps({"solution": feature, "problem": problem, "claims": claims, "evidence": candidates}, ensure_ascii=False)},
-                ], "conflict screen")
-                decisions = response.get("decisions") if isinstance(response.get("decisions"), list) else []
-                by_id = {str(item.get("evidence_id")): item for item in decisions if isinstance(item, dict)}
-                retained = [item for item in candidates if not (item["id"] in by_id and by_id[item["id"]].get("disposition") == "non_conflict" and str(by_id[item["id"]].get("reason", "")).strip())]
+                    {
+                        "role": "user",
+                        "content": json.dumps(
+                            {"solution": feature, "problem": problem, "claims": claims, "evidence": candidates},
+                            ensure_ascii=False,
+                        ),
+                    },
+                ],
+                "conflict screen",
+            )
+            return self._retained_candidates(candidates, response)
         finally:
             await provider.aclose()
+
+    @staticmethod
+    def _retained_candidates(
+        candidates: list[dict[str, object]],
+        response: dict[str, Any],
+    ) -> list[dict[str, object]]:
+        raw_decisions = response.get("decisions")
+        decisions = raw_decisions if isinstance(raw_decisions, list) else []
+        by_id = {str(item.get("evidence_id")): item for item in decisions if isinstance(item, dict)}
+        return [item for item in candidates if not ConflictReviewJobHandler._is_explicit_non_conflict(item, by_id)]
+
+    @staticmethod
+    def _is_explicit_non_conflict(
+        evidence: dict[str, object],
+        decisions: dict[str, dict[str, object]],
+    ) -> bool:
+        decision = decisions.get(str(evidence["id"]))
+        return bool(
+            decision and decision.get("disposition") == "non_conflict" and str(decision.get("reason", "")).strip()
+        )
+
+    async def _review_candidates(
+        self,
+        context: HandlerContext,
+        feature: dict[str, object],
+        problem: dict[str, object],
+        retained: list[dict[str, object]],
+        locale: str,
+    ) -> list[dict[str, object]]:
         base_url, api_key, strong_model = self.settings.credentials("conflict_review")
         provider = AsyncOpenAICompatibleProvider.with_client(base_url, api_key, strong_model)
         findings: list[dict[str, object]] = []
@@ -116,21 +228,106 @@ class ConflictReviewJobHandler:
             for index, evidence in enumerate(retained):
                 if await context.cancelled():
                     raise InterruptedError("Conflict review cancelled")
-                response = await provider.complete_json([
-                    {"role": "system", "content": "Review exactly one Vault passage against its Solution claim. Return JSON {conflict:boolean,claim,severity:'low|medium|high',evidence_id,explanation,required_resolution}. Never invent a citation."},
-                    {"role": "system", "content": response_language_instruction(locale)},
-                    {"role": "user", "content": json.dumps({"solution": feature, "problem": problem, "evidence": evidence}, ensure_ascii=False)},
-                ], "conflict evidence review")
-                if response.get("conflict") is True and str(response.get("evidence_id")) == evidence["id"] and str(response.get("explanation", "")).strip():
-                    findings.append({"claim": str(response.get("claim") or evidence["claim"]), "severity": str(response.get("severity", "medium")), "evidence_id": evidence["id"], "path": evidence["path"], "source_hash": evidence["source_hash"], "start_line": evidence["start_line"], "end_line": evidence["end_line"], "excerpt": evidence["text"], "citation": f"{evidence['path']}:{evidence['start_line']}-{evidence['end_line']}", "explanation": str(response["explanation"]), "required_resolution": str(response.get("required_resolution", "Review manually"))})
+                finding = await self._review_evidence(provider, feature, problem, evidence, locale)
+                if finding:
+                    findings.append(finding)
                 await context.progress(index + 1, len(retained))
         finally:
             await provider.aclose()
-        sufficient = bool(candidates) and coverage >= 1.0
-        state = "potential_conflict" if findings else ("clear" if sufficient else "insufficient_evidence")
-        if context.source_hash != conflict_source_hash(self.workflow, self.retrieval, feature_id, locale):
-            raise StaleJobError("Conflict review source changed during execution")
+        return findings
+
+    async def _review_evidence(
+        self,
+        provider: AsyncOpenAICompatibleProvider,
+        feature: dict[str, object],
+        problem: dict[str, object],
+        evidence: dict[str, object],
+        locale: str,
+    ) -> dict[str, object] | None:
+        response = await provider.complete_json(
+            [
+                {
+                    "role": "system",
+                    "content": (
+                        "Review exactly one Vault passage against its Solution claim. Return JSON "
+                        "{conflict:boolean,claim,severity:'low|medium|high',evidence_id,explanation,"
+                        "required_resolution}. Never invent a citation."
+                    ),
+                },
+                {"role": "system", "content": response_language_instruction(locale)},
+                {
+                    "role": "user",
+                    "content": json.dumps(
+                        {"solution": feature, "problem": problem, "evidence": evidence},
+                        ensure_ascii=False,
+                    ),
+                },
+            ],
+            "conflict evidence review",
+        )
+        if not self._is_conflict(response, evidence):
+            return None
+        return {
+            "claim": str(response.get("claim") or evidence["claim"]),
+            "severity": str(response.get("severity", "medium")),
+            "evidence_id": evidence["id"],
+            "path": evidence["path"],
+            "source_hash": evidence["source_hash"],
+            "start_line": evidence["start_line"],
+            "end_line": evidence["end_line"],
+            "excerpt": evidence["text"],
+            "citation": f"{evidence['path']}:{evidence['start_line']}-{evidence['end_line']}",
+            "explanation": str(response["explanation"]),
+            "required_resolution": str(response.get("required_resolution", "Review manually")),
+        }
+
+    @staticmethod
+    def _is_conflict(response: dict[str, Any], evidence: dict[str, object]) -> bool:
+        return bool(
+            response.get("conflict") is True
+            and str(response.get("evidence_id")) == evidence["id"]
+            and str(response.get("explanation", "")).strip()
+        )
+
+    @staticmethod
+    def _recommended_state(
+        findings: list[dict[str, object]],
+        candidates: list[dict[str, object]],
+        coverage: float,
+    ) -> str:
+        if findings:
+            return "potential_conflict"
+        if candidates and coverage >= 1.0:
+            return "clear"
+        return "insufficient_evidence"
+
+    def _report(
+        self,
+        feature_id: str,
+        query: str,
+        scope: dict[str, object],
+        coverage: float,
+        claims: list[dict[str, str]],
+        candidates: list[dict[str, object]],
+        retained: list[dict[str, object]],
+        findings: list[dict[str, object]],
+        state: str,
+    ) -> dict[str, Any]:
         run_id = self.workflow.start_conflict_review(feature_id, query)
-        report = {"run_id": run_id, "feature_id": feature_id, "status": "ready", "phase": "complete", "recommended_state": state, "state_meanings": STATE_MEANINGS, "scope": {**scope, "embedding_coverage": coverage}, "claims": claims, "candidate_count": len(candidates), "retained_count": len(retained), "reviewed_count": len(retained), "progress": 1.0, "findings": findings, "candidates": candidates, "summary": STATE_MEANINGS[state]}
-        self.workflow.finish_conflict_review(run_id, candidates, report)
-        return report
+        return {
+            "run_id": run_id,
+            "feature_id": feature_id,
+            "status": "ready",
+            "phase": "complete",
+            "recommended_state": state,
+            "state_meanings": STATE_MEANINGS,
+            "scope": {**scope, "embedding_coverage": coverage},
+            "claims": claims,
+            "candidate_count": len(candidates),
+            "retained_count": len(retained),
+            "reviewed_count": len(retained),
+            "progress": 1.0,
+            "findings": findings,
+            "candidates": candidates,
+            "summary": STATE_MEANINGS[state],
+        }

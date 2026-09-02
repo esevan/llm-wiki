@@ -15,16 +15,25 @@ class AsyncOpenAICompatibleProvider:
     client: httpx.AsyncClient
 
     @classmethod
-    def with_client(cls, base_url: str, api_key: str, model: str, client: httpx.AsyncClient | None = None) -> "AsyncOpenAICompatibleProvider":
+    def with_client(
+        cls, base_url: str, api_key: str, model: str, client: httpx.AsyncClient | None = None
+    ) -> "AsyncOpenAICompatibleProvider":
         base = base_url.rstrip("/")
         api_base = base[:-3] if base.endswith("/v1") else base
-        owned = client or httpx.AsyncClient(base_url=f"{api_base}/v1", headers={"Authorization": f"Bearer {api_key}"}, timeout=90)
+        owned = client or httpx.AsyncClient(
+            base_url=f"{api_base}/v1", headers={"Authorization": f"Bearer {api_key}"}, timeout=90
+        )
         return cls(base_url, api_key, model, owned)
 
     async def complete_json(self, messages: list[dict[str, object]], schema_name: str) -> dict[str, object]:
         response = await self.client.post(
             "/chat/completions",
-            json={"model": self.model, "messages": messages, "response_format": {"type": "json_object"}, "stream": False},
+            json={
+                "model": self.model,
+                "messages": messages,
+                "response_format": {"type": "json_object"},
+                "stream": False,
+            },
         )
         response.raise_for_status()
         content = response.json()["choices"][0]["message"]["content"]

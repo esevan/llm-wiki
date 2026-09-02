@@ -5,9 +5,8 @@ from collections.abc import Callable
 from typing import Any
 
 from llm_wiki.adapters.provider import AsyncOpenAICompatibleProvider
+from llm_wiki.core.jobs import StaleJobError, TaskDescriptor
 from llm_wiki.services.handlers.registry import HandlerContext, HandlerRegistry
-from llm_wiki.services.jobs import TaskDescriptor
-from llm_wiki.services.jobs import StaleJobError
 from llm_wiki.services.lineage import report_context, validate_inference_payload
 from llm_wiki.services.patches import digest
 from llm_wiki.services.settings import ProviderSettings
@@ -15,7 +14,12 @@ from llm_wiki.services.workflow import WorkflowEngine
 
 
 class LineageInferenceHandler:
-    def __init__(self, workflow: WorkflowEngine, settings: ProviderSettings, provider_factory: Callable[[], AsyncOpenAICompatibleProvider] | None = None):
+    def __init__(
+        self,
+        workflow: WorkflowEngine,
+        settings: ProviderSettings,
+        provider_factory: Callable[[], AsyncOpenAICompatibleProvider] | None = None,
+    ):
         self.workflow = workflow
         self.settings = settings
         self.provider_factory = provider_factory
@@ -34,10 +38,16 @@ class LineageInferenceHandler:
             base_url, api_key, model = self.settings.credentials("lineage_inference")
             provider = AsyncOpenAICompatibleProvider.with_client(base_url, api_key, model)
         try:
-            result = await provider.complete_json([
-                {"role": "system", "content": "Return JSON only: {\"claims\":[{\"claim_key\":string,\"text\":string,\"confidence\":\"high|medium|low\",\"evidence_ids\":[string]}]}. Add only useful inferred rationale with supplied evidence IDs. Never invent facts or claim conflict resolution."},
-                {"role": "user", "content": report_context([lineage])},
-            ], "lineage inference")
+            result = await provider.complete_json(
+                [
+                    {
+                        "role": "system",
+                        "content": 'Return JSON only: {"claims":[{"claim_key":string,"text":string,"confidence":"high|medium|low","evidence_ids":[string]}]}. Add only useful inferred rationale with supplied evidence IDs. Never invent facts or claim conflict resolution.',
+                    },
+                    {"role": "user", "content": report_context([lineage])},
+                ],
+                "lineage inference",
+            )
         finally:
             await provider.aclose()
         if context.source_hash != lineage_source_hash(self.workflow, feature_id):

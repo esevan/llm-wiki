@@ -4,8 +4,8 @@ import asyncio
 import struct
 from typing import Any
 
+from llm_wiki.core.jobs import TaskDescriptor
 from llm_wiki.services.handlers.registry import HandlerContext, HandlerRegistry
-from llm_wiki.services.jobs import TaskDescriptor
 from llm_wiki.services.retrieval import RetrievalEngine
 
 
@@ -35,7 +35,9 @@ class EmbeddingJobHandler:
                 continue
             if not checkpoint or checkpoint.result.get("source_hash") != source_hash:
                 vector = (await asyncio.to_thread(self.retrieval.embed_texts, [str(row["text"])]))[0]
-                current = self.retrieval.db.execute("SELECT source_hash FROM documents WHERE path=?", (path,)).fetchone()
+                current = self.retrieval.db.execute(
+                    "SELECT source_hash FROM documents WHERE path=?", (path,)
+                ).fetchone()
                 if not current or str(current[0]) != source_hash:
                     continue
                 self.retrieval.db.execute(

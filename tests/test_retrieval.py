@@ -1,4 +1,3 @@
-import struct
 from pathlib import Path
 
 from llm_wiki.services.retrieval import RetrievalEngine
@@ -8,7 +7,9 @@ from llm_wiki.services.vault import MarkdownVaultAdapter
 def test_search_routes_by_directory_then_finds_frontmatter_and_text(tmp_path: Path) -> None:
     vault = tmp_path / "vault"
     (vault / "product").mkdir(parents=True)
-    (vault / "product" / "launch.md").write_text("---\ntags: [release]\naliases: launch notes\n---\n# Launch decision\nKeep the release local first.")
+    (vault / "product" / "launch.md").write_text(
+        "---\ntags: [release]\naliases: launch notes\n---\n# Launch decision\nKeep the release local first."
+    )
     (vault / "random.md").write_text("# Other\nrelease word")
     engine = RetrievalEngine(tmp_path / "index.sqlite", MarkdownVaultAdapter(vault))
     assert engine.index_changed()["changed"] == 2

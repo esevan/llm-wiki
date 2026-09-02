@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from pathlib import Path, PurePosixPath
 import os
 import tempfile
 import time
+from pathlib import Path, PurePosixPath
 
 from llm_wiki.core.models import ParsedDocument
 from llm_wiki.services.markdown import parse_markdown
@@ -21,9 +21,7 @@ class MarkdownVaultAdapter:
         return sorted(
             p
             for p in self.root.rglob("*.md")
-            if p.is_file()
-            and ".obsidian" not in p.parts
-            and not self.is_korean_translation_path(self.relative_path(p))
+            if p.is_file() and ".obsidian" not in p.parts and not self.is_korean_translation_path(self.relative_path(p))
         )
 
     @staticmethod
@@ -77,7 +75,7 @@ class MarkdownVaultAdapter:
                 except PermissionError:
                     if attempt == 2:
                         raise
-                    time.sleep(.05 * (attempt + 1))  # bounded Windows sharing-violation retry
+                    time.sleep(0.05 * (attempt + 1))  # bounded Windows sharing-violation retry
         finally:
             if os.path.exists(temporary):
                 os.unlink(temporary)

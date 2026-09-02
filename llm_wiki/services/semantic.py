@@ -1,4 +1,5 @@
 """Optional semantic reranking; importing it never loads an ONNX model."""
+
 from __future__ import annotations
 
 import math

@@ -5,10 +5,10 @@ from pathlib import Path
 
 import httpx
 
+from llm_wiki.core.jobs import JobStatus, TaskDescriptor
 from llm_wiki.repositories.jobs import JobRepository
 from llm_wiki.services.handlers.registry import HandlerRegistry
 from llm_wiki.services.handlers.worker import AsyncJobWorker
-from llm_wiki.services.jobs import JobStatus, TaskDescriptor
 
 
 def test_worker_executes_registered_handler(tmp_path: Path) -> None:

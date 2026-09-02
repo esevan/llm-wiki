@@ -7,7 +7,8 @@ from llm_wiki.services.workflow import WorkflowEngine
 
 
 def test_projection_is_obsidian_markdown_and_mirrored(tmp_path: Path) -> None:
-    db = sqlite3.connect(":memory:"); db.row_factory = sqlite3.Row
+    db = sqlite3.connect(":memory:")
+    db.row_factory = sqlite3.Row
     workflow = WorkflowEngine(db)
     problem = workflow.promote_capture(workflow.capture("Keep local knowledge clear"))
     path, content = workflow.projection("problems", problem["id"])
@@ -19,7 +20,8 @@ def test_projection_is_obsidian_markdown_and_mirrored(tmp_path: Path) -> None:
 
 
 def test_projection_uses_english_stored_version_as_canonical() -> None:
-    db = sqlite3.connect(":memory:"); db.row_factory = sqlite3.Row
+    db = sqlite3.connect(":memory:")
+    db.row_factory = sqlite3.Row
     workflow = WorkflowEngine(db)
     capture = workflow.capture("한글 캡처")
     problem = workflow.promote_capture(

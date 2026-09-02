@@ -10,7 +10,9 @@ def test_reviewed_patch_is_atomic_and_blocks_external_change(tmp_path: Path) -> 
     note = tmp_path / "decision.md"
     note.write_text("# Decision\n\nKeep this local.\n", encoding="utf-8")
     adapter = MarkdownVaultAdapter(tmp_path)
-    patch = propose_section_patch(adapter.read_text("decision.md"), "insert_after_heading", "Decision", "Reviewed context.")
+    patch = propose_section_patch(
+        adapter.read_text("decision.md"), "insert_after_heading", "Decision", "Reviewed context."
+    )
     apply_reviewed_patch(adapter, "decision.md", patch)
     assert "Reviewed context." in adapter.read_text("decision.md")
     changed = propose_section_patch(adapter.read_text("decision.md"), "append_section", "Evidence", "Facts.")

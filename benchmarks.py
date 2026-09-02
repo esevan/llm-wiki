@@ -1,4 +1,5 @@
 """Repeatable structural-index smoke benchmark for the 1,000-note reference shape."""
+
 from __future__ import annotations
 
 import tempfile

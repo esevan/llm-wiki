@@ -1,10 +1,10 @@
 from __future__ import annotations
 
+import hashlib
 import sqlite3
 import struct
 import threading
 import time
-import hashlib
 from collections import defaultdict
 from pathlib import Path
 
@@ -31,6 +31,7 @@ class RetrievalEngine:
         with self._semantic_lock:
             if self._semantic_embedder is None:
                 from llm_wiki.services.semantic import SemanticEmbedder
+
                 self._semantic_embedder = SemanticEmbedder()
             return self._semantic_embedder.embed(texts)  # type: ignore[attr-defined]
 
@@ -70,15 +71,36 @@ class RetrievalEngine:
                 document = self.vault.read(file)
                 digest = content_hash(document.content)
                 folder = str(Path(path).parent).replace(".", "")
-                values = (path, folder, document.title, document.body, str(document.frontmatter), "\n".join(document.headings),
-                          " ".join(document.tags), " ".join(document.aliases), digest, modified)
+                values = (
+                    path,
+                    folder,
+                    document.title,
+                    document.body,
+                    str(document.frontmatter),
+                    "\n".join(document.headings),
+                    " ".join(document.tags),
+                    " ".join(document.aliases),
+                    digest,
+                    modified,
+                )
                 self.db.execute("INSERT OR REPLACE INTO documents VALUES (?,?,?,?,?,?,?,?,?,?)", values)
                 self.db.execute("DELETE FROM documents_fts WHERE path=?", (path,))
-                self.db.execute("INSERT INTO documents_fts(path,title,body,headings,tags,aliases) VALUES (?,?,?,?,?,?)",
-                                (path, document.title, document.body, "\n".join(document.headings), " ".join(document.tags), " ".join(document.aliases)))
+                self.db.execute(
+                    "INSERT INTO documents_fts(path,title,body,headings,tags,aliases) VALUES (?,?,?,?,?,?)",
+                    (
+                        path,
+                        document.title,
+                        document.body,
+                        "\n".join(document.headings),
+                        " ".join(document.tags),
+                        " ".join(document.aliases),
+                    ),
+                )
                 self.db.execute("DELETE FROM document_links WHERE source_path=?", (path,))
-                self.db.executemany("INSERT INTO document_links VALUES (?,?,?,?,?)",
-                                    [(path, link.target, link.anchor, link.block_id, int(link.embed)) for link in document.links])
+                self.db.executemany(
+                    "INSERT INTO document_links VALUES (?,?,?,?,?)",
+                    [(path, link.target, link.anchor, link.block_id, int(link.embed)) for link in document.links],
+                )
                 changed += 1
             rows = self.db.execute("SELECT path FROM documents").fetchall()
             stale = [row[0] for row in rows if row[0] not in found]
@@ -89,7 +111,11 @@ class RetrievalEngine:
                 self.db.execute("DELETE FROM document_embeddings WHERE path=?", (path,))
             self.db.execute("DELETE FROM document_embeddings WHERE path NOT IN (SELECT path FROM documents)")
             self.db.commit()
-            return {"changed": changed, "removed": len(stale), "elapsed_ms": round((time.perf_counter() - started) * 1000, 2)}
+            return {
+                "changed": changed,
+                "removed": len(stale),
+                "elapsed_ms": round((time.perf_counter() - started) * 1000, 2),
+            }
 
     @staticmethod
     def _terms(query: str) -> list[str]:
@@ -102,7 +128,9 @@ class RetrievalEngine:
         # Directory routing uses the path segments first, reducing FTS work in common cases.
         folder_scores: defaultdict[str, int] = defaultdict(int)
         for term in terms:
-            for row in self.db.execute("SELECT folder FROM documents WHERE lower(folder) LIKE ?", (f"%{term.lower()}%",)):
+            for row in self.db.execute(
+                "SELECT folder FROM documents WHERE lower(folder) LIKE ?", (f"%{term.lower()}%",)
+            ):
                 folder_scores[row[0]] += 1
         folders = [folder for folder, _ in sorted(folder_scores.items(), key=lambda item: -item[1])[:5]]
         expression = " OR ".join(f'"{term.replace(chr(34), "")}"' for term in terms)
@@ -121,17 +149,38 @@ class RetrievalEngine:
         params.append(offset)
         rows = self.db.execute(sql, params).fetchall()
         if not rows and folders:  # cross-directory fallback
-            rows = self.db.execute(sql.replace(" AND d.folder IN (" + ",".join("?" for _ in folders) + ")", ""), [expression, limit, offset]).fetchall()
+            rows = self.db.execute(
+                sql.replace(" AND d.folder IN (" + ",".join("?" for _ in folders) + ")", ""),
+                [expression, limit, offset],
+            ).fetchall()
         results: list[SearchResult] = []
         for row in rows:
-            matched = tuple(field for field in ("path", "title", "headings", "tags", "aliases", "content") if any(term.lower() in str(row[field if field != "content" else "body"]).lower() for term in terms))
-            results.append(SearchResult(path=row["path"], title=row["title"], snippet=row["snippet"], headings=tuple(filter(None, row["headings"].split("\n"))), tags=tuple(filter(None, row["tags"].split())), score=round(-float(row["rank"]), 4), source_hash=row["source_hash"], matched_by=matched))
+            matched = tuple(
+                field
+                for field in ("path", "title", "headings", "tags", "aliases", "content")
+                if any(term.lower() in str(row[field if field != "content" else "body"]).lower() for term in terms)
+            )
+            results.append(
+                SearchResult(
+                    path=row["path"],
+                    title=row["title"],
+                    snippet=row["snippet"],
+                    headings=tuple(filter(None, row["headings"].split("\n"))),
+                    tags=tuple(filter(None, row["tags"].split())),
+                    score=round(-float(row["rank"]), 4),
+                    source_hash=row["source_hash"],
+                    matched_by=matched,
+                )
+            )
         if semantic and results:
             results = self._semantic_rerank(query, results)
         return results
 
     def status(self) -> dict[str, int]:
-        return {"documents": self.db.execute("SELECT count(*) FROM documents").fetchone()[0], "semantic_ready": self.db.execute("SELECT count(*) FROM document_embeddings").fetchone()[0]}
+        return {
+            "documents": self.db.execute("SELECT count(*) FROM documents").fetchone()[0],
+            "semantic_ready": self.db.execute("SELECT count(*) FROM document_embeddings").fetchone()[0],
+        }
 
     def manifest_hash(self) -> str:
         rows = self.db.execute("SELECT path,source_hash FROM documents ORDER BY path").fetchall()
@@ -146,6 +195,7 @@ class RetrievalEngine:
     def semantic_search_many(self, queries: list[str], limit: int = 20) -> list[list[SearchResult]]:
         """Search embeddings for several queries with one batched model call."""
         from llm_wiki.services.semantic import cosine
+
         if not queries:
             return []
         rows = self.db.execute("""SELECT d.path,d.title,d.body,d.headings,d.tags,d.source_hash,
@@ -158,14 +208,24 @@ class RetrievalEngine:
         for query, query_vector in zip(queries, vectors):
             scored = sorted(
                 ((cosine(query_vector, struct.unpack(f"<{row['dimensions']}f", row["vector"])), row) for row in rows),
-                key=lambda item: item[0], reverse=True,
+                key=lambda item: item[0],
+                reverse=True,
             )[:limit]
-            groups.append([SearchResult(
-                path=row["path"], title=row["title"],
-                snippet=self._passage(row["path"], row["body"], row["source_hash"], query)["text"],
-                headings=tuple(filter(None, row["headings"].split("\n"))), tags=tuple(filter(None, row["tags"].split())),
-                score=round(float(score), 4), source_hash=row["source_hash"], matched_by=("semantic",),
-            ) for score, row in scored])
+            groups.append(
+                [
+                    SearchResult(
+                        path=row["path"],
+                        title=row["title"],
+                        snippet=self._passage(row["path"], row["body"], row["source_hash"], query)["text"],
+                        headings=tuple(filter(None, row["headings"].split("\n"))),
+                        tags=tuple(filter(None, row["tags"].split())),
+                        score=round(float(score), 4),
+                        source_hash=row["source_hash"],
+                        matched_by=("semantic",),
+                    )
+                    for score, row in scored
+                ]
+            )
         return groups
 
     def best_passage(self, path: str, query: str, max_chars: int = 1800) -> dict[str, object]:
@@ -175,33 +235,45 @@ class RetrievalEngine:
         return self._passage(path, str(row["body"]), str(row["source_hash"]), query, max_chars)
 
     @classmethod
-    def _passage(cls, path: str, body: str, source_hash: str, query: str,
-                 max_chars: int = 1800) -> dict[str, object]:
+    def _passage(cls, path: str, body: str, source_hash: str, query: str, max_chars: int = 1800) -> dict[str, object]:
         lines = body.splitlines()
         terms = [term.lower() for term in cls._terms(query)]
         best_start, best_score = 0, -1
         for index in range(len(lines)):
-            window = "\n".join(lines[index:index + 12])
+            window = "\n".join(lines[index : index + 12])
             score = sum(window.lower().count(term) for term in terms)
             if score > best_score:
                 best_start, best_score = index, score
         selected: list[str] = []
         length = 0
-        for line in lines[best_start:best_start + 24]:
+        for line in lines[best_start : best_start + 24]:
             if selected and length + len(line) + 1 > max_chars:
                 break
             selected.append(line)
             length += len(line) + 1
         if not selected and lines:
             selected = [lines[0][:max_chars]]
-        return {"path": path, "source_hash": source_hash, "start_line": best_start + 1,
-                "end_line": best_start + len(selected), "text": "\n".join(selected).strip()}
+        return {
+            "path": path,
+            "source_hash": source_hash,
+            "start_line": best_start + 1,
+            "end_line": best_start + len(selected),
+            "text": "\n".join(selected).strip(),
+        }
 
     def _semantic_rerank(self, query: str, results: list[SearchResult]) -> list[SearchResult]:
         from llm_wiki.services.semantic import cosine
-        rows = self.db.execute("SELECT path,dimensions,vector FROM document_embeddings WHERE path IN (" + ",".join("?" for _ in results) + ")", [result.path for result in results]).fetchall()
+
+        rows = self.db.execute(
+            "SELECT path,dimensions,vector FROM document_embeddings WHERE path IN ("
+            + ",".join("?" for _ in results)
+            + ")",
+            [result.path for result in results],
+        ).fetchall()
         if not rows:
             return results
         query_vector = self._embed([query])[0]
-        scores = {row["path"]: cosine(query_vector, struct.unpack(f"<{row['dimensions']}f", row["vector"])) for row in rows}
+        scores = {
+            row["path"]: cosine(query_vector, struct.unpack(f"<{row['dimensions']}f", row["vector"])) for row in rows
+        }
         return sorted(results, key=lambda result: scores.get(result.path, -1), reverse=True)

@@ -4,8 +4,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from llm_wiki.services.jobs import TaskDescriptor
-from llm_wiki.services.jobs import JobCheckpoint
+from llm_wiki.core.jobs import JobCheckpoint, TaskDescriptor
 
 
 @dataclass(frozen=True)

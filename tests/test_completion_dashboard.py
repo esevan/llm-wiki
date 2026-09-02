@@ -6,9 +6,9 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from llm_wiki.services.workflow import WorkflowEngine, WorkflowError
 from llm_wiki.web.app import create_app
 from tests.fakes.ai_provider import run_workflow_job
-from llm_wiki.services.workflow import WorkflowEngine, WorkflowError
 
 
 def approved_feature(workflow: WorkflowEngine) -> tuple[str, str]:
@@ -16,14 +16,17 @@ def approved_feature(workflow: WorkflowEngine) -> tuple[str, str]:
     problem = workflow.promote_capture(capture)
     workflow.assess_importance(problem["id"], 5, 4, 2, 3, "Evidence from review")
     workflow.approve_problem(problem["id"])
-    feature = workflow.create_feature(problem["id"], "A reusable outcome", "People can reuse knowledge", validation_criteria="- [ ] Reuse is observed")
+    feature = workflow.create_feature(
+        problem["id"], "A reusable outcome", "People can reuse knowledge", validation_criteria="- [ ] Reuse is observed"
+    )
     workflow.record_conflict_evaluation(feature["id"], "clear", "standards.md#Current")
     workflow.approve_feature(feature["id"])
     return problem["id"], feature["id"]
 
 
 def test_completion_needs_knowledge_resolution_and_scores_on_verify() -> None:
-    db = sqlite3.connect(":memory:"); db.row_factory = sqlite3.Row
+    db = sqlite3.connect(":memory:")
+    db.row_factory = sqlite3.Row
     workflow = WorkflowEngine(db)
     _, feature = approved_feature(workflow)
     workflow.record_completion(feature, "Human reviewed results", "It worked", "No reusable knowledge was created")
@@ -34,25 +37,31 @@ def test_completion_needs_knowledge_resolution_and_scores_on_verify() -> None:
 
 
 def test_human_can_complete_a_partially_resolved_problem_with_a_reason() -> None:
-    db = sqlite3.connect(":memory:"); db.row_factory = sqlite3.Row
+    db = sqlite3.connect(":memory:")
+    db.row_factory = sqlite3.Row
     workflow = WorkflowEngine(db)
     problem, feature = approved_feature(workflow)
 
     workflow.complete_problem(problem, "The remaining work is intentionally deferred.", "review-123")
 
     assert db.execute("SELECT state FROM problems WHERE id=?", (problem,)).fetchone()[0] == "completed"
-    decision = db.execute("SELECT reason, review_id FROM problem_completion_decisions WHERE problem_id=?", (problem,)).fetchone()
+    decision = db.execute(
+        "SELECT reason, review_id FROM problem_completion_decisions WHERE problem_id=?", (problem,)
+    ).fetchone()
     assert tuple(decision) == ("The remaining work is intentionally deferred.", "review-123")
     assert problem not in {item["id"] for item in workflow.board()["problems"]}
     assert feature not in {item["id"] for item in workflow.board()["features"]}
 
 
 def test_unapproved_problem_cannot_create_feature() -> None:
-    db = sqlite3.connect(":memory:"); db.row_factory = sqlite3.Row
+    db = sqlite3.connect(":memory:")
+    db.row_factory = sqlite3.Row
     workflow = WorkflowEngine(db)
     problem = workflow.promote_capture(workflow.capture("draft"))
     with pytest.raises(WorkflowError, match="approved problem"):
-        workflow.create_feature(problem["id"], "No", "No", validation_criteria="- [ ] Not used because parent is unapproved")
+        workflow.create_feature(
+            problem["id"], "No", "No", validation_criteria="- [ ] Not used because parent is unapproved"
+        )
 
 
 def test_completion_review_excludes_raw_image_data_from_provider_request(tmp_path: Path, monkeypatch) -> None:
@@ -83,19 +92,25 @@ def test_completion_review_excludes_raw_image_data_from_provider_request(tmp_pat
         capture = client.post("/api/captures", json={"text": "Review image evidence"}).json()
         problem = client.post(f"/api/captures/{capture['id']}/promote", json={}).json()
         client.post(f"/api/problems/{problem['id']}/approve")
-        feature = client.post(f"/api/problems/{problem['id']}/features", json={
-            "title": "Review screenshots",
-            "outcome": "The recorded result is reviewed",
-            "non_goals": "None",
-            "validation_criteria": "- [ ] The screenshot summary supports the result",
-        }).json()
+        feature = client.post(
+            f"/api/problems/{problem['id']}/features",
+            json={
+                "title": "Review screenshots",
+                "outcome": "The recorded result is reviewed",
+                "non_goals": "None",
+                "validation_criteria": "- [ ] The screenshot summary supports the result",
+            },
+        ).json()
         client.put(f"/api/features/{feature['id']}/conflict", json={"state": "clear", "citation": "Human review"})
         client.post(f"/api/features/{feature['id']}/approve")
-        entry = client.post(f"/api/features/{feature['id']}/progress", json={
-            "body": "Captured the result",
-            "image_data": "a" * 1_000_000,
-            "image_media_type": "image/png",
-        }).json()
+        entry = client.post(
+            f"/api/features/{feature['id']}/progress",
+            json={
+                "body": "Captured the result",
+                "image_data": "a" * 1_000_000,
+                "image_media_type": "image/png",
+            },
+        ).json()
         app.state.workflow.set_solution_progress_summary(entry["id"], "The expected result is visible.")
 
         response = client.post(f"/api/features/{feature['id']}/completion-review")

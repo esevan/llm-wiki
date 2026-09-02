@@ -7,16 +7,15 @@ canonical Markdown unchanged until an explicit integration path writes them.
 
 from __future__ import annotations
 
-import json
 import hashlib
+import json
 import re
 import sqlite3
-from datetime import datetime, timezone
 from collections.abc import Mapping, Sequence
+from datetime import datetime, timezone
 from importlib.resources import files
 
 from llm_wiki.services.vault import MarkdownVaultAdapter
-
 
 SUPPORTED_LOCALES = ("ko", "en")
 
@@ -74,9 +73,7 @@ class LocaleSettings:
                  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
                )"""
         )
-        self.db.execute(
-            "INSERT OR IGNORE INTO locale_settings(id,locale,explicit) VALUES (1,'en',0)"
-        )
+        self.db.execute("INSERT OR IGNORE INTO locale_settings(id,locale,explicit) VALUES (1,'en',0)")
         self.db.commit()
 
     @staticmethod
@@ -88,9 +85,7 @@ class LocaleSettings:
         }
 
     def get(self, browser_locale: object = None) -> dict[str, object]:
-        row = self.db.execute(
-            "SELECT locale,explicit FROM locale_settings WHERE id=1"
-        ).fetchone()
+        row = self.db.execute("SELECT locale,explicit FROM locale_settings WHERE id=1").fetchone()
         explicit = bool(row[1])
         locale = str(row[0]) if explicit else normalize_locale(browser_locale)
         return self._public(locale, explicit)
@@ -122,10 +117,7 @@ def load_locale_resources(locale: object) -> dict[str, str]:
 
 def _validate_flat_resource(resource: Mapping[str, object], locale: str) -> None:
     if not resource or any(
-        not isinstance(key, str)
-        or not key.strip()
-        or not isinstance(value, str)
-        or not value.strip()
+        not isinstance(key, str) or not key.strip() or not isinstance(value, str) or not value.strip()
         for key, value in resource.items()
     ):
         raise ValueError(f"Locale resource {locale} keys and values must be non-empty strings")
@@ -324,7 +316,9 @@ class LocalizedContentStore:
         entity_id = str(base.get("id") or "")
         if not entity_id:
             raise ValueError("Localized overlay requires an item id")
-        return self._overlay_with_versions(entity_type, base, _require_locale(locale), self.versions(entity_type, entity_id))
+        return self._overlay_with_versions(
+            entity_type, base, _require_locale(locale), self.versions(entity_type, entity_id)
+        )
 
     def overlay_many(
         self,
@@ -379,9 +373,7 @@ class LocalizedContentStore:
                 "content_locale": "original" if fallback_used else locale,
                 "available_locales": [item for item in SUPPORTED_LOCALES if item in versions],
                 "fallback_used": fallback_used,
-                "localized_versions": {
-                    item: dict(versions[item]) for item in SUPPORTED_LOCALES if item in versions
-                },
+                "localized_versions": {item: dict(versions[item]) for item in SUPPORTED_LOCALES if item in versions},
             }
         )
         return result
@@ -474,9 +466,7 @@ class KnowledgeTranslationCache:
         return True
 
     def invalidate(self, path: str) -> int:
-        removed = self.db.execute(
-            "DELETE FROM knowledge_translation_cache WHERE path=?", (path,)
-        ).rowcount
+        removed = self.db.execute("DELETE FROM knowledge_translation_cache WHERE path=?", (path,)).rowcount
         self.db.commit()
         return removed
 

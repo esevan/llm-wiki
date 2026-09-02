@@ -5,11 +5,11 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from llm_wiki.web.app import create_app
+from llm_wiki.core.jobs import JobStatus
+from llm_wiki.services.handlers.catalog import register_workflow_handlers
 from llm_wiki.services.handlers.registry import HandlerRegistry
 from llm_wiki.services.handlers.worker import AsyncJobWorker
-from llm_wiki.services.handlers.workflow import WorkflowJobHandlers
-from llm_wiki.services.jobs import JobStatus
+from llm_wiki.web.app import create_app
 from tests.fakes.ai_provider import AsyncJSONProvider
 
 
@@ -17,7 +17,9 @@ def test_draft_contract_is_202_then_preserves_the_characterized_result(tmp_path:
     app = create_app(tmp_path, tmp_path / "compat.sqlite")
     app.state.provider_settings.save("http://provider.test/v1", "model", None)
     monkeypatch.setattr(app.state.provider_settings, "_secret", lambda: "key")
-    provider = AsyncJSONProvider({"ko": {"title": "문제", "detail": "맥락"}, "en": {"title": "Problem", "detail": "Context"}})
+    provider = AsyncJSONProvider(
+        {"ko": {"title": "문제", "detail": "맥락"}, "en": {"title": "Problem", "detail": "Context"}}
+    )
 
     with TestClient(app) as client:
         capture = client.post("/api/captures", json={"text": "원문"}).json()
@@ -25,7 +27,7 @@ def test_draft_contract_is_202_then_preserves_the_characterized_result(tmp_path:
         assert response.status_code == 202
         job_id = response.json()["id"]
         registry = HandlerRegistry()
-        WorkflowJobHandlers(app.state.workflow, app.state.provider_settings, lambda _task: provider).register(registry)
+        register_workflow_handlers(registry, app.state.workflow, app.state.provider_settings, lambda _task: provider)
         assert asyncio.run(AsyncJobWorker(app.state.job_repository, registry).run_job(job_id))
         assert client.get(f"/api/jobs/{job_id}/result").json()["result"]["title"] == "문제"
 
@@ -47,7 +49,12 @@ def test_failed_async_draft_records_safe_terminal_error(tmp_path: Path, monkeypa
         response = client.post(f"/api/captures/{capture['id']}/draft")
         job_id = response.json()["id"]
         registry = HandlerRegistry()
-        WorkflowJobHandlers(app.state.workflow, app.state.provider_settings, lambda _task: FailingProvider({})).register(registry)
+        register_workflow_handlers(
+            registry,
+            app.state.workflow,
+            app.state.provider_settings,
+            lambda _task: FailingProvider({}),
+        )
         asyncio.run(AsyncJobWorker(app.state.job_repository, registry).run_job(job_id))
 
     job = asyncio.run(app.state.job_repository.get(job_id))

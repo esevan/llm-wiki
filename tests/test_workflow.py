@@ -19,7 +19,12 @@ def test_feature_cannot_be_approved_until_a_cited_clear_evaluation() -> None:
     capture_id = workflow.capture("We lose decisions")
     problem = workflow.promote_capture(capture_id)
     workflow.approve_problem(problem["id"])
-    feature = workflow.create_feature(problem["id"], "Decision home", "Decisions have one trusted home", validation_criteria="- [ ] A person finds a decision")
+    feature = workflow.create_feature(
+        problem["id"],
+        "Decision home",
+        "Decisions have one trusted home",
+        validation_criteria="- [ ] A person finds a decision",
+    )
     with pytest.raises(WorkflowError, match="clear"):
         workflow.approve_feature(feature["id"])
     with pytest.raises(WorkflowError, match="cited"):
@@ -38,7 +43,9 @@ def test_deleting_parent_hides_children_and_can_be_restored() -> None:
     capture = workflow.capture("A problem")
     problem = workflow.promote_capture(capture)
     workflow.approve_problem(problem["id"])
-    feature = workflow.create_feature(problem["id"], "Outcome", "A useful outcome", validation_criteria="- [ ] Outcome is observable")
+    feature = workflow.create_feature(
+        problem["id"], "Outcome", "A useful outcome", validation_criteria="- [ ] Outcome is observable"
+    )
     workflow.record_conflict_evaluation(feature["id"], "clear", "context.md#Evidence")
     workflow.approve_feature(feature["id"])
     workflow.delete("problems", problem["id"])
@@ -74,8 +81,16 @@ def test_refinement_context_is_bounded_lineage_aware_and_recent_first() -> None:
         detail="Evidence shows people repeat old decisions.",
     )
     other = workflow.promote_capture(workflow.capture("Another item"), detail="Must not leak")
-    workflow.record_ai_run("problems", problem["id"], "workflow_chat", "What is constrained?", "Avoid a migration project.")
-    workflow.record_ai_run("problems", problem["id"], "workflow_refinement", "Refine current item", "Latest preview emphasizes trusted decisions.")
+    workflow.record_ai_run(
+        "problems", problem["id"], "workflow_chat", "What is constrained?", "Avoid a migration project."
+    )
+    workflow.record_ai_run(
+        "problems",
+        problem["id"],
+        "workflow_refinement",
+        "Refine current item",
+        "Latest preview emphasizes trusted decisions.",
+    )
     workflow.record_ai_run("problems", other["id"], "workflow_chat", "Other question", "Other private answer")
 
     started = perf_counter()
@@ -139,11 +154,29 @@ def test_refinement_preview_progresses_from_context_to_final_item_detail_shape()
     initial = workflow.refinement_context_summary("problems", problem["id"])
     assert initial["view_mode"] == "context"
     assert [item["label"] for item in initial["structure"]] == [
-        "Problem statement", "Context", "Impact", "Evidence", "Desired outcome", "Boundaries", "Open questions"
+        "Problem statement",
+        "Context",
+        "Impact",
+        "Evidence",
+        "Desired outcome",
+        "Boundaries",
+        "Open questions",
     ]
 
-    workflow.record_ai_run("problems", problem["id"], "workflow_chat", "The impact is that the team loses time every day.", "What evidence shows the cost?")
-    workflow.record_ai_run("problems", problem["id"], "workflow_chat", "Evidence: three reviewers each lose an hour per week.", "What should improve?")
+    workflow.record_ai_run(
+        "problems",
+        problem["id"],
+        "workflow_chat",
+        "The impact is that the team loses time every day.",
+        "What evidence shows the cost?",
+    )
+    workflow.record_ai_run(
+        "problems",
+        problem["id"],
+        "workflow_chat",
+        "Evidence: three reviewers each lose an hour per week.",
+        "What should improve?",
+    )
     developed = workflow.refinement_context_summary("problems", problem["id"])
 
     assert developed["view_mode"] == "structure"
@@ -173,8 +206,16 @@ def test_structured_solution_preview_matches_refined_solution_detail_fields() ->
 
     assert summary["view_mode"] == "structure"
     assert [item["label"] for item in summary["structure"]] == [
-        "Solution title", "Problem this supports", "Intended outcome", "Scope", "Non-goals",
-        "Evidence & prior context", "Trade-offs & risks", "Dependencies", "Validation criteria", "Open questions",
+        "Solution title",
+        "Problem this supports",
+        "Intended outcome",
+        "Scope",
+        "Non-goals",
+        "Evidence & prior context",
+        "Trade-offs & risks",
+        "Dependencies",
+        "Validation criteria",
+        "Open questions",
     ]
     assert next(item for item in summary["structure"] if item["key"] == "scope")["status"] != "missing"
     assert next(item for item in summary["structure"] if item["key"] == "dependencies")["status"] == "missing"
@@ -244,17 +285,26 @@ def test_latest_next_solution_draft_is_restored_and_knows_when_it_was_created() 
 
 
 def test_completed_solution_builds_idempotent_evidence_first_lineage() -> None:
-    db = sqlite3.connect(":memory:"); db.row_factory = sqlite3.Row
+    db = sqlite3.connect(":memory:")
+    db.row_factory = sqlite3.Row
     workflow = WorkflowEngine(db)
     capture = workflow.capture("Keep the original feedback intact")
-    problem = workflow.promote_capture(capture, "Refinement loses its origin", "## Desired outcome\nThe origin remains traceable.")
+    problem = workflow.promote_capture(
+        capture, "Refinement loses its origin", "## Desired outcome\nThe origin remains traceable."
+    )
     workflow.approve_problem(problem["id"])
     solution = workflow.create_feature(
-        problem["id"], "Preserve lineage", "Completed work explains its origin", "No new workflow stage", "- [ ] Origin is linked"
+        problem["id"],
+        "Preserve lineage",
+        "Completed work explains its origin",
+        "No new workflow stage",
+        "- [ ] Origin is linked",
     )
     workflow.record_conflict_evaluation(solution["id"], "clear", "Human review")
     workflow.approve_feature(solution["id"])
-    workflow.update_manual("features", solution["id"], "Preserve final lineage", "Completed work explains every transition")
+    workflow.update_manual(
+        "features", solution["id"], "Preserve final lineage", "Completed work explains every transition"
+    )
     workflow.record_completion(solution["id"], "The origin link was inspected", "Human verified the Lineage")
     workflow.db.execute("UPDATE completions SET knowledge_status='integrated' WHERE feature_id=?", (solution["id"],))
     workflow.verify_completion(solution["id"])
@@ -266,7 +316,11 @@ def test_completed_solution_builds_idempotent_evidence_first_lineage() -> None:
     assert first["snapshot_id"] == second["snapshot_id"]
     assert [stage["kind"] for stage in first["lineage"]["stages"]] == ["capture", "problem", "solution", "complete"]
     assert all(stage.get("occurred_at") for stage in first["lineage"]["stages"])
-    assert [stage.get("record_type") for stage in first["lineage"]["stages"][:3]] == ["captures", "problems", "features"]
+    assert [stage.get("record_type") for stage in first["lineage"]["stages"][:3]] == [
+        "captures",
+        "problems",
+        "features",
+    ]
     assert len(first["lineage"]["transitions"]) == 3
     assert first["lineage"]["transitions"][1]["context_kind"] == "recorded_change"
     transition_claim = first["claims"][first["lineage"]["transitions"][1]["claim_id"]]
@@ -278,26 +332,45 @@ def test_completed_solution_builds_idempotent_evidence_first_lineage() -> None:
 
 
 def test_conflict_address_requires_human_or_implementation_basis() -> None:
-    db = sqlite3.connect(":memory:"); db.row_factory = sqlite3.Row
+    db = sqlite3.connect(":memory:")
+    db.row_factory = sqlite3.Row
     workflow = WorkflowEngine(db)
     problem = workflow.promote_capture(workflow.capture("A requirement conflicts"))
     workflow.approve_problem(problem["id"])
-    solution = workflow.create_feature(problem["id"], "Resolve direction", "A supported direction", validation_criteria="- [ ] Direction is supported")
+    solution = workflow.create_feature(
+        problem["id"], "Resolve direction", "A supported direction", validation_criteria="- [ ] Direction is supported"
+    )
     report_id = workflow.record_conflict_evaluation(solution["id"], "conflicted", "The old requirement differs")
 
     with pytest.raises(WorkflowError, match="AI inference"):
         workflow.record_conflict_address(
-            solution["id"], report_id, "addressed", "ai_inferred", "modified", "Likely changed", "conflict_report", report_id
+            solution["id"],
+            report_id,
+            "addressed",
+            "ai_inferred",
+            "modified",
+            "Likely changed",
+            "conflict_report",
+            report_id,
         )
 
     address = workflow.record_conflict_address(
-        solution["id"], report_id, "addressed", "explicit_decision", "modified", "The user chose Preview context", "conflict_report", report_id
+        solution["id"],
+        report_id,
+        "addressed",
+        "explicit_decision",
+        "modified",
+        "The user chose Preview context",
+        "conflict_report",
+        report_id,
     )
     assert address["status"] == "addressed"
     assert address["disposition"] == "modified"
     conflict = workflow.create_lineage_snapshot(solution["id"])["conflicts"][0]
     assert (conflict["status"], conflict["basis"], conflict["disposition"]) == (
-        "addressed", "explicit_decision", "modified"
+        "addressed",
+        "explicit_decision",
+        "modified",
     )
     workflow.record_conflict_evaluation(solution["id"], "conflicted", "A later requirement is still open")
     refreshed = workflow.create_lineage_snapshot(solution["id"])
@@ -305,30 +378,57 @@ def test_conflict_address_requires_human_or_implementation_basis() -> None:
 
 
 def test_lineage_correction_preserves_ai_revision_and_carries_forward() -> None:
-    db = sqlite3.connect(":memory:"); db.row_factory = sqlite3.Row
+    db = sqlite3.connect(":memory:")
+    db.row_factory = sqlite3.Row
     workflow = WorkflowEngine(db)
     problem = workflow.promote_capture(workflow.capture("Interpret this change"))
     workflow.approve_problem(problem["id"])
-    solution = workflow.create_feature(problem["id"], "Interpret safely", "The history is clear", validation_criteria="- [ ] History is cited")
+    solution = workflow.create_feature(
+        problem["id"], "Interpret safely", "The history is clear", validation_criteria="- [ ] History is cited"
+    )
     workflow.record_conflict_evaluation(solution["id"], "clear", "Human review")
     workflow.approve_feature(solution["id"])
     workflow.complete_problem(problem["id"], "Reviewed")
     lineage = workflow.create_lineage_snapshot(solution["id"])
     evidence_id = next(iter(lineage["evidence"]))
-    lineage = workflow.add_lineage_inferences(solution["id"], lineage["snapshot_id"], [{
-        "claim_key": "inferred:reason", "text": "Likely rationale", "confidence": "medium", "evidence_ids": [evidence_id]
-    }])
+    lineage = workflow.add_lineage_inferences(
+        solution["id"],
+        lineage["snapshot_id"],
+        [
+            {
+                "claim_key": "inferred:reason",
+                "text": "Likely rationale",
+                "confidence": "medium",
+                "evidence_ids": [evidence_id],
+            }
+        ],
+    )
     inferred = next(claim for claim in lineage["claims"].values() if claim["claim_key"] == "inferred:reason")
-    workflow.correct_lineage_claim(solution["id"], inferred["id"], "The context moved into Preview", "User correction", inferred["current_revision_id"])
+    workflow.correct_lineage_claim(
+        solution["id"],
+        inferred["id"],
+        "The context moved into Preview",
+        "User correction",
+        inferred["current_revision_id"],
+    )
     corrected = workflow.lineage(solution["id"])["claims"][inferred["id"]]
     assert corrected["text"] == "The context moved into Preview"
     assert [revision["author_type"] for revision in corrected["revisions"]] == ["ai", "user"]
 
     regenerated = workflow.create_lineage_snapshot(solution["id"], force=True)
     regenerated_evidence = next(iter(regenerated["evidence"]))
-    regenerated = workflow.add_lineage_inferences(solution["id"], regenerated["snapshot_id"], [{
-        "claim_key": "inferred:reason", "text": "A new AI wording", "confidence": "low", "evidence_ids": [regenerated_evidence]
-    }])
+    regenerated = workflow.add_lineage_inferences(
+        solution["id"],
+        regenerated["snapshot_id"],
+        [
+            {
+                "claim_key": "inferred:reason",
+                "text": "A new AI wording",
+                "confidence": "low",
+                "evidence_ids": [regenerated_evidence],
+            }
+        ],
+    )
     carried = next(claim for claim in regenerated["claims"].values() if claim["claim_key"] == "inferred:reason")
     assert carried["text"] == "The context moved into Preview"
     assert carried["current_author_type"] == "user"
@@ -394,7 +494,9 @@ def test_promoted_problem_inherits_capture_conversation_for_preview_and_ai_conte
     db.row_factory = sqlite3.Row
     workflow = WorkflowEngine(db)
     capture = workflow.capture("A raw queue idea")
-    workflow.record_ai_run("captures", capture, "workflow_chat", "Who needs this?", "People submitting AI work requests.")
+    workflow.record_ai_run(
+        "captures", capture, "workflow_chat", "Who needs this?", "People submitting AI work requests."
+    )
     workflow.record_ai_run("captures", capture, "workflow_refinement", "Refine current item", "A clearer queue request")
     problem = workflow.promote_capture(capture, "Make AI work requests queueable")
 
@@ -430,7 +532,9 @@ def test_solution_inherits_problem_and_capture_conversation_lineage() -> None:
         "People can find a trusted decision. " * 30,
         validation_criteria="- [ ] A trusted decision is findable",
     )
-    workflow.record_ai_run("features", solution["id"], "workflow_refinement", "Refine current item", "Keep the decision home focused.")
+    workflow.record_ai_run(
+        "features", solution["id"], "workflow_refinement", "Refine current item", "Keep the decision home focused."
+    )
 
     summary = workflow.refinement_context_summary("features", solution["id"])
 
@@ -454,19 +558,29 @@ def test_solution_inherits_problem_and_capture_conversation_lineage() -> None:
 
 
 def test_only_validation_criteria_bullets_seed_an_editable_checklist_once() -> None:
-    db = sqlite3.connect(":memory:"); db.row_factory = sqlite3.Row
+    db = sqlite3.connect(":memory:")
+    db.row_factory = sqlite3.Row
     workflow = WorkflowEngine(db)
     problem = workflow.promote_capture(workflow.capture("A problem"))
     workflow.approve_problem(problem["id"])
-    feature = workflow.create_feature(problem["id"], "A solution", "- [ ] This outcome bullet must not become a checklist", validation_criteria="- [ ] Review evidence\n- [x] Preserve work log\n- Review evidence")
+    feature = workflow.create_feature(
+        problem["id"],
+        "A solution",
+        "- [ ] This outcome bullet must not become a checklist",
+        validation_criteria="- [ ] Review evidence\n- [x] Preserve work log\n- Review evidence",
+    )
     progress = workflow.solution_progress(feature["id"])
-    assert [(item["body"], item["checked"]) for item in progress["checklist"]] == [("Review evidence", 0), ("Preserve work log", 1)]
+    assert [(item["body"], item["checked"]) for item in progress["checklist"]] == [
+        ("Review evidence", 0),
+        ("Preserve work log", 1),
+    ]
     workflow.update_manual("features", feature["id"], "A solution", "- A new outcome bullet")
     assert len(workflow.solution_progress(feature["id"])["checklist"]) == 2
 
 
 def test_work_log_image_summaries_are_bilingual_atomic_and_leave_authored_evidence_unchanged() -> None:
-    db = sqlite3.connect(":memory:"); db.row_factory = sqlite3.Row
+    db = sqlite3.connect(":memory:")
+    db.row_factory = sqlite3.Row
     workflow = WorkflowEngine(db)
     problem = workflow.promote_capture(workflow.capture("A problem"))
     workflow.approve_problem(problem["id"])
@@ -490,15 +604,14 @@ def test_work_log_image_summaries_are_bilingual_atomic_and_leave_authored_eviden
     assert english["fallback_used"] is True
 
     with pytest.raises(ValueError):
-        workflow.set_solution_progress_summaries(
-            entry["id"], {"ko": {"image_summary": "덮어쓰면 안 됨"}}, "ko"
-        )
+        workflow.set_solution_progress_summaries(entry["id"], {"ko": {"image_summary": "덮어쓰면 안 됨"}}, "ko")
     unchanged = workflow.solution_progress(feature["id"], "en")["entries"][0]
     assert unchanged["image_summary"] == "English image summary"
 
 
 def test_legacy_image_summary_falls_back_without_localization_rows() -> None:
-    db = sqlite3.connect(":memory:"); db.row_factory = sqlite3.Row
+    db = sqlite3.connect(":memory:")
+    db.row_factory = sqlite3.Row
     workflow = WorkflowEngine(db)
     problem = workflow.promote_capture(workflow.capture("A problem"))
     workflow.approve_problem(problem["id"])
@@ -516,7 +629,8 @@ def test_legacy_image_summary_falls_back_without_localization_rows() -> None:
 
 
 def test_organize_workbench_persists_attention_and_category() -> None:
-    db = sqlite3.connect(":memory:"); db.row_factory = sqlite3.Row
+    db = sqlite3.connect(":memory:")
+    db.row_factory = sqlite3.Row
     workflow = WorkflowEngine(db)
     capture = workflow.capture("Improve the LLM Wiki workbench")
     problem = workflow.promote_capture(capture, "Improve the LLM Wiki workbench")
@@ -533,7 +647,8 @@ def test_organize_workbench_persists_attention_and_category() -> None:
 
 
 def test_new_problem_and_solution_inherit_capture_category() -> None:
-    db = sqlite3.connect(":memory:"); db.row_factory = sqlite3.Row
+    db = sqlite3.connect(":memory:")
+    db.row_factory = sqlite3.Row
     workflow = WorkflowEngine(db)
     capture = workflow.capture("A categorized thought")
     workflow.set_workbench_category("captures", capture, "Product")
@@ -557,7 +672,8 @@ def test_new_problem_and_solution_inherit_capture_category() -> None:
 
 
 def test_explicit_general_survives_transitions_until_linked_item_is_dragged() -> None:
-    db = sqlite3.connect(":memory:"); db.row_factory = sqlite3.Row
+    db = sqlite3.connect(":memory:")
+    db.row_factory = sqlite3.Row
     workflow = WorkflowEngine(db)
     capture = workflow.capture("LLM Wiki category heuristic would disagree")
     workflow.set_workbench_category("captures", capture, "General")

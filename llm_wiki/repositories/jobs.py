@@ -10,7 +10,7 @@ from typing import Any
 
 import aiosqlite
 
-from llm_wiki.services.jobs import (
+from llm_wiki.core.jobs import (
     ACTIVE_JOB_STATUSES,
     Job,
     JobCheckpoint,
@@ -178,7 +178,9 @@ class JobRepository:
 
     async def list(self, *, limit: int = 100) -> list[Job]:
         async with self._connect() as db:
-            rows = await (await db.execute("SELECT * FROM ai_jobs_v2 ORDER BY created_at DESC LIMIT ?", (limit,))).fetchall()
+            rows = await (
+                await db.execute("SELECT * FROM ai_jobs_v2 ORDER BY created_at DESC LIMIT ?", (limit,))
+            ).fetchall()
         return [self._job(row) for row in rows]
 
     async def claim(self, job_id: str, worker_id: str, *, lease_seconds: int) -> JobLease | None:
@@ -232,7 +234,18 @@ class JobRepository:
             changed = await db.execute(
                 """UPDATE ai_jobs_v2 SET status=?,attempt=?,worker_id=?,lease_token=?,lease_expires_at=?,heartbeat_at=?,started_at=COALESCE(started_at,?)
                    WHERE id=? AND status IN (?,?)""",
-                (JobStatus.RUNNING.value, attempt, worker_id, token, _iso(expiry), _iso(now), _iso(now), row["id"], JobStatus.QUEUED.value, JobStatus.RETRYABLE.value),
+                (
+                    JobStatus.RUNNING.value,
+                    attempt,
+                    worker_id,
+                    token,
+                    _iso(expiry),
+                    _iso(now),
+                    _iso(now),
+                    row["id"],
+                    JobStatus.QUEUED.value,
+                    JobStatus.RETRYABLE.value,
+                ),
             )
             if changed.rowcount != 1:
                 await db.rollback()
@@ -280,7 +293,9 @@ class JobRepository:
             publication_revision=publication_revision,
         )
 
-    async def fail(self, job_id: str, lease_token: str, code: str, message: str, *, retryable: bool = False, max_attempts: int = 3) -> None:
+    async def fail(
+        self, job_id: str, lease_token: str, code: str, message: str, *, retryable: bool = False, max_attempts: int = 3
+    ) -> None:
         job = await self.get(job_id)
         may_retry = bool(retryable and job and job.attempt < max_attempts)
         if not may_retry:
@@ -291,7 +306,15 @@ class JobRepository:
             changed = await db.execute(
                 """UPDATE ai_jobs_v2 SET status=?,error_code=?,error_message=?,available_at=?,worker_id='',lease_token='',lease_expires_at=NULL
                    WHERE id=? AND status=? AND lease_token=?""",
-                (JobStatus.RETRYABLE.value, code, message[:2000], _iso(_now() + timedelta(seconds=delay)), job_id, JobStatus.RUNNING.value, lease_token),
+                (
+                    JobStatus.RETRYABLE.value,
+                    code,
+                    message[:2000],
+                    _iso(_now() + timedelta(seconds=delay)),
+                    job_id,
+                    JobStatus.RUNNING.value,
+                    lease_token,
+                ),
             )
             if changed.rowcount != 1:
                 await db.rollback()
@@ -382,12 +405,16 @@ class JobRepository:
             elif current is JobStatus.RUNNING:
                 status, finished = JobStatus.CANCELLING, None
             else:
-                terminal = self._job(await (await db.execute("SELECT * FROM ai_jobs_v2 WHERE id=?", (job_id,))).fetchone())
+                terminal = self._job(
+                    await (await db.execute("SELECT * FROM ai_jobs_v2 WHERE id=?", (job_id,))).fetchone()
+                )
                 status = current
                 finished = None
             if terminal is not None:
                 return terminal
-            await db.execute("UPDATE ai_jobs_v2 SET status=?,finished_at=? WHERE id=?", (status.value, finished, job_id))
+            await db.execute(
+                "UPDATE ai_jobs_v2 SET status=?,finished_at=? WHERE id=?", (status.value, finished, job_id)
+            )
             await db.commit()
         return await self.get(job_id)
 
@@ -448,7 +475,10 @@ class JobRepository:
     ) -> None:
         async with self._connect() as db:
             owner = await (
-                await db.execute("SELECT 1 FROM ai_jobs_v2 WHERE id=? AND status=? AND lease_token=?", (job_id, JobStatus.RUNNING.value, lease_token))
+                await db.execute(
+                    "SELECT 1 FROM ai_jobs_v2 WHERE id=? AND status=? AND lease_token=?",
+                    (job_id, JobStatus.RUNNING.value, lease_token),
+                )
             ).fetchone()
             if not owner:
                 raise PermissionError("Job lease is no longer current")
@@ -469,7 +499,17 @@ class JobRepository:
                     (job_id, source_hash, model),
                 )
             ).fetchall()
-        return [JobCheckpoint(row["job_id"], row["unit_key"], row["source_hash"], row["model"], row["ordinal"], json.loads(row["result_json"])) for row in rows]
+        return [
+            JobCheckpoint(
+                row["job_id"],
+                row["unit_key"],
+                row["source_hash"],
+                row["model"],
+                row["ordinal"],
+                json.loads(row["result_json"]),
+            )
+            for row in rows
+        ]
 
     async def publications(self, job_id: str) -> list[dict[str, str]]:
         async with self._connect() as db:
@@ -489,14 +529,18 @@ class JobRepository:
                 (notification_id, job_id, kind, title, json.dumps(target, ensure_ascii=False), _iso()),
             )
             await db.commit()
-            row = await (await db.execute("SELECT * FROM notifications WHERE job_id=? AND kind=?", (job_id, kind))).fetchone()
+            row = await (
+                await db.execute("SELECT * FROM notifications WHERE job_id=? AND kind=?", (job_id, kind))
+            ).fetchone()
         assert row
         return self._notification(row)
 
     async def notifications(self, *, unread_only: bool = False) -> list[JobNotification]:
         condition = "WHERE read_at IS NULL AND dismissed_at IS NULL" if unread_only else ""
         async with self._connect() as db:
-            rows = await (await db.execute(f"SELECT * FROM notifications {condition} ORDER BY created_at DESC")).fetchall()
+            rows = await (
+                await db.execute(f"SELECT * FROM notifications {condition} ORDER BY created_at DESC")
+            ).fetchall()
         return [self._notification(row) for row in rows]
 
     async def update_notification(self, notification_id: str, *, dismiss: bool = False) -> JobNotification | None:
@@ -509,16 +553,37 @@ class JobRepository:
 
     @staticmethod
     def _job(row: aiosqlite.Row | sqlite3.Row) -> Job:
-        descriptor = TaskDescriptor(row["task_kind"], row["entity_type"], row["entity_id"], row["result_interface"], row["notification_policy"])
+        descriptor = TaskDescriptor(
+            row["task_kind"], row["entity_type"], row["entity_id"], row["result_interface"], row["notification_policy"]
+        )
         return Job(
-            id=row["id"], descriptor=descriptor, status=JobStatus(row["status"]), input=json.loads(row["input_json"]),
-            result=json.loads(row["result_json"]), source_hash=row["source_hash"], model=row["model"],
-            execution_mode=row["execution_mode"], idempotency_key=row["idempotency_key"],
-            progress_completed=row["progress_completed"], progress_total=row["progress_total"], attempt=row["attempt"],
-            error_code=row["error_code"], error_message=row["error_message"], created_at=_datetime(row["created_at"]),
-            started_at=_datetime(row["started_at"]), finished_at=_datetime(row["finished_at"]),
+            id=row["id"],
+            descriptor=descriptor,
+            status=JobStatus(row["status"]),
+            input=json.loads(row["input_json"]),
+            result=json.loads(row["result_json"]),
+            source_hash=row["source_hash"],
+            model=row["model"],
+            execution_mode=row["execution_mode"],
+            idempotency_key=row["idempotency_key"],
+            progress_completed=row["progress_completed"],
+            progress_total=row["progress_total"],
+            attempt=row["attempt"],
+            error_code=row["error_code"],
+            error_message=row["error_message"],
+            created_at=_datetime(row["created_at"]),
+            started_at=_datetime(row["started_at"]),
+            finished_at=_datetime(row["finished_at"]),
         )
 
     @staticmethod
     def _notification(row: aiosqlite.Row | sqlite3.Row) -> JobNotification:
-        return JobNotification(row["id"], row["job_id"], row["kind"], row["title"], json.loads(row["target_json"]), _datetime(row["read_at"]), _datetime(row["dismissed_at"]))
+        return JobNotification(
+            row["id"],
+            row["job_id"],
+            row["kind"],
+            row["title"],
+            json.loads(row["target_json"]),
+            _datetime(row["read_at"]),
+            _datetime(row["dismissed_at"]),
+        )

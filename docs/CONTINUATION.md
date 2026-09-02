@@ -1,7 +1,7 @@
 # LLM Wiki — Continuation Handoff
 
-**Updated**: 2026-09-01
-**Current status**: Background AI Queue implementation is complete on `feat/background-ai-queue`; deploy the single verified commit after review.
+**Updated**: 2026-09-02
+**Current status**: Background AI Queue UI and backend architecture cleanup are complete on `fix/readable-queue`; review the single verified commit before merge.
 **Local URL**: `http://127.0.0.1:8765`  
 **Vault**: User-selected local Markdown directory
 
@@ -21,8 +21,11 @@ The current roadmap and acceptance order are maintained in [PROJECT_PLAN.md](PRO
   additionally uses a temporary toast and persisted unread bell alert.
 - Knowledge translation resumes by paragraph and moves completed output to the Vault before
   deleting working checkpoints. Capture and Work Log translations preserve authored source text.
-- AI Queue code follows `web → controllers → services/handlers → repositories/adapters`; the old
-  blocking provider, graph, conflict-review, and AI modules were removed.
+- AI Queue code follows the enforced layered dependency rules in
+  [architecture.md](architecture.md). Web owns composition, controllers receive an assembled
+  runtime, Queue domain types are dependency-free, and each durable task has one named handler
+  module. The old blocking provider, graph, bundled workflow/localization handler, and AI modules
+  were removed.
 
 ### 001 — Fast Vault Search
 
@@ -104,9 +107,9 @@ is installed at `~/Library/LaunchAgents/com.llm-wiki.plist`. It is local-only (`
 ## Verification record
 
 - `uv sync --all-extras` completed with semantic, AI, and test dependencies.
-- Latest automated run: **177 passed, 0 skipped** after installing the Playwright Chromium
-  artifact. The macOS/Windows/Linux acceptance matrix remains in
-  `.github/workflows/cross-platform.yml`.
+- Latest automated run: **180 passed, 0 skipped**. The macOS/Windows/Linux acceptance matrix
+  remains in `.github/workflows/cross-platform.yml`.
+- Ruff lint and 120-column format checks passed across all Python source and tests.
 - Browser JavaScript syntax is separately validated by Node and passed.
 - Latest 1,000-note structural-index benchmark: **1,002.13 ms** (budget: <3,000 ms).
 

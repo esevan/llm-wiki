@@ -4,7 +4,6 @@ from typing import Any
 
 from llm_wiki.services.localization import SUPPORTED_LOCALES
 
-
 _DRAFT_FIELDS = {
     "captures": ("title", "detail"),
     "problems": ("title", "outcome", "non_goals", "validation_criteria"),

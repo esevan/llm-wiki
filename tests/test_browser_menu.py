@@ -3,7 +3,6 @@ from pathlib import Path
 
 import pytest
 
-
 playwright = pytest.importorskip("playwright.sync_api")
 
 
@@ -38,7 +37,13 @@ def test_locale_switch_translates_static_ui_preserves_input_and_avoids_ai_calls(
             elif "/api/dashboard" in url:
                 payload = {"goals": [], "events": []}
             elif "/api/provider/config" in url:
-                payload = {"base_url": "", "model": "", "advanced_model": "", "advanced_tasks": {}, "api_key_configured": False}
+                payload = {
+                    "base_url": "",
+                    "model": "",
+                    "advanced_model": "",
+                    "advanced_tasks": {},
+                    "api_key_configured": False,
+                }
             elif "/api/transitions" in url:
                 payload = {"transitions": []}
             elif "/recent-archive" in url:
@@ -51,11 +56,16 @@ def test_locale_switch_translates_static_ui_preserves_input_and_avoids_ai_calls(
 
         page.route("**/api/**", route_api)
         page.goto(page_url)
-        page.evaluate("resources => { localeResources=resources; rebuildLocaleReverse(); activeLocale='en'; applyLocale(); }", resources)
+        page.evaluate(
+            "resources => { localeResources=resources; rebuildLocaleReverse(); activeLocale='en'; applyLocale(); }",
+            resources,
+        )
         page.locator("#capture-text").fill("사용자가 작성한 원문")
         page.locator("#manual-modal").evaluate("dialog => dialog.showModal()")
         page.locator("#manual-title").fill("편집 중인 제목")
-        elapsed = page.evaluate("async () => { const start=performance.now(); await setLocale('ko', false); return performance.now()-start }")
+        elapsed = page.evaluate(
+            "async () => { const start=performance.now(); await setLocale('ko', false); return performance.now()-start }"
+        )
 
         assert page.locator("html").get_attribute("lang") == "ko"
         assert page.get_by_role("button", name="Vault 검색", exact=False).count() == 1
@@ -63,7 +73,9 @@ def test_locale_switch_translates_static_ui_preserves_input_and_avoids_ai_calls(
         assert page.locator("#manual-modal").evaluate("dialog => dialog.open")
         assert page.locator("#manual-title").input_value() == "편집 중인 제목"
         assert elapsed < 100
-        assert not any(fragment in url for url in requested for fragment in ("/chat", "/draft", "/refine", "/conflict-review"))
+        assert not any(
+            fragment in url for url in requested for fragment in ("/chat", "/draft", "/refine", "/conflict-review")
+        )
         browser.close()
 
 
@@ -111,6 +123,96 @@ def test_saved_locale_initialization_reloads_stored_content_with_the_database_lo
             for item in result["requests"]
             if "/i18n/" in item["value"] or "/settings/locale" in item["value"]
         )
+        browser.close()
+
+
+def test_queue_explains_each_job_and_formats_background_results() -> None:
+    from playwright.sync_api import sync_playwright
+
+    root = Path(__file__).parents[1]
+    page_url = (root / "llm_wiki" / "static" / "index.html").as_uri()
+    resources = {
+        locale: json.loads((root / "llm_wiki" / "static" / "i18n" / f"{locale}.json").read_text(encoding="utf-8"))
+        for locale in ("en", "ko")
+    }
+    with sync_playwright() as driver:
+        try:
+            browser = driver.chromium.launch(headless=True)
+        except Exception as error:
+            pytest.skip(f"Playwright browser artifact unavailable locally: {error}")
+        page = browser.new_page()
+        page.goto(page_url)
+        result = page.evaluate(
+            """async () => {
+                activeLocale='en';
+                window.boardItems={'features:feature-1':{title:'Make Queue readable'}};
+                queueJobs=[
+                    {
+                        id:'review-1',task_kind:'completion_review',entity_type:'features',entity_id:'feature-1',
+                        status:'running',progress:{completed:2,total:4},result_interface:'completion_review',
+                        error:null,created_at:'2026-09-02T10:00:00Z'
+                    },
+                    {
+                        id:'embedding-1',task_kind:'embedding_refresh',entity_type:'vault',entity_id:'documents',
+                        status:'completed',progress:{completed:3,total:3},result_interface:'embedding_coverage',
+                        error:null,created_at:'2026-09-02T09:00:00Z',finished_at:'2026-09-02T09:01:00Z'
+                    },
+                    {
+                        id:'comment-translation-1',task_kind:'derived_translation',
+                        entity_type:'solution_progress_comments',entity_id:'comment-1',status:'running',
+                        progress:{completed:0,total:1},result_interface:'owning_content',error:null,
+                        created_at:'2026-09-02T10:01:00Z'
+                    }
+                ];
+                renderQueue();
+                const queueText=document.querySelector('#queue-list').innerText;
+                const pendingResult=document.querySelector('[data-job-id="review-1"] [data-job-action="result"]');
+                queueJobs[0].status='awaiting_review';
+                renderQueue();
+                const readyResult=document.querySelector('[data-job-id="review-1"] [data-job-action="result"]');
+                let notice=null;
+                api=async path=>({
+                    status:'completed',result_interface:'embedding_coverage',
+                    result:{updated:3,coverage:{documents:10,semantic_ready:9}}
+                });
+                showNotice=(message,title)=>{notice={message,title}};
+                await openJobResult('embedding-1');
+                return {
+                    queueText,notice,
+                    pendingResult:{text:pendingResult?.innerText,disabled:pendingResult?.disabled},
+                    readyResult:{text:readyResult?.innerText,disabled:readyResult?.disabled}
+                };
+            }"""
+        )
+
+        assert "Completion Review" in result["queueText"]
+        assert "Solution · Make Queue readable" in result["queueText"]
+        assert "Checks recorded work and validation criteria" in result["queueText"]
+        assert "2 of 4 steps" in result["queueText"]
+        assert "Result" in result["queueText"]
+        assert "Completion Review page" in result["queueText"]
+        assert "Solution Work · Comment" in result["queueText"]
+        assert "Adds the missing language version" in result["queueText"]
+        assert result["pendingResult"] == {"text": "Available when complete", "disabled": True}
+        assert result["readyResult"] == {"text": "Open result page →", "disabled": False}
+        assert result["notice"] == {
+            "title": "Embedding refresh",
+            "message": "3 documents updated. Semantic search is ready for 9 of 10 documents.",
+        }
+        assert "{" not in result["notice"]["message"]
+        korean = page.evaluate(
+            """resources => {
+                localeResources=resources; rebuildLocaleReverse(); activeLocale='ko'; renderQueue();
+                return document.querySelector('#queue-list').innerText;
+            }""",
+            resources,
+        )
+        assert "완료 검토" in korean
+        assert "기록된 작업과 검증 기준을 확인합니다" in korean
+        assert "4단계 중 2단계" in korean
+        assert "완료 검토 페이지" in korean
+        assert "결과 페이지 열기 →" in korean
+        assert "Solution Work · 댓글" in korean
         browser.close()
 
 
@@ -178,6 +280,7 @@ def test_ai_setup_exposes_lineage_interpretation_model_routing() -> None:
 
 def test_navigation_switches_views_in_a_real_browser() -> None:
     from playwright.sync_api import sync_playwright
+
     page_url = (Path(__file__).parents[1] / "llm_wiki" / "static" / "index.html").as_uri()
     with sync_playwright() as driver:
         try:
@@ -229,6 +332,7 @@ def test_cards_do_not_render_duplicate_explore_buttons() -> None:
 
 def test_edit_manually_opens_and_saves_text_with_quotes_and_newlines() -> None:
     from playwright.sync_api import sync_playwright
+
     page_url = (Path(__file__).parents[1] / "llm_wiki" / "static" / "index.html").as_uri()
     with sync_playwright() as driver:
         try:
@@ -295,8 +399,10 @@ def test_edit_manually_opens_and_saves_text_with_quotes_and_newlines() -> None:
         assert page_errors == []
         browser.close()
 
+
 def test_complete_problem_button_shows_spinner_while_request_is_pending() -> None:
     from playwright.sync_api import sync_playwright
+
     page_url = (Path(__file__).parents[1] / "llm_wiki" / "static" / "index.html").as_uri()
     with sync_playwright() as driver:
         try:
@@ -312,7 +418,9 @@ def test_complete_problem_button_shows_spinner_while_request_is_pending() -> Non
                 button.onclick = () => confirmProblemCompletion('problem-id', 'review-id', button);
             }"""
         )
-        page.evaluate("window.fetch = () => new Promise(resolve => setTimeout(() => resolve({ok: true, status: 200, json: async () => ({})}), 1000))")
+        page.evaluate(
+            "window.fetch = () => new Promise(resolve => setTimeout(() => resolve({ok: true, status: 200, json: async () => ({})}), 1000))"
+        )
 
         button = page.locator("#test-complete")
         button.dispatch_event("click")
@@ -322,12 +430,13 @@ def test_complete_problem_button_shows_spinner_while_request_is_pending() -> Non
         spinner = button.evaluate(
             "button => ({content: getComputedStyle(button, '::before').content, animation: getComputedStyle(button, '::before').animationName})"
         )
-        assert spinner == {"content": '\"\"', "animation": "spin"}
+        assert spinner == {"content": '""', "animation": "spin"}
         browser.close()
 
 
 def test_conflict_review_modal_is_compact_and_decision_icons_align() -> None:
     from playwright.sync_api import sync_playwright
+
     page_url = (Path(__file__).parents[1] / "llm_wiki" / "static" / "index.html").as_uri()
     with sync_playwright() as driver:
         try:
@@ -339,9 +448,7 @@ def test_conflict_review_modal_is_compact_and_decision_icons_align() -> None:
         page.locator("#item-detail-type").evaluate(
             "node => node.textContent = 'Conflict review · your decision required'"
         )
-        page.locator("#item-detail-title").evaluate(
-            "node => node.textContent = 'Conflict review needs attention'"
-        )
+        page.locator("#item-detail-title").evaluate("node => node.textContent = 'Conflict review needs attention'")
         page.locator("#item-detail-notes").evaluate(
             """notes => notes.innerHTML = `
                 <div class="conflict-report">
@@ -372,6 +479,7 @@ def test_conflict_review_modal_is_compact_and_decision_icons_align() -> None:
 
 def test_conflict_review_is_enqueued_without_opening_a_progress_modal() -> None:
     from playwright.sync_api import sync_playwright
+
     page_url = (Path(__file__).parents[1] / "llm_wiki" / "static" / "index.html").as_uri()
     with sync_playwright() as driver:
         try:
@@ -398,6 +506,7 @@ def test_conflict_review_is_enqueued_without_opening_a_progress_modal() -> None:
 
 def test_solution_proposal_sections_do_not_overlap() -> None:
     from playwright.sync_api import sync_playwright
+
     page_url = (Path(__file__).parents[1] / "llm_wiki" / "static" / "index.html").as_uri()
     with sync_playwright() as driver:
         try:
@@ -433,6 +542,7 @@ def test_solution_proposal_sections_do_not_overlap() -> None:
 
 def test_manual_transition_form_uses_clear_paths_and_short_actions() -> None:
     from playwright.sync_api import sync_playwright
+
     page_url = (Path(__file__).parents[1] / "llm_wiki" / "static" / "index.html").as_uri()
     with sync_playwright() as driver:
         try:
@@ -462,7 +572,8 @@ def test_manual_transition_form_uses_clear_paths_and_short_actions() -> None:
         assert page.locator(".manual-kicker").inner_text() == "MANUAL · AI NOT USED"
         assert page.locator("#transition-submit").inner_text() == "Start work"
         assert page.locator("[name=approval_path] option").all_inner_texts() == [
-            "Already checked", "Skip with a reason"
+            "Already checked",
+            "Skip with a reason",
         ]
         assert page.locator("[name=citation]").is_visible()
         assert page.locator("[name=citation]").get_attribute("required") == ""
@@ -566,7 +677,9 @@ def test_solution_card_opens_saved_detail_and_work_in_explore_workspace(viewport
         )
         page.get_by_text("Saved Solution title", exact=True).click()
 
-        page.locator("#explore-preview-detail").get_by_text("A durable saved outcome", exact=True).wait_for(timeout=1000)
+        page.locator("#explore-preview-detail").get_by_text("A durable saved outcome", exact=True).wait_for(
+            timeout=1000
+        )
         assert page.locator("#chat-modal").evaluate("dialog => dialog.open")
         assert not page.locator("#item-detail-modal").evaluate("dialog => dialog.open")
         assert page.locator("#preview-detail-tab").get_attribute("aria-selected") == "true"
@@ -621,7 +734,11 @@ def test_in_progress_card_opens_explore_with_work_selected(viewport: dict[str, i
         assert page.locator("#explore-preview-work").is_visible()
         assert page.locator("#preview-detail-tab").is_enabled()
         page.locator("#preview-detail-tab").click()
-        assert page.locator("#explore-preview-detail").get_by_text("Resume the work without another click.", exact=True).is_visible()
+        assert (
+            page.locator("#explore-preview-detail")
+            .get_by_text("Resume the work without another click.", exact=True)
+            .is_visible()
+        )
         browser.close()
 
 
@@ -748,7 +865,9 @@ def test_completed_solution_uses_read_only_explore_workspace(viewport: dict[str,
 
 
 @pytest.mark.parametrize("viewport", [{"width": 1280, "height": 900}, {"width": 390, "height": 844}])
-def test_chat_updates_refinement_in_preview_background_and_applies_without_review_modal(viewport: dict[str, int]) -> None:
+def test_chat_updates_refinement_in_preview_background_and_applies_without_review_modal(
+    viewport: dict[str, int],
+) -> None:
     from playwright.sync_api import sync_playwright
 
     page_url = (Path(__file__).parents[1] / "llm_wiki" / "static" / "index.html").as_uri()
@@ -981,7 +1100,9 @@ def test_background_refinement_error_stays_in_preview_with_context_and_tooltip()
         assert page.get_by_text("Context remains readable.").is_visible()
         assert not page.locator("#draft-modal").is_visible()
         status.hover()
-        assert "Refinement preview is unavailable" in status.evaluate("node => getComputedStyle(node, '::after').content")
+        assert "Refinement preview is unavailable" in status.evaluate(
+            "node => getComputedStyle(node, '::after').content"
+        )
         browser.close()
 
 

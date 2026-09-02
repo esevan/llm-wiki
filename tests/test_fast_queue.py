@@ -21,6 +21,7 @@ def test_fast_queue_has_one_consumer_and_no_durable_state() -> None:
                 await asyncio.sleep(0.01)
                 yield label
                 active -= 1
+
             return run
 
         first = await queue.submit(operation("first"))
