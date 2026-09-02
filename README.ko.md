@@ -51,6 +51,22 @@ AI는 필수 제품 기능이며, 로컬 검색과 수동 제어는 제공자 �
 
 API 키는 vault나 앱 DB가 아니라 macOS Keychain 또는 Windows Credential Manager에 저장됩니다.
 
+React 프런트엔드는 Tauri 데스크톱 애플리케이션으로도 패키징됩니다. 데스크톱 개발에는
+Node.js 20 이상과 안정 Rust 툴체인이 필요합니다. Tauri가 선택한 Vault용 격리 Python
+애플리케이션 Runtime, Fast Queue, 지속 Worker를 함께 시작하고 종료합니다.
+
+```text
+npm install
+LLM_WIKI_VAULT=/path/to/your-vault npm run tauri -- dev
+npm run tauri:build
+```
+
+Release Build는 Python Runtime을 `.app`에 포함하므로 별도로 Python이나 Web Server를
+설치할 필요가 없습니다. `LLM_WIKI_VAULT`가 없으면 데스크톱 앱은 `Documents/LLM Wiki
+Vault`를 사용합니다. 안정적인 Python 애플리케이션 계층은 검증된 Streaming Loopback
+명령 Adapter 뒤에 유지됩니다. React는 Python과 직접 통신하지 않으며 요청 취소는 Tauri
+전송 계층을 거쳐 전달됩니다.
+
 Worker 역할, 복구, 작업별 결과, 알림 동작은
 [백그라운드 AI Queue](docs/features/background-ai-queue.ko.md)를 참고하세요.
 
@@ -85,6 +101,12 @@ Spirit Review Gate를 통과해야 합니다.
 [백엔드 아키텍처 안내](docs/architecture.ko.md)에 정리되어 있습니다.
 
 ```text
+npm test
+npm run typecheck
+npm run lint
+npm run build
+cargo test --manifest-path src-tauri/Cargo.toml
+cargo check --manifest-path src-tauri/Cargo.toml
 uv run ruff check .
 uv run ruff format --check .
 uv run pytest -q

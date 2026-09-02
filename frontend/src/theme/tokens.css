@@ -1,0 +1,87 @@
+:root {
+  color-scheme: light;
+  --color-bg-primary: #fffaf2;
+  --color-bg-surface: #ffffff;
+  --color-bg-elevated: #fff7fa;
+  --color-text-primary: #27242a;
+  --color-text-secondary: #675e63;
+  --color-text-muted: #7d7780;
+  --color-border-default: #eee5e8;
+  --color-border-strong: #ded6da;
+  --color-accent-primary: #ff2b85;
+  --color-accent-strong: #d91969;
+  --color-status-success: #246146;
+  --color-status-warning: #775500;
+  --color-status-error: #a92c2a;
+  --color-status-info: #38212b;
+  --color-highlight: #fff15b;
+  --color-positive-surface: #c9f2df;
+  --color-bg-muted: #f6f0f1;
+  --color-bg-neutral: #f3eef0;
+  --color-bg-positive-subtle: #f8fff9;
+  --color-bg-danger-subtle: #ffe0df;
+  --color-bg-accent-subtle: #fff0f6;
+  --color-border-accent: #ffc6df;
+  --color-border-accent-muted: #ffd7e7;
+  --color-border-accent-soft: #f3dde7;
+  --color-border-positive: #d3eddd;
+  --color-border-worklog: #e6d6de;
+  --color-shadow-soft: #38212b0b;
+
+  --font-family-body: 'Nunito', system-ui, sans-serif;
+  --font-family-mono: 'DM Mono', ui-monospace, monospace;
+  --font-size-xs: 10px;
+  --font-size-sm: 12px;
+  --font-size-md: 15px;
+  --font-size-lg: 22px;
+  --font-size-xl: 38px;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-7: 28px;
+  --space-8: 36px;
+
+  --radius-control: 9px;
+  --radius-card: 13px;
+  --radius-panel: 17px;
+  --radius-dialog: 20px;
+  --radius-pill: 999px;
+  --border-default: 1px solid var(--color-border-default);
+  --shadow-card: 0 2px 4px rgb(56 33 43 / 4%);
+  --shadow-dialog: 0 20px 70px rgb(56 33 43 / 27%);
+  --control-height: 36px;
+  --layer-menu: 1000;
+  --motion-fast: 150ms;
+  --motion-normal: 320ms;
+  --focus-ring: 2px solid #ffc6df;
+
+  /* Compatibility aliases consumed by the behavior-preserving stylesheet. */
+  --pink: var(--color-accent-primary);
+  --pink-dark: var(--color-accent-strong);
+  --cream: var(--color-bg-primary);
+  --ink: var(--color-text-primary);
+  --muted: var(--color-text-muted);
+  --line: var(--color-border-default);
+  --lemon: var(--color-highlight);
+  --mint: var(--color-positive-surface);
+  --card: var(--color-bg-surface);
+}
+
+:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 2px;
+}
+
+:disabled,
+[aria-disabled='true'] {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.overlay-layer {
+  display: contents;
+}

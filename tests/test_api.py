@@ -28,6 +28,36 @@ def test_api_is_usable_without_ai_or_embeddings(tmp_path: Path) -> None:
         assert captured.json()["id"] != "pending-workflow"
 
 
+def test_react_shell_and_bundled_assets_are_served_from_the_local_app(tmp_path: Path) -> None:
+    with TestClient(create_app(tmp_path, tmp_path / "db.sqlite")) as client:
+        shell = client.get("/")
+        react = client.get("/assets/app.js")
+        runtimes = [
+            client.get(f"/runtime/{name}.js")
+            for name in (
+                "foundation",
+                "jobs",
+                "workbench",
+                "conflicts",
+                "explore",
+                "manual",
+                "search-settings",
+                "solution-work",
+                "archive",
+                "transitions",
+                "completed-workspace",
+            )
+        ]
+
+    assert shell.status_code == 200
+    assert 'id="root"' in shell.text
+    assert "no-store" in shell.headers["cache-control"]
+    assert react.status_code == 200
+    assert "createRoot" in react.text
+    assert all(runtime.status_code == 200 for runtime in runtimes)
+    assert "llmWikiApplication" in runtimes[0].text
+
+
 def test_conflict_resolution_api_validates_complete_human_decisions_and_restores_them(tmp_path: Path) -> None:
     db_path = tmp_path / "conflict-resolution.sqlite"
     app = create_app(tmp_path, db_path)

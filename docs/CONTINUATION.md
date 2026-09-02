@@ -1,9 +1,13 @@
 # LLM Wiki — Continuation Handoff
 
 **Updated**: 2026-09-02
-**Current status**: Repository behavior has been reconciled against all SpecKit specifications on
-`docs/reconcile-current-specs`; confirmed implementation gaps and two unresolved policy decisions
-remain before the specifications can be treated as fully implemented.
+**Current status**: The compatibility-first React/Tauri migration on
+`feat/react-tauri-migration` passes its Phase 9 audit. React owns primary screens, dialogs, and
+navigation; typed HTTP/Tauri application clients, theme tokens, request-ID streaming/cancellation,
+a self-contained native bundle, isolated durable-worker runtimes, real-sidecar command tests, and
+the release-app desktop scenario all pass. The former 181 KB runtime is now eleven bounded feature
+controllers with styles centralized in the theme. See `docs/migrations/react-tauri-report.md` for
+the complete matrix and retained compatibility rationale.
 **Local URL**: `http://127.0.0.1:8765`  
 **Vault**: User-selected local Markdown directory
 
@@ -24,6 +28,9 @@ The current roadmap and acceptance order are maintained in [PROJECT_PLAN.md](PRO
 - Knowledge translation resumes by paragraph and moves completed output to the Vault before
   deleting working checkpoints. Closing or switching its reader detaches UI progress without
   cancelling the durable job. Capture and Work Log translations preserve authored source text.
+- Concurrent durable workers own separate application/SQLite connections; transient SQLite writer
+  contention uses the queue's bounded retry policy. If optional FastEmbed is absent, embedding work
+  completes with an explicit lexical-fallback result instead of creating failed queue history.
 - AI Queue code follows the enforced layered dependency rules in
   [architecture.md](architecture.md). Web owns composition, controllers receive an assembled
   runtime, Queue domain types are dependency-free, and each durable task has one named handler
@@ -36,8 +43,9 @@ The current roadmap and acceptance order are maintained in [PROJECT_PLAN.md](PRO
   wikilinks, heading/block references, embeds, and code-fence exclusion.
 - SQLite WAL + FTS5 structural index with changed-file detection, directory routing, link
   graph storage, source hashes, result citations, pagination, filesystem watcher, and SSE.
-- Optional FastEmbed semantic runtime is installed. Embedding generation and refresh run as
-  durable document jobs; lexical search stays available while they complete.
+- The optional FastEmbed semantic runtime can be installed with the `semantic` extra. Embedding
+  generation and refresh run as durable document jobs when available; lexical search remains
+  available while they complete and is the explicit fallback when the extra is absent.
 - The reference 1,000-note structural benchmark is consistently below the 3-second budget.
 
 ### 002 — Conflict-Gated Workflow
@@ -97,10 +105,10 @@ The current roadmap and acceptance order are maintained in [PROJECT_PLAN.md](PRO
 
 | Item | Value |
 |---|---|
-| Platform | macOS on Intel (`x86_64`) |
+| Platform | macOS on Apple Silicon (`arm64`) |
 | Project path | Repository checkout directory |
-| Python | 3.12.13 (`/usr/local/opt/python@3.12/bin/python3.12`) |
-| Package manager | `uv` 0.12.2 |
+| Python | 3.12.14 (uv-managed) |
+| Package manager | `uv` 0.12.5 |
 | Local database | OS application-data directory, `LLM Wiki/llm-wiki.sqlite3` |
 | Service | `com.llm-wiki` LaunchAgent |
 | Service logs | `~/Library/Application Support/LLM Wiki/logs/` |
@@ -110,9 +118,11 @@ is installed at `~/Library/LaunchAgents/com.llm-wiki.plist`. It is local-only (`
 
 ## Verification record
 
-- `uv sync --all-extras` completed with semantic, AI, and test dependencies.
-- Latest automated run: **180 passed, 0 skipped**. The macOS/Windows/Linux acceptance matrix
-  remains in `.github/workflows/cross-platform.yml`.
+- The core/dev environment is synchronized; use `uv sync --all-extras` when semantic and LangGraph
+  extras are required.
+- Latest migration run: **195 Python + 10 React + 12 Rust tests, 0 skipped**, plus two consecutive
+  release-app desktop E2E passes. The macOS/Windows/Linux acceptance matrix remains in
+  `.github/workflows/cross-platform.yml`.
 - Ruff lint and 120-column format checks passed across all Python source and tests.
 - Browser JavaScript syntax is separately validated by Node and passed.
 - Latest 1,000-note structural-index benchmark: **1,002.13 ms** (budget: <3,000 ms).

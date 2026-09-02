@@ -104,7 +104,15 @@ def _branch_weight(node: ast.AST) -> int:
 
 
 def test_queue_browser_handlers_have_one_authoritative_implementation() -> None:
-    source = (ROOT / "llm_wiki" / "static" / "index.html").read_text(encoding="utf-8")
+    runtime_root = ROOT / "llm_wiki" / "static" / "runtime"
+    sources = list(runtime_root.glob("*.js"))
+    source = "\n".join(path.read_text(encoding="utf-8") for path in sources)
+    assert len(sources) == 11
+    assert not (ROOT / "llm_wiki" / "static" / "legacy-runtime.js").exists()
+    assert max(path.stat().st_size for path in sources) < 60_000
+    assert "document.head.insertAdjacentHTML" not in source
+    assert "<style>" not in source
+    assert re.search(r"#[0-9a-fA-F]{3,8}(?=[;,'\"])", source) is None
     for name in (
         "loadBoard",
         "runConflictReview",
@@ -131,3 +139,42 @@ def test_superseded_ai_modules_are_removed() -> None:
         "llm_wiki/services/handlers/localization.py",
     )
     assert not [path for value in removed if (path := ROOT / value).exists()]
+
+
+def test_react_features_depend_on_the_application_client_not_transports() -> None:
+    feature_sources = "\n".join(
+        path.read_text(encoding="utf-8") for path in (ROOT / "frontend" / "src" / "features").rglob("*.tsx")
+    )
+    assert "fetch(" not in feature_sources
+    assert "invoke(" not in feature_sources
+    assert "/api/" not in feature_sources
+    assert "dangerouslySetInnerHTML" not in feature_sources
+    assert not (ROOT / "frontend" / "src" / "features" / "overlays" / "overlays.html").exists()
+    assert "document.write" not in (ROOT / "llm_wiki" / "static" / "index.html").read_text(encoding="utf-8")
+
+
+def test_frontend_transport_and_theme_boundaries_are_centralized() -> None:
+    source_root = ROOT / "frontend" / "src"
+    invoke_users = [
+        path.relative_to(ROOT)
+        for path in source_root.rglob("*.ts")
+        if re.search(r"\binvoke(?:<[^>]+>)?\(", path.read_text(encoding="utf-8"))
+    ]
+    assert invoke_users == [Path("frontend/src/services/tauriApplicationClient.ts")]
+    colored_components = [
+        path.relative_to(ROOT)
+        for path in source_root.rglob("*.tsx")
+        if re.search(r"#[0-9a-fA-F]{3,8}", path.read_text(encoding="utf-8"))
+    ]
+    assert colored_components == []
+
+
+def test_tauri_exposes_only_the_validated_application_and_e2e_boundaries() -> None:
+    source = (ROOT / "src-tauri" / "src" / "lib.rs").read_text(encoding="utf-8")
+    assert source.count("#[tauri::command]") == 5
+    assert "application_stream" in source
+    assert "cancel_application_request" in source
+    assert "desktop_e2e_complete" in source
+    assert "validate_request(&request)?" in source
+    assert "ApplicationGateway" in source
+    assert "127.0.0.1" in source

@@ -6,6 +6,29 @@ LLM Wiki 백엔드는 하나의 Web 조립 경계를 둔 Layered Architecture를
 계층에서 애플리케이션 로직과 저장 계층 방향으로만 흐르며, 하위 계층은 Controller나 Web 계층을
 역참조하지 않습니다.
 
+데스크톱 마이그레이션은 도메인 로직을 Rust로 옮기지 않고 React 프레젠테이션 계층과
+Tauri 전달 어댑터를 추가합니다. React 기능 모듈은 `ApplicationClient`에 의존하며 HTTP와
+Tauri 어댑터가 이 경계를 구현합니다. Tauri는 범위가 좁고 검증된 요청/Streaming/취소 명령
+모음만 노출하고, 알려진 애플리케이션 경로군과 안전한 Header만 Loopback Python 사이드카로
+전달합니다. 요청 ID가 증분 Chunk와 취소를 연결합니다. Shell은 사이드카를 하나의 전용 Process
+Group으로 패키징하고 시작, 상태 확인, 종료합니다. Fast Worker와 지속 Worker는 이 관리 대상
+Process 안에서 실행됩니다. 각 동시 지속 Worker는 격리된 애플리케이션 Runtime과 SQLite 연결을
+소유하며 일시적인 Writer 경합은 Queue의 제한된 재시도 정책을 따릅니다.
+Python Runtime이 유일한 애플리케이션/도메인 구현으로 남으므로 HTTP와 데스크톱 전달 계층에
+워크플로 로직이 중복되지 않습니다.
+
+```text
+React 기능 -> ApplicationClient -> HTTP 어댑터(웹)
+                               -> Tauri 어댑터 -> Rust 요청/Streaming/취소 -> 관리되는 Python 런타임
+```
+
+프런트엔드 디자인 토큰, 전역/컴포넌트 스타일, 로컬 번들 폰트는 `frontend/src/theme/`에
+있습니다. 주요 화면은 `frontend/src/features/`의 도메인 모듈입니다. React JSX가 탐색,
+대화상자와 알림 영역을 소유하며 HTML 진입점에는 Inline Bootstrap Code가 없습니다. 남아 있는
+명령형 동작은 `llm_wiki/static/runtime/` 아래의 도메인별 Controller 11개로 분리되어 있습니다.
+이 Controller에는 삽입 Style이나 원시 시각 상수가 없으며 Typed React Hook으로 단계적으로
+교체하는 작업은 마이그레이션 감사 문서에 기록되어 있습니다.
+
 | 계층 | 책임 | 주요 위치 |
 | --- | --- | --- |
 | Web | 애플리케이션 Runtime 조립 및 공개 App Factory 제공 | `llm_wiki/web/` |

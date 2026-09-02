@@ -26,7 +26,10 @@ Knowledge 번역은 문단 Checkpoint에서 재개하고 번역본을 Vault에 �
 수 있습니다.
 
 Worker는 제한 재시도, 지수 Backoff, Source Hash, 유효 Lease Token, 취소, 중복 방지 알림을
-사용합니다. AI 결과는 제안 또는 파생 표현이며 Workflow 상태, 승인, 완료, Knowledge 결정 권한은
+사용합니다. 동시 Worker는 격리된 애플리케이션/SQLite 연결을 사용하며 SQLite Writer 경합은 최종
+실패로 게시하지 않고 재시도합니다. 선택 사항인 Semantic Runtime이 없으면 임베딩 작업은 Semantic
+Coverage 0과 어휘 검색 Fallback 결과로 완료됩니다. AI 결과는 제안 또는 파생 표현이며 Workflow
+상태, 승인, 완료, Knowledge 결정 권한은
 사용자에게 있습니다.
 
 [기능 명세](../../specs/009-background-ai-queue/spec.md)와

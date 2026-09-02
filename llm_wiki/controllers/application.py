@@ -17,6 +17,7 @@ from fastapi.responses import (
     Response,
     StreamingResponse,
 )
+from fastapi.staticfiles import StaticFiles
 
 from llm_wiki.controllers.jobs import job_view
 from llm_wiki.controllers.jobs import router as jobs_router
@@ -136,6 +137,9 @@ def create_http_app(runtime: ApplicationRuntime) -> FastAPI:
 
     app = FastAPI(title="LLM Wiki", lifespan=lifespan)
     app.include_router(jobs_router)
+    static_root = Path(__file__).parent.parent / "static"
+    app.mount("/assets", StaticFiles(directory=static_root / "assets"), name="frontend-assets")
+    app.mount("/runtime", StaticFiles(directory=static_root / "runtime"), name="frontend-runtime")
     app.state.retrieval = retrieval
     app.state.vault = vault
     app.state.workflow = workflow
@@ -1184,8 +1188,6 @@ def create_http_app(runtime: ApplicationRuntime) -> FastAPI:
     def shell() -> FileResponse:
         # The local single-file shell changes frequently while the workbench evolves;
         # do not leave a long-lived browser tab on an obsolete UI bundle.
-        return FileResponse(
-            Path(__file__).parent.parent / "static" / "index.html", headers={"Cache-Control": "no-store"}
-        )
+        return FileResponse(static_root / "index.html", headers={"Cache-Control": "no-store"})
 
     return app

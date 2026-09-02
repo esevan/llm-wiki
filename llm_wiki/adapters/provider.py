@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 
@@ -20,8 +21,13 @@ class AsyncOpenAICompatibleProvider:
     ) -> "AsyncOpenAICompatibleProvider":
         base = base_url.rstrip("/")
         api_base = base[:-3] if base.endswith("/v1") else base
+        timeout = 90.0
+        if os.environ.get("LLM_WIKI_TEST_MODE") == "1":
+            raw_timeout = os.environ.get("LLM_WIKI_TEST_PROVIDER_TIMEOUT", "")
+            if raw_timeout:
+                timeout = max(0.01, min(90.0, float(raw_timeout)))
         owned = client or httpx.AsyncClient(
-            base_url=f"{api_base}/v1", headers={"Authorization": f"Bearer {api_key}"}, timeout=90
+            base_url=f"{api_base}/v1", headers={"Authorization": f"Bearer {api_key}"}, timeout=timeout
         )
         return cls(base_url, api_key, model, owned)
 

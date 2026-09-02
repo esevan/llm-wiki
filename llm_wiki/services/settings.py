@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 
 DEFAULT_BASE_URL = "http://127.0.0.1:8317/v1"
@@ -70,6 +71,11 @@ class ProviderSettings:
             "api_key_configured": bool(self._secret()),
         }
 
+    def async_worker_count(self) -> int:
+        """Read worker configuration without touching native secret storage."""
+        row = self.db.execute("SELECT async_worker_count FROM provider_settings WHERE id=1").fetchone()
+        return int(row[0])
+
     def save(
         self,
         base_url: str,
@@ -126,6 +132,8 @@ class ProviderSettings:
         return keyring
 
     def _secret(self) -> str | None:
+        if os.environ.get("LLM_WIKI_TEST_MODE") == "1":
+            return os.environ.get("LLM_WIKI_TEST_API_KEY")
         try:
             return self._keyring().get_password(SERVICE_NAME, ACCOUNT_NAME)
         except Exception:

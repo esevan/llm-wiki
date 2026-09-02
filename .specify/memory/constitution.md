@@ -1,9 +1,10 @@
 <!--
 Sync Impact Report
-Version change: 1.0.0 -> 2.0.0
-Modified principles: engineering-first Core Principles replaced by six Product Spirit principles.
-Added sections: Engineering Guardrails; Product Spirit Review Gate.
-Removed sections: none; prior engineering principles are retained as guardrails.
+Version change: 2.0.0 -> 2.1.0
+Modified principles: Engineering Guardrail F now permits a narrowly scoped Tauri desktop package
+with one supervised local application boundary while continuing to exclude unrelated platform scope.
+Added sections: none.
+Removed sections: none.
 Follow-up TODOs: none.
 -->
 # LLM Wiki Constitution
@@ -81,7 +82,12 @@ paths, file locks, and atomic operations MUST be used where applicable. External
 MUST NOT become storage for the user's private process.
 
 ### F. Minimal Complexity
-Dependencies require a measured justification. Version one excludes desktop packaging, sync,
+Dependencies require a measured justification. The supported desktop distribution MUST use a thin
+Tauri shell, a modular web UI, and one supervised local application boundary; packaging MUST NOT
+duplicate domain behavior across JavaScript, Rust, Python, or HTTP handlers. Python MAY remain as a
+packaged sidecar while it owns substantial stable domain behavior, provided it is never contacted
+directly by the web UI, is bound to loopback only, is lifecycle-managed by the desktop shell, and
+has a documented domain-by-domain removal path. Version one continues to exclude sync,
 collaborative users, OCR, attachment indexing, and Obsidian application integration.
 
 ## Performance Standards
@@ -121,4 +127,4 @@ written reason, semantic-version update, and migration note for affected behavio
 explicitly cite the applicable Product Spirit principle and verify all relevant guardrails and
 performance budgets before acceptance.
 
-**Version**: 2.0.0 | **Ratified**: 2026-08-18 | **Last Amended**: 2026-08-21
+**Version**: 2.1.0 | **Ratified**: 2026-08-18 | **Last Amended**: 2026-09-02

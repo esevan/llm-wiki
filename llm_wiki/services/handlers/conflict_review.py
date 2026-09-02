@@ -167,7 +167,10 @@ class ConflictReviewJobHandler:
 
     def _query(self, feature: dict[str, object], problem: dict[str, object]) -> str:
         return json.dumps(
-            {"solution_hash": _hash({"feature": feature, "problem": problem}), "vault_hash": self.retrieval.manifest_hash()},
+            {
+                "solution_hash": _hash({"feature": feature, "problem": problem}),
+                "vault_hash": self.retrieval.manifest_hash(),
+            },
             sort_keys=True,
         )
 
@@ -293,9 +296,7 @@ class ConflictReviewJobHandler:
         return self._structured_conflict(response, evidence, index)
 
     @staticmethod
-    def _structured_conflict(
-        response: dict[str, Any], evidence: dict[str, object], index: int
-    ) -> dict[str, object]:
+    def _structured_conflict(response: dict[str, Any], evidence: dict[str, object], index: int) -> dict[str, object]:
         path = str(evidence["path"])
         severity = _severity(response.get("severity"))
         explanation = str(response.get("explanation", "")).strip()
@@ -371,9 +372,7 @@ class ConflictReviewJobHandler:
             "reviewed_count": len(retained),
             "progress": 1.0,
             "findings": findings,
-            "conflicts": [
-                {**finding, "id": f"conflict-{index + 1}"} for index, finding in enumerate(findings)
-            ],
+            "conflicts": [{**finding, "id": f"conflict-{index + 1}"} for index, finding in enumerate(findings)],
             "candidates": candidates,
             "summary": STATE_MEANINGS[state],
         }

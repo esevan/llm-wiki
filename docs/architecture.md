@@ -6,6 +6,29 @@ LLM Wiki uses a layered backend with a single web composition boundary. Dependen
 delivery toward application logic and persistence; lower layers never reach back into controllers
 or the web application.
 
+The desktop migration adds a React presentation layer and a Tauri delivery adapter without moving
+domain logic into Rust. React feature modules depend on `ApplicationClient`; the HTTP and Tauri
+adapters implement that boundary. Tauri exposes a narrow validated request/stream/cancel command
+set, accepts only known application route families, forwards only safe headers to a loopback Python
+sidecar, and returns a transport-neutral response. Request IDs carry incremental chunks and
+cancellation. The shell packages, starts, health-checks, and stops the sidecar as one owned process
+group. Its fast worker and durable workers run inside that supervised process; every concurrent
+durable worker owns an isolated application runtime and SQLite connection, and transient writer
+contention follows bounded queue retry semantics. The Python runtime remains the single
+application/domain implementation, so HTTP and desktop delivery do not duplicate workflow logic.
+
+```text
+React feature -> ApplicationClient -> HTTP adapter (web)
+                                  -> Tauri adapter -> Rust request/stream/cancel -> supervised Python runtime
+```
+
+Frontend design tokens, global/component styles, and locally bundled fonts live under
+`frontend/src/theme/`. Primary screens are domain modules under `frontend/src/features/`. The
+remaining imperative behavior is split into eleven bounded, domain-named controllers under
+`llm_wiki/static/runtime/`; React owns navigation, dialogs, and dock surfaces. Controllers contain
+no injected styles or raw visual constants, and the HTML entry point contains no inline bootstrap
+code. Their incremental replacement with typed React hooks remains tracked in the migration audit.
+
 | Layer | Responsibility | Main location |
 | --- | --- | --- |
 | Web | Build the application runtime and expose the public app factory | `llm_wiki/web/` |

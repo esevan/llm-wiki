@@ -29,7 +29,10 @@ understandable without exposing its internal ID. Embedding refresh is durable an
 remains available while it runs.
 
 Workers use bounded retry, exponential backoff, source hashes, live lease tokens, cancellation,
-and idempotent notifications. AI output remains a proposal or derived representation: workflow
+and idempotent notifications. Concurrent workers use isolated application/SQLite connections;
+SQLite writer contention is retried rather than published as a terminal failure. When the optional
+semantic runtime is absent, embedding work completes with lexical fallback and zero semantic
+coverage. AI output remains a proposal or derived representation: workflow
 state, approval, completion, and Knowledge decisions remain under user control.
 
 See [feature specification](../../specs/009-background-ai-queue/spec.md) and

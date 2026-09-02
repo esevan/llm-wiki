@@ -51,14 +51,15 @@ async def run_async_workers(vault_path: Path, db_path: Path, worker_count: int, 
         raise ValueError("Async worker count must be between one and 32")
     repository = JobRepository(db_path)
     await repository.initialize()
-    registry, retrieval = build_job_registry(vault_path, db_path)
+    runtimes = [build_job_registry(vault_path, db_path) for _ in range(worker_count)]
     workers = [
         AsyncJobWorker(repository, registry, worker_id=f"async-{os.getpid()}-{index + 1}")
-        for index in range(worker_count)
+        for index, (registry, _retrieval) in enumerate(runtimes)
     ]
     try:
         async with asyncio.TaskGroup() as group:
             for worker in workers:
                 group.create_task(worker.run(stop))
     finally:
-        retrieval.db.close()
+        for _registry, retrieval in runtimes:
+            retrieval.db.close()

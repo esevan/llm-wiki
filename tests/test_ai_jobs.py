@@ -10,6 +10,10 @@ import pytest
 from llm_wiki.core.jobs import JobStatus, TaskDescriptor
 from llm_wiki.repositories.jobs import JobRepository
 from llm_wiki.services.handlers.conflict_review import ConflictReviewJobHandler
+from llm_wiki.services.handlers.embeddings import EmbeddingJobHandler
+from llm_wiki.services.handlers.registry import HandlerRegistry
+from llm_wiki.services.handlers.worker import AsyncJobWorker
+from llm_wiki.services.semantic import SemanticUnavailable
 from llm_wiki.services.workflow import WorkflowEngine
 
 
@@ -149,6 +153,64 @@ def test_concurrent_workers_cannot_claim_the_same_job(tmp_path: Path) -> None:
         assert sum(claim is not None for claim in claims) == 1
 
     asyncio.run(scenario())
+
+
+def test_database_lock_contention_uses_bounded_job_retry(tmp_path: Path) -> None:
+    repository = JobRepository(tmp_path / "locked-retry.sqlite")
+    run(repository.initialize())
+    job = run(repository.create(TaskDescriptor("derived_translation"), {}))
+    lease = run(repository.claim(job.id, "worker", lease_seconds=30))
+    assert lease is not None
+    worker = AsyncJobWorker(repository, HandlerRegistry(), worker_id="worker")
+
+    run(worker._handle_error(job, lease, sqlite3.OperationalError("database is locked")))
+
+    stored = run(repository.get(job.id))
+    assert stored is not None
+    assert stored.status is JobStatus.RETRYABLE
+    assert stored.error_code == "database_locked"
+
+
+def test_embedding_job_completes_with_lexical_fallback_when_semantic_runtime_is_optional() -> None:
+    class Retrieval:
+        def __init__(self) -> None:
+            self.db = sqlite3.connect(":memory:")
+            self.db.row_factory = sqlite3.Row
+            self.db.execute(
+                "CREATE TABLE documents(path TEXT, source_hash TEXT, title TEXT, headings TEXT, body TEXT)"
+            )
+            self.db.execute(
+                "CREATE TABLE document_embeddings(path TEXT, source_hash TEXT, dimensions INTEGER, vector BLOB)"
+            )
+            self.db.execute("INSERT INTO documents VALUES ('note.md','hash','Title','','Body')")
+
+        @staticmethod
+        def embed_texts(_texts: list[str]) -> list[list[float]]:
+            raise SemanticUnavailable("optional runtime is not installed")
+
+        @staticmethod
+        def status() -> dict[str, int]:
+            return {"documents": 1, "semantic_ready": 0}
+
+    class Context:
+        model = "local-semantic-embedder"
+        source_hash = "manifest"
+
+        @staticmethod
+        async def checkpoints(_source_hash: str, _model: str):
+            return []
+
+        @staticmethod
+        async def cancelled() -> bool:
+            return False
+
+    result = run(EmbeddingJobHandler(Retrieval())(Context()))  # type: ignore[arg-type]
+
+    assert result == {
+        "updated": 0,
+        "coverage": {"documents": 1, "semantic_ready": 0},
+        "semantic_available": False,
+    }
 
 
 def test_conflict_finding_is_normalized_into_the_structured_card_contract() -> None:

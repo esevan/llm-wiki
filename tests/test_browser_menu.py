@@ -6,6 +6,15 @@ import pytest
 playwright = pytest.importorskip("playwright.sync_api")
 
 
+def frontend_source() -> str:
+    root = Path(__file__).parents[1]
+    paths = sorted((root / "llm_wiki" / "static" / "runtime").glob("*.js"))
+    paths.extend((root / "frontend" / "src").rglob("*"))
+    return "\n".join(
+        path.read_text(encoding="utf-8") for path in paths if path.suffix in {".css", ".html", ".js", ".ts", ".tsx"}
+    )
+
+
 def test_locale_switch_translates_static_ui_preserves_input_and_avoids_ai_calls() -> None:
     from playwright.sync_api import sync_playwright
 
@@ -348,7 +357,7 @@ def test_knowledge_reader_opens_immediately_and_reacts_to_async_completion() -> 
 
 
 def test_korean_knowledge_reader_detaches_from_durable_job_when_surface_closes() -> None:
-    source = (Path(__file__).parents[1] / "llm_wiki" / "static" / "index.html").read_text(encoding="utf-8")
+    source = frontend_source()
 
     assert "translate=false" in source
     assert "knowledge-progress'+(active?' is-active':'')" in source
@@ -412,14 +421,14 @@ def test_given_running_knowledge_translation_when_reader_closes_then_job_continu
 
 
 def test_removed_product_stage_has_no_browser_surface() -> None:
-    source = (Path(__file__).parents[1] / "llm_wiki" / "static" / "index.html").read_text()
+    source = frontend_source()
     forbidden = ("model-tasks", "board.tasks", "newTask", "Explore next task", "Task proposal")
     assert all(marker not in source for marker in forbidden)
 
 
 def test_ai_setup_exposes_lineage_interpretation_model_routing() -> None:
-    source = (Path(__file__).parents[1] / "llm_wiki" / "static" / "index.html").read_text()
-    assert 'data-advanced-task="lineage_inference"' in source
+    source = frontend_source()
+    assert "lineage_inference" in source
     assert "Lineage interpretation" in source
 
 

@@ -5,15 +5,17 @@ import asyncio
 import multiprocessing
 import os
 import plistlib
+import socket
 import sqlite3
 import subprocess
+import threading
 import webbrowser
 from pathlib import Path
 
 import uvicorn
 from platformdirs import user_data_path
 
-from llm_wiki.services.fast_queue import FastQueueServer
+from llm_wiki.services.fast_queue import FastQueueClient, FastQueueServer
 from llm_wiki.services.job_runtime import run_async_workers
 from llm_wiki.services.settings import ProviderSettings
 from llm_wiki.web.app import create_app
@@ -25,18 +27,62 @@ def _run_fast_worker(host: str, port: int) -> None:
     asyncio.run(FastQueueServer(host, port).serve())
 
 
-def _run_async_worker(vault: Path, db_path: Path, count: int) -> None:
-    asyncio.run(run_async_workers(vault, db_path, count, asyncio.Event()))
+def _run_async_worker(
+    vault: Path, db_path: Path, count: int, stop_requested: threading.Event | None = None
+) -> None:
+    async def supervise() -> None:
+        stop = asyncio.Event()
+        workers = asyncio.create_task(run_async_workers(vault, db_path, count, stop))
+        if stop_requested is None:
+            await workers
+            return
+        while not stop_requested.is_set():
+            await asyncio.sleep(0.05)
+        stop.set()
+        await workers
+
+    asyncio.run(supervise())
 
 
-def _serve_web(vault: Path, db_path: Path) -> None:
-    uvicorn.run(create_app(vault, db_path), host="127.0.0.1", port=8765)
+def _serve_web(vault: Path, db_path: Path, port: int = 8765) -> None:
+    uvicorn.run(create_app(vault, db_path), host="127.0.0.1", port=port)
+
+
+def _serve_desktop(vault: Path, db_path: Path, port: int, *, workers: bool = True) -> None:
+    """Run the desktop application boundary and its workers in one supervised process."""
+    fast_socket = socket.socket()
+    fast_socket.bind(("127.0.0.1", 0))
+    fast_port = int(fast_socket.getsockname()[1])
+    fast_socket.close()
+    app = create_app(vault, db_path, fast_queue_client=FastQueueClient(port=fast_port))
+    durable_stop = threading.Event()
+    durable_worker: threading.Thread | None = None
+    if workers:
+        threading.Thread(
+            target=_run_fast_worker,
+            args=("127.0.0.1", fast_port),
+            name="llm-wiki-desktop-fast-worker",
+            daemon=True,
+        ).start()
+        durable_worker = threading.Thread(
+            target=_run_async_worker,
+            args=(vault, db_path, _configured_worker_count(db_path), durable_stop),
+            name="llm-wiki-async-workers",
+            daemon=True,
+        )
+        durable_worker.start()
+    try:
+        uvicorn.run(app, host="127.0.0.1", port=port)
+    finally:
+        durable_stop.set()
+        if durable_worker is not None:
+            durable_worker.join(timeout=5)
 
 
 def _configured_worker_count(db_path: Path) -> int:
     connection = sqlite3.connect(db_path)
     try:
-        return int(ProviderSettings(connection).public()["async_worker_count"])
+        return ProviderSettings(connection).async_worker_count()
     finally:
         connection.close()
 
@@ -92,6 +138,11 @@ def main() -> None:
     serve.add_argument("--no-browser", action="store_true")
     web = sub.add_parser("web", help="Run only the HTTP process")
     web.add_argument("--vault", type=Path, required=True)
+    desktop_backend = sub.add_parser("desktop-backend", help="Run the isolated Tauri application sidecar")
+    desktop_backend.add_argument("--vault", type=Path, required=True)
+    desktop_backend.add_argument("--db", type=Path, required=True)
+    desktop_backend.add_argument("--port", type=int, default=8765)
+    desktop_backend.add_argument("--no-workers", action="store_true", help=argparse.SUPPRESS)
     fast = sub.add_parser("fast-worker", help="Run the single ephemeral AI throttle")
     fast.add_argument("--port", type=int, default=8766)
     asynchronous = sub.add_parser("async-worker", help="Run durable AI workers")
@@ -102,6 +153,10 @@ def main() -> None:
     args = parser.parse_args()
     if args.command == "install-service":
         install_service(args.vault)
+        return
+    if args.command == "desktop-backend":
+        args.db.parent.mkdir(parents=True, exist_ok=True)
+        _serve_desktop(args.vault, args.db, args.port, workers=not args.no_workers)
         return
     data_dir = user_data_path("LLM Wiki", appauthor=False)
     data_dir.mkdir(parents=True, exist_ok=True)

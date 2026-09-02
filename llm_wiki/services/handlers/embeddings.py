@@ -7,6 +7,7 @@ from typing import Any
 from llm_wiki.core.jobs import TaskDescriptor
 from llm_wiki.services.handlers.registry import HandlerContext, HandlerRegistry
 from llm_wiki.services.retrieval import RetrievalEngine
+from llm_wiki.services.semantic import SemanticUnavailable
 
 
 class EmbeddingJobHandler:
@@ -34,7 +35,14 @@ class EmbeddingJobHandler:
             if not current or str(current[0]) != source_hash:
                 continue
             if not checkpoint or checkpoint.result.get("source_hash") != source_hash:
-                vector = (await asyncio.to_thread(self.retrieval.embed_texts, [str(row["text"])]))[0]
+                try:
+                    vector = (await asyncio.to_thread(self.retrieval.embed_texts, [str(row["text"])]))[0]
+                except SemanticUnavailable:
+                    return {
+                        "updated": completed,
+                        "coverage": self.retrieval.status(),
+                        "semantic_available": False,
+                    }
                 current = self.retrieval.db.execute(
                     "SELECT source_hash FROM documents WHERE path=?", (path,)
                 ).fetchone()
@@ -48,4 +56,4 @@ class EmbeddingJobHandler:
                 await context.save_checkpoint(path, context.source_hash, model, ordinal, {"source_hash": source_hash})
             completed += 1
             await context.progress(completed, len(rows))
-        return {"updated": completed, "coverage": self.retrieval.status()}
+        return {"updated": completed, "coverage": self.retrieval.status(), "semantic_available": True}

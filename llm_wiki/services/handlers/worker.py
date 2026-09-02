@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import sqlite3
 import uuid
 
 import httpx
@@ -110,6 +111,9 @@ class AsyncJobWorker:
         )
 
     async def _handle_error(self, job: Job, lease: JobLease, error: Exception) -> None:
+        if isinstance(error, sqlite3.OperationalError) and "locked" in str(error).lower():
+            await self.repository.fail(job.id, lease.lease_token, "database_locked", str(error), retryable=True)
+            return
         if isinstance(error, (RetryableJobError, httpx.TimeoutException, httpx.NetworkError)):
             await self.repository.fail(job.id, lease.lease_token, "transient", str(error), retryable=True)
             return

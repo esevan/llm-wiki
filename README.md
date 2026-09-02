@@ -53,6 +53,22 @@ fallbacks that preserve private process and human authority during provider fail
 API keys are stored in macOS Keychain or Windows Credential Manager, never in the vault or app
 database. The server binds only to `127.0.0.1`.
 
+The React frontend is also packaged as a Tauri desktop application. Desktop development requires
+Node.js 20+ and the stable Rust toolchain. Tauri starts and stops the isolated Python application
+runtime, fast queue, and durable workers for the selected vault:
+
+```text
+npm install
+LLM_WIKI_VAULT=/path/to/your-vault npm run tauri -- dev
+npm run tauri:build
+```
+
+The release build packages the Python runtime into the `.app`; no separately installed Python or
+web server is required. If `LLM_WIKI_VAULT` is unset, the desktop app uses `Documents/LLM Wiki
+Vault`. The mature Python application layer remains behind a validated, streaming loopback command
+adapter. React never communicates with Python directly, and request cancellation propagates through
+the Tauri transport.
+
 See [Background AI Queue](docs/features/background-ai-queue.md) for worker roles, recovery,
 task-specific results, and notification behavior.
 
@@ -99,6 +115,12 @@ Backend layers, dependency direction, and the authoritative AI task module map a
 the [backend architecture guide](docs/architecture.md).
 
 ```text
+npm test
+npm run typecheck
+npm run lint
+npm run build
+cargo test --manifest-path src-tauri/Cargo.toml
+cargo check --manifest-path src-tauri/Cargo.toml
 uv run ruff check .
 uv run ruff format --check .
 uv run pytest -q
