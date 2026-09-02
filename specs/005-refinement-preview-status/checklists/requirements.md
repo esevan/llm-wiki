@@ -32,5 +32,6 @@
 ## Notes
 
 - Validation passed on the first review iteration.
-- Open questions from the input were resolved as documented in Assumptions; no clarification marker remains.
+- Context is explicitly bounded to five entries and 500 visible content characters; title-only
+  records count as context.
 - Human review completed and implementation was approved on 2026-08-21.

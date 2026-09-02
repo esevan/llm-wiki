@@ -2,7 +2,7 @@
 
 **Branch**: `feature/lineage-knowledge-layer` | **Date**: 2026-08-21 | **Spec**: [spec.md](spec.md)
 
-**Input**: Feature specification from `specs/006-lineage-knowledge-layer/spec.md`
+**Input**: Feature specification from `specs/010-lineage-knowledge-layer/spec.md`
 
 ## Summary
 
@@ -50,7 +50,7 @@ Replace the completed-Solution Lineage tab's current Problem-plus-chat-context p
 ### Documentation (this feature)
 
 ```text
-specs/006-lineage-knowledge-layer/
+specs/010-lineage-knowledge-layer/
 ├── spec.md
 ├── plan.md
 ├── research.md

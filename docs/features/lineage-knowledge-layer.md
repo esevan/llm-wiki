@@ -50,4 +50,4 @@ AI Setup exposes **Lineage interpretation** as its own task. It uses the Advance
 when one is configured, independently from the **Completion report** task. AI unavailability never
 removes the deterministic Lineage.
 
-Related Spec Kit: [006 — Lineage Knowledge Layer](../../specs/006-lineage-knowledge-layer/spec.md)
+Related Spec Kit: [010 — Lineage Knowledge Layer](../../specs/010-lineage-knowledge-layer/spec.md)

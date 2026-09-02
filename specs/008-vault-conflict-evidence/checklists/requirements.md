@@ -32,3 +32,5 @@
 ## Notes
 
 - The user's intentionally open clear threshold remains a conservative assumption rather than an unresolved implementation blocker.
+- Safe intermediate progress, document-level evidence deduplication, and prompt cancellation are
+  confirmed requirements and current implementation gaps.

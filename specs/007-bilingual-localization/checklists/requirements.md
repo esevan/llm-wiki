@@ -31,4 +31,5 @@
 
 ## Notes
 
-- Validation passed on the first review iteration.
+- Checklist-edit retranslation and the state-changing Knowledge translation request contract are
+  confirmed implementation gaps; the specification is complete for planning those changes.

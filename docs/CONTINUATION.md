@@ -1,7 +1,9 @@
 # LLM Wiki — Continuation Handoff
 
 **Updated**: 2026-09-02
-**Current status**: Background AI Queue UI and backend architecture cleanup are complete on `fix/readable-queue`; review the single verified commit before merge.
+**Current status**: Repository behavior has been reconciled against all SpecKit specifications on
+`docs/reconcile-current-specs`; confirmed implementation gaps and two unresolved policy decisions
+remain before the specifications can be treated as fully implemented.
 **Local URL**: `http://127.0.0.1:8765`  
 **Vault**: User-selected local Markdown directory
 
@@ -62,8 +64,9 @@ The current roadmap and acceptance order are maintained in [PROJECT_PLAN.md](PRO
 - The completed local Workbench audit is maintained in [WORKBENCH_CHECKLIST.md](WORKBENCH_CHECKLIST.md).
 - Editable stage prompts live in `llm_wiki/prompts/{captures,problems,features}.md`; the
   prompt loader reads the matching package resource only when chat is invoked.
-- Features require an approved Problem, a cited `clear` conflict evaluation, and explicit human
-  approval. `unknown` and `conflicted` Features are blocked.
+- Features ordinarily require an approved Problem, a cited `clear` conflict evaluation, and explicit
+  user approval. `unknown` and `conflicted` states are blocked unless the user invokes the supported
+  skip-with-reason resilience override.
 - OpenAI-compatible provider has only base URL, API key, model, `/v1/models`, JSON completion,
   and streaming behavior. No provider-specific behavior exists outside the adapter.
 - LangGraph is installed but lazy; it runs only after an AI enrichment request.
@@ -123,6 +126,17 @@ These are deliberate continuation tasks, not blockers for the currently running 
    three-way merge for non-overlapping edits (current implementation blocks changed files).
 3. Add Windows-native lock/move integration tests and a cross-platform file-lock implementation
    (`portalocker`) before claiming Windows release acceptance.
+4. Implement confirmed SpecKit gaps: independent semantic corpus search; locally bundled fonts;
+   deprecated compatibility API markers; removal of the unused report-language setting; Knowledge
+   translation tier UI; checklist-edit retranslation; state-changing Knowledge translation request;
+   Lineage inference-failure indicator; Conflict Review progress and document deduplication; hard
+   cancellation; and Chat-close abort.
+5. Define the durable Queue history TTL (`TD-006`).
+6. Select the Queue, toast, and notification accessibility acceptance scope (`TD-020`).
+
+The Lineage Knowledge Layer specification migrated from duplicate prefix `006` to `010`.
+Current and pending behavior-driven characterization cases are cataloged in
+[`tests/CHARACTERIZATION.md`](../tests/CHARACTERIZATION.md).
 
 ## First actions for the next agent
 

@@ -1,109 +1,121 @@
 # Feature Specification: Evidence-Rich Vault Conflict Review
 
-**Feature Branch**: `feat/vault-conflict-evidence`
-
+**Feature Branch**: `008-vault-conflict-evidence`
 **Created**: 2026-09-01
-
-**Status**: Ready for implementation
-
-**Input**: Improve Vault conflict review so its search scope, semantic coverage, candidates, progress, evidence, and decision semantics are inspectable and reliable.
+**Last Reconciled**: 2026-09-02
+**Status**: Current baseline reconciled — confirmed progress, deduplication, and cancellation changes pending
 
 ## User Scenarios & Testing
 
-### User Story 1 - Inspect a trustworthy review (Priority: P1)
+### User Story 1 — Request an evidence-grounded review (Priority: P1)
 
-A person starts conflict review and sees the indexed Vault scope, embedding coverage, candidate counts, and phase progress. Potential conflicts appear with exact Vault passages while remaining candidates continue.
-
-**Why this priority**: Review latency is acceptable only when it produces visible, auditable evidence.
-
-**Independent Test**: Start a review against a Vault containing a conflicting decision and verify progress metadata and the cited finding before the terminal result.
+A user starts background conflict review for a Solution. The final result identifies the indexed
+Vault scope, semantic coverage, reviewed claims, candidate evidence, potential conflicts, and a
+conservative recommendation.
 
 **Acceptance Scenarios**:
 
-1. **Given** indexed Vault documents, **When** review begins, **Then** scope, coverage, candidate counts, and current phase are available.
-2. **Given** a potential conflict is confirmed, **When** other candidates remain, **Then** the finding is visible with an exact path and excerpt while progress remains incomplete.
+1. **Given** relevant Vault evidence, **When** review completes, **Then** every displayed conflict
+   includes its claim, severity, exact Vault path, source revision, passage, line range,
+   explanation, and required resolution.
+2. **Given** no evidence candidate or incomplete semantic coverage, **When** review completes without
+   a finding, **Then** the recommendation is `insufficient_evidence`, not `clear`.
+3. **Given** at least one valid finding, **When** review completes, **Then** the recommendation is
+   `potential_conflict`.
 
----
+### User Story 2 — Distinguish safe clear from insufficient evidence (Priority: P1)
 
-### User Story 2 - Distinguish absence from insufficient evidence (Priority: P1)
+`clear` is recommended only when there were candidates, semantic coverage was complete, every
+retained candidate was reviewed, and no valid conflict finding remained.
 
-A person can distinguish a completed evidence-backed clear recommendation, no conflict found so far, and insufficient evidence. Clear is never suggested before every retained candidate is reviewed.
+### User Story 3 — Reuse or cancel background review (Priority: P2)
 
-**Why this priority**: False or premature clear recommendations undermine the approval gate.
-
-**Independent Test**: Run reviews with zero candidates, incomplete embedding coverage, and complete non-conflicting candidates and compare terminal states.
-
-**Acceptance Scenarios**:
-
-1. **Given** no candidates or incomplete semantic coverage, **When** review completes, **Then** the state is `insufficient_evidence`, not `clear`.
-2. **Given** retained candidates are still pending, **When** status is requested, **Then** the state is `reviewing`, never `clear`.
-3. **Given** adequate coverage and all candidates reviewed without conflict, **When** review completes, **Then** an evidence-backed `clear` recommendation may be shown.
-
----
-
-### User Story 3 - Reuse work and cancel it (Priority: P2)
-
-A person receives cached results for unchanged Solution/Vault inputs and can cancel a running browser review so the server stops additional search and model work.
-
-**Why this priority**: Repeated latency and abandoned provider requests waste time and resources.
-
-**Independent Test**: Repeat an unchanged review, modify one document, and cancel a running review; verify reuse, selective invalidation, and cancellation.
-
-**Acceptance Scenarios**:
-
-1. **Given** identical Solution and Vault hashes, **When** review repeats, **Then** the completed result is reused.
-2. **Given** one Vault document changes, **When** review repeats, **Then** stale cached evidence is not reused for that document.
-3. **Given** a running review, **When** the browser cancels, **Then** the server marks it cancelled and issues no later model requests.
+An unchanged Solution and unchanged indexed Vault can reuse a completed review. The user can request
+cancellation through the Queue or conflict-review cancellation action.
 
 ### Edge Cases
 
-- Semantic dependencies or the embedding model are unavailable; lexical search remains available but review evidence is insufficient.
-- A fast screening response is malformed, incomplete, or lacks an exact evidence reference; the candidate is retained for strong review.
-- Raw and canonical generated notes describe the same completed Solution; only the canonical evidence is retained.
-- A cited document changes during review; the finding fails validation and cannot support clear.
-- The provider fails after some findings; findings remain inspectable but the terminal state is insufficient evidence.
+- Missing semantic dependencies leave lexical candidates available but prevent complete coverage.
+- Malformed screening output retains uncertain candidates for strong review.
+- Invalid finding evidence is omitted rather than presented as a conflict.
+- Any change to the Solution, parent Problem, locale view, or indexed Vault invalidates active and
+  cached review identity.
+- Cancellation requested while running enters a cancelling state before terminal cancellation.
+- Provider and network failures are exposed through failed or retryable Queue state; partial
+  findings are not currently published before terminal completion.
 
 ## Requirements
 
 ### Functional Requirements
 
-- **FR-001**: The system MUST create or refresh document embeddings after Vault changes and on startup for missing or stale entries.
-- **FR-002**: Semantic retrieval MUST search all embedded Vault documents independently of lexical results.
-- **FR-003**: The system MUST merge lexical and semantic candidates and remove duplicate paths and Raw/canonical duplicates.
-- **FR-004**: The system MUST split a Solution into reviewable claims covering requirements, scope, constraints, non-goals, and validation expectations.
-- **FR-005**: Each retained claim/candidate pair MUST preserve an exact Vault path, source hash, passage text, and passage line range.
-- **FR-006**: A fast screening pass MAY exclude only explicit, complete, evidence-grounded non-conflicts; malformed or uncertain results MUST be retained.
-- **FR-007**: Retained candidates MUST receive strong review, with valid potential conflicts exposed before the full run completes.
-- **FR-008**: Status MUST expose search scope, embedding coverage, candidate counts, progress, current phase, findings, and search/screen/review timings.
-- **FR-009**: `clear` MUST NOT be suggested until every retained candidate is reviewed and every finding has valid evidence.
-- **FR-010**: Zero candidates, incomplete semantic coverage, provider failure, invalid citations, and incomplete review MUST result in `insufficient_evidence` or `reviewing`, not `clear`.
-- **FR-011**: Results MUST distinguish `reviewing`, `potential_conflict`, `no_conflict_found`, `clear`, `insufficient_evidence`, `cancelled`, and `failed` meanings.
-- **FR-012**: Completed results MUST be reusable by Solution content hash plus relevant Vault document hashes; changed evidence MUST be invalidated.
-- **FR-013**: Browser cancellation MUST propagate to server review state and prevent subsequent search/model operations.
-- **FR-014**: AI recommendations MUST remain evidence for a human decision and MUST NOT change workflow state automatically.
+- **FR-001**: Missing and stale document embeddings MUST be prepared in background work after startup
+  and Vault changes while lexical search remains usable.
+- **FR-002**: Conflict retrieval MUST combine lexical candidates with an independent semantic search
+  over current embedded documents when semantic retrieval is available.
+- **FR-003**: Review MUST split Solution and parent Problem content into typed claims covering scope,
+  requirements, constraints, non-goals, and validation expectations.
+- **FR-004**: Candidate evidence MUST retain exact Vault path, source revision, passage text, line
+  range, related claim, and retrieval signals.
+- **FR-005**: Fast screening MAY exclude a candidate only when it supplies an explicit
+  evidence-grounded non-conflict decision; malformed or uncertain decisions MUST retain the
+  candidate.
+- **FR-006**: Every retained candidate MUST receive strong review before the final recommendation is
+  produced.
+- **FR-007**: A conflict finding MUST be accepted only when the response identifies the reviewed
+  evidence and provides a non-empty explanation.
+- **FR-008**: Final results MUST expose scope, embedding coverage, claims, candidate and retained
+  counts, reviewed count, findings, progress, recommendation, and recommendation meaning.
+- **FR-009**: Final recommendation MUST be `potential_conflict` when any valid finding exists,
+  `clear` only with candidates and complete semantic coverage, and `insufficient_evidence`
+  otherwise.
+- **FR-010**: Running status MUST remain `reviewing` through the Queue and MUST NOT expose a clear
+  recommendation before completion.
+- **FR-011**: Completed reviews MUST be reusable only for the same Solution/Problem content, locale,
+  and complete indexed-Vault revision.
+- **FR-012**: Cancellation MUST use the durable work lifecycle and MUST prevent a cancelled result
+  from changing Solution or conflict state.
+- **FR-013**: AI recommendations MUST remain advisory and MUST NOT apply conflict state or approve a
+  Solution.
+- **FR-014**: While review is running, the result surface MUST expose safe, factual progress phases
+  and available counts, such as claim preparation, evidence search, screening, detailed review, and
+  finalization, without exposing hidden model reasoning.
+- **FR-015**: Final evidence MUST be deduplicated by document while preserving every related claim
+  association and the strongest readable passage for each association.
+- **FR-016**: Cancellation MUST stop active search and provider computation promptly, not merely
+  discard a late result, and MUST publish no post-cancellation finding.
 
 ### Key Entities
 
-- **Review Run**: Input hashes, phase, semantic coverage, counts, timings, state, cancellation, and cache provenance.
-- **Review Claim**: A stable, typed assertion extracted from the Solution.
-- **Evidence Passage**: Vault path, line range, exact text, document hash, lexical/semantic scores.
-- **Candidate Review**: Claim/evidence pair with screening and strong-review disposition.
-- **Finding**: Evidence-backed potential conflict with explanation, severity, and required human resolution.
+- **Conflict review work item**: One source-bound background review and its lifecycle state.
+- **Review claim**: A typed statement extracted from the Solution or parent Problem.
+- **Evidence candidate**: One claim/passage pair retained for screening or review.
+- **Conflict finding**: A validated evidence-backed potential conflict.
+- **Recommendation**: A final `potential_conflict`, `clear`, or `insufficient_evidence` advisory
+  result.
 
 ## Success Criteria
 
-### Measurable Outcomes
-
-- **SC-001**: Every running review exposes scope, coverage, phase, candidate counts, and progress through the local API and browser.
-- **SC-002**: 100% of displayed findings contain an existing Vault path, non-empty source passage, valid line range, and conflict explanation.
-- **SC-003**: Tests prove that incomplete coverage, zero candidates, malformed screening, and invalid citations never produce `clear`.
-- **SC-004**: Unchanged repeat reviews reuse a completed result; changing a cited Vault source invalidates reuse.
-- **SC-005**: Cancellation tests prove no new provider call begins after server cancellation is recorded.
-- **SC-006**: Search, screening, and strong-review elapsed times are recorded separately for every terminal run.
+- **SC-001**: Every displayed finding contains a current path, source revision, non-empty passage,
+  valid line range, explanation, and required resolution.
+- **SC-002**: Zero-candidate and incomplete-coverage tests produce `clear` in zero cases.
+- **SC-003**: Repeating an unchanged review reuses a completed result, while changing any indexed
+  Vault source prevents that reuse.
+- **SC-004**: Conflict Review changes Solution approval or conflict state automatically in zero
+  tested cases.
+- **SC-005**: Cancellation and provider failure preserve all pre-existing Solution and Vault content.
 
 ## Assumptions
 
-- Existing local provider settings supply a default fast model and an advanced strong model; if only one model is configured it may serve both roles while preserving separate passes.
-- Version one uses document embeddings and passage extraction without adding a remote vector database.
-- Minimum evidence thresholds remain deliberately conservative: incomplete embedding coverage or zero candidates is insufficient, while a human still owns the final workflow decision.
-- Workbench items are excluded from Vault conflict evidence in this feature; the Solution and its parent Problem remain query context, not external evidence.
+- Progress visibility means observable work phases and counts; it does not include private model
+  reasoning or fabricated elapsed-time estimates.
+- Cache validity uses the complete indexed Vault revision, so any indexed-document change is a
+  conservative invalidation.
+- The default and Advanced models may be used for separate screening and strong-review passes.
+
+## Confirmed Implementation Gaps
+
+- **IG-016 — Conflict Review progress**: The current review exposes only generic Queue progress
+  before the terminal report. It must publish safe intermediate phases and available counts.
+- **IG-017 — Evidence deduplication and hard cancellation**: Current candidates may repeat the same
+  document across claims, and cancellation is cooperative. Final evidence must deduplicate documents
+  while retaining claim links, and cancellation must promptly terminate active computation.

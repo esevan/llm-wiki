@@ -1,131 +1,108 @@
 # Feature Specification: Task-Level AI Model Routing
 
-**Feature Branch**: `006-ai-task-model-routing`  
-**Created**: 2026-08-21  
-**Status**: Complete
-**Input**: User description: "AI Setup should accept only a default and an advanced model, and let users select the model tier for each AI task through collapsed Advanced options."
+**Feature Branch**: `006-ai-task-model-routing`
+**Created**: 2026-08-21
+**Last Reconciled**: 2026-09-02
+**Status**: Current behavior reconciled — confirmed configuration changes pending
 
 ## User Scenarios & Testing *(mandatory)*
 
-### User Story 1 - Configure Two Model Tiers (Priority: P1)
+### User Story 1 — Configure two model tiers (Priority: P1)
 
-A person configuring AI can provide one Default model for routine work and one Advanced model for
-quality-sensitive work without having to understand Capture, Problem, or Solution model stages.
-
-**Why this priority**: This is the essential simplification: all AI work must have an understandable
-model choice before task-level preferences can work.
-
-**Independent Test**: Save an endpoint, API key, Default model, and Advanced model; reopen AI Setup
-and confirm both model choices remain available without exposing stage-specific model fields.
+A user configures one required Default model and one optional Advanced model for an
+OpenAI-compatible provider. The API key is stored separately from visible configuration.
 
 **Acceptance Scenarios**:
 
-1. **Given** a person opens AI Setup, **When** they view model configuration, **Then** they see
-   Default model and Advanced model fields with brief explanations.
-2. **Given** either model field is saved, **When** AI Setup is reopened, **Then** the saved value is
-   displayed without exposing the API key.
+1. **Given** valid provider configuration, **When** it is saved and reopened, **Then** endpoint,
+   model tiers, task preferences, and background worker count are retained while the API key is not
+   returned.
+2. **Given** no API key or no usable model, **When** an AI request begins, **Then** the request fails
+   without changing source content.
 
----
+### User Story 2 — Select a tier per AI task (Priority: P1)
 
-### User Story 2 - Choose a Model Tier Per AI Task (Priority: P1)
+The user can independently assign visible AI tasks to the Advanced tier. Disabled tasks use the
+Default tier, and enabled tasks fall back to Default when no Advanced model is configured.
 
-A person can expand Advanced options and decide which named AI tasks use the Advanced model, while
-the default choices make discussions, refinement, drafting, review, and reporting quality-focused.
+### User Story 3 — Test provider connectivity (Priority: P2)
 
-**Why this priority**: Different AI tasks have different quality needs; task-level choices preserve
-control without requiring people to manage model names repeatedly.
+The user can request the configured provider's available models without creating Queue history or a
+content result.
 
-**Independent Test**: Enable or disable a named task in Advanced options, save, reopen AI Setup, and
-confirm the same selected state is displayed.
+### User Story 4 — Configure background capacity (Priority: P2)
 
-**Acceptance Scenarios**:
-
-1. **Given** Advanced options are collapsed, **When** a person expands them, **Then** they can see
-   every named AI task and whether it uses the Advanced model.
-2. **Given** a person changes one task selection, **When** they save and reopen AI Setup, **Then**
-   only that task's selection changes and other task selections remain intact.
-3. **Given** no saved task selections exist, **When** AI Setup first loads, **Then** discussions and
-   refinement, drafting, conflict review, image summary, completion review, and completion report
-   are selected for the Advanced model by default.
-
----
-
-### User Story 3 - Receive Safe Model Fallbacks (Priority: P2)
-
-A person can continue using every AI task if the Advanced model has not been supplied or is later
-cleared; selected advanced tasks transparently use the Default model instead of failing because a
-second model is absent.
-
-**Why this priority**: The two-tier setup should reduce configuration burden and not turn an optional
-quality choice into an availability problem.
-
-**Independent Test**: Select an advanced task, leave the Advanced model empty, invoke the task, and
-confirm it uses the configured Default model.
-
-**Acceptance Scenarios**:
-
-1. **Given** an advanced task is enabled and the Advanced model is blank, **When** the task runs,
-   **Then** it uses the Default model.
-2. **Given** an advanced task is disabled, **When** the task runs, **Then** it uses the Default
-   model even if an Advanced model is configured.
+The user can select between one and 32 durable background workers. The setting takes effect after
+the service restarts and does not change Fast Queue's single-request rule.
 
 ### Edge Cases
 
-- The Default model is empty when either a routine task runs or an advanced task needs fallback.
-- Saved task preferences contain an unknown or removed task identifier.
-- A pre-existing installation contains legacy stage-specific model preferences.
-- The provider cannot list models or is unreachable while a person edits settings.
+- Unknown task preference keys are ignored when configuration is saved.
+- Malformed stored preference data falls back to known task defaults.
+- A configured Advanced task falls back to Default when Advanced model is blank.
+- Provider-test failure is reported without disabling local non-AI operation.
+- Leaving the API-key field blank preserves the existing stored secret.
 
 ## Requirements *(mandatory)*
 
 ### Functional Requirements
 
-- **FR-001**: AI Setup MUST present exactly one Default model field and one Advanced model field,
-  each with a concise explanation of its use.
-- **FR-002**: AI Setup MUST group task-tier choices inside a collapsed Advanced options control.
-- **FR-003**: The system MUST let a person independently select whether each named AI task uses the
-  Advanced model.
-- **FR-004**: The initial task defaults MUST select the Advanced model for Capture, Problem, and
-  Solution discussion and refinement; Problem and Solution drafting; conflict review; image summary;
-  completion review; and completion report.
-- **FR-005**: The initial task defaults MUST select the Default model for workbench organization,
-  completed-Solution discussion, and Problem enrichment.
-- **FR-006**: A disabled advanced task MUST use the Default model.
-- **FR-007**: An enabled advanced task MUST use the Advanced model when one is configured and MUST
-  otherwise fall back to the Default model.
-- **FR-008**: The system MUST preserve valid task-tier preferences across restart and ignore unknown
-  task identifiers safely.
-- **FR-009**: The system MUST retain secure API-key handling and must not return or display the API
-  key in configuration responses.
-- **FR-010**: Image summary and conflict review MUST resolve their own named task preferences rather
-  than inheriting an unrelated workflow-stage model.
+- **FR-001**: AI Setup MUST present one Default model field and one optional Advanced model field.
+- **FR-002**: Task-tier choices MUST be grouped under Advanced options rather than shown as primary
+  setup fields.
+- **FR-003**: The user MUST be able to choose the model tier for Capture, Problem, and Solution
+  discussion/refinement; Problem and Solution drafting; Workbench organization; completed-Solution
+  discussion; conflict review; image summary; completion review; completion report; lineage
+  interpretation; Problem enrichment; and Knowledge translation.
+- **FR-004**: Capture, Problem, and Solution assistance; Problem and Solution drafting; conflict
+  review; image summary; completion review; completion report; and lineage interpretation MUST
+  initially prefer Advanced.
+- **FR-005**: Workbench organization, completed-Solution discussion, Problem enrichment, and
+  Knowledge translation MUST initially prefer Default.
+- **FR-006**: A disabled Advanced preference MUST resolve to Default.
+- **FR-007**: An enabled Advanced preference MUST resolve to Advanced when configured and otherwise
+  fall back to Default.
+- **FR-008**: Valid known preferences MUST survive restart and unknown preference keys MUST NOT
+  become selectable tasks.
+- **FR-009**: Public configuration MUST indicate whether an API key is configured without returning
+  the key.
+- **FR-010**: Image summary, conflict review, completion review, completion report, lineage
+  interpretation, and Knowledge translation MUST resolve their own task preference rather than an
+  unrelated workflow-stage preference.
+- **FR-011**: Durable background worker count MUST be restricted to one through 32 and changes MUST
+  be disclosed as effective after restart.
+- **FR-012**: Provider connection tests MUST remain operational feedback and MUST NOT create AI
+  content work or notifications.
+- **FR-013**: Public and stored provider configuration MUST NOT include an unused report-language
+  setting.
 
 ### Key Entities
 
-- **Model tier configuration**: The Default model, optional Advanced model, endpoint, and secure
-  credential reference used for AI requests.
-- **Task-tier preference**: A named AI task and a boolean indication that it should prefer the
-  Advanced model.
-- **AI task**: A stable user-visible operation such as discussion, refinement, drafting, review,
-  report generation, image summary, or workbench organization.
+- **Model tier configuration**: Endpoint, Default model, optional Advanced model, and secure
+  credential presence.
+- **Task-tier preference**: A known AI task and whether it prefers the Advanced model.
+- **Background capacity**: The configured number of durable workers used after service restart.
 
 ## Success Criteria *(mandatory)*
 
-### Measurable Outcomes
-
-- **SC-001**: A person can save both model tiers and one task preference in under 60 seconds from
-  opening AI Setup.
-- **SC-002**: After save and reload, 100% of the supported task preferences retain their selected
-  tier in automated configuration tests.
-- **SC-003**: 100% of supported AI task routes resolve either the selected Advanced model or the
-  Default model; none relies on a legacy stage-specific preference.
-- **SC-004**: An enabled task with no Advanced model completes model selection by using the Default
-  model rather than producing an advanced-model-missing error.
+- **SC-001**: Saving and reloading configuration preserves every supported visible task preference
+  and background worker count.
+- **SC-002**: Every tested task resolves to Advanced, Default, or Default fallback according to its
+  saved preference.
+- **SC-003**: Public configuration and provider-test responses expose the API key in zero tested
+  cases.
+- **SC-004**: Invalid worker counts are rejected without replacing the previous configuration.
 
 ## Assumptions
 
-- The person chooses compatible model identifiers for the configured OpenAI-compatible endpoint.
-- The Default model remains required for all AI use, because it is the safety fallback.
-- Advanced options name operations in user language rather than exposing implementation stages.
-- Legacy stage-specific stored values are not interpreted as one of the two new model choices; the
-  person reviews and saves the new two-tier configuration after upgrade.
+- The user supplies model identifiers compatible with the configured endpoint.
+- Knowledge translation defaults to the Default tier but is a user-selectable Advanced-option task.
+- Provider setup and model discovery are operational checks, not AI content tasks.
+
+## Confirmed Implementation Gaps
+
+- **IG-008 — Remove report-language setting**: The current configuration stores and exposes an
+  unused report-language value. The field must be removed from the supported configuration contract
+  and migrated out of stored settings.
+- **IG-012 — Knowledge translation tier control**: Knowledge translation is routable but currently
+  has no visible Advanced-option checkbox. AI Setup must expose the missing task control.

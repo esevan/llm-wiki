@@ -1,6 +1,6 @@
 # Tasks: Lineage Knowledge Layer
 
-**Input**: Design documents from `specs/006-lineage-knowledge-layer/`
+**Input**: Design documents from `specs/010-lineage-knowledge-layer/`
 
 ## Phase 1: Setup
 
@@ -64,7 +64,7 @@
 - [x] T024 Complete API, workflow, transition, provider-failure, document-input, and browser regression coverage in `tests/`
 - [x] T025 Update English and Korean completion/Lineage feature guides and indexes in `docs/features/`
 - [x] T026 Run `uv run pytest -q`, exact browser-script parse validation, and `git diff --check`
-- [x] T027 Mark completed tasks, review all requirements against implementation, and commit the feature worktree in `specs/006-lineage-knowledge-layer/tasks.md`
+- [x] T027 Mark completed tasks, review all requirements against implementation, and commit the feature worktree in `specs/010-lineage-knowledge-layer/tasks.md`
 
 ## Follow-up: Document-coupled lifecycle
 

@@ -14,17 +14,17 @@
 ## Requirement Completeness
 
 - [x] No [NEEDS CLARIFICATION] markers remain
-- [x] Requirements are testable and unambiguous
+- [ ] Requirements are testable and unambiguous
 - [x] Success criteria are measurable
 - [x] Success criteria are technology-agnostic (no implementation details)
 - [x] All acceptance scenarios are defined
 - [x] Edge cases are identified
-- [x] Scope is clearly bounded
+- [ ] Scope is clearly bounded
 - [x] Dependencies and assumptions identified
 
 ## Feature Readiness
 
-- [x] All functional requirements have clear acceptance criteria
+- [ ] All functional requirements have clear acceptance criteria
 - [x] User scenarios cover primary flows
 - [x] Feature meets measurable outcomes defined in Success Criteria
 - [x] No implementation details leak into specification
@@ -33,3 +33,6 @@
 
 - The specification intentionally describes durable and active work storage behavior without prescribing a particular database or worker framework.
 - Direct-provider-call prevention is deferred to planning as an implementation verification concern rather than a user-facing requirement.
+- Durable history TTL remains undecided.
+- Queue accessibility behaviors are explained, but the required acceptance scope remains undecided.
+- Checklist-edit translation, hard cancellation, and Chat abort are confirmed implementation gaps.

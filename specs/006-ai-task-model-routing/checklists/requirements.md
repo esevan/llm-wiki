@@ -31,5 +31,5 @@
 
 ## Notes
 
-- The feature is already implemented; these artifacts record the agreed behavior and its
-  verification path for future maintenance.
+- Report-language removal and the missing Knowledge translation tier control are confirmed
+  implementation gaps; the specification itself is complete for planning those changes.

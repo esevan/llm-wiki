@@ -48,4 +48,4 @@ AI Setup에는 **Lineage interpretation**이 독립 작업으로 표시됩니다
 기본적으로 이를 사용하며 **Completion report** 작업과 별도로 라우팅됩니다. AI를 사용할 수 없어도
 deterministic Lineage는 유지됩니다.
 
-관련 Spec Kit: [006 — Lineage Knowledge Layer](../../specs/006-lineage-knowledge-layer/spec.md)
+관련 Spec Kit: [010 — Lineage Knowledge Layer](../../specs/010-lineage-knowledge-layer/spec.md)

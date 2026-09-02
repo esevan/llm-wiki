@@ -1,3 +1,9 @@
+"""Behavior-driven characterization of migrated asynchronous API contracts.
+
+Each test protects an externally observable Given/When/Then outcome while the
+underlying execution path evolves.
+"""
+
 from __future__ import annotations
 
 import asyncio
@@ -13,7 +19,8 @@ from llm_wiki.web.app import create_app
 from tests.fakes.ai_provider import AsyncJSONProvider
 
 
-def test_draft_contract_is_202_then_preserves_the_characterized_result(tmp_path: Path, monkeypatch) -> None:
+def test_given_capture_when_draft_runs_then_async_result_preserves_the_contract(tmp_path: Path, monkeypatch) -> None:
+    """Given a Capture, when Draft completes, then the 202 job returns the characterized proposal."""
     app = create_app(tmp_path, tmp_path / "compat.sqlite")
     app.state.provider_settings.save("http://provider.test/v1", "model", None)
     monkeypatch.setattr(app.state.provider_settings, "_secret", lambda: "key")
@@ -36,7 +43,11 @@ def test_draft_contract_is_202_then_preserves_the_characterized_result(tmp_path:
     assert job.execution_mode == "asynchronous"
 
 
-def test_failed_async_draft_records_safe_terminal_error(tmp_path: Path, monkeypatch) -> None:
+def test_given_provider_failure_when_draft_runs_then_safe_terminal_error_is_recorded(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Given provider failure, when Draft runs, then the durable job records a safe terminal error."""
+
     class FailingProvider(AsyncJSONProvider):
         async def complete_json(self, _messages, _schema):
             raise OSError("offline")

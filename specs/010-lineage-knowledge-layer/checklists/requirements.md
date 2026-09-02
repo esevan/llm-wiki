@@ -31,4 +31,6 @@
 
 ## Notes
 
-- The four open questions were resolved as explicit first-version assumptions so planning can proceed without blocking user input.
+- The feature identifier migrated from duplicate prefix `006` to `010`.
+- Retaining the usable snapshot with a retryable inference-failure icon and tooltip is confirmed but
+  not yet fully implemented.
