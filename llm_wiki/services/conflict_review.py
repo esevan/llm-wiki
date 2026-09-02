@@ -114,16 +114,29 @@ class ConflictReviewManager:
     def _search(self, claims: list[dict[str, str]], event: threading.Event) -> list[dict[str, object]]:
         merged: dict[tuple[str, str], dict[str, object]] = {}
         canonical_seen: dict[tuple[str, str], str] = {}
-        for claim in claims:
+        semantic_groups: list[list[object]] | None = None
+        semantic_search_many = getattr(self.retrieval, "semantic_search_many", None)
+        if callable(semantic_search_many):
+            try:
+                semantic_groups = semantic_search_many([claim["text"] for claim in claims], limit=8)
+            except (ImportError, RuntimeError, ValueError):
+                semantic_groups = [[] for _ in claims]
+        for claim_index, claim in enumerate(claims):
             self._check_cancel(event)
             lexical = self.retrieval.search(claim["text"], limit=8)
-            try:
-                semantic = self.retrieval.semantic_search(claim["text"], limit=8)
-            except (ImportError, RuntimeError, ValueError):
-                semantic = []
+            if semantic_groups is not None:
+                semantic = semantic_groups[claim_index] if claim_index < len(semantic_groups) else []
+            else:
+                try:
+                    semantic = self.retrieval.semantic_search(claim["text"], limit=8)
+                except (ImportError, RuntimeError, ValueError):
+                    semantic = []
             for result in [*lexical, *semantic]:
                 key = (claim["id"], result.path)
-                passage = self.retrieval.best_passage(result.path, claim["text"])
+                try:
+                    passage = self.retrieval.best_passage(result.path, claim["text"])
+                except KeyError:
+                    continue  # The watcher removed this stale search result.
                 canonical = (claim["id"], _canonical_path(result.path))
                 existing_path = canonical_seen.get(canonical)
                 if existing_path and "raw" in result.path.lower():

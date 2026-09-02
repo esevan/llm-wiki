@@ -136,29 +136,45 @@ class RetrievalEngine:
 
     def semantic_search(self, query: str, limit: int = 20) -> list[SearchResult]:
         """Search every current embedding, independently of lexical retrieval."""
+        groups = self.semantic_search_many([query], limit)
+        return groups[0] if groups else []
+
+    def semantic_search_many(self, queries: list[str], limit: int = 20) -> list[list[SearchResult]]:
+        """Search embeddings for several queries with one batched model call."""
         from llm_wiki.services.semantic import cosine
+        if not queries:
+            return []
         rows = self.db.execute("""SELECT d.path,d.title,d.body,d.headings,d.tags,d.source_hash,
           e.dimensions,e.vector FROM documents d JOIN document_embeddings e
           ON e.path=d.path AND e.source_hash=d.source_hash""").fetchall()
         if not rows:
-            return []
-        query_vector = self._embed([query])[0]
-        scored = sorted(
-            ((cosine(query_vector, struct.unpack(f"<{row['dimensions']}f", row["vector"])), row) for row in rows),
-            key=lambda item: item[0], reverse=True,
-        )[:limit]
-        return [SearchResult(
-            path=row["path"], title=row["title"], snippet=self.best_passage(row["path"], query)["text"],
-            headings=tuple(filter(None, row["headings"].split("\n"))), tags=tuple(filter(None, row["tags"].split())),
-            score=round(float(score), 4), source_hash=row["source_hash"], matched_by=("semantic",),
-        ) for score, row in scored]
+            return [[] for _ in queries]
+        vectors = self._embed(queries)
+        groups: list[list[SearchResult]] = []
+        for query, query_vector in zip(queries, vectors):
+            scored = sorted(
+                ((cosine(query_vector, struct.unpack(f"<{row['dimensions']}f", row["vector"])), row) for row in rows),
+                key=lambda item: item[0], reverse=True,
+            )[:limit]
+            groups.append([SearchResult(
+                path=row["path"], title=row["title"],
+                snippet=self._passage(row["path"], row["body"], row["source_hash"], query)["text"],
+                headings=tuple(filter(None, row["headings"].split("\n"))), tags=tuple(filter(None, row["tags"].split())),
+                score=round(float(score), 4), source_hash=row["source_hash"], matched_by=("semantic",),
+            ) for score, row in scored])
+        return groups
 
     def best_passage(self, path: str, query: str, max_chars: int = 1800) -> dict[str, object]:
         row = self.db.execute("SELECT body,source_hash FROM documents WHERE path=?", (path,)).fetchone()
         if not row:
             raise KeyError(path)
-        lines = str(row["body"]).splitlines()
-        terms = [term.lower() for term in self._terms(query)]
+        return self._passage(path, str(row["body"]), str(row["source_hash"]), query, max_chars)
+
+    @classmethod
+    def _passage(cls, path: str, body: str, source_hash: str, query: str,
+                 max_chars: int = 1800) -> dict[str, object]:
+        lines = body.splitlines()
+        terms = [term.lower() for term in cls._terms(query)]
         best_start, best_score = 0, -1
         for index in range(len(lines)):
             window = "\n".join(lines[index:index + 12])
@@ -174,7 +190,7 @@ class RetrievalEngine:
             length += len(line) + 1
         if not selected and lines:
             selected = [lines[0][:max_chars]]
-        return {"path": path, "source_hash": row["source_hash"], "start_line": best_start + 1,
+        return {"path": path, "source_hash": source_hash, "start_line": best_start + 1,
                 "end_line": best_start + len(selected), "text": "\n".join(selected).strip()}
 
     def refresh_embeddings(self, batch_size: int = 32) -> int:
@@ -194,10 +210,10 @@ class RetrievalEngine:
         return updated
 
     def _semantic_rerank(self, query: str, results: list[SearchResult]) -> list[SearchResult]:
-        from llm_wiki.services.semantic import SemanticEmbedder, cosine
+        from llm_wiki.services.semantic import cosine
         rows = self.db.execute("SELECT path,dimensions,vector FROM document_embeddings WHERE path IN (" + ",".join("?" for _ in results) + ")", [result.path for result in results]).fetchall()
         if not rows:
             return results
-        query_vector = SemanticEmbedder().embed([query])[0]
+        query_vector = self._embed([query])[0]
         scores = {row["path"]: cosine(query_vector, struct.unpack(f"<{row['dimensions']}f", row["vector"])) for row in rows}
         return sorted(results, key=lambda result: scores.get(result.path, -1), reverse=True)

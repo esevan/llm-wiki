@@ -81,7 +81,9 @@ def test_semantic_model_is_reused_for_indexing_and_repeated_searches(tmp_path: P
 
     assert engine.refresh_embeddings() == 1
     assert engine.semantic_search("local")[0].path == "decision.md"
-    assert engine.semantic_search("data")[0].path == "decision.md"
+    groups = engine.semantic_search_many(["data", "decision"])
+    assert [group[0].path for group in groups] == ["decision.md", "decision.md"]
+    assert engine.search("data", semantic=True)[0].path == "decision.md"
     assert constructed == 1
     row = engine.db.execute("SELECT dimensions,vector FROM document_embeddings").fetchone()
     assert tuple(struct.unpack(f"<{row['dimensions']}f", row["vector"])) == (1.0, 0.0)

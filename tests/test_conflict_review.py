@@ -26,6 +26,7 @@ class FakeRetrieval:
     def __init__(self, coverage=1.0, candidates=True):
         self.coverage = coverage
         self.has_candidates = candidates
+        self.semantic_batches = 0
 
     def manifest_hash(self):
         return "vault-hash"
@@ -40,6 +41,10 @@ class FakeRetrieval:
 
     def semantic_search(self, _query, limit=8):
         return []
+
+    def semantic_search_many(self, queries, limit=8):
+        self.semantic_batches += 1
+        return [[] for _ in queries]
 
     def best_passage(self, path, _query):
         return {"path": path, "source_hash": "source-hash", "start_line": 3, "end_line": 4, "text": "Old scope\nMust stay local"}
@@ -78,7 +83,8 @@ def test_extracts_reviewable_solution_claims():
 
 def test_publishes_exact_evidence_backed_finding():
     workflow = FakeWorkflow()
-    manager = ConflictReviewManager(FakeRetrieval(), workflow, lambda strong: FakeProvider(strong))
+    retrieval = FakeRetrieval()
+    manager = ConflictReviewManager(retrieval, workflow, lambda strong: FakeProvider(strong))
     started = manager.start({"id": "solution-1", "title": "New", "outcome": "Cloud", "non_goals": "", "validation_criteria": "Done"}, {"statement": "Scope"}, "English")
     result = wait_ready(manager)
     assert started["recommended_state"] == "reviewing"
@@ -86,6 +92,20 @@ def test_publishes_exact_evidence_backed_finding():
     assert result["findings"][0]["citation"] == "decision.md:3-4"
     assert result["findings"][0]["excerpt"] == "Old scope\nMust stay local"
     assert set(result["timings_ms"]) == {"search", "screen", "review"}
+    assert retrieval.semantic_batches == 1
+
+
+def test_stale_candidate_removed_during_search_is_skipped():
+    class StaleRetrieval(FakeRetrieval):
+        def best_passage(self, path, query):
+            raise KeyError(path)
+
+    manager = ConflictReviewManager(StaleRetrieval(), FakeWorkflow(), lambda strong: FakeProvider(strong))
+    manager.start({"id": "solution-1", "title": "New", "outcome": "Cloud", "non_goals": "", "validation_criteria": "Done"}, {"statement": "Scope"}, "English")
+    result = wait_ready(manager)
+    assert result["status"] == "ready"
+    assert result["recommended_state"] == "insufficient_evidence"
+    assert result["candidate_count"] == 0
 
 
 def test_zero_candidates_and_incomplete_coverage_never_clear():
