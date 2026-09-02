@@ -22,7 +22,8 @@ The current roadmap and acceptance order are maintained in [PROJECT_PLAN.md](PRO
 - The bottom-right Queue exposes durable status and task-specific result actions. Completion Review
   additionally uses a temporary toast and persisted unread bell alert.
 - Knowledge translation resumes by paragraph and moves completed output to the Vault before
-  deleting working checkpoints. Capture and Work Log translations preserve authored source text.
+  deleting working checkpoints. Closing or switching its reader detaches UI progress without
+  cancelling the durable job. Capture and Work Log translations preserve authored source text.
 - AI Queue code follows the enforced layered dependency rules in
   [architecture.md](architecture.md). Web owns composition, controllers receive an assembled
   runtime, Queue domain types are dependency-free, and each durable task has one named handler

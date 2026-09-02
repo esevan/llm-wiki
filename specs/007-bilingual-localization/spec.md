@@ -72,7 +72,8 @@ resummarizing the image.
 - Missing stored localized fields fall back field-by-field to the unchanged base content.
 - Existing unmanaged Vault Markdown is never translated merely because it is opened in Korean.
 - A Knowledge translation failure leaves untranslated English paragraphs readable and retryable.
-- Closing or changing the Knowledge reader requests cancellation of its active translation job.
+- Closing or changing the Knowledge reader detaches that reader from progress updates while the
+  durable translation job continues in the Queue.
 - Late translation output is rejected when its source revision no longer matches.
 - Code, identifiers, paths, URLs, citations, and quoted evidence are instructed to remain unchanged
   in derived translations.
@@ -113,8 +114,9 @@ resummarizing the image.
   translation area with source path, source revision, locale, model, and generation metadata.
 - **FR-016**: Derived Korean Knowledge MUST be excluded from canonical search and removed when its
   canonical source disappears or changes.
-- **FR-017**: Closing or superseding an active Knowledge reader MUST request server-side cancellation
-  and MUST prevent its late result from replacing the current reader.
+- **FR-017**: Closing or superseding an active Knowledge reader MUST stop updates to that reader and
+  MUST prevent late output from replacing another reader, but MUST NOT cancel the durable Knowledge
+  translation job. Explicit cancellation remains available through the Queue.
 - **FR-018**: New or changed Capture, Work Log body, Work Log comment, and checklist source text MUST
   schedule a derived Korean/English reading after source persistence without delaying the save.
 - **FR-019**: Derived Capture and Work readings MUST preserve the authored source and MUST NOT replace
@@ -150,6 +152,9 @@ resummarizing the image.
 - **SC-006**: Translation failure and cancellation tests preserve canonical and authored source in
   every case.
 - **SC-007**: Packaged Korean and English resources pass key-parity and non-empty-value validation.
+- **SC-008**: Closing or switching away from a translating Knowledge reader cancels the durable
+  translation job in zero acceptance cases, and completed output is reusable when the document is
+  reopened.
 
 ## Assumptions
 

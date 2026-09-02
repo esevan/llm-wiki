@@ -123,6 +123,8 @@
 - [x] T068 Move durable Queue SQLite access into llm_wiki/repositories/ and preserve domain use cases in llm_wiki/services/
 - [x] T069 Remove compatibility imports, superseded direct provider calls, unmanaged background threads, duplicate handlers, and dead modules after all callers migrate
 - [x] T070 Add architecture dependency and dead-code inventory tests in tests/test_architecture.py and tests/test_ai_task_inventory.py
+- [x] T071 Preserve durable Knowledge translation when its reader closes or changes, with a
+  behavior-driven browser regression test and synchronized localization documentation
 
 ## Dependencies
 

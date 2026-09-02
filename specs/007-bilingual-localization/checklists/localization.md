@@ -42,3 +42,4 @@
 - [x] CHK023 Are accessibility semantics, keyboard focus, open dialogs, navigation context, and unsaved input covered during switching? [Coverage, Spec §FR-002, §Assumptions]
 - [x] CHK024 Are cross-platform, privacy, adapter, performance, and human-approval dependencies defined and aligned with the constitution? [Dependency, Plan §Constitution Check]
 - [x] CHK025 Are AI-generated Image Summaries distinguished from user-authored Work Log evidence, with one-call bilingual storage, legacy fallback, and provider-free switching specified? [Consistency, Spec §FR-024–FR-026]
+- [x] CHK026 Does closing or switching the Knowledge reader detach presentation updates without cancelling the durable translation job? [Recovery, Spec §FR-017, §SC-008]

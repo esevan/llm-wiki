@@ -111,7 +111,7 @@ def test_queue_browser_handlers_have_one_authoritative_implementation() -> None:
         "reviewCompletion",
         "startBackgroundRefinement",
         "draftWithAI",
-        "cancelKnowledgeTranslation",
+        "detachKnowledgeTranslationReader",
         "streamKnowledgeTranslation",
     ):
         declarations = len(re.findall(rf"(?:async\s+)?function\s+{name}\s*\(", source))

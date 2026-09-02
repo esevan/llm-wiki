@@ -92,7 +92,11 @@ No constitution violations or additional complexity justifications are required.
 
 ## Progressive Reading Addendum (2026-08-24)
 
-Keep the canonical read endpoint as the sub-second, provider-free path and add a newline-delimited JSON translation stream for cache misses. The browser owns one `AbortController` and server request id at a time; superseding navigation both aborts the response and signals the server cancellation registry. The server translates stable Markdown paragraph blocks, emits only complete blocks, verifies the canonical hash before committing the assembled result to the existing cache, and emits a recoverable failure event without changing canonical Markdown.
+Keep the canonical read endpoint as the sub-second, provider-free path and schedule cache misses as
+durable paragraph translation work. The browser owns one reader observation at a time; superseding
+navigation detaches that observation without cancelling the durable job. The worker translates
+stable Markdown paragraph blocks, verifies the canonical hash before committing the assembled
+result, and records recoverable failure without changing canonical Markdown.
 
 The progress surface is a sticky high-contrast live region above the document. Each paragraph transition temporarily stacks the English and Korean versions in the same layout slot, then uses opposing left-to-right clipping masks over roughly 900 ms before removing the English layer. Reduced-motion preferences continue to suppress decorative movement.
 

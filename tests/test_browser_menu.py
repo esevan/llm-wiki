@@ -347,7 +347,7 @@ def test_knowledge_reader_opens_immediately_and_reacts_to_async_completion() -> 
         browser.close()
 
 
-def test_korean_knowledge_reader_uses_durable_job_and_cancels_it_with_surface() -> None:
+def test_korean_knowledge_reader_detaches_from_durable_job_when_surface_closes() -> None:
     source = (Path(__file__).parents[1] / "llm_wiki" / "static" / "index.html").read_text(encoding="utf-8")
 
     assert "translate=false" in source
@@ -355,9 +355,60 @@ def test_korean_knowledge_reader_uses_durable_job_and_cancels_it_with_surface() 
     assert "result.cache_status==='pending'" in source
     assert "position:sticky" in source
     assert "new AbortController()" in source
-    assert "'/jobs/'+attempt.jobId+'/cancel'" in source
-    assert "waitForJob(job.id,controller.signal)" in source
+    assert "detachKnowledgeTranslationReader" in source
+    detach_handler = source.split("detachKnowledgeTranslationReader=function", 1)[1].split(";\n", 1)[0]
+    assert "/cancel" not in detach_handler
+    assert "waitForJob(job.id,controller.signal,false)" in source
     assert "data-retry-knowledge" in source
+
+
+def test_given_running_knowledge_translation_when_reader_closes_then_job_continues() -> None:
+    """Closing the reader detaches UI polling without cancelling durable translation work."""
+    from playwright.sync_api import sync_playwright
+
+    root = Path(__file__).parents[1]
+    resources = {
+        locale: json.loads((root / "llm_wiki" / "static" / "i18n" / f"{locale}.json").read_text(encoding="utf-8"))
+        for locale in ("en", "ko")
+    }
+    page_url = (root / "llm_wiki" / "static" / "index.html").as_uri()
+    with sync_playwright() as driver:
+        try:
+            browser = driver.chromium.launch(headless=True)
+        except Exception as error:
+            pytest.skip(f"Playwright browser artifact unavailable locally: {error}")
+        page = browser.new_page()
+        page.goto(page_url)
+        page.evaluate(
+            """resources => {
+                localeResources=resources;rebuildLocaleReverse();activeLocale='ko';
+                window.__knowledgeRequests=[];
+                window.fetch=(url,options={})=>{
+                    const value=String(url),method=options.method||'GET';
+                    window.__knowledgeRequests.push({url:value,method});
+                    let payload={};
+                    if(value.includes('/knowledge/translate?')){
+                        payload={id:'translation-1',status:'queued',progress:{completed:0,total:2}};
+                    }else if(value.includes('/knowledge?')){
+                        payload={translated:false,canonical_locale:'en',cache_status:'pending',markdown:'# Canonical'};
+                    }else if(value.endsWith('/jobs/translation-1')){
+                        payload={id:'translation-1',status:'running',progress:{completed:0,total:2}};
+                    }
+                    return Promise.resolve({ok:true,status:200,json:async()=>payload,text:async()=>''});
+                };
+                void searchArchivedDocument('Knowledge/result.md');
+            }""",
+            resources,
+        )
+        page.wait_for_function("activeKnowledgeTranslation?.jobId === 'translation-1'")
+
+        page.locator("#item-detail-close").click()
+
+        page.wait_for_function("activeKnowledgeTranslation === null")
+        requests = page.evaluate("window.__knowledgeRequests")
+        assert not [request for request in requests if request["url"].endswith("/jobs/translation-1/cancel")]
+        assert not page.locator("#item-detail-modal").evaluate("dialog => dialog.open")
+        browser.close()
 
 
 def test_removed_product_stage_has_no_browser_surface() -> None:

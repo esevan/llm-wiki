@@ -50,9 +50,11 @@ above the document and reports completed and total paragraphs. Each complete Kor
 replaces its whole English paragraph with a clearly visible, roughly 900 ms left-to-right wave:
 English recedes in reading order while Korean is revealed behind it. Text is never replaced token
 by token or shown as a typing animation. People who prefer reduced motion receive an immediate
-whole-paragraph replacement. Opening another
-document or closing the reader aborts the browser stream and cancels its server translation job.
-Failures leave the English canonical paragraphs readable and provide an explicit retry action.
+whole-paragraph replacement. Opening another document or closing the reader detaches that reader
+from progress updates but does not cancel durable translation. The job continues in the Queue and
+its completed reading is reused when the document is reopened. Explicit Queue cancellation remains
+available. Failures leave the English canonical paragraphs readable and provide an explicit retry
+action.
 
 If bilingual generation or Korean Knowledge translation fails, the successful original and the
 canonical Markdown remain available. LLM Wiki identifies the missing version or falls back to the

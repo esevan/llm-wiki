@@ -46,5 +46,6 @@
 **Alternatives considered**:
 
 - Translate summaries on locale switch: rejected because it moves AI into a hot read path and makes switching slow and nondeterministic.
-- Queue a second-language translation: rejected because it introduces job lifecycle complexity for work already handled by an explicit AI request.
+- Bind second-language translation to durable Queue work so it survives reader close, navigation,
+  and web-process loss while retaining explicit cancellation through the Queue.
 - Translate all Work Log content: rejected because user-authored evidence must remain exact and most entries do not otherwise require AI.

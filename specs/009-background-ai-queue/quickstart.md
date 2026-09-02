@@ -26,7 +26,9 @@
 1. Interrupt paragraph translation and document embeddings; unchanged checkpoints resume, changed units rerun.
 2. Restart between Vault replace and Job cleanup; reconciliation must retain the file and finish cleanup.
 3. Capture/Work Log persistence returns without waiting and enqueues derived translations without overwriting source.
-4. Lexical search remains available during incomplete embeddings.
+4. Close or switch an active Knowledge reader and verify its durable translation continues in the
+   Queue; reopen the document and reuse its completed result.
+5. Lexical search remains available during incomplete embeddings.
 
 ## Browser
 

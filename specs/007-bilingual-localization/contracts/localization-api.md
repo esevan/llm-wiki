@@ -63,7 +63,14 @@ The response includes `path`, `markdown`, `canonical_locale`, `served_locale`, `
 6. Translation preserves frontmatter, headings, code fences, link targets, identifiers, and quoted evidence; only readable prose changes.
 7. The server re-reads canonical content after translation and caches only if its hash is unchanged.
 
-The browser's first-render request uses `translate=false`. On a cache miss it returns canonical Markdown with `cache_status: pending` without a provider call. `GET /api/knowledge/translate?path=...&request_id=...` then emits newline-delimited JSON events for complete translated paragraphs (`paragraph`), final cache commit (`complete`), or recoverable failure (`error`). A complete result is atomically written to `Translations/ko/<canonical-path>` with canonical-link and source-identity frontmatter. This tree is excluded from canonical retrieval. `POST /api/knowledge/translation-cancel?request_id=...` sets the server cancellation token; a superseded or closed reader invokes it as well as aborting its stream.
+The browser's first-render request uses `translate=false`. On a cache miss it returns canonical
+Markdown with `cache_status: pending` without a provider call. The current compatibility translation
+request returns a durable Job whose paragraph progress and terminal result are read through the Jobs
+contract. A complete result is atomically written to `Translations/ko/<canonical-path>` with
+canonical-link and source-identity frontmatter, and this tree is excluded from canonical retrieval.
+Closing or superseding the reader detaches its progress observation but does not cancel the Job;
+explicit cancellation uses the Jobs cancellation contract. The compatibility translation request is
+scheduled to move from its current read-shaped form to a state-changing request.
 
 ## Backward compatibility
 

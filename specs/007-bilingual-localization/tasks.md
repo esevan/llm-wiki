@@ -190,3 +190,10 @@
 - [X] T051 Implement exact-hash Vault translation storage with canonical-link frontmatter and legacy SQLite promotion in `llm_wiki/services/localization.py`
 - [X] T052 Integrate Vault-backed translation storage and watcher cleanup in `llm_wiki/api/app.py`
 - [X] T053 Update paired documentation and complete stable verification
+
+---
+
+## Phase 14: Reader-independent durable translation
+
+- [X] T054 Detach Knowledge reader polling without cancelling durable translation, add a browser
+  regression journey, and update paired behavior documentation.

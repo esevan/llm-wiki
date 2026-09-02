@@ -33,3 +33,5 @@
 
 - Checklist-edit retranslation and the state-changing Knowledge translation request contract are
   confirmed implementation gaps; the specification is complete for planning those changes.
+- Reader close and document switching are explicitly presentation-only detach actions; durable
+  Knowledge translation continues unless the user cancels it through the Queue.

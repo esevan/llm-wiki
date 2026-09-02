@@ -80,6 +80,8 @@ complete service to start at login.
   failures become failed.
 - Fast Queue requests are not recovered after process restart and are not retried automatically.
 - Closing or disconnecting an interactive Fast Queue surface aborts its active provider request.
+- Closing or switching a Knowledge reader detaches only that reader's progress observation; its
+  durable translation remains visible and cancellable in the Queue.
 - Queue history contains up to the most recent 100 durable jobs, including completed Knowledge
   translation jobs.
 
@@ -159,6 +161,9 @@ complete service to start at login.
 - **FR-037**: Cancellation of durable or Fast Queue work MUST promptly stop active local and provider
   computation and MUST prevent later publication or delivery.
 - **FR-038**: Closing a Chat surface MUST abort its active Fast Queue request.
+- **FR-039**: Closing or switching a Knowledge reader MUST NOT cancel its durable translation work.
+  The reader MUST ignore late presentation updates, while the job continues to completion, failure,
+  staleness, or an explicit Queue cancellation.
 
 ### Key Entities
 
@@ -187,6 +192,8 @@ complete service to start at login.
 - **SC-009**: Queue result routing opens the owning content or readable task result for every task
   family in the matrix.
 - **SC-010**: Provider failure and cancellation tests preserve all pre-existing user content.
+- **SC-011**: Knowledge reader close and document-switch tests leave the associated durable
+  translation active in every case unless the user explicitly cancels it through the Queue.
 
 ## Assumptions
 

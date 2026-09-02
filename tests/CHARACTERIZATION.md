@@ -79,8 +79,10 @@ changes are implemented. These cases describe outcomes rather than internal call
 - **Given** English-canonical managed Knowledge without a current Korean reading,
 - **When** Korean reading or explicit translation is requested,
 - **Then** canonical content remains immediately readable and one source-bound paragraph job is
-  enqueued; unrelated managed documents are not proactively translated.
-- **Automated evidence**: `tests/test_api.py`, `tests/test_localization.py`
+  enqueued; unrelated managed documents are not proactively translated. Closing or switching the
+  reader detaches presentation updates without cancelling that durable job.
+- **Automated evidence**: `tests/test_api.py`, `tests/test_localization.py`,
+  `tests/test_browser_menu.py`
 
 ### CB-010 — New authored work schedules derived translation
 
