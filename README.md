@@ -32,6 +32,7 @@ See [Product Spirit in the product](docs/product-spirit.md) for the design impli
 | Resume active work | In Progress Solutions are highlighted; Work Log stores text, screenshots, comments, and validation checks. |
 | Complete with evidence | AI reviews recorded evidence, while the human retains the completion decision. |
 | Reuse the result | Only completed work becomes an Obsidian-compatible Playbook and searchable Knowledge. |
+| Stay responsive during AI work | One hidden Fast Queue throttles interaction; durable work remains visible and recoverable in the background Queue. |
 
 There is no Task stage. LLM Wiki keeps execution attached to the Solution so work never loses the
 Problem that explains why it exists.
@@ -51,6 +52,9 @@ fallbacks that preserve private process and human authority during provider fail
 
 API keys are stored in macOS Keychain or Windows Credential Manager, never in the vault or app
 database. The server binds only to `127.0.0.1`.
+
+See [Background AI Queue](docs/features/background-ai-queue.md) for worker roles, recovery,
+task-specific results, and notification behavior.
 
 ### Korean and English
 

@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from llm_wiki.api.app import create_app
+from llm_wiki.web.app import create_app
 from llm_wiki.services.workflow import TRANSITIONS, WorkflowEngine, WorkflowError, available_transitions
 
 

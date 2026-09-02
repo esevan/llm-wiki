@@ -7,7 +7,6 @@ import json
 import re
 import base64
 from datetime import date
-from pathlib import Path
 
 from llm_wiki.services.localization import LocalizedContentStore
 from llm_wiki.services.lineage import LINEAGE_SCHEMA_VERSION, build_lineage_document, render_lineage_markdown
@@ -639,7 +638,7 @@ class WorkflowEngine:
 
     def board(self, locale: str = "en") -> dict[str, list[dict[str, object]]]:
         return {
-            "captures": self._active("captures"),
+            "captures": self.localized.overlay_many("captures", self._active("captures"), locale),
             "problems": self.localized.overlay_many("problems", self._active("problems"), locale),
             "features": self.localized.overlay_many("features", self._active("features"), locale),
         }
@@ -872,12 +871,14 @@ class WorkflowEngine:
         ))
         entries = self.localized.overlay_many("solution_progress_entries", entry_rows, locale)
         for entry in entries:
-            entry["comments"] = [dict(row) for row in self.db.execute(
+            comment_rows = list(self.db.execute(
                 "SELECT * FROM solution_progress_comments WHERE entry_id=? ORDER BY created_at", (entry["id"],)
-            )]
-        checklist = [dict(row) for row in self.db.execute(
+            ))
+            entry["comments"] = self.localized.overlay_many("solution_progress_comments", comment_rows, locale)
+        checklist_rows = list(self.db.execute(
             "SELECT * FROM solution_checklist_items WHERE feature_id=? ORDER BY checked, created_at", (feature_id,)
-        )]
+        ))
+        checklist = self.localized.overlay_many("solution_checklist_items", checklist_rows, locale)
         return {"entries": entries, "checklist": checklist}
 
     def add_solution_progress(self, feature_id: str, body: str = "", image_data: str = "", image_media_type: str = "") -> dict[str, object]:
@@ -976,7 +977,7 @@ class WorkflowEngine:
             for item_locale in ("ko", "en")
         }
         try:
-            self.localized.save_bilingual("solution_progress_entries", entry_id, normalized)
+            self.localized.save_versions("solution_progress_entries", entry_id, normalized, complete=False)
             self.db.execute(
                 "UPDATE solution_progress_entries SET image_summary=? WHERE id=?",
                 (summaries[locale], entry_id),

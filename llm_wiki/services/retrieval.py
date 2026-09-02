@@ -34,6 +34,10 @@ class RetrievalEngine:
                 self._semantic_embedder = SemanticEmbedder()
             return self._semantic_embedder.embed(texts)  # type: ignore[attr-defined]
 
+    def embed_texts(self, texts: list[str]) -> list[list[float]]:
+        """Embedding adapter entry point used only by durable worker handlers."""
+        return self._embed(texts)
+
     def _init_schema(self) -> None:
         self.db.executescript("""
         CREATE TABLE IF NOT EXISTS documents (
@@ -192,22 +196,6 @@ class RetrievalEngine:
             selected = [lines[0][:max_chars]]
         return {"path": path, "source_hash": source_hash, "start_line": best_start + 1,
                 "end_line": best_start + len(selected), "text": "\n".join(selected).strip()}
-
-    def refresh_embeddings(self, batch_size: int = 32) -> int:
-        """Background-only embedding refresh, stored float32 by current source hash."""
-        rows = self.db.execute("""SELECT d.path,d.source_hash,d.title || '\n' || d.headings || '\n' || substr(d.body,1,4000) text
-          FROM documents d LEFT JOIN document_embeddings e ON e.path=d.path
-          WHERE e.source_hash IS NULL OR e.source_hash != d.source_hash""").fetchall()
-        if not rows:
-            return 0
-        updated = 0
-        for start in range(0, len(rows), batch_size):
-            batch = rows[start:start + batch_size]
-            vectors = self._embed([row["text"] for row in batch])
-            self.db.executemany("INSERT OR REPLACE INTO document_embeddings(path,source_hash,dimensions,vector) VALUES (?,?,?,?)", [(row["path"], row["source_hash"], len(vector), struct.pack(f"<{len(vector)}f", *vector)) for row, vector in zip(batch, vectors)])
-            self.db.commit()
-            updated += len(batch)
-        return updated
 
     def _semantic_rerank(self, query: str, results: list[SearchResult]) -> list[SearchResult]:
         from llm_wiki.services.semantic import cosine

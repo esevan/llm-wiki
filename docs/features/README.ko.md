@@ -15,6 +15,7 @@
 | [한국어·영어 전환](bilingual-localization.ko.md) | 맥락을 유지하며 언어를 바꾸고 Knowledge의 휴대성 지키기 |
 | [Lineage Knowledge Layer](lineage-knowledge-layer.ko.md) | 완료 Knowledge를 원 기록과 결정까지 추적하기 |
 | [근거 중심 Vault 충돌 검토](vault-conflict-evidence.ko.md) | 검색 coverage, 정확한 근거, 진행률, 보수적인 판정 의미 확인하기 |
+| [백그라운드 AI Queue](background-ai-queue.ko.md) | 반응성을 유지하면서 AI 작업을 조회하고 복구하기 |
 
 제품 흐름은 **Capture → Problem → Solution**입니다. 이후 실행은 Solution의 Work Log, 검증 체크,
 Completion 안에서 이어집니다.

@@ -1,9 +1,17 @@
+import asyncio
 from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-import llm_wiki.api.app as api_module
-from llm_wiki.api.app import create_app
+from llm_wiki.web.app import create_app
+from tests.fakes.ai_provider import FastAdapter, run_workflow_job
+
+
+def finish(client: TestClient, app, response, provider) -> dict[str, object]:
+    assert response.status_code == 202
+    job_id = response.json()["id"]
+    asyncio.run(run_workflow_job(app, job_id, provider))
+    return client.get(f"/api/jobs/{job_id}/result").json()["result"]
 
 
 class FakeProvider:
@@ -59,10 +67,9 @@ class BilingualDraftProvider(FakeProvider):
 
 
 def test_workbench_chat_allows_explanations_beyond_the_old_240_character_limit(tmp_path: Path, monkeypatch) -> None:
-    app = create_app(tmp_path, tmp_path / "db.sqlite")
+    app = create_app(tmp_path, tmp_path / "db.sqlite", fast_queue_client=FastAdapter(LongChatProvider()))
     app.state.provider_settings.save("http://127.0.0.1:8317/v1", "test-model", None)
     monkeypatch.setattr(app.state.provider_settings, "_secret", lambda: "test-key")
-    monkeypatch.setattr(api_module, "OpenAICompatibleProvider", LongChatProvider)
 
     with TestClient(app) as client:
         capture = client.post("/api/captures", json={"text": "Decisions are scattered"}).json()
@@ -77,10 +84,9 @@ def test_workbench_chat_allows_explanations_beyond_the_old_240_character_limit(t
 
 
 def test_problem_chat_receives_the_same_visible_focus_as_preview(tmp_path: Path, monkeypatch) -> None:
-    app = create_app(tmp_path, tmp_path / "focus.sqlite")
+    app = create_app(tmp_path, tmp_path / "focus.sqlite", fast_queue_client=FastAdapter(FocusCapturingProvider()))
     app.state.provider_settings.save("http://127.0.0.1:8317/v1", "test-model", None)
     monkeypatch.setattr(app.state.provider_settings, "_secret", lambda: "test-key")
-    monkeypatch.setattr(api_module, "OpenAICompatibleProvider", FocusCapturingProvider)
     FocusCapturingProvider.messages = []
 
     with TestClient(app) as client:
@@ -99,10 +105,9 @@ def test_problem_chat_receives_the_same_visible_focus_as_preview(tmp_path: Path,
 
 
 def test_live_chat_uses_request_start_locale_once(tmp_path: Path, monkeypatch) -> None:
-    app = create_app(tmp_path, tmp_path / "locale-chat.sqlite")
+    app = create_app(tmp_path, tmp_path / "locale-chat.sqlite", fast_queue_client=FastAdapter(FocusCapturingProvider()))
     app.state.provider_settings.save("http://127.0.0.1:8317/v1", "test-model", None)
     monkeypatch.setattr(app.state.provider_settings, "_secret", lambda: "test-key")
-    monkeypatch.setattr(api_module, "OpenAICompatibleProvider", FocusCapturingProvider)
     FocusCapturingProvider.messages = []
     with TestClient(app) as client:
         capture = client.post("/api/captures", json={"text": "결정이 흩어져 있다"}).json()
@@ -121,11 +126,10 @@ def test_one_bilingual_draft_call_supplies_stored_problem_versions(tmp_path: Pat
     app = create_app(tmp_path, tmp_path / "bilingual-draft.sqlite")
     app.state.provider_settings.save("http://127.0.0.1:8317/v1", "test-model", None)
     monkeypatch.setattr(app.state.provider_settings, "_secret", lambda: "test-key")
-    monkeypatch.setattr(api_module, "OpenAICompatibleProvider", BilingualDraftProvider)
     BilingualDraftProvider.calls = 0
     with TestClient(app) as client:
         capture = client.post("/api/captures", json={"text": "결정이 흩어져 있다"}).json()
-        draft = client.post(f"/api/captures/{capture['id']}/draft", headers={"X-LLM-Wiki-Locale": "ko"}).json()
+        draft = finish(client, app, client.post(f"/api/captures/{capture['id']}/draft", headers={"X-LLM-Wiki-Locale": "ko"}), BilingualDraftProvider())
         assert set(draft["localized_versions"]) == {"ko", "en"}
         problem = client.post(
             f"/api/captures/{capture['id']}/promote",
@@ -140,19 +144,18 @@ def test_one_bilingual_draft_call_supplies_stored_problem_versions(tmp_path: Pat
 
 
 def test_workbench_ai_and_human_actions_follow_the_inbox_to_problem_flow(tmp_path: Path, monkeypatch) -> None:
-    app = create_app(tmp_path, tmp_path / "db.sqlite")
+    app = create_app(tmp_path, tmp_path / "db.sqlite", fast_queue_client=FastAdapter(FakeProvider()))
     app.state.provider_settings.save("http://127.0.0.1:8317/v1", "test-model", None)
     monkeypatch.setattr(app.state.provider_settings, "_secret", lambda: "test-key")
-    monkeypatch.setattr(api_module, "OpenAICompatibleProvider", FakeProvider)
 
     with TestClient(app) as client:
         capture = client.post("/api/captures", json={"text": "Decisions are scattered"}).json()
         assert client.post(f"/api/captures/{capture['id']}/chat", json={"message": "It affects my team"}).status_code == 200
-        refinement = client.post(f"/api/captures/{capture['id']}/refine").json()
+        refinement = finish(client, app, client.post(f"/api/captures/{capture['id']}/refine"), FakeProvider())
         assert refinement["source_note"] == "Decisions are scattered"
         assert client.put(f"/api/items/captures/{capture['id']}", json={"title": refinement["title"], "detail": ""}).status_code == 204
         assert client.post(f"/api/captures/{capture['id']}/next-chat", json={"message": "People need trusted decisions"}).status_code == 200
-        problem_draft = client.post(f"/api/captures/{capture['id']}/draft").json()
+        problem_draft = finish(client, app, client.post(f"/api/captures/{capture['id']}/draft"), FakeProvider())
         problem = client.post(
             f"/api/captures/{capture['id']}/promote",
             json={"statement": problem_draft["title"], "detail": problem_draft["detail"]},
@@ -160,13 +163,13 @@ def test_workbench_ai_and_human_actions_follow_the_inbox_to_problem_flow(tmp_pat
         board = client.get("/api/board").json()
         assert board["captures"] == []
         assert board["problems"][0]["id"] == problem["id"]
-        refined_problem = client.post(f"/api/problems/{problem['id']}/refine").json()
+        refined_problem = finish(client, app, client.post(f"/api/problems/{problem['id']}/refine"), FakeProvider())
         assert "## Context" in refined_problem["detail"]
         assert client.put(f"/api/items/problems/{problem['id']}", json={"title": refined_problem["title"], "detail": refined_problem["detail"]}).status_code == 204
         assert "## Context" in client.get("/api/board").json()["problems"][0]["detail"]
         assert client.post(f"/api/problems/{problem['id']}/approve").status_code == 204
 
-        feature_draft = client.post(f"/api/problems/{problem['id']}/draft").json()
+        feature_draft = finish(client, app, client.post(f"/api/problems/{problem['id']}/draft"), FakeProvider())
         feature = client.post(f"/api/problems/{problem['id']}/features", json=feature_draft).json()
         assert client.put(f"/api/features/{feature['id']}/conflict", json={"state": "clear", "citation": "context.md#Current"}).status_code == 200
         assert client.post(f"/api/features/{feature['id']}/approve").status_code == 204

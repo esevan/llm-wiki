@@ -437,5 +437,14 @@
   "transition.solution_started": "Solution moved to In progress without AI.",
   "notice.cancel": "Cancel",
   "notice.confirm": "Okay",
-  "handoff.copied": "Implementation handoff copied. It contains outcomes and done criteria—not technical implementation steps."
+  "handoff.copied": "Implementation handoff copied. It contains outcomes and done criteria—not technical implementation steps.",
+  "queue.title": "AI Queue",
+  "queue.notifications": "Notifications",
+  "queue.empty": "No background AI work yet.",
+  "queue.active": "ACTIVE",
+  "queue.recent": "RECENT",
+  "queue.view_result": "View result",
+  "queue.worker_count": "Background worker count",
+  "queue.fast_fixed": "Applied after the service restarts. Fast Queue always uses one worker.",
+  "notification.review_ready": "Completion review is ready"
 }

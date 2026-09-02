@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from importlib.resources import files
 
-from llm_wiki.services.localization import response_language_instruction
 
 
 _STAGES = frozenset({"captures", "problems", "features"})

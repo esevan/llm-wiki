@@ -1,3 +1,5 @@
+"""HTTP controllers and application dependency wiring."""
+
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
@@ -5,7 +7,6 @@ from datetime import date
 import asyncio
 import json
 import sqlite3
-import threading
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query, Request
@@ -18,24 +19,26 @@ from llm_wiki.services.vault import MarkdownVaultAdapter
 from llm_wiki.services.workflow import WorkflowEngine, WorkflowError, TRANSITIONS, available_transitions
 from llm_wiki.services.patches import PatchConflict, SectionPatch, apply_reviewed_patch, propose_section_patch
 from llm_wiki.services.patches import digest
-from llm_wiki.services.provider import OpenAICompatibleProvider
-from llm_wiki.services.ai import AIEnrichmentEngine
-from llm_wiki.services.graphs import enrich_problem_graph
 from llm_wiki.services.settings import ProviderSettings
-from llm_wiki.services.conversation import bilingual_draft_prompt, bilingual_refinement_prompt, draft_prompt, refinement_focus_prompt, refinement_prompt, system_prompt
+from llm_wiki.services.conversation import refinement_focus_prompt, system_prompt
 from llm_wiki.services.localization import (
     KnowledgeTranslationCache,
     VaultKnowledgeTranslationCache,
     LocaleSettings,
     SUPPORTED_LOCALES,
     load_locale_resources,
-    knowledge_translation_blocks,
     localize_descriptor,
     normalize_locale,
     response_language_instruction,
 )
-from llm_wiki.services.lineage import readable_report_context, report_context, validate_inference_payload
-from llm_wiki.services.conflict_review import ConflictReviewManager
+from llm_wiki.repositories.jobs import JobRepository
+from llm_wiki.services.jobs import TaskDescriptor
+from llm_wiki.controllers.jobs import job_view, router as jobs_router
+from llm_wiki.services.fast_queue import FastQueueClient
+from llm_wiki.services.handlers.organization import organization_items
+from llm_wiki.services.handlers.conflict_review import conflict_source_hash
+from llm_wiki.services.completion_archive import CompletionArchivePublisher
+from llm_wiki.services.handlers.lineage import lineage_source_hash
 
 
 CHAT_RESPONSE_CHARACTER_LIMIT = 1_200
@@ -129,6 +132,7 @@ class ProviderConfigIn(BaseModel):
     api_key: str | None = Field(default=None, min_length=1)
     advanced_tasks: dict[str, bool] = Field(default_factory=dict)
     report_language: str | None = Field(default=None, pattern="^(ko|en)$")
+    async_worker_count: int = Field(default=2, ge=1, le=32)
 
 
 class WorkbenchCategoryIn(BaseModel):
@@ -184,59 +188,7 @@ class TransitionIn(BaseModel):
 
 
 
-_DRAFT_FIELDS = {
-    "captures": ("title", "detail"),
-    "problems": ("title", "outcome", "non_goals", "validation_criteria"),
-}
-
-
-def validate_draft(entity_type: str, value: dict[str, object]) -> dict[str, str]:
-    """Reject incomplete model output before it reaches the human-review UI."""
-    fields = _DRAFT_FIELDS.get(entity_type)
-    if not fields:
-        raise ValueError(f"Unknown workflow draft: {entity_type}")
-    result = {field: str(value.get(field, "")).strip() for field in fields}
-    missing = [field for field in fields if not result[field]]
-    if missing:
-        raise ValueError(f"AI draft is missing required fields: {', '.join(missing)}")
-    return result
-
-
-def validate_bilingual_draft(entity_type: str, value: dict[str, object]) -> dict[str, dict[str, str]]:
-    """Validate both durable variants before either can be applied."""
-    if set(value) != set(SUPPORTED_LOCALES):
-        raise ValueError("AI draft must contain complete Korean and English versions")
-    return {locale: validate_draft(entity_type, dict(value[locale])) for locale in SUPPORTED_LOCALES}
-
-
-def validate_bilingual_image_summary(value: dict[str, object]) -> dict[str, dict[str, str]]:
-    """Require complete non-empty KO+EN summaries before changing evidence."""
-    if set(value) != set(SUPPORTED_LOCALES):
-        raise ValueError("Image Summary must contain complete Korean and English versions")
-    versions: dict[str, dict[str, str]] = {}
-    for locale in SUPPORTED_LOCALES:
-        payload = value[locale]
-        if not isinstance(payload, dict):
-            raise ValueError(f"Image Summary {locale} version must be an object")
-        summary = str(payload.get("summary", "")).strip()
-        if not summary:
-            raise ValueError(f"Image Summary {locale} version cannot be empty")
-        versions[locale] = {"image_summary": summary}
-    return versions
-
-
-def validate_refinement(entity_type: str, value: dict[str, object]) -> dict[str, str]:
-    fields = {"captures": ("title",), "problems": ("title", "detail"), "features": ("title", "detail")}.get(entity_type)
-    if not fields:
-        raise ValueError(f"Unknown workflow refinement: {entity_type}")
-    result = {field: str(value.get(field, "")).strip() for field in fields}
-    missing = [field for field in fields if not result[field]]
-    if missing:
-        raise ValueError(f"AI refinement is missing required fields: {', '.join(missing)}")
-    return result
-
-
-def create_app(vault_path: Path, db_path: Path) -> FastAPI:
+def create_app(vault_path: Path, db_path: Path, *, fast_queue_client: FastQueueClient | None = None) -> FastAPI:
     vault = MarkdownVaultAdapter(vault_path)
     retrieval = RetrievalEngine(db_path, vault)
     workflow = WorkflowEngine(retrieval.db)
@@ -244,47 +196,59 @@ def create_app(vault_path: Path, db_path: Path) -> FastAPI:
     locale_settings = LocaleSettings(retrieval.db)
     legacy_knowledge_cache = KnowledgeTranslationCache(retrieval.db)
     knowledge_cache = VaultKnowledgeTranslationCache(vault, legacy_knowledge_cache)
-    knowledge_translation_lock = threading.Lock()
-    knowledge_translation_jobs: dict[str, threading.Event] = {}
-    knowledge_translation_cancelled_ids: set[str] = set()
+    completion_archive = CompletionArchivePublisher(workflow, retrieval, vault, knowledge_cache)
+    job_repository = JobRepository(db_path)
+    fast_queue = fast_queue_client or FastQueueClient()
+    async def enqueue(descriptor: TaskDescriptor, payload: dict[str, object], *, idempotency_key: str = "", source_hash: str = "", model_task: str | None = None) -> JSONResponse:
+        job = await job_repository.create(
+            descriptor,
+            {**payload, "entity_type": descriptor.entity_type, "entity_id": descriptor.entity_id},
+            idempotency_key=idempotency_key,
+            source_hash=source_hash,
+            model=provider_settings.model_for(model_task or descriptor.task_kind),
+        )
+        return JSONResponse(job_view(job), status_code=202)
 
-    def conflict_provider(strong: bool) -> OpenAICompatibleProvider:
-        base_url, api_key, model = provider_settings.credentials("conflict_review" if strong else None)
-        return OpenAICompatibleProvider(base_url, api_key, model)
-
-    conflict_reviews = ConflictReviewManager(retrieval, workflow, conflict_provider)
-
-    def refresh_embeddings_background() -> None:
-        if app.state.semantic_running:
+    async def enqueue_derived(entity_type: str, entity_id: str, field: str, source: str, source_locale: str) -> None:
+        if not source.strip():
             return
-        def refresh() -> None:
-            try:
-                retrieval.refresh_embeddings()
-            except Exception:
-                pass  # semantic support is optional; coverage exposes failure to callers
-            finally:
-                app.state.semantic_running = False
-        app.state.semantic_running = True
-        threading.Thread(target=refresh, name="llm-wiki-semantic", daemon=True).start()
+        source_hash = digest(source)
+        await job_repository.create(
+            TaskDescriptor("derived_translation", entity_type, entity_id, "owning_content"),
+            {"entity_type": entity_type, "entity_id": entity_id, "field": field, "source": source, "source_locale": source_locale},
+            idempotency_key=f"derived-translation:{entity_type}:{entity_id}:{field}:{source_hash}",
+            source_hash=source_hash,
+            model=provider_settings.model_for("knowledge_translation"),
+        )
 
-    def knowledge_translation_cancelled(request_id: str) -> bool:
-        with knowledge_translation_lock:
-            event = knowledge_translation_jobs.get(request_id)
-            return request_id in knowledge_translation_cancelled_ids or bool(event and event.is_set())
+    async def enqueue_embeddings() -> None:
+        manifest = retrieval.manifest_hash()
+        await job_repository.create(
+            TaskDescriptor("embedding_refresh", "vault", "documents", "embedding_coverage"),
+            {"entity_type": "vault", "entity_id": "documents", "manifest_hash": manifest},
+            idempotency_key=f"embedding-refresh:{manifest}",
+            source_hash=manifest,
+            model="local-semantic-embedder",
+        )
 
-    def cancel_knowledge_translation(request_id: str) -> None:
-        with knowledge_translation_lock:
-            knowledge_translation_cancelled_ids.add(request_id)
-            event = knowledge_translation_jobs.get(request_id)
-            if event:
-                event.set()
+    async def enqueue_completion_report(problem_id: str, *, refresh_lineage: bool) -> str:
+        lineages = completion_archive.lineages(problem_id, refresh=refresh_lineage)
+        source_hash = digest(json.dumps(lineages, sort_keys=True, ensure_ascii=False))
+        job = await job_repository.create(
+            TaskDescriptor("completion_report", "problems", problem_id, "completed_knowledge"),
+            {"entity_type": "problems", "entity_id": problem_id, "refresh_lineage": False},
+            idempotency_key=f"completion-report:{problem_id}:{source_hash}",
+            source_hash=source_hash,
+            model=provider_settings.model_for("completion_report"),
+        )
+        return job.id
 
     async def watch_vault() -> None:
         from watchfiles import awatch  # keep file-watching out of local request hot paths
         async for _changes in awatch(vault.root):
             knowledge_cache.cleanup()
             await asyncio.to_thread(retrieval.index_changed)
-            refresh_embeddings_background()
+            await enqueue_embeddings()
             async with app.state.index_condition:
                 app.state.index_revision += 1
                 app.state.index_condition.notify_all()
@@ -292,9 +256,10 @@ def create_app(vault_path: Path, db_path: Path) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         # Structural indexing is intentionally separate from app construction and AI-free.
+        await job_repository.initialize()
         knowledge_cache.cleanup()
         retrieval.index_changed()
-        refresh_embeddings_background()
+        await enqueue_embeddings()
         watcher = asyncio.create_task(watch_vault())
         yield
         watcher.cancel()
@@ -305,16 +270,17 @@ def create_app(vault_path: Path, db_path: Path) -> FastAPI:
         retrieval.db.close()
 
     app = FastAPI(title="LLM Wiki", lifespan=lifespan)
+    app.include_router(jobs_router)
     app.state.retrieval = retrieval
+    app.state.vault = vault
     app.state.workflow = workflow
     app.state.index_revision = 0
     app.state.index_condition = asyncio.Condition()
-    app.state.semantic_running = False
     app.state.provider_settings = provider_settings
     app.state.locale_settings = locale_settings
     app.state.knowledge_cache = knowledge_cache
-    app.state.knowledge_translation_cancelled = knowledge_translation_cancelled
-    app.state.conflict_reviews = conflict_reviews
+    app.state.job_repository = job_repository
+    app.state.fast_queue = fast_queue
 
     @app.middleware("http")
     async def bind_request_locale(request: Request, call_next):
@@ -351,8 +317,10 @@ def create_app(vault_path: Path, db_path: Path) -> FastAPI:
         return {"status": "ok", "vault": str(vault.root), **retrieval.status()}
 
     @app.post("/api/index")
-    def index() -> dict[str, int | float]:
-        return retrieval.index_changed()
+    async def index() -> dict[str, int | float]:
+        result = retrieval.index_changed()
+        await enqueue_embeddings()
+        return result
 
     @app.get("/api/events")
     async def events() -> StreamingResponse:
@@ -367,20 +335,16 @@ def create_app(vault_path: Path, db_path: Path) -> FastAPI:
         return StreamingResponse(stream(), media_type="text/event-stream", headers={"Cache-Control": "no-cache"})
 
     @app.get("/api/search")
-    def search(q: str = Query(min_length=1, max_length=500), limit: int = Query(20, ge=1, le=100), offset: int = Query(0, ge=0), semantic: bool = False) -> dict[str, object]:
-        if semantic and not app.state.semantic_running and retrieval.status()["semantic_ready"] < retrieval.status()["documents"]:
-            def refresh() -> None:
-                try:
-                    retrieval.refresh_embeddings()
-                finally:
-                    app.state.semantic_running = False
-            app.state.semantic_running = True
-            threading.Thread(target=refresh, name="llm-wiki-semantic", daemon=True).start()
+    async def search(q: str = Query(min_length=1, max_length=500), limit: int = Query(20, ge=1, le=100), offset: int = Query(0, ge=0), semantic: bool = False) -> dict[str, object]:
+        if semantic and retrieval.status()["semantic_ready"] < retrieval.status()["documents"]:
+            await enqueue_embeddings()
         return {"query": q, "offset": offset, "results": [result.__dict__ for result in retrieval.search(q, limit, semantic, offset)]}
 
     @app.post("/api/captures", status_code=201)
-    def capture(data: CaptureIn) -> dict[str, str]:
-        return {"id": workflow.capture(data.text), "text": data.text}
+    async def capture(data: CaptureIn, request: Request) -> dict[str, str]:
+        capture_id = workflow.capture(data.text)
+        await enqueue_derived("captures", capture_id, "text", data.text, request.state.locale)
+        return {"id": capture_id, "text": data.text}
 
     @app.get("/api/board")
     def board(request: Request) -> dict[str, list[dict[str, object]]]:
@@ -414,7 +378,7 @@ def create_app(vault_path: Path, db_path: Path) -> FastAPI:
             raise HTTPException(404, str(error)) from error
 
     @app.post("/api/transitions/{entity_type}/{entity_id}", status_code=200)
-    def apply_transition(entity_type: str, entity_id: str, data: TransitionIn) -> dict[str, object]:
+    async def apply_transition(entity_type: str, entity_id: str, data: TransitionIn) -> dict[str, object]:
         """Apply a menu-only Workflow Transition with its required input form.
 
         This is the single entry point for all transitions, including the
@@ -428,6 +392,7 @@ def create_app(vault_path: Path, db_path: Path) -> FastAPI:
                 try:
                     playbook = write_completion_playbook(str(result["problem_id"]), refresh_lineage=True)
                     result["playbook"] = playbook
+                    result["report_job_id"] = await enqueue_completion_report(str(result["problem_id"]), refresh_lineage=False)
                 except (WorkflowError, OSError) as error:
                     # The Problem is already completed; the playbook failure is non-fatal.
                     result["playbook_error"] = str(error)
@@ -437,36 +402,17 @@ def create_app(vault_path: Path, db_path: Path) -> FastAPI:
         except OSError as error:
             raise HTTPException(409, str(error)) from error
 
-    @app.post("/api/workbench/organize")
-    def organize_workbench(request: Request) -> dict[str, int]:
-        """Use the configured model only when the human explicitly asks to organize."""
-        try:
-            board = workflow.board(request.state.locale)
-            items = [
-                {
-                    "entity_type": entity_type,
-                    "entity_id": item["id"],
-                    "title": item.get("statement") or item.get("title") or item.get("outcome") or item.get("text"),
-                    "state": item.get("state", "inbox"),
-                    "current_category": item.get("category", ""),
-                }
-                for entity_type in ("captures", "problems", "features")
-                for item in board[entity_type]
-            ]
-            if not items:
-                return {"organized": 0}
-            base_url, api_key, model = provider_settings.credentials("workbench_organization")
-            response = OpenAICompatibleProvider(base_url, api_key, model).complete_json(
-                [
-                    {"role": "system", "content": "You organize a personal workbench. Return JSON only: {\"entries\":[{\"entity_type\":string,\"entity_id\":string,\"category\":string,\"attention_rank\":integer 0-100,\"rationale\":string}]}. Keep category names short, reuse existing categories when appropriate, prioritize urgent unresolved decisions and approved active work. Never change workflow states."},
-                    {"role": "system", "content": response_language_instruction(request.state.locale)},
-                    {"role": "user", "content": json.dumps({"items": items}, ensure_ascii=False)},
-                ],
-                "workbench organization",
-            )
-            return {"organized": workflow.apply_ai_organization(response.get("entries"))}
-        except (WorkflowError, ValueError, OSError) as error:
-            raise HTTPException(502, f"AI organization failed: {error}") from error
+    @app.post("/api/workbench/organize", status_code=202)
+    async def organize_workbench(request: Request) -> JSONResponse:
+        items = organization_items(workflow, request.state.locale)
+        source_hash = digest(json.dumps(items, sort_keys=True, ensure_ascii=False))
+        return await enqueue(
+            TaskDescriptor("workbench_organization", "workbench", "current", "workbench"),
+            {"locale": request.state.locale},
+            idempotency_key=f"workbench-organization:{source_hash}",
+            source_hash=source_hash,
+            model_task="workbench_organization",
+        )
 
     @app.put("/api/workbench/category", status_code=204)
     def update_workbench_category(data: WorkbenchCategoryIn) -> None:
@@ -548,16 +494,15 @@ def create_app(vault_path: Path, db_path: Path) -> FastAPI:
             raise HTTPException(400, str(error)) from error
 
     @app.post("/api/{entity_type}/{entity_id}/chat")
-    def chat(entity_type: str, entity_id: str, data: ChatIn, request: Request) -> StreamingResponse:
+    async def chat(entity_type: str, entity_id: str, data: ChatIn, request: Request) -> StreamingResponse:
         try:
             context = workflow.context_for(entity_type, entity_id, request.state.locale)
             task = {"captures": "capture_assistance", "problems": "problem_assistance", "features": "solution_assistance"}.get(entity_type)
             base_url, api_key, model = provider_settings.credentials(task)
-            provider = OpenAICompatibleProvider(base_url, api_key, model)
         except (WorkflowError, ValueError) as error:
             raise HTTPException(400, str(error)) from error
 
-        def stream():
+        async def stream():
             output: list[str] = []
             sent = 0
             assessment = workflow.refinement_structure_assessment(entity_type, entity_id) if entity_type in {"problems", "features"} else {}
@@ -570,7 +515,7 @@ def create_app(vault_path: Path, db_path: Path) -> FastAPI:
                 {"role": "user", "content": data.message},
             ]
             try:
-                for text in provider.stream(messages):
+                async for text in fast_queue.stream(base_url=base_url, api_key=api_key, model=model, messages=messages):
                     remaining = CHAT_RESPONSE_CHARACTER_LIMIT - sent
                     if remaining <= 0:
                         break
@@ -588,7 +533,7 @@ def create_app(vault_path: Path, db_path: Path) -> FastAPI:
         return StreamingResponse(stream(), media_type="text/event-stream", headers={"Cache-Control": "no-cache"})
 
     @app.post("/api/{entity_type}/{entity_id}/next-chat")
-    def next_chat(entity_type: str, entity_id: str, data: ChatIn, request: Request) -> StreamingResponse:
+    async def next_chat(entity_type: str, entity_id: str, data: ChatIn, request: Request) -> StreamingResponse:
         """Collect the required information for the next stage before drafting it."""
         next_stage = {"captures": "problems", "problems": "features"}.get(entity_type)
         if not next_stage:
@@ -596,11 +541,10 @@ def create_app(vault_path: Path, db_path: Path) -> FastAPI:
         try:
             context = workflow.context_for(entity_type, entity_id, request.state.locale)
             base_url, api_key, model = provider_settings.credentials("problem_drafting" if next_stage == "problems" else "solution_drafting")
-            provider = OpenAICompatibleProvider(base_url, api_key, model)
         except (WorkflowError, ValueError) as error:
             raise HTTPException(400, str(error)) from error
 
-        def stream():
+        async def stream():
             output: list[str] = []
             sent = 0
             messages = [
@@ -611,7 +555,7 @@ def create_app(vault_path: Path, db_path: Path) -> FastAPI:
                 {"role": "user", "content": data.message},
             ]
             try:
-                for text in provider.stream(messages):
+                async for text in fast_queue.stream(base_url=base_url, api_key=api_key, model=model, messages=messages):
                     remaining = CHAT_RESPONSE_CHARACTER_LIMIT - sent
                     if remaining <= 0:
                         break
@@ -627,17 +571,16 @@ def create_app(vault_path: Path, db_path: Path) -> FastAPI:
         return StreamingResponse(stream(), media_type="text/event-stream", headers={"Cache-Control": "no-cache"})
 
     @app.post("/api/features/{feature_id}/completed-chat")
-    def completed_chat(feature_id: str, data: ChatIn, request: Request) -> StreamingResponse:
+    async def completed_chat(feature_id: str, data: ChatIn, request: Request) -> StreamingResponse:
         """Explain an immutable completed record without restarting refinement."""
         try:
             solution = workflow.completed_solution(feature_id, request.state.locale)
             progress = workflow.solution_progress(feature_id, request.state.locale)
             base_url, api_key, model = provider_settings.credentials("completed_solution_chat")
-            provider = OpenAICompatibleProvider(base_url, api_key, model)
         except (WorkflowError, ValueError) as error:
             raise HTTPException(400, str(error)) from error
 
-        def stream():
+        async def stream():
             output: list[str] = []
             sent = 0
             evidence = {
@@ -664,7 +607,7 @@ def create_app(vault_path: Path, db_path: Path) -> FastAPI:
                 {"role": "user", "content": data.message},
             ]
             try:
-                for text in provider.stream(messages):
+                async for text in fast_queue.stream(base_url=base_url, api_key=api_key, model=model, messages=messages):
                     remaining = CHAT_RESPONSE_CHARACTER_LIMIT - sent
                     if remaining <= 0:
                         break
@@ -680,75 +623,43 @@ def create_app(vault_path: Path, db_path: Path) -> FastAPI:
 
         return StreamingResponse(stream(), media_type="text/event-stream", headers={"Cache-Control": "no-cache"})
 
-    @app.post("/api/{entity_type}/{entity_id}/draft")
-    def draft(entity_type: str, entity_id: str, request: Request) -> dict[str, object]:
-        """Generate a proposal only; the browser explicitly applies a reviewed draft."""
+    @app.post("/api/{entity_type}/{entity_id}/draft", status_code=202)
+    async def draft(entity_type: str, entity_id: str, request: Request) -> JSONResponse:
+        """Queue an unapplied proposal bound to the originating surface."""
         try:
-            context = workflow.context_for(entity_type, entity_id, request.state.locale)
-            next_stage = {"captures": "problems", "problems": "features"}.get(entity_type)
-            if not next_stage:
+            item = workflow.context_for(entity_type, entity_id, request.state.locale)
+            if entity_type not in {"captures", "problems"}:
                 raise WorkflowError("This workflow item has no next stage")
-            base_url, api_key, model = provider_settings.credentials("problem_drafting" if next_stage == "problems" else "solution_drafting")
-            provider = OpenAICompatibleProvider(base_url, api_key, model)
-            result = provider.complete_json(
-                [
-                    {"role": "system", "content": bilingual_draft_prompt(entity_type, context["title"], context["detail"])},
-                    *workflow.chat_history(entity_type, entity_id),
-                ],
-                f"{entity_type} draft",
-            )
-            if set(result) == set(SUPPORTED_LOCALES):
-                versions = validate_bilingual_draft(entity_type, result)
-                reviewed = versions[request.state.locale]
-            else:
-                # Older compatible providers can fail to honor the new outer
-                # schema. Preserve their successful source-locale draft and
-                # disclose the missing variant instead of losing user work.
-                reviewed = validate_draft(entity_type, result)
-                versions = {request.state.locale: reviewed}
-            payload = {
-                **reviewed,
-                "source_locale": request.state.locale,
-                "localized_versions": versions,
-                "missing_locales": [locale for locale in SUPPORTED_LOCALES if locale not in versions],
-            }
-            workflow.record_ai_run(entity_type, entity_id, "workflow_draft", "Create a reviewed bilingual draft", str(payload))
-            return payload
-        except (WorkflowError, ValueError, OSError) as error:
-            raise HTTPException(502, f"AI drafting failed: {error}") from error
+        except WorkflowError as error:
+            raise HTTPException(400, str(error)) from error
+        source_hash = digest(f"{item['title']}\n{item['detail']}")
+        surface_id = request.headers.get("X-LLM-Wiki-Surface", "")
+        return await enqueue(
+            TaskDescriptor("workflow_draft", entity_type, entity_id, "inline_preview"),
+            {"locale": request.state.locale, "surface_id": surface_id},
+            idempotency_key=f"draft:{entity_type}:{entity_id}:{source_hash}:{surface_id}",
+            source_hash=source_hash,
+            model_task="problem_drafting" if entity_type == "captures" else "solution_drafting",
+        )
 
-    @app.post("/api/{entity_type}/{entity_id}/refine")
-    def refine(entity_type: str, entity_id: str, request: Request) -> dict[str, object]:
-        """Prepare a reviewed update for this item, without progressing its workflow state."""
+    @app.post("/api/{entity_type}/{entity_id}/refine", status_code=202)
+    async def refine(entity_type: str, entity_id: str, request: Request) -> JSONResponse:
+        """Queue an unapplied refinement bound to the originating surface."""
         try:
-            context = workflow.context_for(entity_type, entity_id, request.state.locale)
-            task = {"captures": "capture_assistance", "problems": "problem_assistance", "features": "solution_assistance"}.get(entity_type)
-            base_url, api_key, model = provider_settings.credentials(task)
-            provider = OpenAICompatibleProvider(base_url, api_key, model)
-            result = provider.complete_json(
-                [
-                    {"role": "system", "content": bilingual_refinement_prompt(entity_type, context["title"], context["detail"])},
-                    *([{"role": "system", "content": response_language_instruction(request.state.locale)}] if entity_type == "captures" else []),
-                    *workflow.chat_history(entity_type, entity_id),
-                ],
-                f"{entity_type} refinement",
-            )
-            if entity_type in {"problems", "features"} and set(result) == set(SUPPORTED_LOCALES):
-                versions = {locale: validate_refinement(entity_type, dict(result[locale])) for locale in SUPPORTED_LOCALES}
-                reviewed = versions[request.state.locale]
-            else:
-                reviewed = validate_refinement(entity_type, result)
-                versions = {request.state.locale: reviewed} if entity_type in {"problems", "features"} else {}
-            payload = {
-                **reviewed,
-                "source_note": context["detail"] or context["title"],
-                "localized_versions": versions,
-                "missing_locales": [locale for locale in SUPPORTED_LOCALES if locale not in versions] if versions else [],
-            }
-            workflow.record_ai_run(entity_type, entity_id, "workflow_refinement", "Refine current item", str(payload))
-            return payload
-        except (WorkflowError, ValueError, OSError) as error:
-            raise HTTPException(502, f"AI refinement failed: {error}") from error
+            item = workflow.context_for(entity_type, entity_id, request.state.locale)
+            if entity_type not in {"captures", "problems", "features"}:
+                raise WorkflowError("Unknown workflow refinement")
+        except WorkflowError as error:
+            raise HTTPException(400, str(error)) from error
+        source_hash = digest(f"{item['title']}\n{item['detail']}")
+        surface_id = request.headers.get("X-LLM-Wiki-Surface", "")
+        return await enqueue(
+            TaskDescriptor("workflow_refinement", entity_type, entity_id, "inline_preview"),
+            {"locale": request.state.locale, "surface_id": surface_id},
+            idempotency_key=f"refine:{entity_type}:{entity_id}:{source_hash}:{surface_id}",
+            source_hash=source_hash,
+            model_task={"captures": "capture_assistance", "problems": "problem_assistance", "features": "solution_assistance"}[entity_type],
+        )
 
     @app.get("/api/{entity_type}/{entity_id}/refinement-context")
     def refinement_context(entity_type: str, entity_id: str, request: Request) -> dict[str, object]:
@@ -812,32 +723,39 @@ def create_app(vault_path: Path, db_path: Path) -> FastAPI:
             raise HTTPException(400, str(error)) from error
 
     @app.post("/api/features/{feature_id}/conflict-review", status_code=202)
-    def conflict_review(feature_id: str, request: Request) -> dict[str, object]:
+    async def conflict_review(feature_id: str, request: Request) -> JSONResponse:
         """Prepare a cited AI review; it never changes the Solution or its conflict state."""
         try:
             board = workflow.board(request.state.locale)
             feature = next((item for item in board["features"] if item["id"] == feature_id), None)
             if not feature:
                 raise WorkflowError("Solution not found")
-            problem = next((item for item in board["problems"] if item["id"] == feature["problem_id"]), {})
-            return conflict_reviews.start(feature, problem, response_language_instruction(request.state.locale))
+            source_hash = conflict_source_hash(workflow, retrieval, feature_id, request.state.locale)
+            return await enqueue(
+                TaskDescriptor("conflict_review", "features", feature_id, "conflict_review"),
+                {"locale": request.state.locale},
+                idempotency_key=f"conflict-review:{feature_id}:{source_hash}",
+                source_hash=source_hash,
+                model_task="conflict_review",
+            )
         except (WorkflowError, ValueError, OSError) as error:
             raise HTTPException(502, f"Conflict review failed: {error}") from error
 
     @app.get("/api/conflict-reviews/{run_id}")
-    def conflict_review_status(run_id: str) -> dict[str, object]:
-        snapshot = conflict_reviews.get(run_id)
-        if not snapshot:
+    async def conflict_review_status(run_id: str) -> dict[str, object]:
+        job = await job_repository.get(run_id)
+        if not job or job.descriptor.task_kind != "conflict_review":
             raise HTTPException(404, "Conflict review not found")
-        return snapshot
+        if job.status.value in {"completed", "awaiting_review"}:
+            return job.result
+        return {"run_id": job.id, "status": job.status.value, "phase": job.status.value, "progress": (job.progress_completed / job.progress_total if job.progress_total else 0), "recommended_state": "reviewing", "findings": [], "candidates": []}
 
     @app.delete("/api/conflict-reviews/{run_id}")
-    def cancel_conflict_review(run_id: str) -> dict[str, object]:
-        snapshot = conflict_reviews.cancel(run_id)
-        if not snapshot:
+    async def cancel_conflict_review(run_id: str) -> dict[str, object]:
+        job = await job_repository.request_cancel(run_id)
+        if not job:
             raise HTTPException(404, "Conflict review not found")
-        workflow.cancel_conflict_review(run_id, snapshot)
-        return snapshot
+        return {"run_id": job.id, "status": job.status.value, "recommended_state": "cancelled"}
 
     @app.post("/api/features/{feature_id}/approve", status_code=204)
     def approve_feature(feature_id: str) -> None:
@@ -861,49 +779,46 @@ def create_app(vault_path: Path, db_path: Path) -> FastAPI:
             raise HTTPException(404, str(error)) from error
 
     @app.post("/api/features/{feature_id}/progress", status_code=201)
-    def add_solution_progress(feature_id: str, data: SolutionProgressIn) -> dict[str, object]:
+    async def add_solution_progress(feature_id: str, data: SolutionProgressIn, request: Request) -> dict[str, object]:
         try:
-            return workflow.add_solution_progress(feature_id, data.body, data.image_data, data.image_media_type)
+            entry = workflow.add_solution_progress(feature_id, data.body, data.image_data, data.image_media_type)
+            await enqueue_derived("solution_progress_entries", str(entry["id"]), "body", data.body, request.state.locale)
+            return entry
         except WorkflowError as error:
             raise HTTPException(400, str(error)) from error
 
-    @app.post("/api/progress/{entry_id}/summarize-image")
-    def summarize_solution_image(entry_id: str, request: Request) -> dict[str, object]:
-        """Use the configured image-summary task model; never hard-code a vision provider."""
+    @app.post("/api/progress/{entry_id}/summarize-image", status_code=202)
+    async def summarize_solution_image(entry_id: str, request: Request) -> JSONResponse:
+        """Queue an image summary; the handler attaches it to the exact Work entry."""
         row = workflow.db.execute("SELECT image_data,image_media_type FROM solution_progress_entries WHERE id=?", (entry_id,)).fetchone()
         if not row:
             raise HTTPException(404, "Progress record not found")
         if not row[0]:
             raise HTTPException(400, "This progress record has no image")
-        try:
-            base_url, api_key, model = provider_settings.credentials("image_summary")
-            content: list[object] = [
-                {"type": "text", "text": "Return JSON only with exactly this shape: {\"ko\":{\"summary\":string},\"en\":{\"summary\":string}}. Summarize this work-progress image accurately and concisely in natural Korean and English in this one response. Both versions must describe the same visible evidence. Do not infer invisible details."},
-                {"type": "image_url", "image_url": {"url": f"data:{row[1] or 'image/png'};base64,{row[0]}"}},
-            ]
-            result = OpenAICompatibleProvider(base_url, api_key, model).complete_json([{"role": "user", "content": content}], "progress image summary")
-            versions = validate_bilingual_image_summary(result)
-            workflow.set_solution_progress_summaries(entry_id, versions, request.state.locale)
-            return {
-                "summary": versions[request.state.locale]["image_summary"],
-                "model": model,
-                "localized_versions": versions,
-                "missing_locales": [],
-            }
-        except (ValueError, OSError) as error:
-            raise HTTPException(502, f"Image summary failed: {error}") from error
+        source_hash = digest(str(row[0]))
+        return await enqueue(
+            TaskDescriptor("image_summary", "solution_progress_entries", entry_id, "solution_work_summary"),
+            {"locale": request.state.locale},
+            idempotency_key=f"image-summary:{entry_id}:{source_hash}",
+            source_hash=source_hash,
+            model_task="image_summary",
+        )
 
     @app.post("/api/progress/{entry_id}/comments", status_code=201)
-    def add_solution_comment(entry_id: str, data: SolutionCommentIn) -> dict[str, object]:
+    async def add_solution_comment(entry_id: str, data: SolutionCommentIn, request: Request) -> dict[str, object]:
         try:
-            return workflow.add_solution_comment(entry_id, data.body)
+            comment = workflow.add_solution_comment(entry_id, data.body)
+            await enqueue_derived("solution_progress_comments", str(comment["id"]), "body", data.body, request.state.locale)
+            return comment
         except WorkflowError as error:
             raise HTTPException(400, str(error)) from error
 
     @app.post("/api/features/{feature_id}/checklist", status_code=201)
-    def add_solution_checklist(feature_id: str, data: SolutionChecklistIn) -> dict[str, object]:
+    async def add_solution_checklist(feature_id: str, data: SolutionChecklistIn, request: Request) -> dict[str, object]:
         try:
-            return workflow.add_solution_checklist_item(feature_id, data.body)
+            item = workflow.add_solution_checklist_item(feature_id, data.body)
+            await enqueue_derived("solution_checklist_items", str(item["id"]), "body", data.body, request.state.locale)
+            return item
         except WorkflowError as error:
             raise HTTPException(400, str(error)) from error
 
@@ -943,178 +858,57 @@ def create_app(vault_path: Path, db_path: Path) -> FastAPI:
         except WorkflowError as error:
             raise HTTPException(400, str(error)) from error
 
-    @app.post("/api/features/{feature_id}/completion-review")
-    def completion_review(feature_id: str, request: Request) -> dict[str, object]:
-        """AI assesses acceptance evidence; it cannot complete anything itself."""
-        try:
-            board = workflow.board(request.state.locale)
-            feature = next((item for item in board["features"] if item["id"] == feature_id), None)
-            if not feature:
-                raise WorkflowError("Solution not found")
-            problem = next((item for item in board["problems"] if item["id"] == feature["problem_id"]), {})
-            progress = workflow.solution_progress(feature_id, request.state.locale)
-            # The image summary is the canonical textual evidence for AI review. Raw
-            # base64 images can make this JSON request many megabytes and cause the
-            # provider to reject it before inference (HTTP 400).
-            progress_entries = [
-                {key: value for key, value in entry.items() if key != "image_data"}
-                for entry in progress["entries"]
-            ]
-            base_url, api_key, model = provider_settings.credentials("completion_review")
-            report = OpenAICompatibleProvider(base_url, api_key, model).complete_json([
-                {"role": "system", "content": "Return JSON only: {\"resolution\":\"complete|partial|insufficient_evidence\",\"executive_summary\":string,\"what_changed\":[string],\"criteria_review\":[{\"criterion\":string,\"status\":\"met|partial|not_evidenced\",\"evidence\":string}],\"remaining_checklist\":[string],\"decision_rationale\":string,\"problem_recommendation\":\"complete|keep_open\",\"capture_recommendation\":\"complete|keep_open\"}. Create a concise factual completion report from supplied evidence only. Assess every Validation Criteria bullet separately. Cite the exact work log, comment, checklist state, or image summary that supports it; use 'No recorded evidence' rather than inferring. Do not claim implementation details, completion, or changes not present in the evidence. Never change state. No implementation instructions."},
-                {"role": "system", "content": response_language_instruction(request.state.locale)},
-                {"role": "user", "content": json.dumps({"problem": problem, "solution": feature, "validation_criteria": feature.get("validation_criteria", ""), "progress_records": progress_entries, "checklist": progress["checklist"]}, ensure_ascii=False)},
-            ], "completion review")
-            review_id = workflow.save_completion_review(feature_id, report)
-            return {"review_id": review_id, "problem_id": feature["problem_id"], "report": report}
-        except (WorkflowError, ValueError, OSError) as error:
-            raise HTTPException(502, f"Completion review failed: {error}") from error
+    @app.post("/api/features/{feature_id}/completion-review", status_code=202)
+    async def completion_review(feature_id: str, request: Request) -> JSONResponse:
+        """Queue an evidence review; only the user may apply the subsequent decision."""
+        board = workflow.board(request.state.locale)
+        feature = next((item for item in board["features"] if item["id"] == feature_id), None)
+        if not feature:
+            raise HTTPException(404, "Solution not found")
+        progress = workflow.solution_progress(feature_id, request.state.locale)
+        source_hash = digest(json.dumps({"feature": feature, "progress": progress}, sort_keys=True, ensure_ascii=False))
+        return await enqueue(
+            TaskDescriptor("completion_review", "features", feature_id, "completion_review", "review_ready"),
+            {"locale": request.state.locale},
+            idempotency_key=f"completion-review:{feature_id}:{source_hash}",
+            source_hash=source_hash,
+            model_task="completion_review",
+        )
 
     @app.post("/api/problems/{problem_id}/complete")
-    def complete_problem(problem_id: str, data: ProblemCompletionIn | None = None) -> dict[str, object]:
+    async def complete_problem(problem_id: str, data: ProblemCompletionIn | None = None) -> dict[str, object]:
         try:
             workflow.complete_problem(problem_id, data.reason if data else "", data.review_id if data else "")
-            return write_completion_playbook(problem_id, refresh_lineage=True)
+            result = write_completion_playbook(problem_id, refresh_lineage=True)
+            result["report_job_id"] = await enqueue_completion_report(problem_id, refresh_lineage=False)
+            return result
         except WorkflowError as error:
             raise HTTPException(400, str(error)) from error
         except OSError as error:
             raise HTTPException(409, f"Could not write completed-work Playbook: {error}") from error
 
     def ensure_completion_document_unmodified(problem_id: str) -> sqlite3.Row | None:
-        existing = retrieval.db.execute(
-            "SELECT path,source_hash FROM completion_playbooks WHERE problem_id=?", (problem_id,)
-        ).fetchone()
-        if existing:
-            try:
-                if digest(vault.read_text(str(existing["path"]))) != existing["source_hash"]:
-                    raise WorkflowError("Completed-work Playbook was modified externally; review it before regenerating")
-            except FileNotFoundError:
-                pass
-        return existing
-
-    def generate_feature_lineage(feature_id: str, force: bool) -> dict[str, object]:
-        """Build the current deterministic Lineage and optionally enrich its interpretations."""
-        lineage = workflow.create_lineage_snapshot(feature_id, force=force)
-        try:
-            base_url, api_key, model = provider_settings.credentials("lineage_inference")
-            context = report_context([lineage])
-            result = OpenAICompatibleProvider(base_url, api_key, model).complete_json([
-                {"role": "system", "content": "Return JSON only: {\"claims\":[{\"claim_key\":string,\"text\":string,\"confidence\":\"high|medium|low\",\"evidence_ids\":[string]}]}. Add only useful likely rationale or relationship interpretations that are not already explicit. Every claim is AI inferred and must cite supplied evidence IDs. Never claim a Conflict is Addressed or Resolved, never create facts, and return an empty claims list when no inference is warranted."},
-                {"role": "user", "content": context},
-            ], "lineage inference")
-            valid = validate_inference_payload(result, set(lineage["evidence"]))
-            if valid:
-                return workflow.add_lineage_inferences(feature_id, str(lineage["snapshot_id"]), valid)
-            return workflow.mark_lineage_inference_complete(feature_id, str(lineage["snapshot_id"]))
-        except (ValueError, OSError) as error:
-            return workflow.set_lineage_inference_error(feature_id, str(lineage["snapshot_id"]), str(error))
+        return completion_archive.ensure_unmodified(problem_id)
 
     def current_problem_lineages(problem_id: str, refresh: bool) -> list[dict[str, object]]:
-        feature_ids = [str(row[0]) for row in workflow.db.execute(
-            "SELECT id FROM features WHERE problem_id=? ORDER BY created_at,rowid", (problem_id,)
-        ).fetchall()]
-        lineages: list[dict[str, object]] = []
-        for feature_id in feature_ids:
-            if refresh:
-                lineages.append(generate_feature_lineage(feature_id, force=True))
-                continue
-            try:
-                lineages.append(workflow.lineage(feature_id))
-            except WorkflowError:
-                lineages.append(generate_feature_lineage(feature_id, force=False))
-        return lineages
+        return completion_archive.lineages(problem_id, refresh=refresh)
 
     def write_completion_playbook(problem_id: str, refresh_lineage: bool = False) -> dict[str, object]:
-        """Regenerate a human-approved completion projection from validated Lineage."""
-        existing = ensure_completion_document_unmodified(problem_id)
-        directory = str(existing["path"]).rsplit("/", 1)[0] if existing else f"{date.today().year}/90. Archive/Completed Work"
-        lineages = current_problem_lineages(problem_id, refresh_lineage)
-        lineage_context = readable_report_context(lineages)
-        report_input_hash = digest(lineage_context)
-        raw_path, raw_content = workflow.completion_playbook(problem_id, directory, raw=True, lineages=lineages)
-        executive_summary = ""
-        report_body = ""
-        report_generation_status = "deterministic_fallback"
-        try:
-            base_url, api_key, model = provider_settings.credentials("completion_report")
-            report = OpenAICompatibleProvider(base_url, api_key, model).complete_json([
-                {"role": "system", "content": "You are an exceptional CTO preparing English-canonical portable Knowledge from a validated Lineage Knowledge projection. Return JSON only: {\"executive_summary_markdown\":string,\"report_body_markdown\":string}. Write every heading and all prose in natural English while preserving code, quoted evidence, and the Observed, Decided, and Inferred distinctions. executive_summary_markdown is a retrieval index, not prose: use only compact Markdown bullets under exactly these headings: ### Completed, ### Decisions, ### Verification, ### Risks and follow-up. report_body_markdown must use exactly: ### Why, ### What changed, ### How the work was carried out, ### Final verification, ### Decision and risks. Use only claims and referenced_evidence in the supplied Lineage snapshots; cite only their human-readable evidence labels. Never output UUIDs, database IDs, snapshot IDs, claim IDs, revision IDs, or source IDs. Label AI inference and uncertainty. Say 'Not explicitly recorded' or 'No recorded evidence' instead of inventing facts. Do not use the report itself as historical evidence. Keep the combined output under 650 words."},
-                {"role": "user", "content": lineage_context},
-            ], "completion executive summary")
-            executive_summary = str(report.get("executive_summary_markdown", "")).strip()
-            report_body = str(report.get("report_body_markdown", "")).strip()
-            if executive_summary or report_body:
-                report_generation_status = "generated"
-                workflow.record_ai_run("problems", problem_id, "completion_executive_summary", f"Lineage snapshots: {','.join(str(item['snapshot_id']) for item in lineages)}", json.dumps({"executive_summary": executive_summary, "report_body": report_body}, ensure_ascii=False))
-        except (ValueError, OSError):
-            # The archive still preserves the facts when the optional provider
-            # is offline; it is never replaced with invented prose.
-            executive_summary = ""
-        path, content = workflow.completion_playbook(
-            problem_id,
-            directory,
-            executive_summary=executive_summary,
-            report_body=report_body,
-            lineages=lineages,
-        )
-        if existing:
-            old_path = str(existing["path"])
-            if old_path != path:
-                if (vault.root / path).exists():
-                    raise WorkflowError("A completed-work document already uses this human-readable name")
-                vault.move(old_path, path)
-                old_raw = old_path.rsplit("/", 1)[0] + "/Raw/" + old_path.rsplit("/", 1)[1][:-3] + ".raw.md"
-                if (vault.root / old_raw).exists() and not (vault.root / raw_path).exists():
-                    vault.move(old_raw, raw_path)
-            legacy_raw = old_path.rsplit("/", 1)[0] + "/Raw/" + old_path.rsplit("/", 1)[1][:-3] + ".raw.md"
-            if (vault.root / legacy_raw).exists() and not (vault.root / raw_path).exists():
-                vault.move(legacy_raw, raw_path)
-        vault.atomic_write(path, content)
-        knowledge_cache.invalidate(path)
-        # Regeneration is an explicit human action. Raw Data is regenerated from
-        # the immutable workflow record alongside the concise main document.
-        vault.atomic_write(raw_path, raw_content)
-        for asset_path, asset_content in workflow.completion_assets(problem_id, directory):
-            vault.atomic_write_bytes(asset_path, asset_content)
-        selected = lineages[-1] if lineages else None
-        workflow.remember_completion_playbook(
-            problem_id,
-            path,
-            digest(content),
-            str(selected["snapshot_id"]) if selected else "",
-            int(selected["version"]) if selected else 0,
-            report_input_hash,
-            report_generation_status,
-        )
-        retrieval.index_changed()
-        return {
-            "path": path,
-            "raw_path": raw_path,
-            "lineage": {
-                "snapshot_id": selected["snapshot_id"],
-                "status": selected["status"],
-                "version": selected["version"],
-                "retryable": bool(selected.get("generation", {}).get("inference_error")),
-            } if selected else None,
-            "report_generation": {
-                "status": report_generation_status,
-                "lineage_snapshot_id": selected["snapshot_id"] if selected else "",
-                "lineage_version": selected["version"] if selected else 0,
-            },
-        }
+        return completion_archive.publish(problem_id, lineages=current_problem_lineages(problem_id, refresh_lineage))
 
-    @app.post("/api/problems/{problem_id}/completion-playbook/regenerate")
-    def regenerate_completion_playbook(problem_id: str) -> dict[str, object]:
+    @app.post("/api/problems/{problem_id}/completion-playbook/regenerate", status_code=202)
+    async def regenerate_completion_playbook(problem_id: str) -> JSONResponse:
         problem = workflow.db.execute("SELECT state FROM problems WHERE id=?", (problem_id,)).fetchone()
         if not problem or problem["state"] != "completed":
             raise HTTPException(400, "Only a completed Problem can regenerate its completed-work document")
         try:
-            return write_completion_playbook(problem_id, refresh_lineage=True)
+            ensure_completion_document_unmodified(problem_id)
+            job_id = await enqueue_completion_report(problem_id, refresh_lineage=True)
+            job = await job_repository.get(job_id)
+            assert job is not None
+            return JSONResponse(job_view(job), status_code=202)
         except WorkflowError as error:
             raise HTTPException(409, str(error)) from error
-        except OSError as error:
-            raise HTTPException(409, f"Could not regenerate completed-work Playbook: {error}") from error
 
     @app.get("/api/features/{feature_id}/lineage")
     def feature_lineage(feature_id: str) -> dict[str, object]:
@@ -1130,8 +924,8 @@ def create_app(vault_path: Path, db_path: Path) -> FastAPI:
         except WorkflowError as error:
             raise HTTPException(404, str(error)) from error
 
-    @app.post("/api/features/{feature_id}/lineage/regenerate", status_code=201)
-    def regenerate_feature_lineage(feature_id: str, data: LineageRegenerateIn) -> dict[str, object]:
+    @app.post("/api/features/{feature_id}/lineage/regenerate")
+    async def regenerate_feature_lineage(feature_id: str, data: LineageRegenerateIn) -> Response:
         feature = workflow.db.execute(
             """SELECT f.problem_id,p.state AS problem_state,c.state AS completion_state
                FROM features f JOIN problems p ON p.id=f.problem_id
@@ -1142,9 +936,18 @@ def create_app(vault_path: Path, db_path: Path) -> FastAPI:
             raise HTTPException(400, "Only a completed Solution can regenerate Lineage")
         try:
             ensure_completion_document_unmodified(str(feature["problem_id"]))
-            lineage = generate_feature_lineage(feature_id, force=True) if data.include_inference else workflow.create_lineage_snapshot(feature_id, force=True)
+            if data.include_inference:
+                source_hash = lineage_source_hash(workflow, feature_id)
+                return await enqueue(
+                    TaskDescriptor("lineage_inference", "features", feature_id, "solution_lineage"),
+                    {"force": True},
+                    idempotency_key=f"lineage-inference:{feature_id}:{source_hash}",
+                    source_hash=source_hash,
+                    model_task="lineage_inference",
+                )
+            lineage = workflow.create_lineage_snapshot(feature_id, force=True)
             projection = write_completion_playbook(str(feature["problem_id"]))
-            return {**lineage, "document_sync": projection}
+            return JSONResponse({**lineage, "document_sync": projection}, status_code=201)
         except WorkflowError as error:
             raise HTTPException(409, str(error)) from error
         except OSError as error:
@@ -1204,15 +1007,15 @@ def create_app(vault_path: Path, db_path: Path) -> FastAPI:
             raise HTTPException(400, str(error)) from error
 
     @app.post("/api/features/{feature_id}/patches", status_code=201)
-    def patch_proposal(feature_id: str, data: PatchIn, request: Request) -> dict[str, str]:
+    async def patch_proposal(feature_id: str, data: PatchIn, request: Request) -> dict[str, str]:
         try:
             before = vault.read_text(data.path)
             content = data.content
             managed = "llm_wiki_managed: true" in before and "canonical_locale: en" in before
             if managed and request.state.locale == "ko":
                 base_url, api_key, model = provider_settings.credentials("knowledge_translation")
-                normalized = OpenAICompatibleProvider(base_url, api_key, model).complete_json(
-                    [
+                normalized = await fast_queue.complete_json(
+                    base_url=base_url, api_key=api_key, model=model, messages=[
                         {
                             "role": "system",
                             "content": (
@@ -1222,8 +1025,7 @@ def create_app(vault_path: Path, db_path: Path) -> FastAPI:
                             ),
                         },
                         {"role": "user", "content": content},
-                    ],
-                    "knowledge English normalization",
+                    ], schema_name="knowledge English normalization",
                 )
                 content = str(normalized.get("content", "")).strip()
                 if not content:
@@ -1262,32 +1064,41 @@ def create_app(vault_path: Path, db_path: Path) -> FastAPI:
     @app.put("/api/provider/config")
     def save_provider_config(data: ProviderConfigIn) -> dict[str, object]:
         try:
-            provider_settings.save(data.base_url, data.model, data.api_key, data.advanced_model, data.advanced_tasks, data.report_language)
+            provider_settings.save(data.base_url, data.model, data.api_key, data.advanced_model, data.advanced_tasks, data.report_language, data.async_worker_count)
             return provider_settings.public()
         except Exception as error:
             raise HTTPException(400, f"Could not save provider configuration: {error}") from error
 
     @app.post("/api/provider/test")
-    def provider_health() -> dict[str, object]:
+    async def provider_health() -> dict[str, object]:
         try:
             base_url, api_key, model = provider_settings.credentials("problem_enrichment")
-            models = OpenAICompatibleProvider(base_url, api_key, model).models()
+            models = await fast_queue.models(base_url=base_url, api_key=api_key, model=model)
             return {"models": models, "configured_model": model}
         except Exception as error:  # provider failures must not affect local operation
             raise HTTPException(502, f"Provider health check failed: {error}") from error
 
     @app.post("/api/ai/enrich-problem")
-    def enrich_problem(data: EnrichIn, request: Request) -> dict[str, object]:
+    async def enrich_problem(data: EnrichIn, request: Request) -> dict[str, object]:
         try:
             base_url, api_key, model = provider_settings.credentials()
-            provider = OpenAICompatibleProvider(base_url, api_key, model)
             statement = data.statement + "\n\n" + response_language_instruction(request.state.locale)
-            return enrich_problem_graph(AIEnrichmentEngine(provider), statement, data.citations[:8])
+            result = await fast_queue.complete_json(
+                base_url=base_url,
+                api_key=api_key,
+                model=model,
+                messages=[{"role": "user", "content": "Return JSON only with normalized_problem, pain, non_goals, categories, and importance_rationale. Use only the cited context. Never change workflow state or provide implementation steps.\nProblem: " + statement + "\nCitations: " + ", ".join(data.citations[:8])}],
+                schema_name="problem enrichment",
+            )
+            required = {"normalized_problem", "pain", "non_goals", "categories", "importance_rationale"}
+            if not required <= result.keys():
+                raise ValueError("Problem enrichment response missed required fields")
+            return {key: result[key] for key in required}
         except (ValueError, OSError) as error:
             raise HTTPException(502, str(error)) from error
 
     @app.get("/api/knowledge")
-    def read_knowledge(
+    async def read_knowledge(
         request: Request,
         path: str = Query(min_length=1),
         locale: str | None = None,
@@ -1316,42 +1127,17 @@ def create_app(vault_path: Path, db_path: Path) -> FastAPI:
             return {**base, "markdown": cached["translated_markdown"], "served_locale": "ko", "translated": True, "cache_status": "hit"}
         if not translate:
             return {**base, "markdown": canonical, "cache_status": "pending"}
-        try:
-            base_url, api_key, model = provider_settings.credentials("knowledge_translation")
-            result = OpenAICompatibleProvider(base_url, api_key, model).complete_json(
-                [
-                    {
-                        "role": "system",
-                        "content": (
-                            "Return JSON only: {\"markdown\":string}. Translate the readable prose of this English canonical Markdown "
-                            "into natural Korean. Preserve frontmatter keys and values, heading levels, code fences and code, identifiers, "
-                            "citations, quoted evidence, URLs, and Markdown or wiki-link targets exactly. Never add facts."
-                        ),
-                    },
-                    {"role": "user", "content": canonical},
-                ],
-                "knowledge Korean translation",
-            )
-            translated = str(result.get("markdown", "")).strip()
-            if not translated:
-                raise ValueError("Knowledge translation was empty")
-            current_hash = digest(vault.read_text(path))
-            if not knowledge_cache.put(path, "ko", source_hash, translated, model, current_source_hash=current_hash):
-                return {**base, "markdown": canonical, "cache_status": "fallback", "warning_code": "canonical_changed"}
-            return {**base, "markdown": translated, "served_locale": "ko", "translated": True, "cache_status": "miss"}
-        except (ValueError, OSError):
-            return {**base, "markdown": canonical, "cache_status": "fallback", "warning_code": "translation_unavailable"}
+        job = await job_repository.create(
+            TaskDescriptor("knowledge_translation", "knowledge", path, "knowledge_document"),
+            {"path": path, "locale": "ko", "entity_type": "knowledge", "entity_id": path},
+            idempotency_key=f"knowledge-translation:{path}:{source_hash}:ko",
+            source_hash=source_hash,
+            model=provider_settings.model_for("knowledge_translation"),
+        )
+        return {**base, "markdown": canonical, "cache_status": "pending", "job_id": job.id}
 
-    @app.post("/api/knowledge/translation-cancel", status_code=204)
-    def stop_knowledge_translation(request_id: str = Query(min_length=1, max_length=200)) -> Response:
-        cancel_knowledge_translation(request_id)
-        return Response(status_code=204)
-
-    @app.get("/api/knowledge/translate")
-    def translate_knowledge_progressively(
-        path: str = Query(min_length=1),
-        request_id: str = Query(min_length=1, max_length=200),
-    ) -> StreamingResponse:
+    @app.get("/api/knowledge/translate", status_code=202)
+    async def translate_knowledge(path: str = Query(min_length=1)) -> JSONResponse:
         try:
             canonical = vault.read_text(path)
         except (FileNotFoundError, ValueError) as error:
@@ -1359,91 +1145,12 @@ def create_app(vault_path: Path, db_path: Path) -> FastAPI:
         if "llm_wiki_managed: true" not in canonical or "canonical_locale: en" not in canonical:
             raise HTTPException(409, "Knowledge document is not managed English canonical content")
         source_hash = digest(canonical)
-        blocks = knowledge_translation_blocks(canonical)
-        translatable = [index for index, block in enumerate(blocks) if block["translatable"]]
-
-        def events():
-            cancel_event = threading.Event()
-            with knowledge_translation_lock:
-                knowledge_translation_jobs[request_id] = cancel_event
-                if request_id in knowledge_translation_cancelled_ids:
-                    cancel_event.set()
-            try:
-                cached = knowledge_cache.get(path, "ko", source_hash)
-                if cached:
-                    yield json.dumps(
-                        {"event": "complete", "markdown": cached["translated_markdown"], "cache_status": "hit"},
-                        ensure_ascii=False,
-                    ) + "\n"
-                    return
-                base_url, api_key, model = provider_settings.credentials("knowledge_translation")
-                provider = OpenAICompatibleProvider(base_url, api_key, model)
-                completed = 0
-                for index in translatable:
-                    if cancel_event.is_set():
-                        yield json.dumps({"event": "cancelled"}) + "\n"
-                        return
-                    original = str(blocks[index]["markdown"])
-                    source = original.strip()
-                    result = provider.complete_json(
-                        [
-                            {
-                                "role": "system",
-                                "content": (
-                                    "Return JSON only: {\"markdown\":string}. Translate this complete English Markdown paragraph "
-                                    "into natural Korean. Preserve heading levels, code, identifiers, citations, quoted evidence, "
-                                    "URLs, and Markdown or wiki-link targets exactly. Never add facts."
-                                ),
-                            },
-                            {"role": "user", "content": source},
-                        ],
-                        "knowledge Korean paragraph translation",
-                    )
-                    translated = str(result.get("markdown", "")).strip()
-                    if not translated:
-                        raise ValueError("Knowledge paragraph translation was empty")
-                    trailing = original[len(original.rstrip()):]
-                    blocks[index]["markdown"] = translated + trailing
-                    completed += 1
-                    yield json.dumps(
-                        {
-                            "event": "paragraph",
-                            "index": index,
-                            "markdown": translated,
-                            "completed": completed,
-                            "total": len(translatable),
-                        },
-                        ensure_ascii=False,
-                    ) + "\n"
-                if cancel_event.is_set():
-                    yield json.dumps({"event": "cancelled"}) + "\n"
-                    return
-                translated_markdown = "".join(
-                    str(block["prefix"]) + str(block["markdown"]) for block in blocks
-                )
-                current_hash = digest(vault.read_text(path))
-                if not knowledge_cache.put(
-                    path,
-                    "ko",
-                    source_hash,
-                    translated_markdown,
-                    model,
-                    current_source_hash=current_hash,
-                ):
-                    yield json.dumps({"event": "error", "warning_code": "canonical_changed"}) + "\n"
-                    return
-                yield json.dumps(
-                    {"event": "complete", "markdown": translated_markdown, "cache_status": "miss"},
-                    ensure_ascii=False,
-                ) + "\n"
-            except (ValueError, OSError):
-                yield json.dumps({"event": "error", "warning_code": "translation_unavailable"}) + "\n"
-            finally:
-                with knowledge_translation_lock:
-                    knowledge_translation_jobs.pop(request_id, None)
-                    knowledge_translation_cancelled_ids.discard(request_id)
-
-        return StreamingResponse(events(), media_type="application/x-ndjson")
+        return await enqueue(
+            TaskDescriptor("knowledge_translation", "knowledge", path, "knowledge_document"),
+            {"path": path, "locale": "ko"},
+            idempotency_key=f"knowledge-translation:{path}:{source_hash}:ko",
+            source_hash=source_hash,
+        )
 
     @app.post("/api/{entity_type}/{entity_id}/project", status_code=201)
     def project(entity_type: str, entity_id: str) -> dict[str, str]:

@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
+import multiprocessing
 import os
 import plistlib
+import sqlite3
 import subprocess
 import webbrowser
 from pathlib import Path
@@ -10,10 +13,33 @@ from pathlib import Path
 import uvicorn
 from platformdirs import user_data_path
 
-from llm_wiki.api.app import create_app
+from llm_wiki.web.app import create_app
+from llm_wiki.services.fast_queue import FastQueueServer
+from llm_wiki.services.job_runtime import run_async_workers
+from llm_wiki.services.settings import ProviderSettings
 
 
 SERVICE_LABEL = "com.llm-wiki"
+
+
+def _run_fast_worker(host: str, port: int) -> None:
+    asyncio.run(FastQueueServer(host, port).serve())
+
+
+def _run_async_worker(vault: Path, db_path: Path, count: int) -> None:
+    asyncio.run(run_async_workers(vault, db_path, count, asyncio.Event()))
+
+
+def _serve_web(vault: Path, db_path: Path) -> None:
+    uvicorn.run(create_app(vault, db_path), host="127.0.0.1", port=8765)
+
+
+def _configured_worker_count(db_path: Path) -> int:
+    connection = sqlite3.connect(db_path)
+    try:
+        return int(ProviderSettings(connection).public()["async_worker_count"])
+    finally:
+        connection.close()
 
 
 def launch_agent_definition(project_root: Path, vault: Path, log_dir: Path) -> dict[str, object]:
@@ -59,6 +85,13 @@ def main() -> None:
     serve = sub.add_parser("serve")
     serve.add_argument("--vault", type=Path, required=True)
     serve.add_argument("--no-browser", action="store_true")
+    web = sub.add_parser("web", help="Run only the HTTP process")
+    web.add_argument("--vault", type=Path, required=True)
+    fast = sub.add_parser("fast-worker", help="Run the single ephemeral AI throttle")
+    fast.add_argument("--port", type=int, default=8766)
+    asynchronous = sub.add_parser("async-worker", help="Run durable AI workers")
+    asynchronous.add_argument("--vault", type=Path, required=True)
+    asynchronous.add_argument("--count", type=int, default=2)
     install = sub.add_parser("install-service", help="Start LLM Wiki at macOS login using launchd")
     install.add_argument("--vault", type=Path, required=True)
     args = parser.parse_args()
@@ -67,6 +100,36 @@ def main() -> None:
         return
     data_dir = user_data_path("LLM Wiki", appauthor=False)
     data_dir.mkdir(parents=True, exist_ok=True)
+    db_path = data_dir / "llm-wiki.sqlite3"
+    if args.command == "fast-worker":
+        _run_fast_worker("127.0.0.1", args.port)
+        return
+    if args.command == "async-worker":
+        _run_async_worker(args.vault, db_path, args.count)
+        return
+    if args.command == "web":
+        _serve_web(args.vault, db_path)
+        return
     if not args.no_browser:
         webbrowser.open("http://127.0.0.1:8765")
-    uvicorn.run(create_app(args.vault, data_dir / "llm-wiki.sqlite3"), host="127.0.0.1", port=8765)
+    context = multiprocessing.get_context("spawn")
+    fast_process = context.Process(target=_run_fast_worker, args=("127.0.0.1", 8766), name="llm-wiki-fast-worker")
+    worker_count = _configured_worker_count(db_path)
+    async_processes = [
+        context.Process(
+            target=_run_async_worker,
+            args=(args.vault, db_path, 1),
+            name=f"llm-wiki-async-worker-{index + 1}",
+        )
+        for index in range(worker_count)
+    ]
+    processes = [fast_process, *async_processes]
+    for process in processes:
+        process.start()
+    try:
+        _serve_web(args.vault, db_path)
+    finally:
+        for process in processes:
+            process.terminate()
+        for process in processes:
+            process.join(timeout=5)

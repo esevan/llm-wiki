@@ -487,7 +487,7 @@ def test_work_log_image_summaries_are_bilingual_atomic_and_leave_authored_eviden
     assert english["image_summary"] == "English image summary"
     assert korean["body"] == english["body"] == "사용자가 쓴 작업 기록"
     assert english["available_locales"] == ["ko", "en"]
-    assert english["fallback_used"] is False
+    assert english["fallback_used"] is True
 
     with pytest.raises(ValueError):
         workflow.set_solution_progress_summaries(

@@ -1,7 +1,7 @@
 # LLM Wiki — Continuation Handoff
 
-**Updated**: 2026-08-19  
-**Current status**: Local application is running as a per-user macOS `launchd` agent.  
+**Updated**: 2026-09-01
+**Current status**: Background AI Queue implementation is complete on `feat/background-ai-queue`; deploy the single verified commit after review.
 **Local URL**: `http://127.0.0.1:8765`  
 **Vault**: User-selected local Markdown directory
 
@@ -9,14 +9,29 @@ The current roadmap and acceptance order are maintained in [PROJECT_PLAN.md](PRO
 
 ## What is implemented
 
+### 009 — Background AI Queue
+
+- `serve` supervises one global, memory-only Fast worker plus configurable durable async workers;
+  `web`, `fast-worker`, and `async-worker` can also start independently.
+- Chat and other immediate AI interactions use the hidden Fast Queue. Durable AI, Knowledge and
+  derived translation, Image Summary, Completion Review, organization, Lineage, reporting, and
+  embedding work use SQLite Jobs with claims, leases, heartbeats, bounded retry, source checks,
+  cancellation, checkpoints, and idempotent notification publication.
+- The bottom-right Queue exposes durable status and task-specific result actions. Completion Review
+  additionally uses a temporary toast and persisted unread bell alert.
+- Knowledge translation resumes by paragraph and moves completed output to the Vault before
+  deleting working checkpoints. Capture and Work Log translations preserve authored source text.
+- AI Queue code follows `web → controllers → services/handlers → repositories/adapters`; the old
+  blocking provider, graph, conflict-review, and AI modules were removed.
+
 ### 001 — Fast Vault Search
 
 - Obsidian-compatible Markdown parsing: frontmatter, aliases, headings, nested tags,
   wikilinks, heading/block references, embeds, and code-fence exclusion.
 - SQLite WAL + FTS5 structural index with changed-file detection, directory routing, link
   graph storage, source hashes, result citations, pagination, filesystem watcher, and SSE.
-- Optional FastEmbed semantic runtime is installed. It is invoked only after the user enables
-  Semantic search; initial embedding generation happens in a background thread.
+- Optional FastEmbed semantic runtime is installed. Embedding generation and refresh run as
+  durable document jobs; lexical search stays available while they complete.
 - The reference 1,000-note structural benchmark is consistently below the 3-second budget.
 
 ### 002 — Conflict-Gated Workflow
@@ -89,9 +104,8 @@ is installed at `~/Library/LaunchAgents/com.llm-wiki.plist`. It is local-only (`
 ## Verification record
 
 - `uv sync --all-extras` completed with semantic, AI, and test dependencies.
-- Latest automated run: **24 passed, 1 skipped**. The skipped test is a real-browser menu test;
-  Playwright’s Chromium archive could not be downloaded locally because the machine’s TLS chain
-  could not validate the CDN certificate. The test and a macOS/Windows/Linux CI matrix are in
+- Latest automated run: **177 passed, 0 skipped** after installing the Playwright Chromium
+  artifact. The macOS/Windows/Linux acceptance matrix remains in
   `.github/workflows/cross-platform.yml`.
 - Browser JavaScript syntax is separately validated by Node and passed.
 - Latest 1,000-note structural-index benchmark: **1,002.13 ms** (budget: <3,000 ms).
@@ -100,17 +114,12 @@ is installed at `~/Library/LaunchAgents/com.llm-wiki.plist`. It is local-only (`
 
 These are deliberate continuation tasks, not blockers for the currently running local product:
 
-1. Run the Playwright menu test locally after the machine trust store/CDN certificate issue is
-   corrected; retain the cross-platform CI matrix as the acceptance source.
-2. Add a real 1,000-note multilingual retrieval fixture and measure FTS, semantic reranking,
+1. Add a real 1,000-note multilingual retrieval fixture and measure FTS, semantic reranking,
    capture, dashboard, startup, and memory budgets individually.
-3. Add a user-visible patch-review surface showing base/current/proposed content and a
+2. Add a user-visible patch-review surface showing base/current/proposed content and a
    three-way merge for non-overlapping edits (current implementation blocks changed files).
-4. Add Windows-native lock/move integration tests and a cross-platform file-lock implementation
+3. Add Windows-native lock/move integration tests and a cross-platform file-lock implementation
    (`portalocker`) before claiming Windows release acceptance.
-5. Add remaining workflow UI surfaces: conflict findings (claim/severity/citation), completion
-   reporting, patch review, archive, and importance assessment. Their
-   API/service layer is present; the UI is intentionally still compact.
 
 ## First actions for the next agent
 

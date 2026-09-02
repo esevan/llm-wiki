@@ -151,21 +151,16 @@ def test_knowledge_reader_opens_immediately_and_reacts_to_async_completion() -> 
         browser.close()
 
 
-def test_korean_knowledge_reader_renders_canonical_then_fades_complete_paragraphs_and_cancels() -> None:
+def test_korean_knowledge_reader_uses_durable_job_and_cancels_it_with_surface() -> None:
     source = (Path(__file__).parents[1] / "llm_wiki" / "static" / "index.html").read_text(encoding="utf-8")
 
     assert "translate=false" in source
     assert "knowledge-progress'+(active?' is-active':'')" in source
     assert "result.cache_status==='pending'" in source
     assert "position:sticky" in source
-    assert "knowledge-wave-old" in source
-    assert "knowledge-wave-new" in source
-    assert "knowledge-wave-out 900ms" in source
-    assert "knowledge-wave-in 900ms" in source
-    assert "clip-path:inset(0 0 0 100%)" in source
-    assert "animateKnowledgeParagraph" in source
     assert "new AbortController()" in source
-    assert "/knowledge/translation-cancel" in source
+    assert "'/jobs/'+attempt.jobId+'/cancel'" in source
+    assert "waitForJob(job.id,controller.signal)" in source
     assert "data-retry-knowledge" in source
 
 
@@ -375,7 +370,7 @@ def test_conflict_review_modal_is_compact_and_decision_icons_align() -> None:
         browser.close()
 
 
-def test_conflict_review_progress_uses_short_layout_with_separate_cancel() -> None:
+def test_conflict_review_is_enqueued_without_opening_a_progress_modal() -> None:
     from playwright.sync_api import sync_playwright
     page_url = (Path(__file__).parents[1] / "llm_wiki" / "static" / "index.html").as_uri()
     with sync_playwright() as driver:
@@ -390,28 +385,14 @@ def test_conflict_review_progress_uses_short_layout_with_separate_cancel() -> No
                 const trigger = document.createElement('button');
                 trigger.textContent = '↯';
                 document.body.append(trigger);
-                window.fetch = () => new Promise(() => {});
+                window.fetch = () => Promise.resolve({ok: true, status: 202, json: async () => ({id: 'review-job'}), text: async () => ''});
                 runConflictReview('preview', trigger);
             }"""
         )
 
-        modal = page.locator("#item-detail-modal").bounding_box()
-        assert modal["height"] <= 300
-        assert modal["width"] <= 460
-        assert page.locator(".conflict-progress-card").is_visible()
-        assert page.locator("#item-detail-modal button").count() == 2
-        assert page.locator(".conflict-progress-actions button").inner_text() == "Cancel"
-        assert page.locator("#item-detail-close").get_attribute("aria-label") == "Cancel review"
-        close_tooltip = page.locator("#item-detail-close").evaluate(
-            """button => {
-                button.focus();
-                const style = getComputedStyle(button, '::after');
-                return {top: style.top, right: style.right, transform: style.transform};
-            }"""
-        )
-        assert close_tooltip["top"] == "43px"
-        assert close_tooltip["right"] == "0px"
-        assert close_tooltip["transform"] == "none"
+        page.get_by_text("Conflict review queued", exact=True).wait_for(timeout=1000)
+        assert not page.locator("#item-detail-modal").evaluate("dialog => dialog.open")
+        assert page.evaluate("activeConflictRun") == "review-job"
         browser.close()
 
 
@@ -669,7 +650,9 @@ def test_capture_click_previews_problem_without_promoting_until_apply(viewport: 
                     const value = String(url);
                     if (value.endsWith('/refinement-context')) return Promise.resolve({ok: true, status: 200, json: async () => ({entries: [{label: 'Current item', text: capture.text}], next_draft: null, refinement_draft: null, current_detail: {kind: 'capture', title: capture.text, detail: capture.text, state: 'captured'}}), text: async () => ''});
                     if (value.endsWith('/next-chat')) return Promise.resolve(new Response('data: Let’s shape the Problem before moving it.\\n\\nevent: done\\ndata: done\\n\\n', {status: 200}));
-                    if (value.endsWith('/draft')) return Promise.resolve({ok: true, status: 200, json: async () => ({title: 'Refinement should not change workflow state', detail: '## Context\\nThe raw idea needs a clear Problem.\\n\\n## Desired outcome\\nThe user reviews it before promotion.'}), text: async () => ''});
+                    if (value.endsWith('/draft')) return Promise.resolve({ok: true, status: 202, json: async () => ({id: 'problem-draft-job'}), text: async () => ''});
+                    if (value.endsWith('/jobs/problem-draft-job')) return Promise.resolve({ok: true, status: 200, json: async () => ({status: 'completed'}), text: async () => ''});
+                    if (value.endsWith('/jobs/problem-draft-job/result')) return Promise.resolve({ok: true, status: 200, json: async () => ({result: {title: 'Refinement should not change workflow state', detail: '## Context\\nThe raw idea needs a clear Problem.\\n\\n## Desired outcome\\nThe user reviews it before promotion.'}}), text: async () => ''});
                     if (value.endsWith('/promote') && options.method === 'POST') {
                         window.__promotionAttempts += 1;
                         if (window.__promotionAttempts === 1) return Promise.resolve({ok: false, status: 500, text: async () => 'Promotion failed'});
@@ -799,15 +782,13 @@ def test_chat_updates_refinement_in_preview_background_and_applies_without_revie
                         'data: ✅ Ready. Your AI refinement is ready to review.\\n\\nevent: done\\ndata: done\\n\\n',
                         {status: 200}
                     ));
-                    if (value.endsWith('/refine')) return new Promise(resolve => {
-                        window.__resolveBackgroundRefinement = () => resolve({
-                            ok: true, status: 200,
-                            json: async () => ({
-                                title: 'Background refinement Preview',
-                                detail: '## Context\\nThe chat stays usable.\\n\\n## Dependencies\\nThe current context endpoint remains available.'
-                            }), text: async () => ''
-                        });
-                    });
+                    if (value.endsWith('/refine')) {
+                        window.__backgroundRefinementReady = false;
+                        window.__resolveBackgroundRefinement = () => { window.__backgroundRefinementReady = true; };
+                        return Promise.resolve({ok: true, status: 202, json: async () => ({id: 'refinement-job'}), text: async () => ''});
+                    }
+                    if (value.endsWith('/jobs/refinement-job/result')) return Promise.resolve({ok: true, status: 200, json: async () => ({result: {title: 'Background refinement Preview', detail: '## Context\\nThe chat stays usable.\\n\\n## Dependencies\\nThe current context endpoint remains available.'}}), text: async () => ''});
+                    if (value.endsWith('/jobs/refinement-job')) return Promise.resolve({ok: true, status: 200, json: async () => ({status: window.__backgroundRefinementReady ? 'completed' : 'running', progress: {completed: 0, total: 1}}), text: async () => ''});
                     if (value.includes('/items/')) {
                         window.__applied = JSON.parse(options.body);
                         return Promise.resolve({ok: true, status: 204, json: async () => null, text: async () => ''});
@@ -892,17 +873,13 @@ def test_explore_next_solution_uses_live_preview_and_creates_from_detail(viewpor
                         'data: I will shape that outcome into a Solution.\\n\\nevent: done\\ndata: done\\n\\n',
                         {status: 200}
                     ));
-                    if (value.endsWith('/draft')) return new Promise(resolve => {
-                        window.__resolveSolutionDraft = () => resolve({
-                            ok: true, status: 200,
-                            json: async () => ({
-                                title: 'Keep Explore next in one workspace',
-                                outcome: 'The proposed Solution updates beside the conversation.',
-                                non_goals: 'Do not create the Solution automatically.',
-                                validation_criteria: '- [ ] Context and Detail remain available'
-                            }), text: async () => ''
-                        });
-                    });
+                    if (value.endsWith('/draft')) {
+                        window.__solutionDraftReady = false;
+                        window.__resolveSolutionDraft = () => { window.__solutionDraftReady = true; };
+                        return Promise.resolve({ok: true, status: 202, json: async () => ({id: 'solution-draft-job'}), text: async () => ''});
+                    }
+                    if (value.endsWith('/jobs/solution-draft-job/result')) return Promise.resolve({ok: true, status: 200, json: async () => ({result: {title: 'Keep Explore next in one workspace', outcome: 'The proposed Solution updates beside the conversation.', non_goals: 'Do not create the Solution automatically.', validation_criteria: '- [ ] Context and Detail remain available'}}), text: async () => ''});
+                    if (value.endsWith('/jobs/solution-draft-job')) return Promise.resolve({ok: true, status: 200, json: async () => ({status: window.__solutionDraftReady ? 'completed' : 'running', progress: {completed: 0, total: 1}}), text: async () => ''});
                     if (value.endsWith('/features') && options.method === 'POST') return new Promise(resolve => {
                         window.__createdSolution = JSON.parse(options.body);
                         window.__resolveSolutionCreation = () => resolve({ok: true, status: 201, json: async () => ({id: 'solution-id'}), text: async () => ''});

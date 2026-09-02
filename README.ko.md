@@ -32,6 +32,7 @@ LLM Wiki는 여섯 가지 타협할 수 없는 원칙에서 출발합니다.
 | 진행 중인 일 이어가기 | In Progress Solution을 강조하고 Work Log에 텍스트·스크린샷·댓글·검증 기준을 남깁니다. |
 | 근거로 완료하기 | AI가 기록된 근거를 검토하되 완료 결정은 사람이 내립니다. |
 | 결과 재사용하기 | 완료된 결과만 Obsidian 호환 Playbook과 검색 가능한 Knowledge가 됩니다. |
+| AI 작업 중에도 빠르게 반응하기 | 숨겨진 Fast Queue는 상호작용 요청을 제한하고 지속 작업은 백그라운드 Queue에서 조회·복구합니다. |
 
 Task 단계는 없습니다. 실행을 Solution에 붙여 두어 일이 존재하는 이유인 Problem과 분리되지 않게 합니다.
 
@@ -49,6 +50,9 @@ AI는 필수 제품 기능이며, 로컬 검색과 수동 제어는 제공자 �
 결정권을 보존하기 위한 fallback입니다.
 
 API 키는 vault나 앱 DB가 아니라 macOS Keychain 또는 Windows Credential Manager에 저장됩니다.
+
+Worker 역할, 복구, 작업별 결과, 알림 동작은
+[백그라운드 AI Queue](docs/features/background-ai-queue.ko.md)를 참고하세요.
 
 ### 한국어와 영어
 

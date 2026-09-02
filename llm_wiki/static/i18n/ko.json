@@ -437,5 +437,14 @@
   "transition.solution_started": "AI 없이 솔루션을 진행 중 단계로 이동했습니다.",
   "notice.cancel": "취소",
   "notice.confirm": "확인",
-  "handoff.copied": "구현 인계 내용을 복사했습니다. 기술 구현 단계가 아니라 결과와 완료 기준이 포함되어 있습니다."
+  "handoff.copied": "구현 인계 내용을 복사했습니다. 기술 구현 단계가 아니라 결과와 완료 기준이 포함되어 있습니다.",
+  "queue.title": "AI 작업 Queue",
+  "queue.notifications": "알림",
+  "queue.empty": "백그라운드 AI 작업이 없습니다.",
+  "queue.active": "진행 중",
+  "queue.recent": "최근 작업",
+  "queue.view_result": "결과 보기",
+  "queue.worker_count": "백그라운드 Worker 수",
+  "queue.fast_fixed": "서비스를 재시작한 뒤 적용됩니다. Fast Queue는 항상 Worker 하나를 사용합니다.",
+  "notification.review_ready": "완료 검토 결과를 확인할 수 있습니다"
 }

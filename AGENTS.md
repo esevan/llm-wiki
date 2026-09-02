@@ -23,3 +23,8 @@
 - After every completed task, read and follow `docs/DOCUMENTATION_GUIDE.md`.
 - Update the affected documentation in the same task whenever the behavior, workflow, interface, setup, or verification expectations changed.
 - If no documentation change is needed, state that the guide was reviewed in the final handoff.
+
+## Korean user-facing terminology
+
+- In Korean translations and Korean user-facing copy, refer to the person using the product as `사용자`; do not translate "user" or "human" as `인간`.
+- This terminology rule does not require changing English governance terms, source quotations, or technical identifiers.

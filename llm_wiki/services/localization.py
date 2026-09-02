@@ -24,9 +24,12 @@ SUPPORTED_LOCALES = ("ko", "en")
 # Work Log text remains authored evidence; its explicitly AI-generated image
 # summary is localized without making the rest of the progress record mutable.
 LOCALIZED_FIELDS: dict[str, tuple[str, ...]] = {
+    "captures": ("text",),
     "problems": ("statement", "detail"),
     "features": ("title", "outcome", "non_goals", "validation_criteria"),
-    "solution_progress_entries": ("image_summary",),
+    "solution_progress_entries": ("body", "image_summary"),
+    "solution_progress_comments": ("body",),
+    "solution_checklist_items": ("body",),
 }
 
 
@@ -278,7 +281,7 @@ class LocalizedContentStore:
             versions,
             origin="ai",
             source_hash=source_hash,
-            complete=True,
+            complete=entity_type != "solution_progress_entries",
         )
 
     def supplement(

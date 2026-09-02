@@ -1,3 +1,4 @@
+import asyncio
 import json
 import sqlite3
 from pathlib import Path
@@ -5,8 +6,8 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-import llm_wiki.api.app as api_module
-from llm_wiki.api.app import create_app
+from llm_wiki.web.app import create_app
+from tests.fakes.ai_provider import run_workflow_job
 from llm_wiki.services.workflow import WorkflowEngine, WorkflowError
 
 
@@ -77,7 +78,6 @@ def test_completion_review_excludes_raw_image_data_from_provider_request(tmp_pat
     app = create_app(tmp_path, tmp_path / "db.sqlite")
     app.state.provider_settings.save("http://provider.test/v1", "test-model", None)
     monkeypatch.setattr(app.state.provider_settings, "_secret", lambda: "test-key")
-    monkeypatch.setattr(api_module, "OpenAICompatibleProvider", RecordingProvider)
 
     with TestClient(app) as client:
         capture = client.post("/api/captures", json={"text": "Review image evidence"}).json()
@@ -99,8 +99,9 @@ def test_completion_review_excludes_raw_image_data_from_provider_request(tmp_pat
         app.state.workflow.set_solution_progress_summary(entry["id"], "The expected result is visible.")
 
         response = client.post(f"/api/features/{feature['id']}/completion-review")
+        asyncio.run(run_workflow_job(app, response.json()["id"], RecordingProvider()))
 
-    assert response.status_code == 200
+    assert response.status_code == 202
     evidence = json.loads(str(captured_messages[-1]["content"]))
     assert evidence["progress_records"][0]["image_summary"] == "The expected result is visible."
     assert "image_data" not in evidence["progress_records"][0]

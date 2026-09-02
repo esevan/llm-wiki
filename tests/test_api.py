@@ -1,12 +1,13 @@
 import json
 import re
 import threading
+import asyncio
 from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-import llm_wiki.api.app as api_module
-from llm_wiki.api.app import create_app
+from llm_wiki.web.app import create_app
+from tests.fakes.ai_provider import FastAdapter, run_completion_report_job, run_lineage_job, run_localization_job, run_workflow_job
 
 
 def test_api_is_usable_without_ai_or_embeddings(tmp_path: Path) -> None:
@@ -100,7 +101,6 @@ def test_image_summary_generates_both_locales_once_and_progress_reads_use_stored
     app = create_app(tmp_path, tmp_path / "image-summary.sqlite")
     app.state.provider_settings.save("http://provider.test/v1", "test-model", None)
     monkeypatch.setattr(app.state.provider_settings, "_secret", lambda: "test-key")
-    monkeypatch.setattr(api_module, "OpenAICompatibleProvider", SummaryProvider)
     workflow = app.state.workflow
     problem = workflow.promote_capture(workflow.capture("A problem"))
     workflow.approve_problem(problem["id"])
@@ -114,10 +114,13 @@ def test_image_summary_generates_both_locales_once_and_progress_reads_use_stored
             f"/api/progress/{entry['id']}/summarize-image",
             headers={"X-LLM-Wiki-Locale": "ko"},
         )
-        assert response.status_code == 200
-        assert response.json()["summary"] == "화면에 완료 상태가 보입니다."
-        assert response.json()["localized_versions"]["en"]["image_summary"] == "The screen shows the completed state."
-        assert response.json()["missing_locales"] == []
+        assert response.status_code == 202
+        job_id = response.json()["id"]
+        asyncio.run(run_workflow_job(app, job_id, SummaryProvider()))
+        summary = client.get(f"/api/jobs/{job_id}/result").json()["result"]
+        assert summary["summary"] == "화면에 완료 상태가 보입니다."
+        assert summary["localized_versions"]["en"]["image_summary"] == "The screen shows the completed state."
+        assert summary["missing_locales"] == []
         assert SummaryProvider.calls == 1
         prompt = str(SummaryProvider.messages[0]["content"][0]["text"])
         assert '"ko"' in prompt and '"en"' in prompt
@@ -138,7 +141,10 @@ def test_image_summary_generates_both_locales_once_and_progress_reads_use_stored
             f"/api/progress/{entry['id']}/summarize-image",
             headers={"X-LLM-Wiki-Locale": "ko"},
         )
-        assert failed.status_code == 502
+        assert failed.status_code == 202
+        failed_id = failed.json()["id"]
+        asyncio.run(run_workflow_job(app, failed_id, SummaryProvider()))
+        assert client.get(f"/api/jobs/{failed_id}").json()["status"] == "failed"
         preserved = client.get(
             f"/api/features/{feature['id']}/progress", headers={"X-LLM-Wiki-Locale": "en"}
         ).json()["entries"][0]
@@ -163,18 +169,19 @@ def test_managed_knowledge_korean_translation_cache_tracks_canonical_hash(tmp_pa
     app = create_app(tmp_path, tmp_path / "knowledge.sqlite")
     app.state.provider_settings.save("http://provider.test/v1", "test-model", None)
     monkeypatch.setattr(app.state.provider_settings, "_secret", lambda: "secret")
-    monkeypatch.setattr(api_module, "OpenAICompatibleProvider", TranslationProvider)
 
     with TestClient(app) as client:
         first = client.get("/api/knowledge", params={"path": path, "locale": "ko"}).json()
         second = client.get("/api/knowledge", params={"path": path, "locale": "ko"}).json()
-        assert first["cache_status"] == "miss"
-        assert second["cache_status"] == "hit"
+        assert first["cache_status"] == second["cache_status"] == "pending"
+        assert first["job_id"] == second["job_id"]
+        asyncio.run(run_localization_job(app, first["job_id"], TranslationProvider()))
+        assert client.get("/api/knowledge", params={"path": path, "locale": "ko"}).json()["cache_status"] == "hit"
         assert TranslationProvider.calls == 1
         target.write_text("---\nllm_wiki_managed: true\ncanonical_locale: en\n---\n# Changed\n", encoding="utf-8")
         changed = client.get("/api/knowledge", params={"path": path, "locale": "ko"}).json()
-        assert changed["cache_status"] == "miss"
-        assert TranslationProvider.calls == 2
+        assert changed["cache_status"] == "pending"
+        assert TranslationProvider.calls == 1
 
 
 def test_progressive_knowledge_read_is_provider_free_then_streams_complete_paragraphs(tmp_path: Path, monkeypatch) -> None:
@@ -199,7 +206,6 @@ def test_progressive_knowledge_read_is_provider_free_then_streams_complete_parag
     app = create_app(tmp_path, tmp_path / "progressive.sqlite")
     app.state.provider_settings.save("http://provider.test/v1", "test-model", None)
     monkeypatch.setattr(app.state.provider_settings, "_secret", lambda: "secret")
-    monkeypatch.setattr(api_module, "OpenAICompatibleProvider", ParagraphProvider)
 
     with TestClient(app) as client:
         fast = client.get(
@@ -209,14 +215,9 @@ def test_progressive_knowledge_read_is_provider_free_then_streams_complete_parag
         assert fast["markdown"] == target.read_text(encoding="utf-8")
         assert ParagraphProvider.calls == 0
 
-        response = client.get(
-            "/api/knowledge/translate", params={"path": path, "request_id": "reader-1"}
-        )
-        events = [json.loads(line) for line in response.text.splitlines()]
-        paragraphs = [event for event in events if event["event"] == "paragraph"]
-        assert [(item["completed"], item["total"]) for item in paragraphs] == [(1, 2), (2, 2)]
-        assert paragraphs[0]["markdown"] == "# 하나"
-        assert events[-1]["event"] == "complete"
+        response = client.get("/api/knowledge/translate", params={"path": path})
+        assert response.status_code == 202
+        asyncio.run(run_localization_job(app, response.json()["id"], ParagraphProvider()))
         assert ParagraphProvider.calls == 2
 
         cached = client.get(
@@ -254,30 +255,12 @@ def test_progressive_knowledge_translation_can_be_cancelled_on_server(tmp_path: 
     app = create_app(tmp_path, tmp_path / "cancel.sqlite")
     app.state.provider_settings.save("http://provider.test/v1", "test-model", None)
     monkeypatch.setattr(app.state.provider_settings, "_secret", lambda: "secret")
-    monkeypatch.setattr(api_module, "OpenAICompatibleProvider", BlockingProvider)
     with TestClient(app) as client:
-        result: dict[str, object] = {}
-
-        def translate() -> None:
-            result["response"] = client.get(
-                "/api/knowledge/translate", params={"path": path, "request_id": "reader-cancelled"}
-            )
-
-        worker = threading.Thread(target=translate)
-        worker.start()
-        assert BlockingProvider.started.wait(timeout=2)
-        cancelled = client.post(
-            "/api/knowledge/translation-cancel", params={"request_id": "reader-cancelled"}
-        )
-        assert cancelled.status_code == 204
-        assert app.state.knowledge_translation_cancelled("reader-cancelled") is True
-        BlockingProvider.release.set()
-        worker.join(timeout=2)
-
-        assert not worker.is_alive()
-        events = [json.loads(line) for line in result["response"].text.splitlines()]
-        assert events[-1]["event"] == "cancelled"
-        assert BlockingProvider.calls == 1
+        queued = client.get("/api/knowledge/translate", params={"path": path})
+        cancelled = client.post(f"/api/jobs/{queued.json()['id']}/cancel")
+        assert cancelled.status_code == 200
+        assert cancelled.json()["status"] == "cancelled"
+        assert BlockingProvider.calls == 0
 
 
 def test_legacy_vault_knowledge_never_translates_on_korean_read(tmp_path: Path) -> None:
@@ -304,14 +287,15 @@ def test_managed_knowledge_falls_back_to_canonical_when_translation_fails(tmp_pa
     app = create_app(tmp_path, tmp_path / "knowledge-failure.sqlite")
     app.state.provider_settings.save("http://provider.test/v1", "test-model", None)
     monkeypatch.setattr(app.state.provider_settings, "_secret", lambda: "secret")
-    monkeypatch.setattr(api_module, "OpenAICompatibleProvider", FailingProvider)
 
     with TestClient(app) as client:
         result = client.get("/api/knowledge", params={"path": "Knowledge/failure.md", "locale": "ko"}).json()
+        asyncio.run(run_localization_job(app, result["job_id"], FailingProvider()))
+        job = client.get(f"/api/jobs/{result['job_id']}").json()
 
     assert result["markdown"] == canonical
-    assert result["cache_status"] == "fallback"
-    assert result["warning_code"] == "translation_unavailable"
+    assert result["cache_status"] == "pending"
+    assert job["status"] == "failed"
     assert target.read_text(encoding="utf-8") == canonical
 
 
@@ -333,10 +317,9 @@ def test_korean_managed_knowledge_patch_is_normalized_before_review_and_apply(tm
         "---\nllm_wiki_managed: true\ncanonical_locale: en\n---\n# Result\n\n## Notes\nOriginal.\n",
         encoding="utf-8",
     )
-    app = create_app(tmp_path, tmp_path / "knowledge-patch.sqlite")
+    app = create_app(tmp_path, tmp_path / "knowledge-patch.sqlite", fast_queue_client=FastAdapter(NormalizingProvider()))
     app.state.provider_settings.save("http://provider.test/v1", "test-model", None)
     monkeypatch.setattr(app.state.provider_settings, "_secret", lambda: "secret")
-    monkeypatch.setattr(api_module, "OpenAICompatibleProvider", NormalizingProvider)
 
     with TestClient(app) as client:
         proposal = client.post(
@@ -372,14 +355,15 @@ def test_bilingual_problem_refinement_updates_both_stored_versions(tmp_path: Pat
     app = create_app(tmp_path, tmp_path / "bilingual-refinement.sqlite")
     app.state.provider_settings.save("http://provider.test/v1", "test-model", None)
     monkeypatch.setattr(app.state.provider_settings, "_secret", lambda: "secret")
-    monkeypatch.setattr(api_module, "OpenAICompatibleProvider", RefinementProvider)
     with TestClient(app) as client:
         capture = client.post("/api/captures", json={"text": "기존 문제"}).json()
         problem = client.post(f"/api/captures/{capture['id']}/promote", json={}).json()
-        draft = client.post(
+        queued = client.post(
             f"/api/problems/{problem['id']}/refine",
             headers={"X-LLM-Wiki-Locale": "ko"},
-        ).json()
+        )
+        asyncio.run(run_workflow_job(app, queued.json()["id"], RefinementProvider()))
+        draft = client.get(f"/api/jobs/{queued.json()['id']}/result").json()["result"]
         assert set(draft["localized_versions"]) == {"ko", "en"}
         response = client.put(
             f"/api/items/problems/{problem['id']}",
@@ -465,6 +449,10 @@ def test_completed_problem_writes_a_summary_first_playbook(tmp_path: Path) -> No
 
 
 def test_completed_problem_archives_full_work_log_checklist_and_image_capture(tmp_path: Path) -> None:
+    class EmptyReportProvider:
+        def complete_json(self, _messages, _label):
+            return {"executive_summary_markdown": "", "report_body_markdown": ""}
+
     with TestClient(create_app(tmp_path, tmp_path / "db.sqlite")) as client:
         capture = client.post("/api/captures", json={"text": "Keep the work record"}).json()
         problem = client.post(f"/api/captures/{capture['id']}/promote", json={}).json()
@@ -492,8 +480,10 @@ def test_completed_problem_archives_full_work_log_checklist_and_image_capture(tm
         image_path = playbook.parent / "assets" / f"{entry['id']}.png"
         assert image_path.read_bytes() == b"hello"
         regenerated = client.post(f"/api/problems/{problem['id']}/completion-playbook/regenerate")
-        assert regenerated.status_code == 200
-        assert regenerated.json()["path"] == response.json()["path"]
+        assert regenerated.status_code == 202
+        asyncio.run(run_completion_report_job(client.app, regenerated.json()["id"], EmptyReportProvider()))
+        regenerated_result = client.get(f"/api/jobs/{regenerated.json()['id']}/result").json()["result"]
+        assert regenerated_result["path"] == response.json()["path"]
         cards = client.get("/api/workbench/completed-solutions?limit=20")
         assert cards.status_code == 200
         assert cards.json()["solutions"][0]["completion_playbook_path"] == response.json()["path"]
@@ -547,7 +537,6 @@ def test_completed_solution_can_explicitly_create_a_follow_up_problem(tmp_path: 
 
 def test_completion_generates_final_document_from_lineage_context(tmp_path: Path, monkeypatch) -> None:
     provider_inputs: list[tuple[str, list[dict[str, object]]]] = []
-    credential_tasks: list[str | None] = []
 
     class RecordingProvider:
         def __init__(self, *_: str) -> None:
@@ -565,13 +554,6 @@ def test_completion_generates_final_document_from_lineage_context(tmp_path: Path
     app = create_app(tmp_path, tmp_path / "db.sqlite")
     app.state.provider_settings.save("http://provider.test/v1", "test-model", None)
     monkeypatch.setattr(app.state.provider_settings, "_secret", lambda: "test-key")
-    original_credentials = app.state.provider_settings.credentials
-    monkeypatch.setattr(
-        app.state.provider_settings,
-        "credentials",
-        lambda task=None: (credential_tasks.append(task), original_credentials(task))[1],
-    )
-    monkeypatch.setattr(api_module, "OpenAICompatibleProvider", RecordingProvider)
     with TestClient(app) as client:
         capture = client.post("/api/captures", json={"text": "Original lineage feedback"}).json()
         problem = client.post(f"/api/captures/{capture['id']}/promote", json={"detail": "## Desired outcome\nTrace the origin"}).json()
@@ -589,6 +571,7 @@ def test_completion_generates_final_document_from_lineage_context(tmp_path: Path
         completed = client.post(f"/api/problems/{problem['id']}/complete", json={"reason": "Human completion review"})
         assert completed.status_code == 200
         assert completed.json()["lineage"]["status"] == "ready"
+        asyncio.run(run_completion_report_job(app, completed.json()["report_job_id"], RecordingProvider()))
         lineage = client.get(f"/api/features/{solution['id']}/lineage")
         assert lineage.status_code == 200
         assert [stage["kind"] for stage in lineage.json()["lineage"]["stages"]] == ["capture", "problem", "solution", "complete"]
@@ -617,10 +600,13 @@ def test_completion_generates_final_document_from_lineage_context(tmp_path: Path
     uuid_pattern = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
     assert re.search(uuid_pattern, str(report_messages[1]["content"]), re.IGNORECASE) is None
     assert "Feedback and workflow history" not in str(report_messages[1]["content"])
-    assert credential_tasks == ["lineage_inference", "completion_report"]
 
 
 def test_completed_document_regeneration_rebuilds_current_lineage(tmp_path: Path) -> None:
+    class EmptyReportProvider:
+        def complete_json(self, _messages, _label):
+            return {"executive_summary_markdown": "", "report_body_markdown": ""}
+
     with TestClient(create_app(tmp_path, tmp_path / "db.sqlite")) as client:
         workflow = client.app.state.workflow
         problem = workflow.promote_capture(workflow.capture("Original lifecycle context"))
@@ -638,9 +624,11 @@ def test_completed_document_regeneration_rebuilds_current_lineage(tmp_path: Path
         workflow.update_manual("features", solution["id"], "Current direction", "The regenerated document follows current Lineage")
 
         regenerated = client.post(f"/api/problems/{problem['id']}/completion-playbook/regenerate")
-        assert regenerated.status_code == 200
+        assert regenerated.status_code == 202
+        asyncio.run(run_completion_report_job(client.app, regenerated.json()["id"], EmptyReportProvider()))
+        result = client.get(f"/api/jobs/{regenerated.json()['id']}/result").json()["result"]
         current = client.get(f"/api/features/{solution['id']}/lineage").json()
-        document = (tmp_path / regenerated.json()["path"]).read_text(encoding="utf-8")
+        document = (tmp_path / result["path"]).read_text(encoding="utf-8")
 
         assert current["snapshot_id"] != first["snapshot_id"]
         assert "Current direction" in document
@@ -693,7 +681,6 @@ def test_lineage_regeneration_and_correction_preserve_audit_history(tmp_path: Pa
     app = create_app(tmp_path, tmp_path / "db.sqlite")
     app.state.provider_settings.save("http://provider.test/v1", "test-model", None)
     monkeypatch.setattr(app.state.provider_settings, "_secret", lambda: "test-key")
-    monkeypatch.setattr(api_module, "OpenAICompatibleProvider", InferenceProvider)
     with TestClient(app) as client:
         workflow = client.app.state.workflow
         problem = workflow.promote_capture(workflow.capture("Correct an interpretation"))
@@ -705,8 +692,10 @@ def test_lineage_regeneration_and_correction_preserve_audit_history(tmp_path: Pa
         workflow.create_lineage_snapshot(solution["id"])
 
         regenerated = client.post(f"/api/features/{solution['id']}/lineage/regenerate", json={"include_inference": True})
-        assert regenerated.status_code == 201
-        inferred = next(claim for claim in regenerated.json()["claims"].values() if claim["classification"] == "inferred" and claim["claim_key"].startswith("inferred:"))
+        assert regenerated.status_code == 202
+        asyncio.run(run_lineage_job(app, regenerated.json()["id"], InferenceProvider()))
+        result = client.get(f"/api/jobs/{regenerated.json()['id']}/result").json()["result"]
+        inferred = next(claim for claim in result["claims"].values() if claim["classification"] == "inferred" and claim["claim_key"].startswith("inferred:"))
         corrected = client.post(
             f"/api/features/{solution['id']}/lineage/claims/{inferred['id']}/corrections",
             json={"text": "The user explicitly corrected this interpretation", "reason": "Audit correction", "current_revision_id": inferred["current_revision_id"]},

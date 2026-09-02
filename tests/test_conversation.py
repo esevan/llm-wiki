@@ -1,15 +1,15 @@
 import pytest
 
-from llm_wiki.api.app import validate_draft, validate_refinement
+from llm_wiki.services.handlers.validation import validate_draft, validate_refinement
 from llm_wiki.services.conversation import (
     bilingual_draft_prompt,
     bilingual_refinement_prompt,
     draft_prompt,
     refinement_focus_prompt,
     refinement_prompt,
-    response_language_instruction,
     system_prompt,
 )
+from llm_wiki.services.localization import response_language_instruction
 
 
 def test_each_workflow_stage_allows_context_before_a_needed_open_question() -> None:

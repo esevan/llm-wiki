@@ -123,7 +123,7 @@ def test_localized_store_rejects_unregistered_fields_without_changing_existing_v
     assert "en" not in store.versions("problems", "problem-1")
 
 
-def test_localized_store_supports_only_the_generated_image_summary_field_for_progress_entries() -> None:
+def test_progress_translation_can_fall_back_per_field_while_image_summary_is_localized() -> None:
     store = LocalizedContentStore(database())
     base = {"id": "entry-1", "body": "사용자가 쓴 작업 기록", "image_summary": "기존 요약"}
 
@@ -140,9 +140,9 @@ def test_localized_store_supports_only_the_generated_image_summary_field_for_pro
     assert english["image_summary"] == "English image summary"
     assert english["body"] == "사용자가 쓴 작업 기록"
     assert english["available_locales"] == ["ko", "en"]
-    assert english["fallback_used"] is False
-    with pytest.raises(ValueError, match="Unregistered localized field"):
-        store.supplement("solution_progress_entries", "entry-1", "ko", {"body": "번역 금지"})
+    assert english["fallback_used"] is True
+    store.supplement("solution_progress_entries", "entry-1", "ko", {"body": "번역된 작업 기록"})
+    assert store.overlay("solution_progress_entries", base, "ko")["body"] == "번역된 작업 기록"
 
 
 def test_knowledge_cache_hits_only_the_exact_path_locale_and_source_hash() -> None:
