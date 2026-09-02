@@ -6,6 +6,8 @@ Conflict review now shows what it is doing while it runs. The review panel repor
 
 The service searches lexical and semantic evidence independently across the Vault. It splits the Solution into reviewable claims, combines candidate passages, removes duplicate Raw/canonical records, and keeps exact path, line range, source hash, and passage text. Potential conflicts appear as soon as they are validated, without waiting for every remaining candidate.
 
+Semantic indexing and review searches share one loaded embedding model. Repeated claim searches therefore reuse the existing model session instead of reloading it for every claim, allowing the review to move out of the search phase without repeated model-startup delays.
+
 ## Result meanings
 
 - **Reviewing**: candidates remain, so clear is unavailable.

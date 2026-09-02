@@ -1,3 +1,4 @@
+import struct
 from pathlib import Path
 
 from llm_wiki.services.retrieval import RetrievalEngine
@@ -58,3 +59,29 @@ def test_passage_has_exact_line_range_and_manifest_changes(tmp_path: Path) -> No
     note.write_text(note.read_text() + "Changed\n", encoding="utf-8")
     engine.index_changed()
     assert engine.manifest_hash() != before
+
+
+def test_semantic_model_is_reused_for_indexing_and_repeated_searches(tmp_path: Path, monkeypatch) -> None:
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    (vault / "decision.md").write_text("# Decision\nKeep data local", encoding="utf-8")
+    engine = RetrievalEngine(tmp_path / "index.sqlite", MarkdownVaultAdapter(vault))
+    engine.index_changed()
+    constructed = 0
+
+    class FakeEmbedder:
+        def __init__(self) -> None:
+            nonlocal constructed
+            constructed += 1
+
+        def embed(self, texts: list[str]) -> list[list[float]]:
+            return [[1.0, 0.0] for _ in texts]
+
+    monkeypatch.setattr("llm_wiki.services.semantic.SemanticEmbedder", FakeEmbedder)
+
+    assert engine.refresh_embeddings() == 1
+    assert engine.semantic_search("local")[0].path == "decision.md"
+    assert engine.semantic_search("data")[0].path == "decision.md"
+    assert constructed == 1
+    row = engine.db.execute("SELECT dimensions,vector FROM document_embeddings").fetchone()
+    assert tuple(struct.unpack(f"<{row['dimensions']}f", row["vector"])) == (1.0, 0.0)
