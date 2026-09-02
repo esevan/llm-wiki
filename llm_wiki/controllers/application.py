@@ -25,6 +25,7 @@ from llm_wiki.controllers.schemas import (
     ChatIn,
     CompletionIn,
     ConflictIn,
+    ConflictResolutionsIn,
     EnrichIn,
     FeatureIn,
     FeatureStageIn,
@@ -48,7 +49,7 @@ from llm_wiki.controllers.schemas import (
 )
 from llm_wiki.core.jobs import TaskDescriptor
 from llm_wiki.services.conversation import refinement_focus_prompt, system_prompt
-from llm_wiki.services.handlers.conflict_review import conflict_source_hash
+from llm_wiki.services.handlers.conflict_review import conflict_review_query, conflict_source_hash
 from llm_wiki.services.handlers.lineage import lineage_source_hash
 from llm_wiki.services.handlers.organization import organization_items
 from llm_wiki.services.localization import (
@@ -656,6 +657,9 @@ def create_http_app(runtime: ApplicationRuntime) -> FastAPI:
 
     @app.get("/api/conflict-reviews/{run_id}")
     async def conflict_review_status(run_id: str) -> dict[str, object]:
+        stored = workflow.conflict_review(run_id)
+        if stored:
+            return stored
         job = await job_repository.get(run_id)
         if not job or job.descriptor.task_kind != "conflict_review":
             raise HTTPException(404, "Conflict review not found")
@@ -670,6 +674,22 @@ def create_http_app(runtime: ApplicationRuntime) -> FastAPI:
             "findings": [],
             "candidates": [],
         }
+
+    @app.put("/api/conflict-reviews/{run_id}/resolutions")
+    def resolve_conflict_review(run_id: str, data: ConflictResolutionsIn, request: Request) -> dict[str, object]:
+        stored = workflow.conflict_review(run_id)
+        if not stored:
+            raise HTTPException(404, "Conflict review not found")
+        try:
+            feature_id = str(stored.get("feature_id", ""))
+            current_query = conflict_review_query(workflow, retrieval, feature_id, request.state.locale)
+            return workflow.resolve_conflict_review(
+                run_id,
+                [item.model_dump() for item in data.resolutions],
+                current_query,
+            )
+        except WorkflowError as error:
+            raise HTTPException(400, str(error)) from error
 
     @app.delete("/api/conflict-reviews/{run_id}")
     async def cancel_conflict_review(run_id: str) -> dict[str, object]:

@@ -41,6 +41,12 @@ LLM Wiki 백엔드는 하나의 Web 조립 경계를 둔 Layered Architecture를
 공통 제공자 설정, 대상 검증, Handler 등록, Worker 실행은 각각 `provider.py`, `targets.py`,
 `catalog.py`, `registry.py`, `worker.py`에 있습니다. 개별 작업 동작은 이 공통 모듈에 넣지 않습니다.
 
+Conflict Review Handler는 Provider 출력을 정규화하고 `WorkflowEngine`을 통해 검토 단위 충돌을
+저장합니다. 브라우저는 사용자가 결정한 전체 해결 방식 모음을 Application Controller로 보내며,
+Workflow Service는 이를 검증한 뒤 해결 기록과 기존 충돌 Report/Address Gate를 하나의 SQLite
+Transaction으로 저장합니다. Source Query 비교로 오래된 검토를 거부하며 Provider 출력은 사용자의
+결정 동작을 포함하거나 저장하지 않습니다.
+
 ## 자동으로 강제하는 설계 규칙
 
 아키텍처 테스트는 역방향 계층 Import, 내부 순환 의존성, 중복되거나 잘못 배치된 작업 Descriptor,
@@ -48,4 +54,5 @@ LLM Wiki 백엔드는 하나의 Web 조립 경계를 둔 Layered Architecture를
 공개 Web Factory를 기준으로 실행하므로 내부 구조를 바꿔도 외부 동작을 보존합니다. 관련 검증은
 `tests/test_architecture.py`와 `tests/test_ai_task_inventory.py`에 있습니다.
 
-사용자에게 보이는 Queue 동작은 [백그라운드 AI Queue](features/background-ai-queue.ko.md)를 참고하세요.
+사용자에게 보이는 Queue 동작은 [백그라운드 AI Queue](features/background-ai-queue.ko.md), 검토 결정
+흐름은 [충돌 해결 워크플로](features/conflict-resolution-workflow.ko.md)를 참고하세요.

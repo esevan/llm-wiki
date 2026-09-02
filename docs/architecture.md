@@ -42,6 +42,12 @@ Shared provider setup, target validation, handler registration, and worker orche
 `provider.py`, `targets.py`, `catalog.py`, `registry.py`, and `worker.py`. Task behavior does not go
 into those shared modules.
 
+Conflict Review normalizes provider output in its handler and stores review-scoped conflicts through
+`WorkflowEngine`. The browser submits a complete set of human resolutions to the application
+controller; the workflow service validates the set and commits resolutions plus the existing
+conflict report/address gate in one SQLite transaction. Source-query comparison rejects stale
+reviews. Provider output never contains or persists the human action.
+
 ## Enforced design rules
 
 Architecture tests reject reverse layer imports, internal import cycles, duplicate or misplaced
@@ -50,4 +56,5 @@ functions. API-level compatibility tests run against the public web factory so r
 the observable contract. These checks live in `tests/test_architecture.py` and
 `tests/test_ai_task_inventory.py`.
 
-See [Background AI Queue](features/background-ai-queue.md) for user-visible Queue behavior.
+See [Background AI Queue](features/background-ai-queue.md) for user-visible Queue behavior and
+[Conflict Resolution Workflow](features/conflict-resolution-workflow.md) for the review decision flow.

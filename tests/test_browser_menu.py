@@ -216,6 +216,100 @@ def test_queue_explains_each_job_and_formats_background_results() -> None:
         browser.close()
 
 
+def test_conflict_review_cards_require_independent_resolutions_and_acceptance_rationale() -> None:
+    from playwright.sync_api import sync_playwright
+
+    page_url = (Path(__file__).parents[1] / "llm_wiki" / "static" / "index.html").as_uri()
+    with sync_playwright() as driver:
+        try:
+            browser = driver.chromium.launch(headless=True)
+        except Exception as error:
+            pytest.skip(f"Playwright browser artifact unavailable locally: {error}")
+        page = browser.new_page(viewport={"width": 900, "height": 700})
+        page.goto(page_url)
+        elapsed = page.evaluate(
+            """() => {
+                const conflicts=Array.from({length:20},(_,index)=>({
+                    id:'conflict-'+(index+1),target_id:'adr-'+index,target_title:'ADR-'+index,
+                    severity:['high','medium','low'][index%3],category:'Storage ownership '+index,
+                    summary:'The claims differ.',current_claim:'Client state is authoritative.',
+                    existing_claim:'Server state is authoritative.',impact:'Clients can diverge.',
+                    recommendation:'Keep server authority.',evidence:[{citation:'adr.md:1-2',excerpt:'Server owns state.'}]
+                }));
+                const start=performance.now();
+                document.querySelector('#item-detail-notes').innerHTML=conflictReviewMarkup({
+                    run_id:'run-1',feature_id:'feature-1',recommended_state:'potential_conflict',conflicts
+                },'feature-1',false);
+                document.querySelector('#item-detail-type').textContent='Conflict review · your decision required';
+                document.querySelector('#item-detail-modal').showModal();
+                return performance.now()-start;
+            }"""
+        )
+        assert elapsed < 100
+        assert page.locator(".conflict-card").count() == 20
+        assert page.locator(".conflict-severity").first.inner_text() == "HIGH"
+        severity_colors = page.locator(".conflict-card").evaluate_all(
+            "cards => cards.slice(0,3).map(card => getComputedStyle(card).borderLeftColor)"
+        )
+        assert len(set(severity_colors)) == 3
+        assert page.locator(".conflict-card").first.get_by_text("Client state is authoritative.").is_visible()
+        assert page.locator(".conflict-card details").first.get_by_text("Server owns state.").count() == 1
+        assert page.locator("#conflict-review-summary").inner_text() == "20 conflicts · 0 resolved · 20 unresolved"
+        continue_button = page.locator("#conflict-review-continue")
+        assert continue_button.is_disabled()
+
+        first = page.locator(".conflict-card").nth(0)
+        first.get_by_label("Apply recommendation").check()
+        assert page.locator("#conflict-review-summary").inner_text() == "20 conflicts · 1 resolved · 19 unresolved"
+        second = page.locator(".conflict-card").nth(1)
+        second.get_by_label("Accept conflict").check()
+        assert second.locator("textarea").get_attribute("required") == ""
+        assert page.locator("#conflict-review-summary").inner_text() == "20 conflicts · 1 resolved · 19 unresolved"
+        second.locator("textarea").fill("Offline-first is intentional.")
+        assert page.locator("#conflict-review-summary").inner_text() == "20 conflicts · 2 resolved · 18 unresolved"
+        assert first.get_by_label("Apply recommendation").is_checked()
+        assert first.locator("input[type=radio]:checked").count() == 1
+        footer = page.locator(".conflict-review-footer")
+        assert footer.evaluate("node => getComputedStyle(node).position") == "sticky"
+        page.locator(".conflict-card").nth(2).get_by_label("Apply recommendation").check()
+        page.evaluate(
+            """() => {
+                document.querySelectorAll('.conflict-card').forEach(card => {
+                    if (!card.querySelector('input[type=radio]:checked')) {
+                        card.querySelector('input[value=apply_recommendation]').checked=true;
+                    }
+                });
+                updateConflictResolutionState();
+                api=async()=>{throw Error('The decisions could not be saved.')};
+            }"""
+        )
+        assert not continue_button.is_disabled()
+        continue_button.click()
+        page.locator("#conflict-review-error").get_by_text("The decisions could not be saved.").wait_for()
+        assert page.locator("#item-detail-modal").evaluate("dialog => dialog.open")
+        assert first.get_by_label("Apply recommendation").is_checked()
+
+        page.locator("#item-detail-notes").evaluate(
+            """notes => notes.innerHTML=conflictReviewMarkup({run_id:'legacy-run',findings:[{
+                severity:'high',claim:'Legacy current claim',path:'legacy.md',excerpt:'Legacy existing claim',
+                explanation:'Legacy explanation',required_resolution:'Run a current review'
+            }]},'feature-1',false)"""
+        )
+        assert page.locator(".conflict-card").count() == 1
+        assert page.locator(".conflict-card").get_by_role("heading", name="Legacy current claim").is_visible()
+        assert page.locator("#conflict-review-continue").is_disabled()
+        assert page.get_by_text("run a fresh review to save item resolutions", exact=False).is_visible()
+
+        page.locator("#item-detail-notes").evaluate(
+            """notes => notes.innerHTML=conflictReviewMarkup({
+                recommended_state:'clear',summary:'No conflicts found.',findings:[],scope:{documents:1,semantic_ready:1}
+            },'feature-1',false)"""
+        )
+        assert page.locator(".conflict-card").count() == 0
+        assert page.get_by_role("button", name="Declare clear").is_visible()
+        browser.close()
+
+
 def test_knowledge_reader_opens_immediately_and_reacts_to_async_completion() -> None:
     from playwright.sync_api import sync_playwright
 

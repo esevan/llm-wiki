@@ -26,6 +26,15 @@ def _hash(value: object) -> str:
     return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
 
 
+def _response_text(response: dict[str, Any], key: str, fallback: object) -> str:
+    return str(response.get(key) or fallback).strip()
+
+
+def _severity(value: object) -> str:
+    normalized = str(value or "medium").lower()
+    return normalized if normalized in {"low", "medium", "high"} else "medium"
+
+
 def _claims(feature: dict[str, object], problem: dict[str, object]) -> list[dict[str, str]]:
     fields = (
         ("scope", feature.get("title")),
@@ -79,6 +88,21 @@ def conflict_source_hash(workflow: WorkflowEngine, retrieval: RetrievalEngine, f
     return digest(
         json.dumps({"feature": feature, "problem": problem}, sort_keys=True, ensure_ascii=False)
         + retrieval.manifest_hash()
+    )
+
+
+def conflict_review_query(workflow: WorkflowEngine, retrieval: RetrievalEngine, feature_id: str, locale: str) -> str:
+    board = workflow.board(locale)
+    feature = next((item for item in board["features"] if item["id"] == feature_id), None)
+    if not feature:
+        raise WorkflowError("Solution not found")
+    problem = next((item for item in board["problems"] if item["id"] == feature["problem_id"]), {})
+    return json.dumps(
+        {
+            "solution_hash": _hash({"feature": feature, "problem": problem}),
+            "vault_hash": retrieval.manifest_hash(),
+        },
+        sort_keys=True,
     )
 
 
@@ -143,10 +167,7 @@ class ConflictReviewJobHandler:
 
     def _query(self, feature: dict[str, object], problem: dict[str, object]) -> str:
         return json.dumps(
-            {
-                "solution_hash": _hash({"feature": feature, "problem": problem}),
-                "vault_hash": self.retrieval.manifest_hash(),
-            },
+            {"solution_hash": _hash({"feature": feature, "problem": problem}), "vault_hash": self.retrieval.manifest_hash()},
             sort_keys=True,
         )
 
@@ -228,7 +249,7 @@ class ConflictReviewJobHandler:
             for index, evidence in enumerate(retained):
                 if await context.cancelled():
                     raise InterruptedError("Conflict review cancelled")
-                finding = await self._review_evidence(provider, feature, problem, evidence, locale)
+                finding = await self._review_evidence(provider, feature, problem, evidence, locale, index + 1)
                 if finding:
                     findings.append(finding)
                 await context.progress(index + 1, len(retained))
@@ -243,6 +264,7 @@ class ConflictReviewJobHandler:
         problem: dict[str, object],
         evidence: dict[str, object],
         locale: str,
+        index: int,
     ) -> dict[str, object] | None:
         response = await provider.complete_json(
             [
@@ -250,8 +272,9 @@ class ConflictReviewJobHandler:
                     "role": "system",
                     "content": (
                         "Review exactly one Vault passage against its Solution claim. Return JSON "
-                        "{conflict:boolean,claim,severity:'low|medium|high',evidence_id,explanation,"
-                        "required_resolution}. Never invent a citation."
+                        "{conflict:boolean,evidence_id,severity:'low|medium|high',category,summary,"
+                        "current_claim,existing_claim,impact,recommendation,explanation}. "
+                        "Keep every field concise. Never invent a citation."
                     ),
                 },
                 {"role": "system", "content": response_language_instruction(locale)},
@@ -267,18 +290,38 @@ class ConflictReviewJobHandler:
         )
         if not self._is_conflict(response, evidence):
             return None
+        return self._structured_conflict(response, evidence, index)
+
+    @staticmethod
+    def _structured_conflict(
+        response: dict[str, Any], evidence: dict[str, object], index: int
+    ) -> dict[str, object]:
+        path = str(evidence["path"])
+        severity = _severity(response.get("severity"))
+        explanation = str(response.get("explanation", "")).strip()
+        current_claim = _response_text(response, "current_claim", _response_text(response, "claim", evidence["claim"]))
+        existing_claim = _response_text(response, "existing_claim", evidence["text"])
         return {
-            "claim": str(response.get("claim") or evidence["claim"]),
-            "severity": str(response.get("severity", "medium")),
-            "evidence_id": evidence["id"],
-            "path": evidence["path"],
-            "source_hash": evidence["source_hash"],
-            "start_line": evidence["start_line"],
-            "end_line": evidence["end_line"],
-            "excerpt": evidence["text"],
-            "citation": f"{evidence['path']}:{evidence['start_line']}-{evidence['end_line']}",
-            "explanation": str(response["explanation"]),
-            "required_resolution": str(response.get("required_resolution", "Review manually")),
+            "id": f"conflict-{index}",
+            "target_id": path,
+            "target_title": Path(path).stem or path,
+            "severity": severity,
+            "category": _response_text(response, "category", "Conflicting requirement"),
+            "summary": _response_text(response, "summary", explanation or "The current and existing claims differ."),
+            "current_claim": current_claim,
+            "existing_claim": existing_claim,
+            "impact": _response_text(response, "impact", explanation or "The competing claims require a decision."),
+            "recommendation": _response_text(response, "recommendation", "Review the competing claims."),
+            "evidence": [
+                {
+                    "evidence_id": evidence["id"],
+                    "citation": f"{path}:{evidence['start_line']}-{evidence['end_line']}",
+                    "excerpt": evidence["text"],
+                    "source_hash": evidence["source_hash"],
+                    "start_line": evidence["start_line"],
+                    "end_line": evidence["end_line"],
+                }
+            ],
         }
 
     @staticmethod
@@ -317,7 +360,7 @@ class ConflictReviewJobHandler:
         return {
             "run_id": run_id,
             "feature_id": feature_id,
-            "status": "ready",
+            "status": "conflicts_found" if findings else state,
             "phase": "complete",
             "recommended_state": state,
             "state_meanings": STATE_MEANINGS,
@@ -328,6 +371,9 @@ class ConflictReviewJobHandler:
             "reviewed_count": len(retained),
             "progress": 1.0,
             "findings": findings,
+            "conflicts": [
+                {**finding, "id": f"conflict-{index + 1}"} for index, finding in enumerate(findings)
+            ],
             "candidates": candidates,
             "summary": STATE_MEANINGS[state],
         }

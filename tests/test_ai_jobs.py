@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -8,6 +9,8 @@ import pytest
 
 from llm_wiki.core.jobs import JobStatus, TaskDescriptor
 from llm_wiki.repositories.jobs import JobRepository
+from llm_wiki.services.handlers.conflict_review import ConflictReviewJobHandler
+from llm_wiki.services.workflow import WorkflowEngine
 
 
 def run(coroutine):
@@ -146,3 +149,72 @@ def test_concurrent_workers_cannot_claim_the_same_job(tmp_path: Path) -> None:
         assert sum(claim is not None for claim in claims) == 1
 
     asyncio.run(scenario())
+
+
+def test_conflict_finding_is_normalized_into_the_structured_card_contract() -> None:
+    evidence = {
+        "id": "evidence-1",
+        "claim": "Client state is authoritative.",
+        "path": "decisions/adr-008.md",
+        "source_hash": "source-hash",
+        "start_line": 12,
+        "end_line": 18,
+        "text": "Server state remains authoritative.",
+    }
+    response = {
+        "conflict": True,
+        "evidence_id": "evidence-1",
+        "severity": "URGENT",
+        "category": "Storage ownership",
+        "summary": "The sources assign authority differently.",
+        "current_claim": "Client state is authoritative.",
+        "existing_claim": "Server state remains authoritative.",
+        "impact": "Concurrent clients can diverge.",
+        "recommendation": "Keep server authority.",
+        "explanation": "Authority differs.",
+    }
+
+    conflict = ConflictReviewJobHandler._structured_conflict(response, evidence, 1)
+
+    assert conflict == {
+        "id": "conflict-1",
+        "target_id": "decisions/adr-008.md",
+        "target_title": "adr-008",
+        "severity": "medium",
+        "category": "Storage ownership",
+        "summary": "The sources assign authority differently.",
+        "current_claim": "Client state is authoritative.",
+        "existing_claim": "Server state remains authoritative.",
+        "impact": "Concurrent clients can diverge.",
+        "recommendation": "Keep server authority.",
+        "evidence": [
+            {
+                "evidence_id": "evidence-1",
+                "citation": "decisions/adr-008.md:12-18",
+                "excerpt": "Server state remains authoritative.",
+                "source_hash": "source-hash",
+                "start_line": 12,
+                "end_line": 18,
+            }
+        ],
+    }
+
+
+def test_legacy_findings_only_conflict_report_remains_available_from_cache() -> None:
+    db = sqlite3.connect(":memory:")
+    db.row_factory = sqlite3.Row
+    workflow = WorkflowEngine(db)
+    problem = workflow.promote_capture(workflow.capture("Legacy conflict"))
+    workflow.approve_problem(problem["id"])
+    feature = workflow.create_feature(
+        problem["id"], "Legacy Solution", "Keep history readable", validation_criteria="- [ ] Review history"
+    )
+    run_id = workflow.start_conflict_review(feature["id"], "legacy-query")
+    finding = {"claim": "Old claim", "explanation": "Old explanation", "path": "old.md"}
+    workflow.finish_conflict_review(run_id, [], {"run_id": run_id, "feature_id": feature["id"], "findings": [finding]})
+
+    cached = workflow.cached_conflict_review("legacy-query")
+
+    assert cached is not None
+    assert cached["findings"] == [finding]
+    assert cached.get("conflicts", []) == []

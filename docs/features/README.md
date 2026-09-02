@@ -15,6 +15,7 @@ visible behavior rather than a marketing layer.
 | [Korean and English localization](bilingual-localization.md) | Switch language without losing context; keep Knowledge portable. |
 | [Lineage Knowledge Layer](lineage-knowledge-layer.md) | Make completed Knowledge traceable to records and decisions. |
 | [Evidence-rich Vault conflict review](vault-conflict-evidence.md) | Inspect search coverage, exact evidence, progress, and cautious result meanings. |
+| [Conflict Resolution Workflow](conflict-resolution-workflow.md) | Turn each detected disagreement into an explicit, durable human decision. |
 | [Background AI Queue](background-ai-queue.md) | Stay responsive while durable AI work remains observable and recoverable. |
 
 The product workflow is **Capture → Problem → Solution**. Work continues inside the Solution through

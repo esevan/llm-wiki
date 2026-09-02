@@ -240,6 +240,20 @@ class WorkflowEngine:
           error TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
           updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
+        CREATE TABLE IF NOT EXISTS conflict_review_conflicts (
+          storage_id TEXT PRIMARY KEY, run_id TEXT NOT NULL, feature_id TEXT NOT NULL,
+          conflict_id TEXT NOT NULL, target_id TEXT NOT NULL DEFAULT '', target_title TEXT NOT NULL DEFAULT '',
+          severity TEXT NOT NULL, category TEXT NOT NULL DEFAULT '', summary TEXT NOT NULL DEFAULT '',
+          current_claim TEXT NOT NULL DEFAULT '', existing_claim TEXT NOT NULL DEFAULT '',
+          impact TEXT NOT NULL DEFAULT '', recommendation TEXT NOT NULL DEFAULT '',
+          evidence_json TEXT NOT NULL DEFAULT '[]', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE(run_id,conflict_id)
+        );
+        CREATE TABLE IF NOT EXISTS conflict_resolutions (
+          id TEXT PRIMARY KEY, run_id TEXT NOT NULL, feature_id TEXT NOT NULL, conflict_id TEXT NOT NULL,
+          action TEXT NOT NULL, rationale TEXT NOT NULL DEFAULT '',
+          resolved_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE(run_id,conflict_id)
+        );
         CREATE TABLE IF NOT EXISTS solution_decision_events (
           id TEXT PRIMARY KEY, feature_id TEXT NOT NULL, event_type TEXT NOT NULL,
           before_json TEXT NOT NULL DEFAULT '{}', after_json TEXT NOT NULL DEFAULT '{}',
@@ -365,6 +379,12 @@ class WorkflowEngine:
                 self.db.execute(f"ALTER TABLE completion_playbooks ADD COLUMN {name} {declaration}")
         self.db.execute(
             "CREATE INDEX IF NOT EXISTS idx_lineage_snapshots_feature ON lineage_snapshots(feature_id,version DESC)"
+        )
+        self.db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_conflict_review_conflicts_run ON conflict_review_conflicts(run_id,created_at)"
+        )
+        self.db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_conflict_resolutions_feature ON conflict_resolutions(feature_id,resolved_at)"
         )
         self.db.execute("CREATE INDEX IF NOT EXISTS idx_lineage_claims_snapshot ON lineage_claims(snapshot_id)")
         self.db.execute("CREATE INDEX IF NOT EXISTS idx_lineage_evidence_claim ON lineage_evidence(claim_id)")
@@ -592,10 +612,47 @@ class WorkflowEngine:
 
     def finish_conflict_review(self, run_id: str, candidates: object, report: object, error: str = "") -> None:
         status = "failed" if error else "ready"
+        report_value = report if isinstance(report, dict) else {}
+        run = self.db.execute("SELECT feature_id FROM conflict_review_runs WHERE id=?", (run_id,)).fetchone()
+        if not run:
+            raise WorkflowError("Conflict review not found")
         self.db.execute(
             "UPDATE conflict_review_runs SET status=?,candidates_json=?,report_json=?,error=?,updated_at=CURRENT_TIMESTAMP WHERE id=?",
             (status, __import__("json").dumps(candidates), __import__("json").dumps(report), error, run_id),
         )
+        self.db.execute("DELETE FROM conflict_review_conflicts WHERE run_id=?", (run_id,))
+        if not error:
+            conflicts = report_value.get("conflicts", [])
+            if isinstance(conflicts, list):
+                for index, item in enumerate(conflicts):
+                    if not isinstance(item, dict):
+                        continue
+                    conflict_id = f"conflict-{index + 1}"
+                    severity = str(item.get("severity", "medium")).lower()
+                    if severity not in {"low", "medium", "high"}:
+                        severity = "medium"
+                    self.db.execute(
+                        """INSERT INTO conflict_review_conflicts(
+                             storage_id,run_id,feature_id,conflict_id,target_id,target_title,severity,category,
+                             summary,current_claim,existing_claim,impact,recommendation,evidence_json
+                           ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                        (
+                            str(uuid.uuid4()),
+                            run_id,
+                            run["feature_id"],
+                            conflict_id,
+                            str(item.get("target_id", "")),
+                            str(item.get("target_title", "")),
+                            severity,
+                            str(item.get("category", "Conflicting requirement")),
+                            str(item.get("summary", "The current and existing claims differ.")),
+                            str(item.get("current_claim", "Not provided")),
+                            str(item.get("existing_claim", "Not provided")),
+                            str(item.get("impact", "Review required")),
+                            str(item.get("recommendation", "Review the competing claims.")),
+                            __import__("json").dumps(item.get("evidence", [])),
+                        ),
+                    )
         self.db.commit()
 
     def cancel_conflict_review(self, run_id: str, report: object) -> None:
@@ -607,16 +664,161 @@ class WorkflowEngine:
 
     def cached_conflict_review(self, query: str) -> dict[str, object] | None:
         row = self.db.execute(
-            "SELECT report_json FROM conflict_review_runs WHERE query=? AND status='ready' ORDER BY updated_at DESC,rowid DESC LIMIT 1",
+            "SELECT id FROM conflict_review_runs WHERE query=? AND status='ready' ORDER BY updated_at DESC,rowid DESC LIMIT 1",
             (query,),
         ).fetchone()
         if not row:
             return None
-        try:
-            report = __import__("json").loads(row[0])
-        except (TypeError, ValueError):
+        return self.conflict_review(str(row["id"]))
+
+    def conflict_review(self, run_id: str) -> dict[str, object] | None:
+        row = self.db.execute("SELECT * FROM conflict_review_runs WHERE id=?", (run_id,)).fetchone()
+        if not row:
             return None
-        return report if isinstance(report, dict) else None
+        try:
+            report = __import__("json").loads(row["report_json"])
+        except (TypeError, ValueError):
+            report = {"summary": row["report_json"]}
+        if not isinstance(report, dict):
+            report = {}
+        conflicts: list[dict[str, object]] = []
+        for conflict in self.db.execute(
+            "SELECT * FROM conflict_review_conflicts WHERE run_id=? ORDER BY created_at,rowid", (run_id,)
+        ):
+            try:
+                evidence = __import__("json").loads(conflict["evidence_json"])
+            except (TypeError, ValueError):
+                evidence = []
+            resolution = self.db.execute(
+                "SELECT action,rationale,resolved_at FROM conflict_resolutions WHERE run_id=? AND conflict_id=?",
+                (run_id, conflict["conflict_id"]),
+            ).fetchone()
+            conflicts.append(
+                {
+                    "id": conflict["conflict_id"],
+                    "target_id": conflict["target_id"],
+                    "target_title": conflict["target_title"],
+                    "severity": conflict["severity"],
+                    "category": conflict["category"],
+                    "summary": conflict["summary"],
+                    "current_claim": conflict["current_claim"],
+                    "existing_claim": conflict["existing_claim"],
+                    "impact": conflict["impact"],
+                    "recommendation": conflict["recommendation"],
+                    "evidence": evidence if isinstance(evidence, list) else [],
+                    "resolution": dict(resolution) if resolution else None,
+                }
+            )
+        if conflicts:
+            report["conflicts"] = conflicts
+        report.setdefault("run_id", run_id)
+        report.setdefault("feature_id", row["feature_id"])
+        report.setdefault("status", row["status"])
+        return report
+
+    def resolve_conflict_review(
+        self, run_id: str, resolutions: list[dict[str, str]], current_query: str
+    ) -> dict[str, object]:
+        run = self.db.execute("SELECT * FROM conflict_review_runs WHERE id=?", (run_id,)).fetchone()
+        if not run:
+            raise WorkflowError("Conflict review not found")
+        if run["status"] != "ready":
+            raise WorkflowError("Conflict review is not ready")
+        if run["query"] != current_query:
+            raise WorkflowError("Conflict review is stale; run it again")
+        conflicts = list(
+            self.db.execute(
+                "SELECT conflict_id FROM conflict_review_conflicts WHERE run_id=? ORDER BY created_at,rowid", (run_id,)
+            )
+        )
+        if not conflicts:
+            raise WorkflowError("Conflict review has no structured conflicts to resolve")
+        expected = [str(row["conflict_id"]) for row in conflicts]
+        provided = [str(item.get("conflict_id", "")) for item in resolutions]
+        if len(provided) != len(set(provided)):
+            raise WorkflowError("Each conflict may be resolved only once")
+        if set(provided) != set(expected) or len(provided) != len(expected):
+            raise WorkflowError("Every conflict requires exactly one resolution")
+        allowed = {"apply_recommendation", "accept_conflict"}
+        for item in resolutions:
+            action = str(item.get("action", ""))
+            rationale = str(item.get("rationale", "")).strip()
+            if action not in allowed:
+                raise WorkflowError("Invalid conflict resolution action")
+            if action == "accept_conflict" and not rationale:
+                raise WorkflowError("Accept conflict requires a rationale")
+        if self.db.execute("SELECT 1 FROM conflict_resolutions WHERE run_id=?", (run_id,)).fetchone():
+            raise WorkflowError("Conflict review is already resolved")
+
+        requires_revision = any(item["action"] == "apply_recommendation" for item in resolutions)
+        feature_id = str(run["feature_id"])
+        try:
+            for item in resolutions:
+                self.db.execute(
+                    "INSERT INTO conflict_resolutions(id,run_id,feature_id,conflict_id,action,rationale) VALUES (?,?,?,?,?,?)",
+                    (
+                        str(uuid.uuid4()),
+                        run_id,
+                        feature_id,
+                        item["conflict_id"],
+                        item["action"],
+                        str(item.get("rationale", "")).strip(),
+                    ),
+                )
+            detected_id = self.record_conflict_evaluation(
+                feature_id,
+                "conflicted",
+                f"Conflict review {run_id}: {len(expected)} evidence-backed conflicts reviewed",
+                commit=False,
+            )
+            if requires_revision:
+                self.record_conflict_address(
+                    feature_id,
+                    detected_id,
+                    "unaddressed",
+                    "explicit_decision",
+                    None,
+                    "One or more recommendations will be applied; revise the Solution and run a fresh review.",
+                    "conflict_review",
+                    run_id,
+                    commit=False,
+                )
+                state = "conflicted"
+            else:
+                rationale = " | ".join(str(item.get("rationale", "")).strip() for item in resolutions)
+                self.record_conflict_address(
+                    feature_id,
+                    detected_id,
+                    "addressed",
+                    "explicit_decision",
+                    "preserved",
+                    rationale,
+                    "conflict_review",
+                    run_id,
+                    commit=False,
+                )
+                self.record_conflict_evaluation(
+                    feature_id,
+                    "clear",
+                    f"Conflict review {run_id}: all conflicts intentionally accepted with rationale",
+                    commit=False,
+                )
+                state = "clear"
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            raise
+        saved = self.conflict_review(run_id) or {}
+        saved_resolutions = [item["resolution"] for item in saved.get("conflicts", []) if item.get("resolution")]
+        return {
+            "run_id": run_id,
+            "feature_id": feature_id,
+            "state": state,
+            "resolved_count": len(saved_resolutions),
+            "unresolved_count": len(expected) - len(saved_resolutions),
+            "requires_revision": requires_revision,
+            "resolutions": saved_resolutions,
+        }
 
     def approve_feature(self, feature_id: str) -> None:
         feature = self.db.execute("SELECT conflict_state FROM features WHERE id=?", (feature_id,)).fetchone()

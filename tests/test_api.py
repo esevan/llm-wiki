@@ -28,6 +28,79 @@ def test_api_is_usable_without_ai_or_embeddings(tmp_path: Path) -> None:
         assert captured.json()["id"] != "pending-workflow"
 
 
+def test_conflict_resolution_api_validates_complete_human_decisions_and_restores_them(tmp_path: Path) -> None:
+    db_path = tmp_path / "conflict-resolution.sqlite"
+    app = create_app(tmp_path, db_path)
+    workflow = app.state.workflow
+    problem = workflow.promote_capture(workflow.capture("Conflicting ownership"))
+    workflow.approve_problem(problem["id"])
+    feature = workflow.create_feature(
+        problem["id"], "Choose ownership", "Client state owns writes", validation_criteria="- [ ] Decide ownership"
+    )
+    from llm_wiki.services.handlers.conflict_review import conflict_review_query
+
+    query = conflict_review_query(workflow, app.state.retrieval, feature["id"], "en")
+    run_id = workflow.start_conflict_review(feature["id"], query)
+    conflicts = [
+        {
+            "id": "conflict-1",
+            "target_id": "adr.md",
+            "target_title": "ADR",
+            "severity": "high",
+            "category": "Ownership",
+            "summary": "Claims differ",
+            "current_claim": "Client owns writes",
+            "existing_claim": "Server owns writes",
+            "impact": "Data can diverge",
+            "recommendation": "Use the server",
+            "evidence": [],
+        }
+    ]
+    workflow.finish_conflict_review(run_id, [], {"run_id": run_id, "feature_id": feature["id"], "conflicts": conflicts})
+
+    with TestClient(app) as client:
+        invalid = client.put(
+            f"/api/conflict-reviews/{run_id}/resolutions",
+            json={"resolutions": [{"conflict_id": "conflict-1", "action": "accept_conflict", "rationale": ""}]},
+        )
+        assert invalid.status_code == 400
+        saved = client.put(
+            f"/api/conflict-reviews/{run_id}/resolutions",
+            json={
+                "resolutions": [
+                    {
+                        "conflict_id": "conflict-1",
+                        "action": "accept_conflict",
+                        "rationale": "Offline-first is an intentional exception.",
+                    }
+                ]
+            },
+        )
+        assert saved.status_code == 200
+        assert saved.json()["state"] == "clear"
+        restored = client.get(f"/api/conflict-reviews/{run_id}")
+        assert restored.status_code == 200
+        assert restored.json()["conflicts"][0]["resolution"]["action"] == "accept_conflict"
+
+        workflow.update_manual("features", feature["id"], "Changed ownership", "Client state owns writes")
+        stale = client.put(
+            f"/api/conflict-reviews/{run_id}/resolutions",
+            json={
+                "resolutions": [
+                    {"conflict_id": "conflict-1", "action": "accept_conflict", "rationale": "Still intentional"}
+                ]
+            },
+        )
+        assert stale.status_code == 400
+
+    with TestClient(create_app(tmp_path, db_path)) as restarted:
+        restored = restarted.get(f"/api/conflict-reviews/{run_id}")
+        assert restored.status_code == 200
+        resolution = restored.json()["conflicts"][0]["resolution"]
+        assert resolution["rationale"] == "Offline-first is an intentional exception."
+        assert resolution["resolved_at"]
+
+
 def test_locale_resources_setting_and_localized_board_are_persistent_and_provider_free(tmp_path: Path) -> None:
     db_path = tmp_path / "locale.sqlite"
     app = create_app(tmp_path, db_path)

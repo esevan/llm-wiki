@@ -36,6 +36,115 @@ def test_feature_cannot_be_approved_until_a_cited_clear_evaluation() -> None:
     assert progress["body"] == "People can find approved decisions"
 
 
+def _reviewable_solution(workflow: WorkflowEngine) -> dict[str, str]:
+    problem = workflow.promote_capture(workflow.capture("Conflicting ownership"))
+    workflow.approve_problem(problem["id"])
+    return workflow.create_feature(
+        problem["id"],
+        "Choose storage ownership",
+        "Client state is authoritative",
+        validation_criteria="- [ ] Ownership is explicit",
+    )
+
+
+def _structured_conflicts() -> list[dict[str, object]]:
+    return [
+        {
+            "id": "conflict-1",
+            "target_id": "decisions/adr-008.md",
+            "target_title": "ADR-008",
+            "severity": "high",
+            "category": "Storage ownership",
+            "summary": "Authority differs.",
+            "current_claim": "Client state is authoritative.",
+            "existing_claim": "Server state is authoritative.",
+            "impact": "Clients can diverge.",
+            "recommendation": "Keep server authority.",
+            "evidence": [{"citation": "decisions/adr-008.md:12-18", "excerpt": "Server owns state."}],
+        },
+        {
+            "id": "conflict-1",
+            "target_id": "specs/sync.md",
+            "target_title": "Sync specification",
+            "severity": "medium",
+            "category": "Offline behavior",
+            "summary": "Offline expectations differ.",
+            "current_claim": "Writes remain local.",
+            "existing_claim": "Writes require a connection.",
+            "impact": "Offline work may be lost.",
+            "recommendation": "Document the exception.",
+            "evidence": [],
+        },
+    ]
+
+
+def test_conflict_resolutions_persist_atomically_and_map_to_the_existing_gate() -> None:
+    db = sqlite3.connect(":memory:")
+    db.row_factory = sqlite3.Row
+    workflow = WorkflowEngine(db)
+    feature = _reviewable_solution(workflow)
+    query = '{"solution_hash":"current","vault_hash":"current"}'
+    run_id = workflow.start_conflict_review(feature["id"], query)
+    workflow.finish_conflict_review(run_id, [], {"run_id": run_id, "conflicts": _structured_conflicts()})
+
+    with pytest.raises(WorkflowError, match="rationale"):
+        workflow.resolve_conflict_review(
+            run_id,
+            [
+                {"conflict_id": "conflict-1", "action": "apply_recommendation", "rationale": ""},
+                {"conflict_id": "conflict-2", "action": "accept_conflict", "rationale": ""},
+            ],
+            query,
+        )
+    assert db.execute("SELECT count(*) FROM conflict_resolutions").fetchone()[0] == 0
+    assert db.execute("SELECT conflict_state FROM features WHERE id=?", (feature["id"],)).fetchone()[0] == "unknown"
+
+    saved = workflow.resolve_conflict_review(
+        run_id,
+        [
+            {"conflict_id": "conflict-1", "action": "accept_conflict", "rationale": "Intentional local-first."},
+            {"conflict_id": "conflict-2", "action": "accept_conflict", "rationale": "Travel use requires it."},
+        ],
+        query,
+    )
+    assert saved["state"] == "clear"
+    assert saved["requires_revision"] is False
+    assert saved["resolved_count"] == 2
+    assert db.execute("SELECT conflict_state FROM features WHERE id=?", (feature["id"],)).fetchone()[0] == "clear"
+    restored = workflow.conflict_review(run_id)
+    assert [item["resolution"]["rationale"] for item in restored["conflicts"]] == [
+        "Intentional local-first.",
+        "Travel use requires it.",
+    ]
+
+
+def test_applying_a_conflict_recommendation_preserves_history_and_blocks_solution() -> None:
+    db = sqlite3.connect(":memory:")
+    db.row_factory = sqlite3.Row
+    workflow = WorkflowEngine(db)
+    feature = _reviewable_solution(workflow)
+    query = "current-query"
+    run_id = workflow.start_conflict_review(feature["id"], query)
+    workflow.finish_conflict_review(run_id, [], {"run_id": run_id, "conflicts": _structured_conflicts()[:1]})
+
+    saved = workflow.resolve_conflict_review(
+        run_id,
+        [{"conflict_id": "conflict-1", "action": "apply_recommendation", "rationale": "Revise ownership."}],
+        query,
+    )
+
+    assert saved["state"] == "conflicted"
+    assert saved["requires_revision"] is True
+    with pytest.raises(WorkflowError, match="clear"):
+        workflow.approve_feature(feature["id"])
+    with pytest.raises(WorkflowError, match="stale"):
+        workflow.resolve_conflict_review(
+            run_id,
+            [{"conflict_id": "conflict-1", "action": "apply_recommendation", "rationale": "Again"}],
+            "changed-query",
+        )
+
+
 def test_deleting_parent_hides_children_and_can_be_restored() -> None:
     db = sqlite3.connect(":memory:")
     db.row_factory = sqlite3.Row

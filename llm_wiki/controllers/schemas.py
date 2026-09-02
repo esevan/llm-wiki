@@ -36,6 +36,16 @@ class ConflictIn(BaseModel):
     address: ConflictAddressIn | None = None
 
 
+class ConflictResolutionIn(BaseModel):
+    conflict_id: str = Field(min_length=1, max_length=200)
+    action: str = Field(pattern="^(apply_recommendation|accept_conflict)$")
+    rationale: str = Field(default="", max_length=10_000)
+
+
+class ConflictResolutionsIn(BaseModel):
+    resolutions: list[ConflictResolutionIn] = Field(min_length=1, max_length=50)
+
+
 class LineageRegenerateIn(BaseModel):
     include_inference: bool = True
 
