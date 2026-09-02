@@ -1,0 +1,22 @@
+# Evidence-rich Vault conflict review
+
+**English** | [한국어](vault-conflict-evidence.ko.md)
+
+Conflict review now shows what it is doing while it runs. The review panel reports the number of indexed Vault documents, current embedding coverage, merged candidate count, retained/reviewed progress, current phase, and separate search, screening, and strong-review timings.
+
+The service searches lexical and semantic evidence independently across the Vault. It splits the Solution into reviewable claims, combines candidate passages, removes duplicate Raw/canonical records, and keeps exact path, line range, source hash, and passage text. Potential conflicts appear as soon as they are validated, without waiting for every remaining candidate.
+
+## Result meanings
+
+- **Reviewing**: candidates remain, so clear is unavailable.
+- **Potential conflict**: at least one exact cited passage may contradict a Solution claim.
+- **No conflict found**: nothing has been found yet, but the review cannot claim absence.
+- **Clear**: embedding coverage is complete, evidence was found, and every retained candidate finished without a conflict.
+- **Insufficient evidence**: coverage, candidates, model output, or citations cannot support clear.
+- **Cancelled/failed**: review stopped without a reliable recommendation.
+
+Fast screening may remove only an explicit, well-formed non-conflict. Missing or ambiguous screening output stays in the strong-review queue. Browser cancellation is also sent to the server, preventing later model calls in that run. Unchanged Solution and Vault hashes reuse a completed review; changes invalidate it.
+
+AI output remains evidence, not authority. Only a person may declare the Solution clear or conflicted and advance workflow state.
+
+See [specification](../../specs/008-vault-conflict-evidence/spec.md) and [API contract](../../specs/008-vault-conflict-evidence/contracts/conflict-review-api.md).

@@ -1,0 +1,26 @@
+[project]
+name = "llm-wiki"
+version = "0.1.0"
+description = "Performance-first local Markdown knowledge workbench"
+requires-python = ">=3.12"
+dependencies = ["fastapi>=0.115", "uvicorn[standard]>=0.30", "platformdirs>=4.2", "watchfiles>=0.24", "keyring>=25.0"]
+
+[project.optional-dependencies]
+semantic = ["fastembed>=0.4", "onnxruntime==1.22.1; sys_platform == 'darwin' and platform_machine == 'x86_64'"]
+ai = ["langgraph>=0.4"]
+
+[project.scripts]
+llm-wiki = "llm_wiki.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build]
+include = ["llm_wiki/**/*.py", "llm_wiki/prompts/*.md", "llm_wiki/static/*.html", "llm_wiki/static/i18n/*.json"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[dependency-groups]
+dev = ["pytest>=8.0", "httpx>=0.27", "playwright>=1.50"]

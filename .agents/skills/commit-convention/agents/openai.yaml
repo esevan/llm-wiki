@@ -1,0 +1,4 @@
+interface:
+  display_name: "Commit Convention"
+  short_description: "Create compliant Git commits and PR-ready squashes"
+  default_prompt: "Apply the repository commit convention to this Git operation."
