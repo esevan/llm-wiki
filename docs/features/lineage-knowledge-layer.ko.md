@@ -4,6 +4,8 @@
 
 > 완료된 Solution은 출발점, 결정, 충돌, 완료 근거를 추적 가능한 Knowledge로 남깁니다.
 
+![완료 전에 체크리스트 상태, 진행 근거, 검토 댓글을 보존하는 Solution Work](images/06-work-log.png)
+
 Solution을 완료하면 LLM Wiki가 현재 **Capture → Problem → Solution → Complete**
 스냅샷을 자동으로 만듭니다. 완료 보고서는 이 스냅샷을 먼저 만든 뒤, Lineage 투영과 거기서
 참조한 근거만 입력으로 사용해 생성합니다. 최종 Markdown에는 Detail, Lineage, Decision Changes,

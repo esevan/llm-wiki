@@ -2,6 +2,8 @@
 
 **English** | [한국어](conflict-resolution-workflow.ko.md)
 
+![An unresolved Solution remains visibly gated until conflict review and a human decision are complete](images/02-workbench-board.png)
+
 Conflict Review is a decision workflow inside a proposed Solution, not a raw AI report. When Vault evidence disagrees with the current Solution, the completed Queue result opens one card per conflict.
 
 Each card puts the core comparison first:

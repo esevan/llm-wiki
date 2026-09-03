@@ -28,6 +28,22 @@ def test_api_is_usable_without_ai_or_embeddings(tmp_path: Path) -> None:
         assert captured.json()["id"] != "pending-workflow"
 
 
+def test_compass_goal_creation_returns_the_persisted_goal(tmp_path: Path) -> None:
+    with TestClient(create_app(tmp_path, tmp_path / "db.sqlite")) as client:
+        created = client.post(
+            "/api/goals",
+            json={
+                "title": "Make decisions reusable",
+                "description": "Keep reviewed work available as durable knowledge.",
+            },
+        )
+
+        assert created.status_code == 201
+        assert created.json()["title"] == "Make decisions reusable"
+        assert created.json()["active"] == 1
+        assert client.get("/api/dashboard").json()["goals"][0]["id"] == created.json()["id"]
+
+
 def test_react_shell_and_bundled_assets_are_served_from_the_local_app(tmp_path: Path) -> None:
     with TestClient(create_app(tmp_path, tmp_path / "db.sqlite")) as client:
         shell = client.get("/")

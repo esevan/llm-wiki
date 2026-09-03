@@ -99,6 +99,7 @@ default. Every choice remains user-configurable in Advanced options.
 ## Feature guides
 
 - [Product Spirit and product decisions](docs/product-spirit.md)
+- [Visual feature tour](docs/features/visual-guide.md)
 - [Fast vault search](docs/features/fast-vault-search.md)
 - [Problem-centered Workbench](docs/features/conflict-gated-workflow.md)
 - [Completion, Knowledge, and archive](docs/features/completion-writeback-archive.md)

@@ -5,10 +5,14 @@
 LLM Wiki는 상호작용의 반응성을 유지하면서 복구 가능한 작업을 잃지 않도록 AI 실행을 두 개의
 프로세스 경로로 분리합니다.
 
+![지속 작업의 목적, 대상, 상태, 결과 목적지를 읽을 수 있게 보여주는 백그라운드 Queue](images/08-background-queue.png)
+
 - **Fast Queue**는 FIFO Worker 하나만 사용합니다. Chat과 즉시 반응이 필요한 상호작용을 전역
   요청 제한 경로로 처리하며, 데이터베이스 상태·Queue UI·재시도 기록·알림을 만들지 않습니다.
 - **Asynchronous Queue**는 지속 가능한 AI·번역·임베딩 Job을 SQLite에 저장합니다. AI Setup에서
   Worker 수를 조절하며, Worker는 Lease와 Heartbeat로 작업을 점유합니다.
+
+![충돌 검토가 백그라운드에서 이어짐을 알리는 지속 Job 시작 화면](images/09-background-job-queued.png)
 
 오른쪽 아래 Queue는 각 백그라운드 작업의 대상과 목적을 설명하고, 이해하기 쉬운 상태·단계별
 진행률·시간·안전한 오류·취소·재시도를 표시합니다. 결과는 작업에 맞는 화면이나 간결한 요약으로
@@ -31,6 +35,8 @@ Worker는 제한 재시도, 지수 Backoff, Source Hash, 유효 Lease Token, 취
 Coverage 0과 어휘 검색 Fallback 결과로 완료됩니다. AI 결과는 제안 또는 파생 표현이며 Workflow
 상태, 승인, 완료, Knowledge 결정 권한은
 사용자에게 있습니다.
+
+![Endpoint와 model routing은 표시하면서 자격 증명 값은 native secret storage에 유지하는 AI 설정](images/07-ai-settings.png)
 
 [기능 명세](../../specs/009-background-ai-queue/spec.md)와
 [Worker 계약](../../specs/009-background-ai-queue/contracts/worker-contract.md)을 참고하세요. 모든 지속

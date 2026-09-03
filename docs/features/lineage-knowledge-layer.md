@@ -4,6 +4,8 @@
 
 > A completed Solution keeps its origin, decisions, conflicts, and completion basis traceable.
 
+![Solution Work preserves checklist state, progress evidence, and review comments before completion](images/06-work-log.png)
+
 When a Solution is completed, LLM Wiki automatically builds the current
 **Capture → Problem → Solution → Complete** snapshot. The completed-work report is generated only
 after this snapshot exists and uses the Lineage projection plus its referenced evidence as input.

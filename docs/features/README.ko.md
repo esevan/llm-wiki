@@ -2,21 +2,29 @@
 
 [English](README.md) | **한국어**
 
-[Product Spirit](../product-spirit.ko.md)에서 시작하세요. 아래 문서는 Spirit이 실제 제품 행동으로
-어떻게 나타나는지 설명합니다.
+[Product Spirit](../product-spirit.ko.md)에서 시작하거나, 실제 실행 화면 중심의
+[기능 둘러보기](visual-guide.ko.md)로 전체 흐름을 먼저 확인하세요.
 
-| 기능 | 드러나는 Product Spirit |
-| --- | --- |
-| [빠른 Vault 검색](fast-vault-search.ko.md) | 기존 Knowledge와 근거에서 바로 이어가기 |
-| [Problem 중심 Workbench](conflict-gated-workflow.ko.md) | 먼저 말하기, 인지 부하 줄이기, Problem 중심 구성 |
-| [완료와 Knowledge](completion-writeback-archive.ko.md) | 과정은 개인적으로, 완료 결과만 휴대 가능하게 |
-| [Compass](direction-dashboard.ko.md) | 사람을 점수화하지 않고 방향 이해하기 |
-| [Refinement Preview](refinement-preview-status.ko.md) | 일이 정리되는 동안에도 맥락 보존하기 |
-| [한국어·영어 전환](bilingual-localization.ko.md) | 맥락을 유지하며 언어를 바꾸고 Knowledge의 휴대성 지키기 |
-| [Lineage Knowledge Layer](lineage-knowledge-layer.ko.md) | 완료 Knowledge를 원 기록과 결정까지 추적하기 |
-| [근거 중심 Vault 충돌 검토](vault-conflict-evidence.ko.md) | 검색 coverage, 정확한 근거, 진행률, 보수적인 판정 의미 확인하기 |
-| [충돌 해결 워크플로](conflict-resolution-workflow.ko.md) | 발견한 충돌마다 명시적이고 지속 가능한 사용자 결정을 남기기 |
-| [백그라운드 AI Queue](background-ai-queue.ko.md) | 반응성을 유지하면서 AI 작업을 조회하고 복구하기 |
+## 작업을 캡처하고 구체화하기
 
-제품 흐름은 **Capture → Problem → Solution**입니다. 이후 실행은 Solution의 Work Log, 검증 체크,
-Completion 안에서 이어집니다.
+- [Problem 중심 Workbench](conflict-gated-workflow.ko.md)는 화면의 흐름을
+  **Capture → Problem → Solution**으로 구성합니다.
+- [Refinement Preview](refinement-preview-status.ko.md)는 AI 제안을 검토하는 동안 맥락을 보존합니다.
+- [Compass](direction-dashboard.ko.md)는 사람을 점수화하지 않고 방향을 기록합니다.
+
+## 근거를 찾고 검증하기
+
+- [빠른 Vault 검색](fast-vault-search.ko.md)은 기존 Knowledge와 근거에서 바로 이어가게 합니다.
+- [근거 중심 Vault 충돌 검토](vault-conflict-evidence.ko.md)는 검색 coverage, 인용, 진행률,
+  보수적인 판정 의미를 설명합니다.
+- [충돌 해결 워크플로](conflict-resolution-workflow.ko.md)는 발견한 불일치를 명시적이고 지속 가능한
+  사용자 결정으로 바꿉니다.
+
+## 실행하고 Knowledge로 남기기
+
+- [완료와 Knowledge](completion-writeback-archive.ko.md)는 비공개 작업 기록을 보존하면서 완료 결과를
+  게시합니다.
+- [Lineage Knowledge Layer](lineage-knowledge-layer.ko.md)는 완료 Knowledge를 원 기록과 결정까지
+  추적합니다.
+- [백그라운드 AI Queue](background-ai-queue.ko.md)는 지속 작업을 조회하고 복구하게 합니다.
+- [한국어·영어 전환](bilingual-localization.ko.md)은 workflow 맥락을 잃지 않고 언어를 바꿉니다.

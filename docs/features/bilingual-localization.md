@@ -5,6 +5,8 @@
 > **Resume where you left off.** Language changes preserve the current surface, input, and workflow
 > lineage instead of making the user start over.
 
+![The Korean Workbench preserves English-authored records and marks them as source-language content](images/02-workbench.png)
+
 LLM Wiki supports Korean and English throughout the application. The language control is available
 from every primary surface. A change updates interface text immediately, keeps the current view and
 unsaved input in place, and is remembered for later sessions. Before the user makes an explicit

@@ -2,6 +2,8 @@
 
 [English](conflict-resolution-workflow.md) | **한국어**
 
+![충돌 검토와 사용자 결정이 끝날 때까지 미해결 Solution을 명확히 제한하는 화면](images/02-workbench-board.png)
+
 Conflict Review는 AI 원문 보고서가 아니라 제안된 Solution 안에서 진행하는 결정 워크플로입니다. Vault 근거와 현재 Solution이 충돌하면 완료된 Queue 결과에 충돌별 카드가 표시됩니다.
 
 각 카드는 핵심 비교를 가장 먼저 보여줍니다.

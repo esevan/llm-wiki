@@ -2,21 +2,31 @@
 
 **English** | [한국어](README.ko.md)
 
-Start with [Product Spirit](../product-spirit.md). The feature guides show how that spirit becomes
-visible behavior rather than a marketing layer.
+Start with [Product Spirit](../product-spirit.md), or use the
+[visual feature tour](visual-guide.md) for a screenshot-led overview of the running application.
 
-| Feature | Product Spirit made visible |
-| --- | --- |
-| [Fast vault search](fast-vault-search.md) | Resume with existing Knowledge and evidence. |
-| [Problem-centered Workbench](conflict-gated-workflow.md) | Talk first, reduce load, and organize around Problems. |
-| [Completion and Knowledge](completion-writeback-archive.md) | Keep process private; publish only completed outcomes. |
-| [Compass](direction-dashboard.md) | Understand direction without scoring people. |
-| [Refinement Preview](refinement-preview-status.md) | Preserve context while the work organizes itself. |
-| [Korean and English localization](bilingual-localization.md) | Switch language without losing context; keep Knowledge portable. |
-| [Lineage Knowledge Layer](lineage-knowledge-layer.md) | Make completed Knowledge traceable to records and decisions. |
-| [Evidence-rich Vault conflict review](vault-conflict-evidence.md) | Inspect search coverage, exact evidence, progress, and cautious result meanings. |
-| [Conflict Resolution Workflow](conflict-resolution-workflow.md) | Turn each detected disagreement into an explicit, durable human decision. |
-| [Background AI Queue](background-ai-queue.md) | Stay responsive while durable AI work remains observable and recoverable. |
+## Capture and shape work
 
-The product workflow is **Capture → Problem → Solution**. Work continues inside the Solution through
-Work Log, validation checks, and Completion.
+- [Problem-centered Workbench](conflict-gated-workflow.md) organizes the visible workflow as
+  **Capture → Problem → Solution**.
+- [Refinement Preview](refinement-preview-status.md) preserves context while AI prepares a proposal
+  for review.
+- [Compass](direction-dashboard.md) records direction without scoring people.
+
+## Find and validate evidence
+
+- [Fast vault search](fast-vault-search.md) resumes work from existing Knowledge and evidence.
+- [Evidence-rich Vault conflict review](vault-conflict-evidence.md) explains search coverage,
+  citations, progress, and cautious result meanings.
+- [Conflict Resolution Workflow](conflict-resolution-workflow.md) turns each disagreement into an
+  explicit, durable human decision.
+
+## Execute and retain knowledge
+
+- [Completion and Knowledge](completion-writeback-archive.md) keeps the private work record while
+  publishing completed outcomes.
+- [Lineage Knowledge Layer](lineage-knowledge-layer.md) traces completed Knowledge to its records
+  and decisions.
+- [Background AI Queue](background-ai-queue.md) keeps durable AI work observable and recoverable.
+- [Korean and English localization](bilingual-localization.md) changes language without losing
+  workflow context.

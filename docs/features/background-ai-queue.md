@@ -5,11 +5,15 @@
 LLM Wiki separates AI execution into two process-level paths so interaction stays responsive
 without losing recoverable work.
 
+![Background Queue shows durable work by readable purpose, target, status, and result destination](images/08-background-queue.png)
+
 - The **Fast Queue** has exactly one FIFO worker. Chat and other immediate interactions use it as
   a global request throttle. It has no database state, Queue UI entry, retry history, or
   notification.
 - The **Asynchronous Queue** stores durable AI, translation, and embedding Jobs in SQLite. Its
   worker count is configurable in AI Setup and workers claim jobs with leases and heartbeats.
+
+![Starting conflict review acknowledges that the durable job continues in the background](images/09-background-job-queued.png)
 
 The bottom-right Queue names the target item and explains what each durable task is doing. Its cards
 show readable status, step progress, time, safe failures, cancellation, retry, and only the result
@@ -34,6 +38,8 @@ SQLite writer contention is retried rather than published as a terminal failure.
 semantic runtime is absent, embedding work completes with lexical fallback and zero semantic
 coverage. AI output remains a proposal or derived representation: workflow
 state, approval, completion, and Knowledge decisions remain under user control.
+
+![AI Settings keeps endpoint and model routing visible while the credential value remains in native secret storage](images/07-ai-settings.png)
 
 See [feature specification](../../specs/009-background-ai-queue/spec.md) and
 [worker contract](../../specs/009-background-ai-queue/contracts/worker-contract.md). The

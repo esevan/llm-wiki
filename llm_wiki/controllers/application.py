@@ -794,7 +794,7 @@ def create_http_app(runtime: ApplicationRuntime) -> FastAPI:
         return workflow.dashboard()
 
     @app.post("/api/goals", status_code=201)
-    def goal(data: GoalIn) -> dict[str, str]:
+    def goal(data: GoalIn) -> dict[str, object]:
         return workflow.create_goal(data.title, data.description)
 
     @app.post("/api/features/{feature_id}/completion", status_code=201)
