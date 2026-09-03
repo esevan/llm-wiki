@@ -109,6 +109,7 @@
   "archive.reusable_title": "Reusable work",
   "archive.no_documents": "No archived documents yet.",
   "archive.no_verified_solutions": "No verified Solutions yet.",
+  "archive.no_completed_solutions": "No completed Solutions yet.",
   "archive.no_completed_document": "No completed-work document yet",
   "archive.regenerate_title": "Regenerate archive",
   "archive.regenerate_confirm": "Rebuild the concise completed-work document and its Raw Data from the preserved Solution records?",

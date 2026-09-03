@@ -170,13 +170,14 @@ def test_frontend_transport_and_theme_boundaries_are_centralized() -> None:
 
 
 def test_tauri_exposes_only_native_domain_and_e2e_boundaries() -> None:
-    source = (ROOT / "src-tauri" / "src" / "lib.rs").read_text(encoding="utf-8")
-    assert source.count("#[tauri::command]") == 10
+    source = "\n".join(path.read_text(encoding="utf-8") for path in (ROOT / "src-tauri" / "src").glob("*.rs"))
+    assert source.count("#[tauri::command]") == 11
     for command in ("system_command", "vault_command", "settings_command", "workflow_command", "jobs_command"):
         assert command in source
     assert "conversation_stream" in source
     assert "cancel_conversation" in source
     assert "desktop_e2e_complete" in source
+    assert "provider_request" in source
     assert "ApplicationGateway" not in source
     assert "TcpListener" not in source
     assert "desktop-backend" not in source

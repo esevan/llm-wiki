@@ -4,19 +4,23 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "build": "vite build",
+    "build": "npm run prepare:fonts && vite build && npm run verify:fonts",
     "build:desktop": "npm run prepare:embedding && npm run build",
     "dev": "vite",
     "lint": "eslint frontend/src --max-warnings=0",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "prepare:embedding": "python3 scripts/prepare_embedding_model.py",
+    "prepare:embedding": "node scripts/prepare_embedding_model.mjs",
+    "prepare:fonts": "node scripts/prepare_fonts.mjs",
     "tauri": "tauri",
-    "tauri:build": "tauri build"
+    "tauri:build": "tauri build",
+    "test:desktop": "node scripts/run_desktop_e2e.mjs",
+    "verify:fonts": "node scripts/verify_bundled_fonts.mjs"
   },
   "dependencies": {
     "@fontsource/dm-mono": "^5.2.6",
     "@fontsource/nunito": "^5.2.6",
+    "@fontsource-variable/noto-sans-kr": "^5.3.0",
     "@tauri-apps/api": "^2.8.0",
     "react": "^19.1.1",
     "react-dom": "^19.1.1"

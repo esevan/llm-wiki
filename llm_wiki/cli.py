@@ -26,9 +26,7 @@ def _run_fast_worker(host: str, port: int) -> None:
     asyncio.run(FastQueueServer(host, port).serve())
 
 
-def _run_async_worker(
-    vault: Path, db_path: Path, count: int, stop_requested: threading.Event | None = None
-) -> None:
+def _run_async_worker(vault: Path, db_path: Path, count: int, stop_requested: threading.Event | None = None) -> None:
     async def supervise() -> None:
         stop = asyncio.Event()
         workers = asyncio.create_task(run_async_workers(vault, db_path, count, stop))

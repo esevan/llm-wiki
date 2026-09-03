@@ -73,6 +73,24 @@ CREATE TABLE IF NOT EXISTS conflict_review_runs (
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+CREATE TABLE IF NOT EXISTS conflict_review_conflicts (
+  storage_id TEXT PRIMARY KEY,
+  run_id TEXT NOT NULL,
+  feature_id TEXT NOT NULL,
+  conflict_id TEXT NOT NULL,
+  target_id TEXT NOT NULL DEFAULT '',
+  target_title TEXT NOT NULL DEFAULT '',
+  severity TEXT NOT NULL DEFAULT 'medium',
+  category TEXT NOT NULL DEFAULT 'Conflicting requirement',
+  summary TEXT NOT NULL DEFAULT '',
+  current_claim TEXT NOT NULL DEFAULT '',
+  existing_claim TEXT NOT NULL DEFAULT '',
+  impact TEXT NOT NULL DEFAULT '',
+  recommendation TEXT NOT NULL DEFAULT '',
+  evidence_json TEXT NOT NULL DEFAULT '[]',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(run_id, conflict_id)
+);
 CREATE TABLE IF NOT EXISTS conflict_resolutions (
   id TEXT PRIMARY KEY,
   run_id TEXT NOT NULL,
@@ -118,6 +136,33 @@ CREATE TABLE IF NOT EXISTS completion_playbooks (
   report_generation_status TEXT NOT NULL DEFAULT 'deterministic_fallback',
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+CREATE TABLE IF NOT EXISTS lineage_snapshots (
+  id TEXT PRIMARY KEY, feature_id TEXT NOT NULL, version INTEGER NOT NULL,
+  schema_version INTEGER NOT NULL, source_hash TEXT NOT NULL, status TEXT NOT NULL,
+  document_json TEXT NOT NULL DEFAULT '{}', inference_error TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE(feature_id,version)
+);
+CREATE TABLE IF NOT EXISTS lineage_claims (
+  id TEXT PRIMARY KEY, snapshot_id TEXT NOT NULL, claim_key TEXT NOT NULL,
+  section TEXT NOT NULL, subject_type TEXT NOT NULL, subject_id TEXT NOT NULL,
+  classification TEXT NOT NULL, confidence TEXT, material INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE(snapshot_id,claim_key)
+);
+CREATE TABLE IF NOT EXISTS lineage_evidence (
+  id TEXT PRIMARY KEY, claim_id TEXT NOT NULL, source_type TEXT NOT NULL,
+  source_id TEXT NOT NULL, field_name TEXT NOT NULL, excerpt TEXT NOT NULL,
+  source_hash TEXT NOT NULL, live_entity_type TEXT NOT NULL DEFAULT '',
+  captured_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS lineage_revisions (
+  id TEXT PRIMARY KEY, claim_id TEXT NOT NULL, supersedes_id TEXT,
+  author_type TEXT NOT NULL, text TEXT NOT NULL, reason TEXT NOT NULL DEFAULT '',
+  is_current INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_lineage_snapshots_feature ON lineage_snapshots(feature_id,version DESC);
+CREATE INDEX IF NOT EXISTS idx_lineage_claims_snapshot ON lineage_claims(snapshot_id);
+CREATE INDEX IF NOT EXISTS idx_lineage_evidence_claim ON lineage_evidence(claim_id);
+CREATE INDEX IF NOT EXISTS idx_lineage_revisions_claim ON lineage_revisions(claim_id,is_current);
 CREATE TABLE IF NOT EXISTS compass_goals (
   id TEXT PRIMARY KEY,
   title TEXT NOT NULL,
@@ -134,10 +179,57 @@ CREATE TABLE IF NOT EXISTS score_events (
   event_type TEXT NOT NULL,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+CREATE TABLE IF NOT EXISTS score_periods (
+  period TEXT NOT NULL,
+  goal_id TEXT,
+  points REAL NOT NULL,
+  PRIMARY KEY(period, goal_id)
+);
+CREATE TABLE IF NOT EXISTS importance_assessments (
+  id TEXT PRIMARY KEY,
+  problem_id TEXT UNIQUE NOT NULL,
+  alignment INTEGER NOT NULL,
+  impact INTEGER NOT NULL,
+  urgency INTEGER NOT NULL,
+  leverage INTEGER NOT NULL,
+  evidence TEXT NOT NULL,
+  importance INTEGER NOT NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS mirror_files (
+  entity_type TEXT NOT NULL,
+  entity_id TEXT NOT NULL,
+  path TEXT NOT NULL,
+  source_hash TEXT NOT NULL,
+  PRIMARY KEY(entity_type, entity_id)
+);
+CREATE TABLE IF NOT EXISTS patch_proposals (
+  id TEXT PRIMARY KEY,
+  feature_id TEXT NOT NULL,
+  path TEXT NOT NULL,
+  operation TEXT NOT NULL,
+  heading TEXT NOT NULL,
+  content TEXT NOT NULL,
+  base_hash TEXT NOT NULL,
+  before_text TEXT NOT NULL,
+  proposed_text TEXT NOT NULL,
+  reverse_text TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'proposed',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 CREATE TABLE IF NOT EXISTS deleted_entities (
   entity_type TEXT NOT NULL,
   entity_id TEXT NOT NULL,
   deleted_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY(entity_type, entity_id)
+);
+CREATE TABLE IF NOT EXISTS workbench_priorities (
+  entity_type TEXT NOT NULL,
+  entity_id TEXT NOT NULL,
+  category TEXT NOT NULL DEFAULT 'General',
+  attention_rank INTEGER NOT NULL DEFAULT 0,
+  rationale TEXT NOT NULL DEFAULT '',
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY(entity_type, entity_id)
 );
 CREATE TABLE IF NOT EXISTS workbench_priority_overrides (
@@ -209,13 +301,17 @@ CREATE TABLE IF NOT EXISTS locale_settings (
 CREATE TABLE IF NOT EXISTS localized_content (
   entity_type TEXT NOT NULL,
   entity_id TEXT NOT NULL,
+  field_name TEXT NOT NULL,
   locale TEXT NOT NULL,
-  fields_json TEXT NOT NULL,
+  value TEXT NOT NULL,
+  origin TEXT NOT NULL DEFAULT 'ai',
   source_hash TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  PRIMARY KEY(entity_type, entity_id, locale)
+  PRIMARY KEY(entity_type, entity_id, field_name, locale)
 );
+CREATE INDEX IF NOT EXISTS idx_localized_content_entity
+  ON localized_content(entity_type,entity_id,locale);
 CREATE TABLE IF NOT EXISTS ai_runs (
   id TEXT PRIMARY KEY, entity_type TEXT NOT NULL, entity_id TEXT NOT NULL,
   kind TEXT NOT NULL, input_text TEXT NOT NULL, output_text TEXT NOT NULL DEFAULT '',

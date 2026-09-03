@@ -37,10 +37,13 @@ code. Their incremental replacement with typed React hooks remains tracked in th
 | Adapter | Integrate with AI providers and other external mechanisms | `llm_wiki/adapters/` |
 | Native desktop application | Execute desktop workflow, jobs, settings, and Vault operations | `src-tauri/src/native/` |
 
-The native Vault module indexes Markdown at application startup. `native/semantic.rs` lazily loads
+The native Vault module starts Markdown indexing on a blocking-worker thread after application
+state is ready, so first-window creation does not wait for a Vault scan or ONNX model load.
+`native/semantic.rs` lazily loads
 the checksum-pinned multilingual MiniLM model from Tauri resources, writes 384-dimensional vectors
 to SQLite, and reranks selected search results locally. The release app never fetches this model at
-runtime; only the reproducible desktop build preparation downloads the verified assets.
+runtime; only the reproducible desktop build preparation downloads the verified assets. Nunito,
+DM Mono, and Noto Sans KR are likewise bundled and verified during the frontend build.
 
 `web.app.create_app` is the public composition root. It builds one `ApplicationRuntime`, then
 passes that runtime to `controllers.application.create_http_app`. Controllers do not construct

@@ -66,11 +66,16 @@ npm run tauri:build
 시작 시 임베딩 모델을 내려받지 않습니다. 캐시를 검증하거나 복구하려면
 `npm run prepare:embedding`을 다시 실행합니다.
 
+Nunito, DM Mono, variable Noto Sans KR도 모든 production build에서 앱 asset으로 복사됩니다.
+따라서 패키징 UI는 web font 요청 없이 한국어와 영어를 표시합니다. macOS build는 `.app`을 만들고,
+Windows와 Linux build check는 cross-platform CI matrix에서 실행합니다.
+
 Release `.app`에는 Python Runtime, Sidecar, 내부 Web Server가 없습니다.
 `LLM_WIKI_VAULT`가 없으면 데스크톱 앱은 `Documents/LLM Wiki Vault`를 사용합니다. React는
 Workflow, Vault, 설정, Job, System 명령을 각각 호출하며 Chat Chunk와 취소는 네이티브 Tauri
 Channel을 사용합니다. Socket은 사용자가 명시적으로 설정한 외부 AI Provider 호출에만 열립니다.
-위 Python/FastAPI 브라우저 모드는 별도로 유지되며 Tauri가 시작하지 않습니다.
+위 Python/FastAPI 브라우저 모드는 명시적인 브라우저 전달·동작 characterization 경계로만 별도
+유지되며 Tauri가 시작하지 않습니다.
 
 Worker 역할, 복구, 작업별 결과, 알림 동작은
 [백그라운드 AI Queue](docs/features/background-ai-queue.ko.md)를 참고하세요.

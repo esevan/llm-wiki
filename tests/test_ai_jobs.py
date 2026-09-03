@@ -176,9 +176,7 @@ def test_embedding_job_completes_with_lexical_fallback_when_semantic_runtime_is_
         def __init__(self) -> None:
             self.db = sqlite3.connect(":memory:")
             self.db.row_factory = sqlite3.Row
-            self.db.execute(
-                "CREATE TABLE documents(path TEXT, source_hash TEXT, title TEXT, headings TEXT, body TEXT)"
-            )
+            self.db.execute("CREATE TABLE documents(path TEXT, source_hash TEXT, title TEXT, headings TEXT, body TEXT)")
             self.db.execute(
                 "CREATE TABLE document_embeddings(path TEXT, source_hash TEXT, dimensions INTEGER, vector BLOB)"
             )

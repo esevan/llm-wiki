@@ -97,6 +97,18 @@ const waitForIdleJobs = async () => {
   throw new Error('Desktop background jobs did not quiesce');
 };
 
+const waitForSemanticStartupIndex = async () => {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    const search = await applicationJson<{
+      results: Array<{ semantic_score: number | null }>;
+      semantic_available: boolean;
+    }>('/search?q=startup&semantic=true');
+    if (search.semantic_available && typeof search.results[0]?.semantic_score === 'number') return;
+    await new Promise((resolve) => window.setTimeout(resolve, 50));
+  }
+  throw new Error('Startup Vault indexing did not prepare bundled semantic Search');
+};
+
 const applicationText = async (path: string, body: object) => {
   const response = await window.llmWikiApplication.request({
     path,
@@ -120,13 +132,7 @@ const run = async (providerUrl: string) => {
   try {
     await waitFor(() => document.documentElement.dataset.applicationReady === 'true', 'application initialization');
     await step('application launched and initialized through the native command path');
-    const startupSearch = await applicationJson<{
-      results: Array<{ semantic_score: number | null }>;
-      semantic_available: boolean;
-    }>('/search?q=startup&semantic=true');
-    if (!startupSearch.semantic_available || typeof startupSearch.results[0]?.semantic_score !== 'number') {
-      throw new Error('Startup Vault indexing did not prepare bundled semantic Search');
-    }
+    await waitForSemanticStartupIndex();
     await step('startup indexing prepared the Vault with the bundled embedding model');
     await applicationJson('/provider/config', 'PUT', {
       base_url: providerUrl,

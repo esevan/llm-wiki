@@ -1,74 +1,12 @@
+mod conversation;
+mod desktop_e2e;
 mod native;
+mod provider;
 
 pub use native::{NativeApplication, NativeOperation, NativeResponse};
-use serde::{Deserialize, Serialize};
-use serde_json::json;
-use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
-use tauri::ipc::Channel;
 use tauri::path::BaseDirectory;
 use tauri::Manager;
-use tokio::sync::Mutex;
-use tokio_util::sync::CancellationToken;
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct DesktopE2eResult {
-    status: String,
-    steps: Vec<String>,
-    error: Option<String>,
-    #[serde(default)]
-    capture: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct DesktopE2eState {
-    provider_url: String,
-    restore_capture: Option<String>,
-    restore_steps: Vec<String>,
-}
-
-#[derive(Clone, Default)]
-struct RequestRegistry {
-    active: Arc<Mutex<HashMap<String, CancellationToken>>>,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(tag = "kind", rename_all = "camelCase")]
-enum StreamEvent {
-    Chunk { data: Vec<u8> },
-    Complete,
-    Cancelled,
-    Error { message: String },
-}
-
-impl RequestRegistry {
-    async fn register(&self, request_id: &str) -> Result<CancellationToken, String> {
-        if request_id.is_empty() || request_id.len() > 128 {
-            return Err("Invalid request identifier".into());
-        }
-        let mut active = self.active.lock().await;
-        if active.contains_key(request_id) {
-            return Err("Request identifier is already active".into());
-        }
-        let token = CancellationToken::new();
-        active.insert(request_id.to_owned(), token.clone());
-        Ok(token)
-    }
-    async fn finish(&self, request_id: &str) {
-        self.active.lock().await.remove(request_id);
-    }
-    async fn cancel(&self, request_id: &str) -> bool {
-        if let Some(token) = self.active.lock().await.remove(request_id) {
-            token.cancel();
-            true
-        } else {
-            false
-        }
-    }
-}
 
 fn application_paths() -> Result<(PathBuf, PathBuf), String> {
     let vault = std::env::var_os("LLM_WIKI_VAULT")
@@ -117,11 +55,11 @@ fn settings_command(
 }
 
 #[tauri::command]
-fn workflow_command(
+async fn workflow_command(
     application: tauri::State<'_, NativeApplication>,
     operation: NativeOperation,
 ) -> Result<NativeResponse, String> {
-    execute_domain(application, "workflow", operation)
+    Ok(application.execute_workflow(operation).await)
 }
 
 #[tauri::command]
@@ -143,140 +81,13 @@ async fn enqueue_ai_job(
             body: serde_json::json!({"detail":"Unsupported AI job command"}),
         });
     }
-    let text = |key: &str| {
-        operation
-            .input
-            .get(key)
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("")
-            .to_owned()
-    };
-    match native::jobs::enqueue(
-        application.db_path(),
-        text("taskKind"),
-        text("entityType"),
-        text("entityId"),
-    )
-    .await
-    {
-        Ok(body) => Ok(NativeResponse { status: 202, body }),
-        Err(error) => Ok(NativeResponse {
-            status: 400,
-            body: serde_json::json!({"detail":error}),
-        }),
-    }
-}
-
-#[tauri::command]
-async fn conversation_stream(
-    application: tauri::State<'_, NativeApplication>,
-    registry: tauri::State<'_, RequestRegistry>,
-    request_id: String,
-    entity_type: String,
-    entity_id: String,
-    message: String,
-    on_event: Channel<StreamEvent>,
-) -> Result<NativeResponse, String> {
-    if message.trim().is_empty() {
-        return Err("message is required".into());
-    }
-    native::workflow::item(&application.db_path(), &entity_type, &entity_id)?;
-    let (base_url, model, api_key) =
-        native::settings::provider_credentials(&application.db_path())?;
-    if model.trim().is_empty() {
-        return Err("Provider model is required".into());
-    }
-    let token = registry.register(&request_id).await?;
-    let registry = registry.inner().clone();
-    let db_path = application.db_path();
-    tauri::async_runtime::spawn(async move {
-        let task = async {
-            let response = reqwest::Client::new().post(format!("{}/chat/completions", base_url.trim_end_matches('/')))
-                .bearer_auth(api_key)
-                .json(&json!({"model":model,"messages":[{"role":"user","content":message}],"stream":true}))
-                .send().await.map_err(|error| error.to_string())?;
-            if !response.status().is_success() { return Err(format!("Provider request failed ({})", response.status())); }
-            let source = response.text().await.map_err(|error| error.to_string())?;
-            let mut output = String::new();
-            for line in source.lines().filter_map(|line| line.strip_prefix("data: ")) {
-                if token.is_cancelled() { let _ = on_event.send(StreamEvent::Cancelled); return Ok(()); }
-                if line == "[DONE]" { break; }
-                let value: serde_json::Value = serde_json::from_str(line).map_err(|error| error.to_string())?;
-                if let Some(text) = value.pointer("/choices/0/delta/content").and_then(serde_json::Value::as_str) {
-                    output.push_str(text);
-                    let data = format!("data: {}\n\n", text.replace('\n', " ")).into_bytes();
-                    let _ = on_event.send(StreamEvent::Chunk { data });
-                }
-            }
-            native::workflow::record_ai_run(&db_path, &entity_type, &entity_id, &message, &output)?;
-            let _ = on_event.send(StreamEvent::Chunk { data: b"event: done\ndata: done\n\n".to_vec() });
-            let _ = on_event.send(StreamEvent::Complete);
-            Ok::<(), String>(())
-        }.await;
-        if let Err(message) = task {
-            let _ = on_event.send(StreamEvent::Error { message });
-        }
-        registry.finish(&request_id).await;
-    });
-    Ok(NativeResponse {
-        status: 200,
-        body: serde_json::Value::Null,
-    })
-}
-
-#[tauri::command]
-async fn cancel_conversation(
-    registry: tauri::State<'_, RequestRegistry>,
-    request_id: String,
-) -> Result<bool, String> {
-    Ok(registry.cancel(&request_id).await)
-}
-
-#[tauri::command]
-fn desktop_e2e_mode() -> Option<DesktopE2eState> {
-    if let Some(path) = std::env::var_os("LLM_WIKI_E2E_RESULT").map(PathBuf::from) {
-        let _ = std::fs::write(path.with_extension("started"), b"webview started");
-        let provider_url = std::env::var("LLM_WIKI_E2E_PROVIDER_URL").ok()?;
-        let restore_capture = std::env::var("LLM_WIKI_E2E_RESTORE_CAPTURE").ok();
-        let restore_steps = std::env::var("LLM_WIKI_E2E_RESTORE_STEPS")
-            .ok()
-            .and_then(|value| serde_json::from_str(&value).ok())
-            .unwrap_or_default();
-        Some(DesktopE2eState {
-            provider_url,
-            restore_capture,
-            restore_steps,
-        })
-    } else {
-        None
-    }
-}
-
-#[tauri::command]
-fn desktop_e2e_complete(app: tauri::AppHandle, result: DesktopE2eResult) -> Result<(), String> {
-    let path = std::env::var_os("LLM_WIKI_E2E_RESULT")
-        .map(PathBuf::from)
-        .ok_or("Desktop E2E mode is disabled")?;
-    if result.status == "progress" {
-        let payload =
-            serde_json::to_vec_pretty(&result.steps).map_err(|error| error.to_string())?;
-        return std::fs::write(path.with_extension("progress"), payload)
-            .map_err(|error| error.to_string());
-    }
-    let payload = serde_json::to_vec_pretty(&result).map_err(|error| error.to_string())?;
-    std::fs::write(path, payload).map_err(|error| error.to_string())?;
-    app.exit(if matches!(result.status.as_str(), "passed" | "relaunch") {
-        0
-    } else {
-        1
-    });
-    Ok(())
+    Ok(application.enqueue_job(operation.input).await)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .manage(RequestRegistry::default())
+        .manage(conversation::RequestRegistry::default())
         .setup(|app| {
             let (vault, db) = application_paths()?;
             let model_dir = app
@@ -284,17 +95,17 @@ pub fn run() {
                 .resolve("resources/embedding-model", BaseDirectory::Resource)
                 .map_err(|error| error.to_string())?;
             let application = NativeApplication::new(vault, db, Some(model_dir))?;
-            let indexed = application.execute_domain(
-                "vault",
-                NativeOperation {
-                    name: "vault.index".into(),
-                    input: serde_json::Value::Null,
-                },
-            );
-            if indexed.status != 200 {
-                return Err(format!("Initial Vault index failed: {}", indexed.body).into());
-            }
+            let background_index = application.clone();
             app.manage(application);
+            tauri::async_runtime::spawn_blocking(move || {
+                let _ = background_index.execute_domain(
+                    "vault",
+                    NativeOperation {
+                        name: "vault.index".into(),
+                        input: serde_json::json!({"semantic":true}),
+                    },
+                );
+            });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -304,10 +115,11 @@ pub fn run() {
             workflow_command,
             jobs_command,
             enqueue_ai_job,
-            conversation_stream,
-            cancel_conversation,
-            desktop_e2e_mode,
-            desktop_e2e_complete
+            conversation::conversation_stream,
+            conversation::cancel_conversation,
+            desktop_e2e::desktop_e2e_mode,
+            desktop_e2e::desktop_e2e_complete,
+            provider::provider_request
         ])
         .run(tauri::generate_context!())
         .expect("error while running LLM Wiki desktop");
@@ -338,6 +150,61 @@ mod tests {
         assert_eq!(created.status, 201);
         assert_eq!(board.status, 200);
         assert!(board.body.to_string().contains("Native state"));
+    }
+
+    #[test]
+    fn native_board_preserves_bilingual_versions_and_legacy_fallback() {
+        let state = tempdir().unwrap();
+        let app = NativeApplication::isolated(
+            &state.path().join("vault"),
+            &state.path().join("db.sqlite"),
+        )
+        .unwrap();
+        let capture = app.execute(NativeOperation {
+            name: "capture.create".into(),
+            input: json!({"text":"원문 캡처"}),
+        });
+        let problem = app.execute(NativeOperation {
+            name: "capture.promote".into(),
+            input: json!({
+                "captureId": capture.body["id"],
+                "statement": "한글 문제",
+                "detail": "한글 맥락",
+                "localized_versions": {
+                    "ko": {"statement":"한글 문제","detail":"한글 맥락"},
+                    "en": {"statement":"English problem","detail":"English context"}
+                }
+            }),
+        });
+        assert_eq!(problem.status, 201, "{}", problem.body);
+
+        let english = app.execute(NativeOperation {
+            name: "board.get".into(),
+            input: json!({"locale":"en-US"}),
+        });
+        assert_eq!(english.body["problems"][0]["statement"], "English problem");
+        assert_eq!(english.body["problems"][0]["fallback_used"], false);
+        assert_eq!(
+            english.body["problems"][0]["available_locales"],
+            json!(["ko", "en"])
+        );
+
+        let supplemented = app.execute(NativeOperation {
+            name: "item.localization.save".into(),
+            input: json!({
+                "entityType":"problems",
+                "entityId":problem.body["id"],
+                "locale":"en",
+                "fields":{"statement":"Updated English"}
+            }),
+        });
+        assert_eq!(supplemented.status, 204, "{}", supplemented.body);
+        let english = app.execute(NativeOperation {
+            name: "board.get".into(),
+            input: json!({"locale":"en"}),
+        });
+        assert_eq!(english.body["problems"][0]["statement"], "Updated English");
+        assert_eq!(english.body["problems"][0]["detail"], "English context");
     }
 
     #[test]

@@ -88,11 +88,12 @@ Status values are `PASS`, `PARTIAL`, `MISSING`, `NOT_APPLICABLE`, and `BLOCKED`.
 - **Streaming/background:** index events, job events and polling, live chat, draft/refine/job enqueue,
   conflict review, image summary, completion review, translation, embedding and lineage work.
 - **Transport-only:** HTTP status/header/CORS/FileResponse mapping and SSE framing.
-- **Intentionally retained external web API:** none identified; loopback HTTP is a desktop migration
-  compatibility boundary, not a documented public remote API.
-- **Obsolete candidates after parity:** none while the packaged Python application boundary and web
-  mode are retained. Removing individual loopback routes would create a second application contract
-  or break the retained web product, so all are intentionally retained behind the typed client.
+- **Intentionally retained external web API:** the separately launched FastAPI browser product. It
+  remains loopback-only and is never packaged, spawned, or contacted by the native desktop app.
+- **Obsolete candidates after parity:** the packaged Python boundary, generic HTTP-shaped Tauri
+  request command, loopback port allocation, sidecar lifecycle, and PyInstaller bundle were removed.
+  Browser routes remain because removing individual endpoints would break the retained web product;
+  its React delivery uses the typed HTTP adapter while the desktop selects the Tauri adapter.
 
 ## Known insufficient coverage before migration
 

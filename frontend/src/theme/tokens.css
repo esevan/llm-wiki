@@ -28,7 +28,7 @@
   --color-border-worklog: #e6d6de;
   --color-shadow-soft: #38212b0b;
 
-  --font-family-body: 'Nunito', system-ui, sans-serif;
+  --font-family-body: 'Nunito', 'Noto Sans KR Variable', system-ui, sans-serif;
   --font-family-mono: 'DM Mono', ui-monospace, monospace;
   --font-size-xs: 10px;
   --font-size-sm: 12px;

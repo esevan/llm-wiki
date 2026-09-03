@@ -6,6 +6,7 @@ export default defineConfig(({ mode }) => ({
   define: mode === 'test' ? {} : { 'process.env.NODE_ENV': JSON.stringify('production') },
   plugins: [react()],
   build: {
+    assetsInlineLimit: 0,
     emptyOutDir: false,
     outDir: '../llm_wiki/static/assets',
     lib: {
@@ -16,7 +17,10 @@ export default defineConfig(({ mode }) => ({
     },
     rollupOptions: {
       output: {
-        assetFileNames: 'app.[ext]',
+        assetFileNames: (assetInfo) =>
+          assetInfo.names.some((name) => name.endsWith('.css'))
+            ? 'app.css'
+            : 'fonts/[name]-[hash][extname]',
       },
     },
   },

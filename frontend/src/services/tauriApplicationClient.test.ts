@@ -12,7 +12,7 @@ describe('Tauri domain command adapter', () => {
     const response = await new TauriApplicationClient().request({ path: '/board' });
     expect(await response.json()).toEqual({ captures: [] });
     expect(invoke).toHaveBeenCalledWith('workflow_command', {
-      operation: { name: 'board.get', input: {} },
+      operation: { name: 'board.get', input: { locale: 'en' } },
     });
   });
 
@@ -33,7 +33,31 @@ describe('Tauri domain command adapter', () => {
     vi.mocked(invoke).mockResolvedValue({ status: 202, body: { id: 'job-1', status: 'queued' } });
     await new TauriApplicationClient().request({ path: '/captures/capture-1/draft', method: 'POST' });
     expect(invoke).toHaveBeenCalledWith('enqueue_ai_job', {
-      operation: { name: 'jobs.enqueue', input: { taskKind: 'workflow_draft', entityType: 'captures', entityId: 'capture-1' } },
+      operation: { name: 'jobs.enqueue', input: { taskKind: 'workflow_draft', entityType: 'captures', entityId: 'capture-1', locale: 'en' } },
+    });
+  });
+
+  it('Given Korean content and a native-only feature, then locale and domain data survive without an HTTP route crossing IPC', async () => {
+    vi.mocked(invoke).mockResolvedValue({ status: 204, body: null });
+    await new TauriApplicationClient().request({
+      path: '/items/problems/problem-1/localizations',
+      method: 'PUT',
+      headers: { 'X-LLM-Wiki-Locale': 'ko' },
+      body: JSON.stringify({ locale: 'en', fields: { statement: 'English problem' } }),
+    });
+    expect(invoke).toHaveBeenCalledWith('workflow_command', {
+      operation: {
+        name: 'item.localization.save',
+        input: { entityType: 'problems', entityId: 'problem-1', locale: 'en', fields: { statement: 'English problem' } },
+      },
+    });
+  });
+
+  it('Given provider verification, then the dedicated async provider command receives no URL-shaped payload', async () => {
+    vi.mocked(invoke).mockResolvedValue({ status: 200, body: { models: ['local-model'] } });
+    await new TauriApplicationClient().request({ path: '/provider/test', method: 'POST' });
+    expect(invoke).toHaveBeenCalledWith('provider_request', {
+      operation: { name: 'provider.test', input: {} },
     });
   });
 

@@ -137,13 +137,36 @@ pub fn save_provider(db_path: &Path, input: &Value) -> Result<Value, String> {
     provider(db_path)
 }
 
-pub fn provider_credentials(db_path: &Path) -> Result<(String, String, String), String> {
-    let (base_url, model) = database::open(db_path)?
+pub fn provider_credentials_for(
+    db_path: &Path,
+    task: &str,
+) -> Result<(String, String, String), String> {
+    let (base_url, default_model, advanced_model, advanced_tasks): (
+        String,
+        String,
+        String,
+        String,
+    ) = database::open(db_path)?
         .query_row(
-            "SELECT base_url,model FROM provider_settings WHERE id=1",
+            "SELECT base_url,model,advanced_model,advanced_tasks FROM provider_settings WHERE id=1",
             [],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
         )
         .map_err(|error| error.to_string())?;
+    let advanced = serde_json::from_str::<Value>(&advanced_tasks)
+        .ok()
+        .and_then(|value| value.get(task).and_then(Value::as_bool))
+        .unwrap_or_else(|| {
+            TASKS
+                .iter()
+                .find(|(name, _)| *name == task)
+                .map(|(_, enabled)| *enabled)
+                .unwrap_or(false)
+        });
+    let model = if advanced && !advanced_model.trim().is_empty() {
+        advanced_model
+    } else {
+        default_model
+    };
     Ok((base_url, model, api_key()))
 }

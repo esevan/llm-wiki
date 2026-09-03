@@ -37,10 +37,12 @@ React 기능 -> ApplicationClient -> HTTP 어댑터 -> FastAPI(별도 브라우�
 | Adapter | AI 제공자와 외부 메커니즘 연동 | `llm_wiki/adapters/` |
 | 네이티브 데스크톱 애플리케이션 | 데스크톱 Workflow, Job, 설정, Vault 작업 실행 | `src-tauri/src/native/` |
 
-네이티브 Vault 모듈은 앱 시작 시 Markdown을 인덱싱합니다. `native/semantic.rs`는 Tauri 리소스의
+네이티브 Vault 모듈은 앱 상태가 준비된 뒤 blocking worker thread에서 Markdown 인덱싱을 시작하므로
+첫 창 생성은 Vault scan이나 ONNX model load를 기다리지 않습니다. `native/semantic.rs`는 Tauri 리소스의
 체크섬 고정 다국어 MiniLM 모델을 필요할 때 로드하고 384차원 벡터를 SQLite에 저장한 뒤 사용자가
 선택한 검색 결과를 로컬에서 재정렬합니다. Release 앱은 Runtime에 모델을 내려받지 않으며 재현 가능한
-데스크톱 빌드 준비 단계에서만 검증된 자산을 내려받습니다.
+데스크톱 빌드 준비 단계에서만 검증된 자산을 내려받습니다. Nunito, DM Mono, Noto Sans KR 폰트도
+frontend build에서 함께 번들·검증합니다.
 
 공개 조립 지점은 `web.app.create_app`입니다. 여기에서 `ApplicationRuntime` 하나를 만든 뒤
 `controllers.application.create_http_app`에 전달합니다. Controller는 Repository나 제공자 Adapter를

@@ -1,0 +1,90 @@
+# Native completeness audit
+
+This audit covers the packaged Tauri desktop application. The separately launched FastAPI browser
+delivery remains a retained external interface and is not packaged, spawned, or contacted by the
+desktop application.
+
+## 1. Clean code
+
+PASS. Tauri handlers validate a bounded domain operation and delegate to `NativeApplication`.
+Conversation streaming, provider requests, desktop E2E support, completion, Lineage, localization,
+patches, refinement context, projection/archive, workbench organization, job lifecycle, and
+task-result persistence are separate modules. The latest split reduced `jobs.rs` from 837 to 564
+lines and `workflow.rs` from 1,391 to 1,195 lines. Clippy runs with warnings denied.
+
+The remaining browser-compatible UI controllers are feature-named and isolated under
+`llm_wiki/static/runtime/`. They are a presentation migration seam, not a desktop transport seam;
+they call the centralized application client and contain no direct Tauri IPC.
+
+## 2. Bad smells
+
+PASS with a documented presentation seam. Provider execution and result persistence no longer
+diverge in the same module, protected filesystem writes share one cross-platform implementation,
+and completion/Lineage/refinement behavior no longer requires changes to the workflow core.
+Transport changes terminate in one adapter rather than requiring shotgun edits across features.
+
+## 3. Existing Python behavior
+
+PASS for the desktop capability surface. Every retained HTTP endpoint family maps to a named native
+operation or an intentional native stream. Command tests cover workflow gates, localization schema
+compatibility, Compass scoring, Work Log/comments/checklists, completion documents, Lineage,
+conflicts, patches, Vault search, semantic embeddings, settings secrecy, durable jobs, retries and
+cancellation. The release desktop E2E exercises the real React → Tauri → Rust → SQLite/Vault path.
+
+HTTP-only routing, CORS, and browser delivery behavior remain protected by the existing FastAPI
+suite because that delivery is intentionally retained. They are not duplicated in Tauri commands.
+
+## 4. Performance
+
+PASS. Database schema migration now runs once during application construction instead of on every
+command. SQLite uses a busy timeout. The window no longer waits for a Vault walk or 224 MB ONNX
+model initialization: lexical and semantic indexing run on a blocking worker after application
+state is managed. The embedding model is loaded lazily once and reused, while unchanged documents
+reuse source-hash-matched vectors.
+
+## 5. Stability
+
+PASS. Durable jobs have idempotency keys, persisted states, retry, timeouts, and cancellation tokens.
+Streaming cancellation drops the active provider response. Managed Markdown and image writes use
+temporary files plus atomic replacement; Windows uses `ReplaceFileW` when overwriting. Source hashes
+block stale translations, patches, workbench organization, image summaries, and external completion
+document edits. Desktop E2E verifies persistence across a full process relaunch.
+
+## 6. Python replacement
+
+PASS for the packaged application. The `.app` contains no Python executable, FastAPI server,
+sidecar, port allocation, or loopback request path. Embedding preparation and desktop E2E tooling
+were also migrated from Python to Node. Python remains only for the explicitly separate browser
+delivery and its characterization tests; removing that external product would be a product removal,
+not a remaining desktop migration step.
+
+## 7. Platform support
+
+PASS at the source and build-policy level. macOS produces a verified `.app`. The base Tauri bundle
+configuration enables all platform targets, with a macOS override that avoids Finder-dependent DMG
+layout automation. CI installs and checks React, Rust, command tests, and an unbundled Tauri build on
+macOS, Windows, and Linux. Paths use platform directory APIs; secrets use native keyring support;
+overwrite semantics have an explicit Windows implementation.
+
+## 8. UX flow
+
+PASS. Capture remains one field and one action. AI work is queued without blocking the Workbench;
+approval, conflict resolution, destructive actions, and completion remain explicit user decisions.
+Startup indexing is background work. Korean empty states and Compass summaries are translated at
+render time, avoiding mixed-language dead ends. Four current packaged-app screenshots are organized
+by capability in the [visual feature tour](../features/visual-guide.md).
+
+## Verification evidence
+
+| Check | Result |
+| --- | --- |
+| Retained Python/API characterization | PASS — 196 tests |
+| React component/adapter | PASS — 12 tests |
+| Rust unit/command | PASS — 23 tests |
+| TypeScript typecheck and ESLint | PASS |
+| Rustfmt and Clippy `-D warnings` | PASS |
+| Frontend production build | PASS; 148 local WOFF2 subsets verified |
+| Embedding bundle | PASS; five pinned assets verified |
+| macOS Tauri bundle | PASS; `LLM Wiki.app` |
+| Real desktop E2E | PASS; launch, workflow, AI, completion, search, relaunch |
+

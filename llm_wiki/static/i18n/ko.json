@@ -109,6 +109,7 @@
   "archive.reusable_title": "재사용 가능한 작업",
   "archive.no_documents": "보관된 문서가 아직 없습니다.",
   "archive.no_verified_solutions": "검증된 솔루션이 아직 없습니다.",
+  "archive.no_completed_solutions": "완료된 솔루션이 아직 없습니다.",
   "archive.no_completed_document": "완료 작업 문서가 아직 없습니다",
   "archive.regenerate_title": "보관 문서 다시 생성",
   "archive.regenerate_confirm": "보존된 솔루션 기록으로 간결한 완료 작업 문서와 원시 데이터를 다시 만들까요?",

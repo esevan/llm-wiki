@@ -68,11 +68,16 @@ ignored build-resource cache and packages it in the application. A released app 
 indexing and search locally and never downloads an embedding model at startup. Re-run
 `npm run prepare:embedding` to verify or restore the cached build assets.
 
+Nunito, DM Mono, and variable Noto Sans KR are also copied into the application assets during every
+production build. The packaged UI therefore renders Korean and English without a web-font request.
+macOS builds produce an `.app`; Windows and Linux build checks run in the cross-platform CI matrix.
+
 The release `.app` contains no Python runtime, sidecar, or internal web server. If
 `LLM_WIKI_VAULT` is unset, the desktop app uses `Documents/LLM Wiki Vault`. React invokes separate
 workflow, Vault, settings, jobs, and system commands; chat chunks and cancellation use a native
 Tauri channel. Network sockets are opened only for an explicitly configured external AI provider.
-The Python/FastAPI browser mode above remains separately available and is never started by Tauri.
+The Python/FastAPI browser mode above remains separately available and is never started by Tauri;
+it is retained only as an explicit browser delivery and behavioral-characterization boundary.
 
 See [Background AI Queue](docs/features/background-ai-queue.md) for worker roles, recovery,
 task-specific results, and notification behavior.

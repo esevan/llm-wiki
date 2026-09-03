@@ -1,5 +1,6 @@
 import type { ApplicationClient, ApplicationRequest, ApplicationResponse } from '../types/application';
 
+/** Browser-delivery adapter. The packaged desktop never constructs this class. */
 export class HttpApplicationClient implements ApplicationClient {
   constructor(private readonly basePath = '/api') {}
 

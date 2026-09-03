@@ -1,5 +1,8 @@
 # React and native Tauri migration report
 
+See the [native completeness audit](native-completeness-audit.md) for the clean-code, parity,
+performance, stability, Python-runtime, platform, and UX review.
+
 This document records the current implementation. The earlier packaged Python sidecar design was
 removed after the native-boundary audit found that it still opened an internal loopback socket.
 
@@ -35,8 +38,11 @@ desktop application.
 | Theme | `frontend/src/theme/` | Tokens, fonts, global and reusable component styles |
 | Application adapter | `frontend/src/services/tauriApplicationClient.ts` | Maps compatibility paths to typed domain operations |
 | Tauri commands | `src-tauri/src/lib.rs` | Domain allowlists, streaming channel, cancellation, E2E hook |
-| Native workflow | `src-tauri/src/native/workflow.rs` | Workflow state, progress, completion, Lineage, handoff |
-| Native jobs | `src-tauri/src/native/jobs.rs` | Durable SQLite jobs, provider execution, notifications |
+| Native workflow | `src-tauri/src/native/workflow.rs` | Workflow state, progress, Compass scoring, and handoff |
+| Native job lifecycle | `src-tauri/src/native/jobs.rs` | Durable submission, execution, retry, cancellation, and notifications |
+| Native job results | `src-tauri/src/native/job_results.rs` | Validate and persist task-specific results |
+| Completion and Lineage | `src-tauri/src/native/completion.rs`, `lineage.rs` | Completion records and auditable evidence snapshots |
+| Refinement and projection | `src-tauri/src/native/refinement.rs`, `projection.rs` | Bounded context and protected Markdown writes |
 | Native vault | `src-tauri/src/native/vault.rs` | Markdown indexing, search, safe reads |
 | Native embeddings | `src-tauri/src/native/semantic.rs` | Offline ONNX inference and semantic reranking |
 | Model manifest | `src-tauri/resources/embedding-model/manifest.json` | Pinned revision, size, and SHA-256 verification |
@@ -47,7 +53,8 @@ desktop application.
 
 | Previous HTTP family | Native application capability | Tauri command |
 | --- | --- | --- |
-| health/events | system state | `system_command` |
+| health | system state | `system_command` |
+| browser-only index events | retained HTTP SSE | Not exposed to the desktop |
 | index/search/knowledge | vault index and read model | `vault_command` |
 | locale/i18n/provider | persisted settings | `settings_command` |
 | captures/problems/features/progress/items/goals | workflow application service | `workflow_command` |
@@ -90,11 +97,11 @@ no HTTP method, header set, URL, or localhost origin crosses the Tauri IPC bound
 | Check | Result |
 | --- | --- |
 | Python unit/integration/API tests | PASS — 196 |
-| React unit/component tests | PASS — 10 |
+| React unit/component/adapter tests | PASS — 12 |
 | TypeScript typecheck | PASS |
 | Frontend production build | PASS |
-| Rust command/unit tests | PASS — 10 |
-| Tauri release build | PASS — 286 MB native `.app`, verified embedding model, no bundled sidecar |
+| Rust command/unit tests | PASS — 23 |
+| Tauri release build | PASS — native `.app`, verified embedding model and fonts, no bundled sidecar |
 | Desktop E2E | PASS — launch, full workflow, bundled semantic search, relaunch, restoration |
 
 ## Retained and removed boundaries
@@ -116,3 +123,6 @@ no HTTP method, header set, URL, or localhost origin crosses the Tauri IPC bound
 - Model binaries remain outside Git because the verified ONNX and tokenizer total about 246 MB.
   `npm run prepare:embedding` deterministically restores them from the immutable model revision;
   `tauri:build` always runs that verification before packaging.
+- macOS packages only the `.app` in local builds to avoid Finder-dependent DMG layout automation.
+  The base Tauri configuration remains `all` for Windows/Linux packaging, and CI performs native
+  build checks on macOS, Windows, and Linux.

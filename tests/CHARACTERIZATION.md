@@ -164,6 +164,23 @@ changes are implemented. These cases describe outcomes rather than internal call
 - **Automated evidence**: `tests/test_api.py`, `tests/test_transitions.py`
 - **Transition note**: deprecation markers are covered by `PA-003` and `PA-006`.
 
+### CB-020 — Required fonts are bundled
+
+- **Given** the application is running without internet access,
+- **When** the React shell loads,
+- **Then** Nunito, DM Mono, and Noto Sans KR load from verified packaged WOFF2 assets and system
+  fonts are fallback faces only.
+- **Automated evidence**: `scripts/verify_bundled_fonts.mjs`, `npm run build`
+
+### CB-021 — Native provider work is promptly cancellable
+
+- **Given** active native durable or streamed provider computation,
+- **When** the user cancels the job or aborts the conversation,
+- **Then** its cancellation token stops active work, no late result is published, and prior valid
+  content remains unchanged.
+- **Automated evidence**: `src-tauri/tests/application_commands.rs`,
+  `frontend/src/services/tauriApplicationClient.test.ts`
+
 ## Pending acceptance scenarios
 
 ### PA-001 — Independent semantic corpus search
@@ -171,13 +188,6 @@ changes are implemented. These cases describe outcomes rather than internal call
 - **Given** a semantically relevant document that is absent from the lexical candidate page,
 - **When** the user selects Semantic search,
 - **Then** the document can be returned from the complete current semantic corpus.
-
-### PA-002 — Locally bundled fonts
-
-- **Given** the application is running without internet access,
-- **When** the browser shell loads,
-- **Then** all required font files load from bundled application assets and no external font request
-  is attempted; system fonts are fallback faces only.
 
 ### PA-003 — Deprecated direct API disclosure
 
@@ -214,9 +224,9 @@ changes are implemented. These cases describe outcomes rather than internal call
 - **Then** the usable snapshot remains visible and a retryable failure icon exposes a readable
   tooltip.
 
-### PA-008 — Prompt cancellation and Chat abort
+### PA-008 — Browser-delivery prompt cancellation and Chat-close abort
 
-- **Given** active durable or Fast Queue provider computation,
+- **Given** active browser-delivery durable or Fast Queue provider computation,
 - **When** the user cancels the work or closes its Chat surface,
 - **Then** active computation is promptly aborted, no late result is delivered or published, and
   prior valid content remains unchanged.

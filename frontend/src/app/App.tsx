@@ -1,3 +1,5 @@
+import { useState } from 'react';
+
 import { CompassView } from '../features/compass/CompassView';
 import { OverlayLayer } from '../features/overlays/OverlayLayer';
 import { SearchView } from '../features/search/SearchView';
@@ -25,4 +27,3 @@ export function App() {
     </>
   );
 }
-import { useState } from 'react';

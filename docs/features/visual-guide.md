@@ -2,14 +2,18 @@
 
 **English** | [한국어](visual-guide.ko.md)
 
-These screenshots were captured from the application after the React and Tauri migration was
-merged to `main`. They use an isolated documentation Vault and sample records; no personal Vault
-content or credential value appears in the images. The same React surfaces run in the Tauri
-WebView. Native command behavior is covered separately by the desktop E2E suite.
+The four primary screenshots below were recaptured from the packaged native application after the
+React/Tauri cutover reached `main`. They use an isolated documentation Vault and database; no
+personal Vault content or credential value appears. Each image represents a product capability,
+while the later detailed images document deeper workflow states.
 
-![Native Tauri application Workbench using isolated sample data](images/00-native-workbench.png)
+![Packaged native Tauri Workbench with a Capture persisted through commands](../images/native-app/workbench.jpg)
 
 ## 1. Capture, Problem, and Solution
+
+The current Workbench capture shows a Korean user-visible locale rendered with the bundled Noto
+Sans KR font. Saving the sample Capture writes through the typed application client and Tauri
+workflow command; it does not call a loopback web server.
 
 ![Workbench with Capture, Problem, Solution, active work, and conflict status](images/02-workbench.png)
 
@@ -43,7 +47,7 @@ Related guides: [Completion and Knowledge](completion-writeback-archive.md) and
 
 ## 4. Recover existing Knowledge
 
-![Vault search result with path, title, and matching context](images/01-search-vault.png)
+![Native semantic Vault search using the bundled multilingual model](../images/native-app/vault-search.jpg)
 
 Vault Search returns local Markdown context. The selected semantic result shown here was produced
 by the multilingual embedding model bundled in the `.app`; no embedding service or startup
@@ -53,7 +57,7 @@ Related guide: [Fast vault search](fast-vault-search.md).
 
 ## 5. Keep direction visible
 
-![Compass with an active direction goal](images/04-compass.png)
+![Native Compass with a direction goal persisted through a Tauri command](../images/native-app/compass.jpg)
 
 Compass records an active direction without converting individual activity into a performance
 score.
@@ -62,7 +66,7 @@ Related guide: [Compass](direction-dashboard.md).
 
 ## 6. Configure AI without exposing secrets
 
-![AI settings with endpoint, model routing, worker count, and masked credential state](images/07-ai-settings.png)
+![Native AI settings with endpoint, model routing, worker count, and masked credential state](../images/native-app/ai-settings.jpg)
 
 AI Settings separates endpoint and model routing from the credential itself. The saved key is kept
 in native secret storage and its value is never returned to the UI.

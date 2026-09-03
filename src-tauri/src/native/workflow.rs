@@ -1,4 +1,4 @@
-use crate::native::database;
+use crate::native::{database, localization};
 use rusqlite::{params, OptionalExtension, Row};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -17,6 +17,31 @@ fn required_text<'a>(input: &'a Value, key: &str) -> Result<&'a str, String> {
         .ok_or_else(|| format!("{key} is required"))
 }
 
+fn award(
+    connection: &rusqlite::Connection,
+    entity_type: &str,
+    entity_id: &str,
+    points: f64,
+    event_type: &str,
+) -> Result<(), String> {
+    connection
+        .execute(
+            "INSERT INTO score_events(id,entity_type,entity_id,points,event_type) VALUES (?,?,?,?,?)",
+            params![id(), entity_type, entity_id, points, event_type],
+        )
+        .map_err(|error| error.to_string())?;
+    connection
+        .execute("DELETE FROM score_periods", [])
+        .map_err(|error| error.to_string())?;
+    connection
+        .execute(
+            "INSERT INTO score_periods(period,goal_id,points) SELECT substr(created_at,1,10),goal_id,sum(points) FROM score_events GROUP BY substr(created_at,1,10),goal_id",
+            [],
+        )
+        .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
 fn capture_row(row: &Row<'_>) -> rusqlite::Result<Value> {
     Ok(json!({
         "id": row.get::<_, String>(0)?,
@@ -24,6 +49,8 @@ fn capture_row(row: &Row<'_>) -> rusqlite::Result<Value> {
         "created_at": row.get::<_, String>(2)?,
         "category": row.get::<_, Option<String>>(3)?.unwrap_or_else(|| "General".into()),
         "important": row.get::<_, i64>(4)? != 0,
+        "attention_rank": row.get::<_, i64>(5)?,
+        "attention_rationale": row.get::<_, String>(6)?,
         "localized_versions": {},
     }))
 }
@@ -38,6 +65,8 @@ fn problem_row(row: &Row<'_>) -> rusqlite::Result<Value> {
         "created_at": row.get::<_, String>(5)?,
         "category": row.get::<_, Option<String>>(6)?.unwrap_or_else(|| "General".into()),
         "important": row.get::<_, i64>(7)? != 0,
+        "attention_rank": row.get::<_, i64>(8)?,
+        "attention_rationale": row.get::<_, String>(9)?,
         "localized_versions": {},
     }))
 }
@@ -55,6 +84,8 @@ fn feature_row(row: &Row<'_>) -> rusqlite::Result<Value> {
         "created_at": row.get::<_, String>(8)?,
         "category": row.get::<_, Option<String>>(9)?.unwrap_or_else(|| "General".into()),
         "important": row.get::<_, i64>(10)? != 0,
+        "attention_rank": row.get::<_, i64>(11)?,
+        "attention_rationale": row.get::<_, String>(12)?,
         "localized_versions": {},
     }))
 }
@@ -79,12 +110,15 @@ pub fn board(db_path: &Path) -> Result<Value, String> {
     let connection = database::open(db_path)?;
     let mut captures = connection
         .prepare(
-            "SELECT c.id,c.text,c.created_at,w.category,
+            "SELECT c.id,c.text,c.created_at,COALESCE(o.category,p.category),
              EXISTS(SELECT 1 FROM workbench_priority_overrides o WHERE o.entity_type='captures' AND o.entity_id=c.id AND o.manual_priority=1)
-             FROM captures c LEFT JOIN workbench_category_overrides w ON w.entity_type='captures' AND w.entity_id=c.id
+             ,COALESCE(p.attention_rank,0),COALESCE(p.rationale,'')
+             FROM captures c
+             LEFT JOIN workbench_category_overrides o ON o.entity_type='captures' AND o.entity_id=c.id
+             LEFT JOIN workbench_priorities p ON p.entity_type='captures' AND p.entity_id=c.id
              WHERE NOT EXISTS(SELECT 1 FROM problems p WHERE p.capture_id=c.id)
              AND NOT EXISTS(SELECT 1 FROM deleted_entities d WHERE d.entity_type='captures' AND d.entity_id=c.id)
-             ORDER BY c.created_at",
+             ORDER BY COALESCE(p.attention_rank,0) DESC,c.created_at DESC",
         )
         .map_err(|error| error.to_string())?;
     let captures = captures
@@ -94,11 +128,15 @@ pub fn board(db_path: &Path) -> Result<Value, String> {
         .map_err(|error| error.to_string())?;
     let mut problems = connection
         .prepare(
-            "SELECT p.id,p.capture_id,p.statement,p.detail,p.state,p.created_at,w.category,
+            "SELECT p.id,p.capture_id,p.statement,p.detail,p.state,p.created_at,COALESCE(o.category,priority.category),
              EXISTS(SELECT 1 FROM workbench_priority_overrides o WHERE o.entity_type='problems' AND o.entity_id=p.id AND o.manual_priority=1)
-             FROM problems p LEFT JOIN workbench_category_overrides w ON w.entity_type='problems' AND w.entity_id=p.id
-             WHERE NOT EXISTS(SELECT 1 FROM deleted_entities d WHERE d.entity_type='problems' AND d.entity_id=p.id)
-             ORDER BY p.created_at",
+             ,COALESCE(priority.attention_rank,0),COALESCE(priority.rationale,'')
+             FROM problems p
+             LEFT JOIN workbench_category_overrides o ON o.entity_type='problems' AND o.entity_id=p.id
+             LEFT JOIN workbench_priorities priority ON priority.entity_type='problems' AND priority.entity_id=p.id
+             WHERE p.state NOT IN ('archived','completed')
+             AND NOT EXISTS(SELECT 1 FROM deleted_entities d WHERE d.entity_type='problems' AND d.entity_id=p.id)
+             ORDER BY COALESCE(priority.attention_rank,0) DESC,p.created_at DESC",
         )
         .map_err(|error| error.to_string())?;
     let problems = problems
@@ -108,11 +146,17 @@ pub fn board(db_path: &Path) -> Result<Value, String> {
         .map_err(|error| error.to_string())?;
     let mut features = connection
         .prepare(
-            "SELECT f.id,f.problem_id,f.title,f.outcome,f.non_goals,f.conflict_state,f.validation_criteria,f.state,f.created_at,w.category,
+            "SELECT f.id,f.problem_id,f.title,f.outcome,f.non_goals,f.conflict_state,f.validation_criteria,f.state,f.created_at,COALESCE(o.category,priority.category),
              EXISTS(SELECT 1 FROM workbench_priority_overrides o WHERE o.entity_type='features' AND o.entity_id=f.id AND o.manual_priority=1)
-             FROM features f LEFT JOIN workbench_category_overrides w ON w.entity_type='features' AND w.entity_id=f.id
-             WHERE NOT EXISTS(SELECT 1 FROM deleted_entities d WHERE d.entity_type='features' AND d.entity_id=f.id)
-             ORDER BY f.created_at",
+             ,COALESCE(priority.attention_rank,0),COALESCE(priority.rationale,'')
+             FROM features f
+             LEFT JOIN workbench_category_overrides o ON o.entity_type='features' AND o.entity_id=f.id
+             LEFT JOIN workbench_priorities priority ON priority.entity_type='features' AND priority.entity_id=f.id
+             WHERE f.state NOT IN ('archived','completed')
+             AND NOT EXISTS(SELECT 1 FROM problems p WHERE p.id=f.problem_id AND p.state='completed')
+             AND NOT EXISTS(SELECT 1 FROM deleted_entities d WHERE d.entity_type='features' AND d.entity_id=f.id)
+             AND NOT EXISTS(SELECT 1 FROM deleted_entities d WHERE d.entity_type='problems' AND d.entity_id=f.problem_id)
+             ORDER BY COALESCE(priority.attention_rank,0) DESC,f.created_at DESC",
         )
         .map_err(|error| error.to_string())?;
     let features = features
@@ -121,6 +165,47 @@ pub fn board(db_path: &Path) -> Result<Value, String> {
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| error.to_string())?;
     Ok(json!({"captures": captures, "problems": problems, "features": features}))
+}
+
+pub fn board_for_locale(db_path: &Path, locale: &str) -> Result<Value, String> {
+    let connection = database::open(db_path)?;
+    let mut result = board(db_path)?;
+    for (key, entity_type) in [
+        ("captures", "captures"),
+        ("problems", "problems"),
+        ("features", "features"),
+    ] {
+        let rows = result[key]
+            .as_array()
+            .ok_or("Board collection is invalid")?
+            .iter()
+            .cloned()
+            .map(|record| localization::overlay(&connection, entity_type, record, locale))
+            .collect::<Result<Vec<_>, _>>()?;
+        result[key] = Value::Array(rows);
+    }
+    Ok(result)
+}
+
+pub fn problem_record(db_path: &Path, problem_id: &str) -> Result<Value, String> {
+    database::open(db_path)?
+        .query_row(
+            "SELECT id,capture_id,statement,detail,state,created_at FROM problems WHERE id=?",
+            [problem_id],
+            |row| {
+                Ok(json!({
+                    "id": row.get::<_, String>(0)?,
+                    "capture_id": row.get::<_, Option<String>>(1)?,
+                    "statement": row.get::<_, String>(2)?,
+                    "detail": row.get::<_, String>(3)?,
+                    "state": row.get::<_, String>(4)?,
+                    "created_at": row.get::<_, String>(5)?,
+                }))
+            },
+        )
+        .optional()
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "Problem not found".into())
 }
 
 pub fn promote_capture(db_path: &Path, capture_id: &str, input: &Value) -> Result<Value, String> {
@@ -155,6 +240,9 @@ pub fn promote_capture(db_path: &Path, capture_id: &str, input: &Value) -> Resul
             params![problem_id, capture_id, statement, detail],
         )
         .map_err(|error| error.to_string())?;
+    if let Some(versions) = input.get("localized_versions") {
+        localization::save_versions(&connection, "problems", &problem_id, versions)?;
+    }
     Ok(
         json!({"id": problem_id, "capture_id": capture_id, "statement": statement, "detail": detail, "state": "draft"}),
     )
@@ -177,6 +265,23 @@ pub fn approve_problem(db_path: &Path, problem_id: &str) -> Result<Value, String
             params![id(), problem_id],
         )
         .map_err(|error| error.to_string())?;
+    let importance: Option<f64> = connection
+        .query_row(
+            "SELECT importance FROM importance_assessments WHERE problem_id=?",
+            [problem_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| error.to_string())?;
+    if let Some(importance) = importance {
+        award(
+            &connection,
+            "problem",
+            problem_id,
+            importance * 0.10,
+            "problem_approved",
+        )?;
+    }
     Ok(Value::Null)
 }
 
@@ -220,6 +325,9 @@ pub fn create_feature(db_path: &Path, problem_id: &str, input: &Value) -> Result
             ).map_err(|error| error.to_string())?;
         }
     }
+    if let Some(versions) = input.get("localized_versions") {
+        localization::save_versions(&connection, "features", &feature_id, versions)?;
+    }
     Ok(
         json!({"id": feature_id, "problem_id": problem_id, "title": title, "outcome": outcome, "non_goals": non_goals, "validation_criteria": criteria, "state": "proposed", "conflict_state": "unknown"}),
     )
@@ -227,7 +335,7 @@ pub fn create_feature(db_path: &Path, problem_id: &str, input: &Value) -> Result
 
 pub fn set_conflict(db_path: &Path, feature_id: &str, input: &Value) -> Result<Value, String> {
     let state = required_text(input, "state")?;
-    if !matches!(state, "clear" | "conflict" | "unknown") {
+    if !matches!(state, "clear" | "conflicted" | "unknown") {
         return Err("Unsupported conflict state".into());
     }
     let citation = input.get("citation").and_then(Value::as_str).unwrap_or("");
@@ -255,6 +363,151 @@ pub fn set_conflict(db_path: &Path, feature_id: &str, input: &Value) -> Result<V
     Ok(json!({"id": report_id, "feature_id": feature_id, "state": state, "citation": citation}))
 }
 
+pub(super) fn conflict_query(
+    connection: &rusqlite::Connection,
+    feature_id: &str,
+) -> Result<String, String> {
+    let values: (String, String, String, String, String, String) = connection
+        .query_row(
+            "SELECT f.title,f.outcome,f.non_goals,f.validation_criteria,p.statement,p.detail FROM features f JOIN problems p ON p.id=f.problem_id WHERE f.id=?",
+            [feature_id],
+            |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?,row.get(5)?)),
+        )
+        .map_err(|_| "Solution not found".to_string())?;
+    Ok(format!(
+        "{:x}",
+        Sha256::digest(json!(values).to_string().as_bytes())
+    ))
+}
+
+pub fn conflict_review(db_path: &Path, run_id: &str) -> Result<Value, String> {
+    let connection = database::open(db_path)?;
+    let (feature_id, status, raw): (String, String, String) = connection
+        .query_row(
+            "SELECT feature_id,status,report_json FROM conflict_review_runs WHERE id=?",
+            [run_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .optional()
+        .map_err(|error| error.to_string())?
+        .ok_or("Conflict review not found")?;
+    let mut report = serde_json::from_str::<Value>(&raw).unwrap_or_else(|_| json!({}));
+    report["run_id"] = json!(run_id);
+    report["feature_id"] = json!(feature_id);
+    report["status"] = json!(status);
+    if let Some(conflicts) = report.get_mut("conflicts").and_then(Value::as_array_mut) {
+        for conflict in conflicts {
+            let conflict_id = conflict.get("id").and_then(Value::as_str).unwrap_or("");
+            let resolution: Option<(String, String, String)> = connection
+                .query_row(
+                    "SELECT action,rationale,resolved_at FROM conflict_resolutions WHERE run_id=? AND conflict_id=?",
+                    params![run_id, conflict_id],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )
+                .optional()
+                .map_err(|error| error.to_string())?;
+            conflict["resolution"] = resolution
+                .map(|value| json!({"action":value.0,"rationale":value.1,"resolved_at":value.2}))
+                .unwrap_or(Value::Null);
+        }
+    }
+    Ok(report)
+}
+
+pub fn resolve_conflict_review(
+    db_path: &Path,
+    run_id: &str,
+    input: &Value,
+) -> Result<Value, String> {
+    let connection = database::open(db_path)?;
+    let (feature_id, status, expected_query): (String, String, String) = connection
+        .query_row(
+            "SELECT feature_id,status,query FROM conflict_review_runs WHERE id=?",
+            [run_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .optional()
+        .map_err(|error| error.to_string())?
+        .ok_or("Conflict review not found")?;
+    if status != "ready" {
+        return Err("Conflict review is not ready".into());
+    }
+    if conflict_query(&connection, &feature_id)? != expected_query {
+        return Err("Conflict review is stale; run it again".into());
+    }
+    let conflicts = conflict_review(db_path, run_id)?["conflicts"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    if conflicts.is_empty() {
+        return Err("Conflict review has no structured conflicts to resolve".into());
+    }
+    let resolutions = input
+        .get("resolutions")
+        .and_then(Value::as_array)
+        .ok_or("resolutions is required")?;
+    let expected = conflicts
+        .iter()
+        .filter_map(|item| item.get("id").and_then(Value::as_str))
+        .collect::<std::collections::HashSet<_>>();
+    let provided = resolutions
+        .iter()
+        .filter_map(|item| item.get("conflict_id").and_then(Value::as_str))
+        .collect::<Vec<_>>();
+    if provided.len() != expected.len()
+        || provided
+            .iter()
+            .copied()
+            .collect::<std::collections::HashSet<_>>()
+            != expected
+    {
+        return Err("Every conflict requires exactly one resolution".into());
+    }
+    let requires_revision = resolutions
+        .iter()
+        .any(|item| item["action"] == "apply_recommendation");
+    for resolution in resolutions {
+        let conflict_id = required_text(resolution, "conflict_id")?;
+        let action = required_text(resolution, "action")?;
+        let rationale = resolution
+            .get("rationale")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim();
+        if !matches!(action, "apply_recommendation" | "accept_conflict")
+            || (action == "accept_conflict" && rationale.is_empty())
+        {
+            return Err("Accept conflict requires a rationale".into());
+        }
+        connection.execute("INSERT INTO conflict_resolutions(id,run_id,feature_id,conflict_id,action,rationale) VALUES (?,?,?,?,?,?)", params![id(),run_id,feature_id,conflict_id,action,rationale]).map_err(|error| error.to_string())?;
+    }
+    let state = if requires_revision {
+        "conflicted"
+    } else {
+        "clear"
+    };
+    connection
+        .execute(
+            "UPDATE features SET conflict_state=? WHERE id=?",
+            params![state, feature_id],
+        )
+        .map_err(|error| error.to_string())?;
+    connection
+        .execute(
+            "INSERT INTO conflict_reports(id,feature_id,state,citation) VALUES (?,?,?,?)",
+            params![
+                id(),
+                feature_id,
+                state,
+                format!("Conflict review {run_id}: decisions recorded")
+            ],
+        )
+        .map_err(|error| error.to_string())?;
+    Ok(
+        json!({"run_id":run_id,"feature_id":feature_id,"state":state,"resolved_count":resolutions.len(),"unresolved_count":0,"requires_revision":requires_revision,"resolutions":resolutions}),
+    )
+}
+
 pub fn approve_feature(db_path: &Path, feature_id: &str) -> Result<Value, String> {
     let connection = database::open(db_path)?;
     let conflict: Option<String> = connection
@@ -280,15 +533,45 @@ pub fn approve_feature(db_path: &Path, feature_id: &str) -> Result<Value, String
             params![id(), feature_id],
         )
         .map_err(|error| error.to_string())?;
+    let importance: Option<f64> = connection
+        .query_row(
+            "SELECT i.importance FROM importance_assessments i JOIN features f ON f.problem_id=i.problem_id WHERE f.id=?",
+            [feature_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| error.to_string())?;
+    if let Some(importance) = importance {
+        award(
+            &connection,
+            "feature",
+            feature_id,
+            importance * 0.20,
+            "feature_approved",
+        )?;
+    }
     Ok(Value::Null)
 }
 
 pub fn set_stage(db_path: &Path, feature_id: &str, input: &Value) -> Result<Value, String> {
     let state = required_text(input, "state")?;
-    if !matches!(state, "proposed" | "in_progress" | "approved") {
+    if !matches!(state, "proposed" | "approved") {
         return Err("Unsupported Solution stage".into());
     }
     let connection = database::open(db_path)?;
+    if state == "approved" {
+        let conflict: Option<String> = connection
+            .query_row(
+                "SELECT conflict_state FROM features WHERE id=?",
+                [feature_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|error| error.to_string())?;
+        if conflict.as_deref() != Some("clear") {
+            return Err("Moving to in progress requires a clear conflict review".into());
+        }
+    }
     if connection
         .execute(
             "UPDATE features SET state=? WHERE id=?",
@@ -314,8 +597,55 @@ pub fn progress(db_path: &Path, feature_id: &str) -> Result<Value, String> {
         Ok(json!({"id":entry_id,"body":row.get::<_,String>(1)?,"image_data":row.get::<_,String>(2)?,"image_media_type":row.get::<_,String>(3)?,"image_summary":row.get::<_,String>(4)?,"created_at":row.get::<_,String>(5)?,"comments":comments,"localized_versions":{}}))
     }).map_err(|error| error.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|error| error.to_string())?;
     let mut checklist_statement = connection.prepare("SELECT id,body,checked,created_at,updated_at FROM solution_checklist_items WHERE feature_id=? ORDER BY created_at").map_err(|error| error.to_string())?;
-    let checklist = checklist_statement.query_map([feature_id], |row| Ok(json!({"id":row.get::<_,String>(0)?,"body":row.get::<_,String>(1)?,"checked":row.get::<_,i64>(2)?,"created_at":row.get::<_,String>(3)?,"updated_at":row.get::<_,String>(4)?}))).map_err(|error| error.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|error| error.to_string())?;
+    let checklist = checklist_statement.query_map([feature_id], |row| Ok(json!({"id":row.get::<_,String>(0)?,"body":row.get::<_,String>(1)?,"checked":row.get::<_,i64>(2)? != 0,"created_at":row.get::<_,String>(3)?,"updated_at":row.get::<_,String>(4)?}))).map_err(|error| error.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|error| error.to_string())?;
     Ok(json!({"entries": entries, "checklist": checklist}))
+}
+
+pub fn progress_for_locale(
+    db_path: &Path,
+    feature_id: &str,
+    locale: &str,
+) -> Result<Value, String> {
+    let connection = database::open(db_path)?;
+    let mut result = progress(db_path, feature_id)?;
+    let entries = result["entries"]
+        .as_array()
+        .ok_or("Progress entries are invalid")?
+        .iter()
+        .cloned()
+        .map(|record| {
+            localization::overlay(&connection, "solution_progress_entries", record, locale)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    result["entries"] = Value::Array(entries);
+    if let Some(entries) = result["entries"].as_array_mut() {
+        for entry in entries {
+            let comments = entry["comments"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+                .map(|comment| {
+                    localization::overlay(
+                        &connection,
+                        "solution_progress_comments",
+                        comment,
+                        locale,
+                    )
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            entry["comments"] = Value::Array(comments);
+        }
+    }
+    let checklist = result["checklist"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|item| localization::overlay(&connection, "solution_checklist_items", item, locale))
+        .collect::<Result<Vec<_>, _>>()?;
+    result["checklist"] = Value::Array(checklist);
+    Ok(result)
 }
 
 pub fn add_progress(db_path: &Path, feature_id: &str, input: &Value) -> Result<Value, String> {
@@ -366,7 +696,7 @@ pub fn add_checklist(db_path: &Path, feature_id: &str, input: &Value) -> Result<
             params![item_id, feature_id, body, i64::from(checked)],
         )
         .map_err(|error| error.to_string())?;
-    Ok(json!({"id":item_id,"feature_id":feature_id,"body":body,"checked":i64::from(checked)}))
+    Ok(json!({"id":item_id,"feature_id":feature_id,"body":body,"checked":checked}))
 }
 
 pub fn update_checklist(db_path: &Path, item_id: &str, input: &Value) -> Result<Value, String> {
@@ -399,16 +729,200 @@ pub fn create_goal(db_path: &Path, input: &Value) -> Result<Value, String> {
     Ok(json!({"id":goal_id,"title":title,"description":description,"active":1}))
 }
 
+pub fn assess_importance(db_path: &Path, problem_id: &str, input: &Value) -> Result<Value, String> {
+    let factor = |key: &str| {
+        input
+            .get(key)
+            .and_then(Value::as_i64)
+            .filter(|value| (0..=5).contains(value))
+            .ok_or_else(|| format!("{key} must be between 0 and 5"))
+    };
+    let alignment = factor("alignment")?;
+    let impact = factor("impact")?;
+    let urgency = factor("urgency")?;
+    let leverage = factor("leverage")?;
+    let evidence = required_text(input, "evidence")?.trim();
+    let connection = database::open(db_path)?;
+    let exists: bool = connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM problems WHERE id=?)",
+            [problem_id],
+            |row| row.get(0),
+        )
+        .map_err(|error| error.to_string())?;
+    if !exists {
+        return Err("Problem not found".into());
+    }
+    let importance = (20.0
+        * (0.35 * alignment as f64
+            + 0.30 * impact as f64
+            + 0.20 * urgency as f64
+            + 0.15 * leverage as f64))
+        .round() as i64;
+    connection.execute(
+        "INSERT INTO importance_assessments(id,problem_id,alignment,impact,urgency,leverage,evidence,importance) VALUES (?,?,?,?,?,?,?,?)
+         ON CONFLICT(problem_id) DO UPDATE SET alignment=excluded.alignment,impact=excluded.impact,urgency=excluded.urgency,leverage=excluded.leverage,evidence=excluded.evidence,importance=excluded.importance",
+        params![id(),problem_id,alignment,impact,urgency,leverage,evidence,importance],
+    ).map_err(|error| error.to_string())?;
+    Ok(json!({"importance":importance,"evidence":evidence}))
+}
+
+pub fn record_completion(db_path: &Path, feature_id: &str, input: &Value) -> Result<Value, String> {
+    let evidence = required_text(input, "evidence")?.trim();
+    let report = required_text(input, "report")?.trim();
+    let no_update_reason = input
+        .get("no_update_reason")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim();
+    let connection = database::open(db_path)?;
+    let state: Option<String> = connection
+        .query_row(
+            "SELECT state FROM features WHERE id=?",
+            [feature_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| error.to_string())?;
+    if state.as_deref() != Some("approved") {
+        return Err("Completion requires an approved Solution".into());
+    }
+    let knowledge_status = if no_update_reason.is_empty() {
+        "pending"
+    } else {
+        "not_needed"
+    };
+    let completion_id = id();
+    connection.execute(
+        "INSERT INTO completions(id,feature_id,evidence,report,knowledge_status,no_update_reason) VALUES (?,?,?,?,?,?)
+         ON CONFLICT(feature_id) DO UPDATE SET id=excluded.id,evidence=excluded.evidence,report=excluded.report,knowledge_status=excluded.knowledge_status,no_update_reason=excluded.no_update_reason,state='draft'",
+        params![completion_id,feature_id,evidence,report,knowledge_status,no_update_reason],
+    ).map_err(|error| error.to_string())?;
+    Ok(
+        json!({"id":completion_id,"feature_id":feature_id,"evidence":evidence,"report":report,"knowledge_status":knowledge_status,"no_update_reason":no_update_reason,"state":"draft"}),
+    )
+}
+
+pub fn verify_completion(db_path: &Path, feature_id: &str) -> Result<Value, String> {
+    let connection = database::open(db_path)?;
+    let status: Option<String> = connection
+        .query_row(
+            "SELECT knowledge_status FROM completions WHERE feature_id=?",
+            [feature_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| error.to_string())?;
+    if !matches!(status.as_deref(), Some("integrated" | "not_needed")) {
+        return Err(
+            "Completion needs approved knowledge integration or an explicit no-update reason"
+                .into(),
+        );
+    }
+    connection
+        .execute(
+            "UPDATE completions SET state='verified' WHERE feature_id=?",
+            [feature_id],
+        )
+        .map_err(|error| error.to_string())?;
+    connection.execute("INSERT INTO approvals(id,entity_type,entity_id,action) VALUES (?,'completion',?,'verified')", params![id(),feature_id]).map_err(|error| error.to_string())?;
+    let importance: Option<f64> = connection
+        .query_row(
+            "SELECT i.importance FROM importance_assessments i JOIN features f ON f.problem_id=i.problem_id WHERE f.id=?",
+            [feature_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| error.to_string())?;
+    if let Some(importance) = importance {
+        award(
+            &connection,
+            "feature",
+            feature_id,
+            importance * 0.70,
+            "implementation_verified_and_integrated",
+        )?;
+    }
+    Ok(Value::Null)
+}
+
+pub fn recent_archive(db_path: &Path, limit: u64) -> Result<Value, String> {
+    let connection = database::open(db_path)?;
+    let mut statement = connection.prepare(
+        "SELECT path,title FROM vault_documents WHERE path LIKE '%/90. Archive/%' OR path LIKE '90. Archive/%' ORDER BY modified_at DESC LIMIT ?",
+    ).map_err(|error| error.to_string())?;
+    let documents = statement
+        .query_map([limit as i64], |row| {
+            Ok(json!({"path":row.get::<_,String>(0)?,"title":row.get::<_,String>(1)?}))
+        })
+        .map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+    Ok(json!({"documents":documents}))
+}
+
+pub fn recent_completed(
+    db_path: &Path,
+    vault: &Path,
+    limit: u64,
+    locale: &str,
+) -> Result<Value, String> {
+    let connection = database::open(db_path)?;
+    let mut statement = connection.prepare(
+        "SELECT f.id,f.problem_id,f.title,f.outcome,f.non_goals,f.conflict_state,f.validation_criteria,f.state,f.created_at,NULL,0,0,'',
+                COALESCE(c.evidence,''),COALESCE(c.report,''),COALESCE(c.created_at,''),COALESCE(m.path,''),p.statement,COALESCE(cp.path,'')
+         FROM features f JOIN problems p ON p.id=f.problem_id
+         LEFT JOIN completions c ON c.feature_id=f.id
+         LEFT JOIN mirror_files m ON m.entity_type='features' AND m.entity_id=f.id
+         LEFT JOIN completion_playbooks cp ON cp.problem_id=p.id
+         WHERE c.state='verified' OR cp.path IS NOT NULL OR p.state='completed'
+         ORDER BY COALESCE(c.created_at,cp.created_at) DESC LIMIT ?",
+    ).map_err(|error| error.to_string())?;
+    let rows = statement
+        .query_map([limit as i64], |row| {
+            let mut item = feature_row(row)?;
+            item["completion_evidence"] = json!(row.get::<_, String>(13)?);
+            item["completion_report"] = json!(row.get::<_, String>(14)?);
+            item["completed_at"] = json!(row.get::<_, String>(15)?);
+            item["generated_path"] = json!(row.get::<_, String>(16)?);
+            item["problem_statement"] = json!(row.get::<_, String>(17)?);
+            let path = row.get::<_, String>(18)?;
+            item["completion_playbook_path"] = json!(path);
+            item["archive_status"] = json!(if path.is_empty() || !vault.join(&path).is_file() {
+                "missing"
+            } else {
+                "available"
+            });
+            Ok(item)
+        })
+        .map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+    let solutions = rows
+        .into_iter()
+        .map(|record| localization::overlay(&connection, "features", record, locale))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(json!({"solutions":solutions}))
+}
+
 pub fn dashboard(db_path: &Path) -> Result<Value, String> {
     let connection = database::open(db_path)?;
     let mut goals_statement = connection.prepare("SELECT id,title,description,active,created_at FROM compass_goals WHERE active=1 ORDER BY created_at").map_err(|error| error.to_string())?;
     let goals = goals_statement.query_map([], |row| Ok(json!({"id":row.get::<_,String>(0)?,"title":row.get::<_,String>(1)?,"description":row.get::<_,String>(2)?,"active":row.get::<_,i64>(3)?,"created_at":row.get::<_,String>(4)?}))).map_err(|error| error.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|error| error.to_string())?;
     let mut events_statement = connection.prepare("SELECT entity_type,entity_id,goal_id,points,event_type,created_at FROM score_events ORDER BY created_at DESC").map_err(|error| error.to_string())?;
     let events = events_statement.query_map([], |row| Ok(json!({"entity_type":row.get::<_,String>(0)?,"entity_id":row.get::<_,String>(1)?,"goal_id":row.get::<_,Option<String>>(2)?,"points":row.get::<_,f64>(3)?,"event_type":row.get::<_,String>(4)?,"created_at":row.get::<_,String>(5)?}))).map_err(|error| error.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|error| error.to_string())?;
-    Ok(json!({"goals":goals,"events":events,"periods":[]}))
+    let mut scores_statement = connection
+        .prepare("SELECT period,goal_id,points FROM score_periods ORDER BY period DESC")
+        .map_err(|error| error.to_string())?;
+    let scores = scores_statement.query_map([], |row| Ok(json!({"period":row.get::<_,String>(0)?,"goal_id":row.get::<_,Option<String>>(1)?,"points":row.get::<_,f64>(2)?}))).map_err(|error| error.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|error| error.to_string())?;
+    Ok(json!({"goals":goals,"events":events,"scores":scores}))
 }
 
 pub fn delete(db_path: &Path, entity_type: &str, entity_id: &str) -> Result<Value, String> {
+    if !matches!(entity_type, "captures" | "problems" | "features") {
+        return Err("Unsupported deletion type".into());
+    }
+    item(db_path, entity_type, entity_id)?;
     let connection = database::open(db_path)?;
     connection
         .execute(
@@ -416,6 +930,15 @@ pub fn delete(db_path: &Path, entity_type: &str, entity_id: &str) -> Result<Valu
             params![entity_type, entity_id],
         )
         .map_err(|error| error.to_string())?;
+    if entity_type == "problems" {
+        connection
+            .execute(
+                "INSERT OR REPLACE INTO deleted_entities(entity_type,entity_id)
+                 SELECT 'features',id FROM features WHERE problem_id=?",
+                [entity_id],
+            )
+            .map_err(|error| error.to_string())?;
+    }
     Ok(Value::Null)
 }
 
@@ -458,22 +981,62 @@ pub fn update_item(
     if changed == 0 {
         return Err("Item not found".into());
     }
+    if let Some(versions) = input.get("localized_versions") {
+        localization::save_versions(&connection, entity_type, entity_id, versions)?;
+    }
     Ok(Value::Null)
 }
 
 pub fn item(db_path: &Path, entity_type: &str, entity_id: &str) -> Result<Value, String> {
-    let board = board(db_path)?;
-    let key = match entity_type {
-        "captures" => "captures",
-        "problems" => "problems",
-        "features" => "features",
-        _ => return Err("Unsupported item type".into()),
-    };
-    board[key]
-        .as_array()
-        .and_then(|items| items.iter().find(|item| item["id"] == entity_id))
-        .cloned()
-        .ok_or_else(|| "Item not found".into())
+    item_for_locale(db_path, entity_type, entity_id, "en")
+}
+
+pub fn item_for_locale(
+    db_path: &Path,
+    entity_type: &str,
+    entity_id: &str,
+    locale: &str,
+) -> Result<Value, String> {
+    let connection = database::open(db_path)?;
+    match entity_type {
+        "captures" => connection.query_row(
+            "SELECT id,text,created_at FROM captures WHERE id=?", [entity_id],
+            |row| Ok(json!({"id":row.get::<_,String>(0)?,"kind":"capture","title":row.get::<_,String>(1)?,"detail":row.get::<_,String>(1)?,"state":"captured","created_at":row.get::<_,String>(2)?})),
+        ).optional().map_err(|error| error.to_string())?.ok_or_else(|| "Item not found".into()),
+        "problems" => {
+            let record = connection.query_row("SELECT id,capture_id,statement,detail,state,created_at FROM problems WHERE id=?", [entity_id], |row| Ok(json!({"id":row.get::<_,String>(0)?,"capture_id":row.get::<_,Option<String>>(1)?,"statement":row.get::<_,String>(2)?,"detail":row.get::<_,String>(3)?,"state":row.get::<_,String>(4)?,"created_at":row.get::<_,String>(5)?}))).optional().map_err(|error| error.to_string())?.ok_or("Item not found")?;
+            let localized = localization::overlay(&connection, "problems", record, locale)?;
+            Ok(json!({"id":entity_id,"kind":"problem","title":localized["statement"],"detail":localized["detail"],"state":localized["state"],"created_at":localized["created_at"],"capture_id":localized["capture_id"],"content_locale":localized["content_locale"],"available_locales":localized["available_locales"],"fallback_used":localized["fallback_used"],"localized_versions":localized["localized_versions"]}))
+        }
+        "features" => {
+            let record = connection.query_row("SELECT f.id,f.problem_id,f.title,f.outcome,f.non_goals,f.validation_criteria,f.state,f.conflict_state,f.created_at,p.statement FROM features f JOIN problems p ON p.id=f.problem_id WHERE f.id=?", [entity_id], |row| Ok(json!({"id":row.get::<_,String>(0)?,"problem_id":row.get::<_,String>(1)?,"title":row.get::<_,String>(2)?,"outcome":row.get::<_,String>(3)?,"non_goals":row.get::<_,String>(4)?,"validation_criteria":row.get::<_,String>(5)?,"state":row.get::<_,String>(6)?,"conflict_state":row.get::<_,String>(7)?,"created_at":row.get::<_,String>(8)?,"problem_statement":row.get::<_,String>(9)?}))).optional().map_err(|error| error.to_string())?.ok_or("Item not found")?;
+            let mut localized = localization::overlay(&connection, "features", record, locale)?;
+            let problem = connection.query_row("SELECT id,statement,detail,state,created_at FROM problems WHERE id=?", [localized["problem_id"].as_str().unwrap_or("")], |row| Ok(json!({"id":row.get::<_,String>(0)?,"statement":row.get::<_,String>(1)?,"detail":row.get::<_,String>(2)?,"state":row.get::<_,String>(3)?,"created_at":row.get::<_,String>(4)?}))).map_err(|error| error.to_string())?;
+            localized["problem_statement"] = localization::overlay(&connection, "problems", problem, locale)?["statement"].clone();
+            localized["kind"] = json!("solution");
+            Ok(localized)
+        }
+        _ => Err("Unsupported item type".into()),
+    }
+}
+
+pub fn supplement_localization(
+    db_path: &Path,
+    entity_type: &str,
+    entity_id: &str,
+    input: &Value,
+) -> Result<Value, String> {
+    item(db_path, entity_type, entity_id)?;
+    let locale = required_text(input, "locale")?;
+    let fields = input.get("fields").ok_or("fields is required")?;
+    localization::supplement(
+        &database::open(db_path)?,
+        entity_type,
+        entity_id,
+        locale,
+        fields,
+    )?;
+    Ok(Value::Null)
 }
 
 pub fn set_category(db_path: &Path, input: &Value) -> Result<Value, String> {
@@ -495,15 +1058,6 @@ pub fn set_importance(db_path: &Path, input: &Value) -> Result<Value, String> {
     let connection = database::open(db_path)?;
     connection.execute("INSERT INTO workbench_priority_overrides(entity_type,entity_id,manual_priority) VALUES (?,?,?) ON CONFLICT(entity_type,entity_id) DO UPDATE SET manual_priority=excluded.manual_priority", params![entity_type,entity_id,i64::from(important)]).map_err(|error| error.to_string())?;
     Ok(Value::Null)
-}
-
-pub fn refinement_context(
-    db_path: &Path,
-    entity_type: &str,
-    entity_id: &str,
-) -> Result<Value, String> {
-    let current = item(db_path, entity_type, entity_id)?;
-    Ok(json!({"entries":[],"refinement_draft":null,"current_detail":current}))
 }
 
 pub fn record_ai_run(
@@ -561,143 +1115,23 @@ pub fn follow_up_problem(db_path: &Path, feature_id: &str) -> Result<Value, Stri
     )
 }
 
-pub fn complete_problem(
-    db_path: &Path,
-    vault: &Path,
-    problem_id: &str,
-    input: &Value,
-) -> Result<Value, String> {
-    let reason = input.get("reason").and_then(Value::as_str).unwrap_or("");
-    let connection = database::open(db_path)?;
-    let (statement, detail): (String, String) = connection
-        .query_row(
-            "SELECT statement,detail FROM problems WHERE id=?",
-            [problem_id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )
-        .optional()
-        .map_err(|error| error.to_string())?
-        .ok_or("Problem not found")?;
-    let mut query = connection.prepare("SELECT title,outcome,validation_criteria FROM features WHERE problem_id=? ORDER BY created_at").map_err(|error| error.to_string())?;
-    let features = query
-        .query_map([problem_id], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-            ))
-        })
-        .map_err(|error| error.to_string())?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| error.to_string())?;
-    if features.is_empty() {
-        return Err("Problem has no Solutions to complete".into());
-    }
-    let slug = statement
-        .chars()
-        .filter(|c| c.is_alphanumeric() || *c == ' ' || *c == '-')
-        .collect::<String>()
-        .trim()
-        .replace(' ', "-");
-    let relative = format!(
-        "90. Archive/{}-{}.md",
-        chrono::Utc::now().format("%Y-%m-%d"),
-        if slug.is_empty() {
-            "completed-problem"
-        } else {
-            &slug
-        }
-    );
-    let mut markdown = format!("# {statement}\n\n{detail}\n\n## Completion decision\n\n{reason}\n");
-    for (title, outcome, criteria) in features {
-        markdown.push_str(&format!(
-            "\n## Solution: {title}\n\n{outcome}\n\n### Validation criteria\n\n{criteria}\n"
-        ));
-    }
-    let target = vault.join(&relative);
-    if let Some(parent) = target.parent() {
-        std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-    }
-    std::fs::write(&target, &markdown).map_err(|error| error.to_string())?;
-    let hash = format!("{:x}", Sha256::digest(markdown.as_bytes()));
-    connection.execute("INSERT OR REPLACE INTO completion_playbooks(problem_id,path,source_hash) VALUES (?,?,?)", params![problem_id, relative, hash]).map_err(|error| error.to_string())?;
-    connection
-        .execute(
-            "INSERT INTO problem_completion_decisions(id,problem_id,reason) VALUES (?,?,?)",
-            params![id(), problem_id, reason],
-        )
-        .map_err(|error| error.to_string())?;
-    connection
-        .execute(
-            "UPDATE problems SET state='completed' WHERE id=?",
-            [problem_id],
-        )
-        .map_err(|error| error.to_string())?;
-    Ok(json!({"path":relative,"problem_id":problem_id,"source_hash":hash}))
-}
-
-pub fn lineage(db_path: &Path, feature_id: &str) -> Result<Value, String> {
-    let connection = database::open(db_path)?;
-    let (problem_id, title): (String, String) = connection
-        .query_row(
-            "SELECT problem_id,title FROM features WHERE id=?",
-            [feature_id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )
-        .optional()
-        .map_err(|error| error.to_string())?
-        .ok_or("Solution not found")?;
-    let (capture_id, problem): (Option<String>, String) = connection
-        .query_row(
-            "SELECT capture_id,statement FROM problems WHERE id=?",
-            [&problem_id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )
-        .map_err(|error| error.to_string())?;
-    let capture = capture_id
-        .as_ref()
-        .and_then(|capture_id| {
-            connection
-                .query_row(
-                    "SELECT text FROM captures WHERE id=?",
-                    [capture_id],
-                    |row| row.get::<_, String>(0),
-                )
-                .ok()
-        })
-        .unwrap_or_default();
-    let completed: bool = connection
-        .query_row(
-            "SELECT EXISTS(SELECT 1 FROM completion_playbooks WHERE problem_id=?)",
-            [&problem_id],
-            |row| row.get(0),
-        )
-        .map_err(|error| error.to_string())?;
-    let mut stages = vec![
-        json!({"kind":"capture","id":capture_id,"title":capture}),
-        json!({"kind":"problem","id":problem_id,"title":problem}),
-        json!({"kind":"solution","id":feature_id,"title":title}),
-    ];
-    if completed {
-        stages.push(json!({"kind":"complete","id":problem_id,"title":"Completed"}));
-    }
-    Ok(json!({"lineage":{"stages":stages},"claims":{},"evidence":{}}))
-}
-
 pub fn handoff(db_path: &Path, feature_id: &str) -> Result<Value, String> {
     let connection = database::open(db_path)?;
-    let record: (String, String, String, String) = connection
+    let record: (String, String, String, String, String, String) = connection
         .query_row(
-            "SELECT title,outcome,non_goals,validation_criteria FROM features WHERE id=?",
+            "SELECT f.title,f.outcome,f.non_goals,f.validation_criteria,f.state,p.statement FROM features f JOIN problems p ON p.id=f.problem_id WHERE f.id=?",
             [feature_id],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)),
         )
         .optional()
         .map_err(|error| error.to_string())?
         .ok_or("Solution not found")?;
+    if record.4 != "approved" {
+        return Err("Handoff requires an approved Solution".into());
+    }
     Ok(Value::String(format!(
-        "# {}\n\n## Intended outcome\n{}\n\n## Non-goals\n{}\n\n## Done criteria\n{}\n",
-        record.0, record.1, record.2, record.3
+        "# Implementation handoff\n\n## Approved problem\n{}\n\n## Approved solution\n{}\n{}\n\n## Constraints and non-goals\n{}\n\n## Definition of done\n{}\n\n## Unanswered questions\nNone recorded.\n",
+        record.5, record.0, record.1, if record.2.is_empty() { "None recorded." } else { &record.2 }, "Review the intended outcome and validation criteria recorded in the Solution."
     )))
 }
 
@@ -754,7 +1188,7 @@ pub fn apply_transition(
                 .optional()
                 .map_err(|error| error.to_string())?
                 .ok_or("Solution not found")?;
-            complete_problem(db_path, vault, &problem_id, fields)
+            crate::native::completion::complete(db_path, vault, &problem_id, fields)
         }
         _ => Err("Unsupported workflow transition".into()),
     }

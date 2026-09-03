@@ -1,8 +1,9 @@
 # LLM Wiki Project Plan
 
-**Updated**: 2026-08-19  
-**Project status**: Local functional baseline implemented; acceptance-hardening and remaining UI
-surfaces are planned below.
+**Updated**: 2026-09-03
+**Project status**: Native React/Tauri desktop migration complete; the loopback FastAPI browser
+delivery remains a separate, intentionally retained product. The items below are post-migration
+product enhancements, not desktop-cutover blockers.
 
 ## Product boundaries
 
@@ -18,10 +19,10 @@ surfaces are planned below.
 
 | Feature | Outcome | Current state | Next acceptance work |
 |---|---|---|---|
-| 001 Fast Vault Search | Fast, Obsidian-compatible local retrieval | Implemented | Add multilingual/performance/memory fixtures and formal gates |
-| 002 Conflict-Gated Workflow | Human-approved capture-to-handoff flow | Implemented baseline with AI-first drafting | Add enrichment review, conflict-finding, and importance UI |
-| 003 Completion, Writeback, Archive | Reviewed, safe knowledge integration | Implemented API/service layer | Add patch-review UI and three-way merge/Windows lock coverage |
-| 004 Direction Dashboard | Compass-aligned progress scoring | Implemented baseline | Add period/drift views and dashboard benchmark fixtures |
+| 001 Fast Vault Search | Fast, Obsidian-compatible local retrieval | Implemented in native and browser deliveries | Add corpus-wide semantic mode and ratified memory fixtures |
+| 002 Conflict-Gated Workflow | Human-approved capture-to-handoff flow | Implemented and desktop-E2E protected | Add richer progressive conflict-review presentation |
+| 003 Completion, Writeback, Archive | Reviewed, safe knowledge integration | Implemented with atomic cross-platform writes | Add three-way merge for non-overlapping external edits |
+| 004 Direction Dashboard | Compass-aligned progress scoring | Implemented with 10/20/70 milestone ledger | Add period/drift views and dashboard benchmark fixtures |
 
 ## Phase 1 — Finish user-facing workflow surfaces
 
@@ -79,7 +80,10 @@ tests pass.
 
 ## Current acceptance evidence
 
-- Automated suite: 24 passed, 1 browser test skipped locally because Playwright’s Chromium
-  artifact cannot currently be downloaded through the local certificate chain.
+- Native desktop: 12 React tests and 23 Rust unit/command tests pass with no skips.
+- Retained browser contract: 196 Python unit/integration/API/UI tests pass with no skips.
+- The packaged macOS application passes real launch, workflow, provider-double, bundled semantic
+  search, filesystem, full process relaunch, and restoration E2E.
 - Structural reference benchmark: 1,000 notes index under the 3-second budget.
-- Per-user local service: `com.llm-wiki` LaunchAgent; application binds only to `127.0.0.1`.
+- The packaged desktop opens no internal socket and starts no Python process. The optional browser
+  delivery remains a separately launched loopback service.

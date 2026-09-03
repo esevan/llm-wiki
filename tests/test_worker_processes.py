@@ -30,8 +30,6 @@ def test_cli_exposes_independent_spawn_safe_roles() -> None:
 
 
 def test_each_concurrent_worker_owns_an_isolated_application_runtime() -> None:
-    source = (Path(__file__).parents[1] / "llm_wiki" / "services" / "job_runtime.py").read_text(
-        encoding="utf-8"
-    )
+    source = (Path(__file__).parents[1] / "llm_wiki" / "services" / "job_runtime.py").read_text(encoding="utf-8")
     assert "build_job_registry(vault_path, db_path) for _ in range(worker_count)" in source
     assert "for index, (registry, _retrieval) in enumerate(runtimes)" in source

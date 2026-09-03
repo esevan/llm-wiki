@@ -118,28 +118,29 @@ is installed at `~/Library/LaunchAgents/com.llm-wiki.plist`. It is local-only (`
 
 - The core/dev environment is synchronized; use `uv sync --all-extras` when semantic and LangGraph
   extras are required.
-- Latest native cutover run: **196 Python + 10 React + 10 Rust tests, 0 skipped**. The 286 MB release
-  `.app` includes the checksum-verified multilingual MiniLM ONNX model and no sidecar. Real desktop
+- Latest native cutover run: **196 Python + 12 React + 23 Rust tests, 0 skipped**. The release
+  `.app` includes the checksum-verified multilingual MiniLM ONNX model and bundled fonts, with no sidecar. Real desktop
   E2E passes launch, workflow, local semantic search, full process relaunch, and state restoration.
 - Ruff lint and 120-column format checks passed across all Python source and tests.
 - Browser JavaScript syntax is separately validated by Node and passed.
 - Latest 1,000-note structural-index benchmark: **1,002.13 ms** (budget: <3,000 ms).
 
-## Remaining work
+## Post-migration product backlog
 
-These are deliberate continuation tasks, not blockers for the currently running local product:
+The native cutover has no open implementation item. These are separately scoped product
+enhancements and two unresolved product-policy choices, not migration blockers:
 
 1. Add a real 1,000-note multilingual retrieval fixture and measure FTS, semantic reranking,
    capture, dashboard, startup, and memory budgets individually.
 2. Add a user-visible patch-review surface showing base/current/proposed content and a
    three-way merge for non-overlapping edits (current implementation blocks changed files).
-3. Add Windows-native lock/move integration tests and a cross-platform file-lock implementation
-   (`portalocker`) before claiming Windows release acceptance.
-4. Implement confirmed SpecKit gaps: independent semantic corpus search;
-   deprecated compatibility API markers; removal of the unused report-language setting; Knowledge
-   translation tier UI; checklist-edit retranslation; state-changing Knowledge translation request;
-   Lineage inference-failure indicator; Conflict Review progress and document deduplication; hard
-   cancellation; and Chat-close abort.
+3. Confirm the configured native Windows CI lane on every release. Managed overwrite uses
+   `ReplaceFileW` on Windows; a Windows SDK is not available for local cross-linking from macOS.
+4. Implement confirmed browser/product gaps: independent semantic corpus search; deprecated browser
+   compatibility API markers; removal of the browser delivery's unused report-language setting;
+   Knowledge translation tier UI; checklist-edit retranslation; state-changing Knowledge
+   translation request; Lineage inference-failure presentation; and richer Conflict Review progress
+   and document deduplication. Native durable and conversation cancellation are complete.
 5. Define the durable Queue history TTL (`TD-006`).
 6. Select the Queue, toast, and notification accessibility acceptance scope (`TD-020`).
 
@@ -147,12 +148,10 @@ The Lineage Knowledge Layer specification migrated from duplicate prefix `006` t
 Current and pending behavior-driven characterization cases are cataloged in
 [`tests/CHARACTERIZATION.md`](../tests/CHARACTERIZATION.md).
 
-## First actions for the next agent
+## First actions for future product work
 
-1. Read `.specify/memory/constitution.md` and this file.
-2. Read the feature `tasks.md` matching the continuation task.
-3. Run `uv sync --all-extras` and `uv run pytest -q` from the project root.
-4. Confirm service health at `/api/health`; use LaunchAgent logs if unavailable.
-5. Preserve adapter boundaries: only `MarkdownVaultAdapter` touches vault paths; only
-   `OpenAICompatibleProvider` knows endpoint details; no AI imports in capture, board, or
-   structural search paths.
+1. Read `.specify/memory/constitution.md`, this file, and the selected feature `tasks.md`.
+2. For native work, run the React/Rust suites and real desktop E2E; for retained browser work, run
+   `uv run pytest -q` as well.
+3. Preserve the desktop boundary: React depends on `ApplicationClient`, Tauri commands remain thin,
+   and only native Vault/settings/provider modules touch their external resources.

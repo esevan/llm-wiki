@@ -2,14 +2,17 @@
 
 [English](visual-guide.md) | **한국어**
 
-이 화면들은 React·Tauri 마이그레이션을 `main`에 병합한 뒤 실행 중인 애플리케이션에서
-캡처했습니다. 문서용으로 격리한 Vault와 샘플 기록을 사용했으며 개인 Vault 콘텐츠나 자격 증명 값은
-포함하지 않습니다. Tauri WebView에서도 같은 React 화면을 사용하며, 네이티브 command 동작은 별도
-Desktop E2E suite가 검증합니다.
+아래 네 장의 주요 화면은 React·Tauri 전환이 `main`에 반영된 뒤 패키징한 네이티브 앱에서 다시
+캡처했습니다. 문서용으로 격리한 Vault와 데이터베이스를 사용했으며 개인 Vault 콘텐츠나 자격 증명
+값은 포함하지 않습니다. 각 화면은 하나의 제품 기능을 보여주고, 뒤의 세부 화면은 더 깊은 workflow
+상태를 설명합니다.
 
-![격리된 샘플 데이터를 사용하는 네이티브 Tauri 앱 Workbench](images/00-native-workbench.png)
+![Tauri command로 Capture를 저장한 패키징 네이티브 Workbench](../images/native-app/workbench.jpg)
 
 ## 1. Capture, Problem, Solution
+
+현재 Workbench 화면은 번들된 Noto Sans KR 폰트로 한국어 UI를 표시합니다. 샘플 Capture 저장은 typed
+application client와 Tauri workflow command를 통과하며 loopback 웹 서버를 호출하지 않습니다.
 
 ![Capture, Problem, Solution, 진행 중 작업, 충돌 상태를 함께 보여주는 Workbench](images/02-workbench.png)
 
@@ -43,7 +46,7 @@ Work 탭은 검증 기준, 체크 상태, 진행 메모, 검토 댓글을 함께
 
 ## 4. 기존 Knowledge 다시 찾기
 
-![경로, 제목, 일치 맥락을 보여주는 Vault 검색 결과](images/01-search-vault.png)
+![번들된 다국어 모델을 사용하는 네이티브 의미 기반 Vault 검색](../images/native-app/vault-search.jpg)
 
 Vault 검색은 로컬 Markdown 맥락을 반환합니다. 이 화면에서 선택한 의미 검색 결과는 `.app`에
 포함된 다국어 임베딩 모델이 만들었으며 임베딩 서비스나 시작 시 다운로드가 필요하지 않습니다.
@@ -53,7 +56,7 @@ Vault 검색은 로컬 Markdown 맥락을 반환합니다. 이 화면에서 선�
 
 ## 5. 방향을 계속 보이게 하기
 
-![활성 방향 목표를 보여주는 Compass](images/04-compass.png)
+![Tauri command로 방향 목표를 저장한 네이티브 Compass](../images/native-app/compass.jpg)
 
 Compass는 개인 활동을 성과 점수로 바꾸지 않고 현재 방향을 기록합니다.
 
@@ -61,7 +64,7 @@ Compass는 개인 활동을 성과 점수로 바꾸지 않고 현재 방향을 �
 
 ## 6. 비밀 값을 노출하지 않고 AI 설정하기
 
-![Endpoint, model routing, Worker 수, 마스킹된 자격 증명 상태를 보여주는 AI 설정](images/07-ai-settings.png)
+![Endpoint, model routing, Worker 수, 마스킹된 자격 증명 상태를 보여주는 네이티브 AI 설정](../images/native-app/ai-settings.jpg)
 
 AI 설정은 endpoint·model routing과 자격 증명을 분리합니다. 저장된 키는 native secret storage에
 보관하며 그 값을 UI로 돌려주지 않습니다.

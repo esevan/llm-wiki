@@ -23,7 +23,7 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["app"],
+    "targets": "all",
     "resources": ["resources/embedding-model/"]
   }
 }
