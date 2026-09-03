@@ -69,9 +69,12 @@ Windows build는 MSI와 NSIS installer를 만듭니다. Windows agent가 그대�
 [Windows 패키징 및 설치](docs/windows-packaging.ko.md)에 정리되어 있습니다.
 
 Release `.app`에는 Python Runtime, Sidecar, 내부 Web Server가 없습니다.
-`LLM_WIKI_VAULT`가 없으면 데스크톱 앱은 `Documents/LLM Wiki Vault`를 사용합니다. React는
-Workflow, Vault, 설정, Job, System 명령을 각각 호출하며 Chat Chunk와 취소는 네이티브 Tauri
-Channel을 사용합니다. Socket은 사용자가 명시적으로 설정한 외부 AI Provider 호출에만 열립니다.
+새 설치는 Workbench를 조작하기 전에 네이티브 폴더 선택기를 열고 사용자가 고른 Markdown Vault를
+기억합니다. 기존 설치는 `Documents/LLM Wiki Vault`를 승계하며 `LLM_WIKI_VAULT`는 개발용
+override로 유지됩니다. React는 Workflow, Vault, 설정, Job, System 명령을 각각 호출하며 Chat
+Chunk와 취소는 네이티브 Tauri Channel을 사용합니다. Socket은 사용자가 명시적으로 설정한 외부 AI
+Provider 호출에만 열립니다. 자세한 내용은
+[최초 실행 Vault 설정](docs/features/first-run-vault-setup.ko.md)을 참고하세요.
 기존 Python/FastAPI 브라우저 전달은 네이티브 명령 parity 검증 후 폐기했습니다. 마지막 구현은
 `caef236` Git history에서만 확인할 수 있습니다.
 

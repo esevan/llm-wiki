@@ -56,11 +56,13 @@ an unsuccessful exit code, and reports MSI code 3010 as a successful install tha
 ## Post-install verification
 
 1. Launch **LLM Wiki** from the Start menu.
-2. Confirm that Workbench opens without a terminal, Python process, or localhost service.
-3. Create a Capture, close the app, relaunch it, and confirm that the Capture remains.
-4. Put a Markdown file in `%USERPROFILE%\Documents\LLM Wiki Vault`, select **Vault Search**, enable
+2. Choose an existing Markdown folder in the first-run native Vault picker.
+3. Confirm that Workbench opens without a terminal, Python process, or localhost service.
+4. Create a Capture, close the app, relaunch it, and confirm that the Capture remains and the Vault
+   picker does not reopen.
+5. Put a Markdown file in the selected Vault, select **Vault Search**, enable
    semantic search, and confirm that the note is returned after background indexing.
-5. Open AI Setup and confirm that an API key is reported only as configured/not configured. The key
+6. Open AI Setup and confirm that an API key is reported only as configured/not configured. The key
    is stored through Windows Credential Manager and is never returned to React.
 
 `http://ipc.localhost` in the Tauri content-security policy is WebView2's virtual IPC origin; it is

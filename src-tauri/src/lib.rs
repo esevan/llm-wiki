@@ -7,11 +7,59 @@ pub use native::{NativeApplication, NativeOperation, NativeResponse};
 use std::path::PathBuf;
 use tauri::path::BaseDirectory;
 use tauri::Manager;
+use tauri_plugin_dialog::DialogExt;
 
-fn application_paths() -> Result<(PathBuf, PathBuf), String> {
-    let vault = std::env::var_os("LLM_WIKI_VAULT")
-        .map(PathBuf::from)
-        .or_else(|| dirs::document_dir().map(|path| path.join("LLM Wiki Vault")))
+struct VaultResolution {
+    path: PathBuf,
+    setup_required: bool,
+    persist_path: bool,
+}
+
+fn resolve_vault(
+    default: PathBuf,
+    db: &std::path::Path,
+    forced: Option<PathBuf>,
+) -> Result<VaultResolution, String> {
+    if let Some(path) = forced {
+        return Ok(VaultResolution {
+            path,
+            setup_required: false,
+            persist_path: false,
+        });
+    }
+    let database_existed = db.is_file();
+    match native::settings::vault_startup(db)? {
+        native::settings::VaultStartup::Configured(path) if path.is_dir() => Ok(VaultResolution {
+            path,
+            setup_required: false,
+            persist_path: false,
+        }),
+        native::settings::VaultStartup::Configured(_) => Ok(VaultResolution {
+            path: default,
+            setup_required: true,
+            persist_path: false,
+        }),
+        native::settings::VaultStartup::Pending => Ok(VaultResolution {
+            path: default,
+            setup_required: true,
+            persist_path: false,
+        }),
+        native::settings::VaultStartup::Unset if database_existed => Ok(VaultResolution {
+            path: default,
+            setup_required: false,
+            persist_path: true,
+        }),
+        native::settings::VaultStartup::Unset => Ok(VaultResolution {
+            path: default,
+            setup_required: true,
+            persist_path: false,
+        }),
+    }
+}
+
+fn application_paths() -> Result<(VaultResolution, PathBuf), String> {
+    let default_vault = dirs::document_dir()
+        .map(|path| path.join("LLM Wiki Vault"))
         .ok_or("A local vault path is required")?;
     let data_dir = dirs::data_local_dir()
         .ok_or("The local application data directory is unavailable")?
@@ -19,7 +67,8 @@ fn application_paths() -> Result<(PathBuf, PathBuf), String> {
     let db = std::env::var_os("LLM_WIKI_DB")
         .map(PathBuf::from)
         .unwrap_or_else(|| data_dir.join("llm-wiki.sqlite3"));
-    Ok((vault, db))
+    let forced = std::env::var_os("LLM_WIKI_VAULT").map(PathBuf::from);
+    Ok((resolve_vault(default_vault, &db, forced)?, db))
 }
 
 fn execute_domain(
@@ -71,6 +120,31 @@ fn jobs_command(
 }
 
 #[tauri::command]
+fn vault_setup_status(
+    application: tauri::State<'_, NativeApplication>,
+) -> Result<serde_json::Value, String> {
+    Ok(application.vault_setup_status())
+}
+
+#[tauri::command]
+async fn choose_vault(
+    app: tauri::AppHandle,
+    application: tauri::State<'_, NativeApplication>,
+) -> Result<bool, String> {
+    let selected = app
+        .dialog()
+        .file()
+        .set_title("Choose your LLM Wiki Vault")
+        .blocking_pick_folder();
+    let Some(selected) = selected else {
+        return Ok(false);
+    };
+    let path = selected.into_path().map_err(|error| error.to_string())?;
+    application.save_vault_selection(&path)?;
+    app.restart();
+}
+
+#[tauri::command]
 async fn enqueue_ai_job(
     application: tauri::State<'_, NativeApplication>,
     operation: NativeOperation,
@@ -87,25 +161,43 @@ async fn enqueue_ai_job(
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .manage(conversation::RequestRegistry::default())
         .setup(|app| {
             let (vault, db) = application_paths()?;
+            let VaultResolution {
+                path,
+                setup_required,
+                persist_path,
+            } = vault;
             let model_dir = app
                 .path()
                 .resolve("resources/embedding-model", BaseDirectory::Resource)
                 .map_err(|error| error.to_string())?;
-            let application = NativeApplication::new(vault, db, Some(model_dir))?;
+            let application =
+                NativeApplication::with_vault_setup(path, db, Some(model_dir), setup_required)?;
+            if setup_required {
+                native::settings::mark_vault_setup_pending(&application.db_path())?;
+            } else if persist_path {
+                native::settings::save_vault_path(
+                    &application.db_path(),
+                    &application.vault_path(),
+                )?;
+            }
             let background_index = application.clone();
+            let should_index = !setup_required;
             app.manage(application);
-            tauri::async_runtime::spawn_blocking(move || {
-                let _ = background_index.execute_domain(
-                    "vault",
-                    NativeOperation {
-                        name: "vault.index".into(),
-                        input: serde_json::json!({"semantic":true}),
-                    },
-                );
-            });
+            if should_index {
+                tauri::async_runtime::spawn_blocking(move || {
+                    let _ = background_index.execute_domain(
+                        "vault",
+                        NativeOperation {
+                            name: "vault.index".into(),
+                            input: serde_json::json!({"semantic":true}),
+                        },
+                    );
+                });
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -115,6 +207,8 @@ pub fn run() {
             workflow_command,
             jobs_command,
             enqueue_ai_job,
+            vault_setup_status,
+            choose_vault,
             conversation::conversation_stream,
             conversation::cancel_conversation,
             desktop_e2e::desktop_e2e_mode,
@@ -128,8 +222,58 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::native::settings::VaultStartup;
     use serde_json::json;
     use tempfile::tempdir;
+
+    #[test]
+    fn first_launch_requires_a_vault_and_restores_the_selected_folder() {
+        let state = tempdir().unwrap();
+        let db = state.path().join("state.sqlite3");
+        let default = state.path().join("default-vault");
+        let first_launch = resolve_vault(default.clone(), &db, None).unwrap();
+        assert!(first_launch.setup_required);
+        assert_eq!(first_launch.path, default);
+
+        let application = NativeApplication::with_vault_setup(
+            first_launch.path,
+            db.clone(),
+            None,
+            first_launch.setup_required,
+        )
+        .unwrap();
+        native::settings::mark_vault_setup_pending(&db).unwrap();
+        assert_eq!(application.vault_setup_status()["required"], true);
+
+        let selected = state.path().join("chosen-vault");
+        std::fs::create_dir(&selected).unwrap();
+        application.save_vault_selection(&selected).unwrap();
+        let restored = resolve_vault(default, &db, None).unwrap();
+        assert!(!restored.setup_required);
+        assert_eq!(restored.path, selected.canonicalize().unwrap());
+        assert!(matches!(
+            native::settings::vault_startup(&db).unwrap(),
+            VaultStartup::Configured(_)
+        ));
+
+        std::fs::remove_dir(&selected).unwrap();
+        let unavailable = resolve_vault(state.path().join("fallback"), &db, None).unwrap();
+        assert!(unavailable.setup_required);
+    }
+
+    #[test]
+    fn existing_installation_without_a_vault_setting_keeps_the_legacy_default() {
+        let state = tempdir().unwrap();
+        let db = state.path().join("state.sqlite3");
+        let default = state.path().join("legacy-default-vault");
+        NativeApplication::isolated(&default, &db).unwrap();
+
+        let restored = resolve_vault(default.clone(), &db, None).unwrap();
+
+        assert!(!restored.setup_required);
+        assert!(restored.persist_path);
+        assert_eq!(restored.path, default);
+    }
 
     #[test]
     fn native_runtime_uses_sqlite_without_a_loopback_origin() {

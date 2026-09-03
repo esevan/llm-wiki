@@ -69,17 +69,19 @@ overwrite semantics have an explicit Windows implementation.
 
 PASS. Capture remains one field and one action. AI work is queued without blocking the Workbench;
 approval, conflict resolution, destructive actions, and completion remain explicit user decisions.
-Startup indexing is background work. Korean empty states and Compass summaries are translated at
-render time, avoiding mixed-language dead ends. Four current packaged-app screenshots are organized
-by capability in the [visual feature tour](../features/visual-guide.md).
+New installations require an explicit native Vault folder choice before interaction, while existing
+installations keep their former path without a migration interruption. Startup indexing is
+background work. Korean empty states and Compass summaries are translated at render time, avoiding
+mixed-language dead ends. Four current packaged-app screenshots are organized by capability in the
+[visual feature tour](../features/visual-guide.md).
 
 ## Verification evidence
 
 | Check | Result |
 | --- | --- |
 | Retired Python/API characterization | PASS — 196 at `caef236`; removed with product |
-| React component/adapter | PASS — 10 tests plus runtime boundary gate |
-| Rust unit/command | PASS — 23 tests |
+| React component/adapter | PASS — 14 tests plus runtime boundary gate |
+| Rust unit/command | PASS — 25 tests |
 | TypeScript typecheck and ESLint | PASS |
 | Rustfmt and Clippy `-D warnings` | PASS |
 | Frontend production build | PASS; 148 local WOFF2 subsets verified |

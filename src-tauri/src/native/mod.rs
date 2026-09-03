@@ -22,6 +22,7 @@ use std::path::{Path, PathBuf};
 pub struct NativeApplication {
     db_path: PathBuf,
     vault: PathBuf,
+    vault_setup_required: bool,
     semantic: semantic::SemanticEngine,
     jobs: jobs::JobRegistry,
 }
@@ -47,7 +48,27 @@ impl NativeApplication {
         db_path: PathBuf,
         embedding_model_dir: Option<PathBuf>,
     ) -> Result<Self, String> {
-        std::fs::create_dir_all(&vault).map_err(|error| error.to_string())?;
+        Self::build(vault, db_path, embedding_model_dir, false)
+    }
+
+    pub fn with_vault_setup(
+        vault: PathBuf,
+        db_path: PathBuf,
+        embedding_model_dir: Option<PathBuf>,
+        vault_setup_required: bool,
+    ) -> Result<Self, String> {
+        Self::build(vault, db_path, embedding_model_dir, vault_setup_required)
+    }
+
+    fn build(
+        vault: PathBuf,
+        db_path: PathBuf,
+        embedding_model_dir: Option<PathBuf>,
+        vault_setup_required: bool,
+    ) -> Result<Self, String> {
+        if !vault_setup_required {
+            std::fs::create_dir_all(&vault).map_err(|error| error.to_string())?;
+        }
         if let Some(parent) = db_path.parent() {
             std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
         }
@@ -55,6 +76,7 @@ impl NativeApplication {
         Ok(Self {
             db_path,
             vault,
+            vault_setup_required,
             semantic: semantic::SemanticEngine::new(embedding_model_dir),
             jobs: jobs::JobRegistry::default(),
         })
@@ -83,6 +105,21 @@ impl NativeApplication {
 
     pub fn vault_path(&self) -> PathBuf {
         self.vault.clone()
+    }
+
+    pub fn vault_setup_status(&self) -> Value {
+        json!({
+            "required": self.vault_setup_required,
+            "path": if self.vault_setup_required { Value::Null } else { Value::String(self.vault.to_string_lossy().into_owned()) }
+        })
+    }
+
+    pub fn save_vault_selection(&self, path: &Path) -> Result<(), String> {
+        if !path.is_absolute() || !path.is_dir() {
+            return Err("Choose an existing Vault folder".into());
+        }
+        let selected = path.canonicalize().map_err(|error| error.to_string())?;
+        settings::save_vault_path(&self.db_path, &selected)
     }
 
     pub fn execute(&self, operation: NativeOperation) -> NativeResponse {

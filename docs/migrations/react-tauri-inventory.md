@@ -76,6 +76,7 @@ Status values are `PASS`, `PARTIAL`, `MISSING`, `NOT_APPLICABLE`, and `BLOCKED`.
 | UI-023 | Completed lineage | Deterministic lineage remains on inference failure; corrections preserve revisions | SQLite + optional AI | `test_api.py`, `test_workflow.py`, CB-016 | `features/lineage` | high / high | PASS | PASS | PASS | PASS |
 | UI-024 | Startup/shutdown/relaunch | Runtime initializes index/settings/jobs; workers terminate with shell; persisted state reloads | filesystem, SQLite, processes | `test_cli.py`, `test_worker_processes.py` | `app/lifecycle` | high / medium | PASS | PASS | PASS | PASS |
 | UI-025 | Reviewed patch apply/undo | Hash mismatch blocks; accepted patch is atomic and reversible | vault filesystem + mirror hash | `test_patches.py`, CB-004 | `features/completion` | high / high | PASS | PASS | PASS | PASS |
+| UI-026 | Choose Vault on first launch | New installs block normal interaction until an existing directory is selected; cancel remains pending; existing installs retain the legacy default | native folder picker + SQLite `app_settings`; no indexing before selection | CB-022, React tests, Rust startup tests, desktop E2E | `features/vault-setup` | high / high | PASS | PASS | PASS | PASS |
 
 ## Endpoint classification
 

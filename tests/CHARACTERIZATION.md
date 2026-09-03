@@ -183,6 +183,19 @@ is mapped in `docs/migrations/react-tauri-inventory.md` and `src-tauri/tests/`.
 - **Automated evidence**: `src-tauri/tests/application_commands.rs`,
   `frontend/src/services/tauriApplicationClient.test.ts`
 
+### CB-022 — First launch requires an explicit Vault selection
+
+- **Given** a new desktop installation with no stored Vault path,
+- **When** the application launches,
+- **Then** a blocking setup screen opens the native folder picker, cancellation leaves setup
+  pending, and a selected existing directory is stored in SQLite and restored after restart.
+- **Alternative**: an existing installation without the new setting keeps its historical
+  `Documents/LLM Wiki Vault` location without interruption; `LLM_WIKI_VAULT` remains an explicit
+  development and test override.
+- **Automated evidence**: `frontend/src/features/vault-setup/VaultSetupView.test.tsx`,
+  `frontend/src/services/vaultSetupClient.test.ts`, `src-tauri/src/lib.rs`,
+  `frontend/src/test/desktopScenario.ts`
+
 ## Pending acceptance scenarios
 
 ### PA-001 — Independent semantic corpus search

@@ -4,6 +4,7 @@ import {
   reportDesktopE2eProgress,
   type DesktopE2eResult,
 } from '../services/tauriApplicationClient';
+import { getVaultSetupStatus } from '../services/vaultSetupClient';
 
 const waitFor = async (condition: () => boolean, description: string) => {
   if (condition()) return;
@@ -132,6 +133,9 @@ const run = async (providerUrl: string) => {
   try {
     await waitFor(() => document.documentElement.dataset.applicationReady === 'true', 'application initialization');
     await step('application launched and initialized through the native command path');
+    const vaultSetup = await getVaultSetupStatus();
+    if (vaultSetup.required || !vaultSetup.path) throw new Error('Configured Vault was not restored');
+    await step('the configured Vault was restored without reopening first-run setup');
     await waitForSemanticStartupIndex();
     await step('startup indexing prepared the Vault with the bundled embedding model');
     await applicationJson('/provider/config', 'PUT', {

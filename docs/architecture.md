@@ -55,10 +55,14 @@ replacement, source hashes block stale publication, and Windows overwrite uses `
 
 ## Startup and resources
 
-The window becomes available before Vault indexing. A blocking worker performs the initial scan and
-loads the checksum-pinned multilingual MiniLM model only when semantic work needs it. The release
-application never downloads a model or font at runtime. Build preparation verifies five model files
-and copies 148 WOFF2 subsets for Nunito, DM Mono, and Noto Sans KR.
+On a new installation, the React onboarding layer blocks application interaction while a thin Tauri
+command opens the native folder picker. Rust validates and persists the chosen path, then restarts
+the application against that Vault. Existing databases adopt their former Documents Vault without
+a prompt. The window becomes available before Vault indexing; indexing does not start while setup
+is pending. A blocking worker performs the initial scan and loads the checksum-pinned multilingual
+MiniLM model only when semantic work needs it. The release application never downloads a model or
+font at runtime. Build preparation verifies five model files and copies 148 WOFF2 subsets for
+Nunito, DM Mono, and Noto Sans KR.
 
 ## Verification boundaries
 

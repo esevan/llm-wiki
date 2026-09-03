@@ -1,7 +1,13 @@
 use crate::native::database;
-use rusqlite::{params, OptionalExtension};
+use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 use serde_json::{json, Value};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+pub enum VaultStartup {
+    Configured(PathBuf),
+    Pending,
+    Unset,
+}
 
 const TASKS: &[(&str, bool)] = &[
     ("capture_assistance", true),
@@ -29,6 +35,81 @@ fn api_key() -> String {
         .ok()
         .or_else(|| key_entry().ok().and_then(|entry| entry.get_password().ok()))
         .unwrap_or_default()
+}
+
+pub fn vault_startup(db_path: &Path) -> Result<VaultStartup, String> {
+    if !db_path.is_file() {
+        return Ok(VaultStartup::Unset);
+    }
+    let connection = Connection::open_with_flags(db_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .map_err(|error| error.to_string())?;
+    let has_settings: bool = connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='app_settings')",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|error| error.to_string())?;
+    if !has_settings {
+        return Ok(VaultStartup::Unset);
+    }
+    let path: Option<String> = connection
+        .query_row(
+            "SELECT value FROM app_settings WHERE key='vault_path'",
+            [],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| error.to_string())?;
+    if let Some(path) = path.filter(|value| !value.is_empty()) {
+        return Ok(VaultStartup::Configured(PathBuf::from(path)));
+    }
+    let pending: Option<String> = connection
+        .query_row(
+            "SELECT value FROM app_settings WHERE key='vault_setup_pending'",
+            [],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| error.to_string())?;
+    Ok(if pending.as_deref() == Some("1") {
+        VaultStartup::Pending
+    } else {
+        VaultStartup::Unset
+    })
+}
+
+pub fn mark_vault_setup_pending(db_path: &Path) -> Result<(), String> {
+    database::open(db_path)?
+        .execute(
+            "INSERT INTO app_settings(key,value) VALUES ('vault_setup_pending','1') ON CONFLICT(key) DO UPDATE SET value='1'",
+            [],
+        )
+        .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+pub fn save_vault_path(db_path: &Path, vault: &Path) -> Result<(), String> {
+    let value = vault
+        .to_str()
+        .ok_or("Vault path must contain valid Unicode")?;
+    let mut connection = database::open(db_path)?;
+    let transaction = connection
+        .transaction()
+        .map_err(|error| error.to_string())?;
+    transaction
+        .execute(
+            "INSERT INTO app_settings(key,value) VALUES ('vault_path',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            [value],
+        )
+        .map_err(|error| error.to_string())?;
+    transaction
+        .execute(
+            "DELETE FROM app_settings WHERE key='vault_setup_pending'",
+            [],
+        )
+        .map_err(|error| error.to_string())?;
+    transaction.commit().map_err(|error| error.to_string())
 }
 
 pub fn resources(locale: &str) -> Result<Value, String> {

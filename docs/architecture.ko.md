@@ -54,10 +54,12 @@ Windows overwrite는 `ReplaceFileW`를 사용합니다.
 
 ## 시작과 리소스
 
-창은 Vault indexing보다 먼저 표시됩니다. Blocking worker가 초기 scan을 실행하고 semantic 작업이
-필요할 때만 checksum 고정 다국어 MiniLM model을 로드합니다. Release 앱은 runtime에 model이나 font를
-내려받지 않습니다. Build 준비 단계가 model 파일 5개와 Nunito, DM Mono, Noto Sans KR WOFF2 subset
-148개를 검증합니다.
+새 설치에서는 React 온보딩 layer가 앱 조작을 차단하고 얇은 Tauri command가 네이티브 폴더 선택기를
+엽니다. Rust가 선택 경로를 검증·저장한 뒤 해당 Vault로 앱을 재시작합니다. 기존 DB는 선택 화면 없이
+이전 Documents Vault를 승계합니다. 창은 Vault indexing보다 먼저 표시되지만 설정 미완료 중에는 색인을
+시작하지 않습니다. Blocking worker가 초기 scan을 실행하고 semantic 작업이 필요할 때만 checksum 고정
+다국어 MiniLM model을 로드합니다. Release 앱은 runtime에 model이나 font를 내려받지 않습니다. Build
+준비 단계가 model 파일 5개와 Nunito, DM Mono, Noto Sans KR WOFF2 subset 148개를 검증합니다.
 
 ## 검증 경계
 

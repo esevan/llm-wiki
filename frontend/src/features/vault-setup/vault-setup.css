@@ -1,0 +1,69 @@
+.vault-setup-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: var(--layer-menu);
+  display: grid;
+  place-items: center;
+  padding: var(--space-5);
+  background: color-mix(in srgb, var(--color-status-info) 72%, transparent);
+  backdrop-filter: blur(8px);
+}
+
+.vault-setup-card {
+  width: min(520px, 100%);
+  padding: var(--space-8);
+  border: var(--border-default);
+  border-radius: var(--radius-dialog);
+  background: var(--color-bg-surface);
+  box-shadow: var(--shadow-dialog);
+  text-align: center;
+}
+
+.vault-setup-mark {
+  display: grid;
+  place-items: center;
+  width: 58px;
+  height: 58px;
+  margin: 0 auto var(--space-4);
+  border-radius: var(--radius-panel);
+  background: var(--color-positive-surface);
+  color: var(--color-status-success);
+  font-size: 28px;
+}
+
+.vault-setup-eyebrow {
+  margin: 0 0 var(--space-2);
+  color: var(--color-accent-strong);
+  font: 500 var(--font-size-xs) var(--font-family-mono);
+  letter-spacing: 0.08em;
+}
+
+.vault-setup-card h1 {
+  margin: 0 0 var(--space-3);
+  color: var(--color-text-primary);
+  font-size: var(--font-size-lg);
+}
+
+.vault-setup-card > p:not(.vault-setup-eyebrow) {
+  margin: 0 auto var(--space-3);
+  color: var(--color-text-secondary);
+  line-height: 1.55;
+}
+
+.vault-setup-card .vault-setup-detail {
+  padding: var(--space-3);
+  border-radius: var(--radius-card);
+  background: var(--color-bg-muted);
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.vault-setup-card .vault-setup-error {
+  color: var(--color-status-error);
+}
+
+.vault-setup-card button {
+  min-width: 190px;
+  min-height: 44px;
+  margin-top: var(--space-2);
+}

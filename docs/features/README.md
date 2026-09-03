@@ -5,6 +5,9 @@
 Start with [Product Spirit](../product-spirit.md), or use the
 [visual feature tour](visual-guide.md) for a screenshot-led overview of the running application.
 
+- [First-run Vault setup](first-run-vault-setup.md) keeps the Markdown folder under explicit user
+  control before indexing starts.
+
 ## Capture and shape work
 
 - [Problem-centered Workbench](conflict-gated-workflow.md) organizes the visible workflow as

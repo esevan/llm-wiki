@@ -69,10 +69,13 @@ production build. The packaged UI therefore renders Korean and English without a
 macOS builds produce an `.app`; Windows builds produce MSI and NSIS installers. A reproducible
 Windows agent workflow is documented in [Windows packaging and installation](docs/windows-packaging.md).
 
-The release `.app` contains no Python runtime, sidecar, or internal web server. If
-`LLM_WIKI_VAULT` is unset, the desktop app uses `Documents/LLM Wiki Vault`. React invokes separate
-workflow, Vault, settings, jobs, and system commands; chat chunks and cancellation use a native
-Tauri channel. Network sockets are opened only for an explicitly configured external AI provider.
+The release `.app` contains no Python runtime, sidecar, or internal web server. A new installation
+opens a native folder picker before the Workbench becomes interactive and remembers the selected
+Markdown Vault. Existing installations retain `Documents/LLM Wiki Vault`; `LLM_WIKI_VAULT` remains
+a development override. React invokes separate workflow, Vault, settings, jobs, and system
+commands; chat chunks and cancellation use a native Tauri channel. Network sockets are opened only
+for an explicitly configured external AI provider. See
+[First-run Vault setup](docs/features/first-run-vault-setup.md).
 The former Python/FastAPI browser delivery was retired after native command parity was verified.
 Its final implementation remains available only in Git history at `caef236`.
 
