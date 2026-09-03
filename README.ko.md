@@ -51,9 +51,9 @@ AI는 필수 제품 기능이며, 로컬 검색과 수동 제어는 제공자 �
 
 API 키는 vault나 앱 DB가 아니라 macOS Keychain 또는 Windows Credential Manager에 저장됩니다.
 
-React 프런트엔드는 Tauri 데스크톱 애플리케이션으로도 패키징됩니다. 데스크톱 개발에는
-Node.js 20 이상과 안정 Rust 툴체인이 필요합니다. Tauri가 선택한 Vault용 격리 Python
-애플리케이션 Runtime, Fast Queue, 지속 Worker를 함께 시작하고 종료합니다.
+React 프런트엔드는 네이티브 Tauri 데스크톱 애플리케이션으로도 패키징됩니다. 데스크톱 개발에는
+Node.js 20 이상과 안정 Rust 툴체인이 필요합니다. 데스크톱 Process는 Rust 도메인 명령을 통해
+SQLite DB와 선택한 Vault를 직접 엽니다.
 
 ```text
 npm install
@@ -61,11 +61,16 @@ LLM_WIKI_VAULT=/path/to/your-vault npm run tauri -- dev
 npm run tauri:build
 ```
 
-Release Build는 Python Runtime을 `.app`에 포함하므로 별도로 Python이나 Web Server를
-설치할 필요가 없습니다. `LLM_WIKI_VAULT`가 없으면 데스크톱 앱은 `Documents/LLM Wiki
-Vault`를 사용합니다. 안정적인 Python 애플리케이션 계층은 검증된 Streaming Loopback
-명령 Adapter 뒤에 유지됩니다. React는 Python과 직접 통신하지 않으며 요청 취소는 Tauri
-전송 계층을 거쳐 전달됩니다.
+데스크톱 빌드는 고정 리비전과 SHA-256으로 검증한 다국어 MiniLM ONNX 모델을 무시된 빌드
+리소스 캐시에 내려받아 앱에 포함합니다. Release 앱의 의미 인덱싱과 검색은 로컬에서 실행되며 앱
+시작 시 임베딩 모델을 내려받지 않습니다. 캐시를 검증하거나 복구하려면
+`npm run prepare:embedding`을 다시 실행합니다.
+
+Release `.app`에는 Python Runtime, Sidecar, 내부 Web Server가 없습니다.
+`LLM_WIKI_VAULT`가 없으면 데스크톱 앱은 `Documents/LLM Wiki Vault`를 사용합니다. React는
+Workflow, Vault, 설정, Job, System 명령을 각각 호출하며 Chat Chunk와 취소는 네이티브 Tauri
+Channel을 사용합니다. Socket은 사용자가 명시적으로 설정한 외부 AI Provider 호출에만 열립니다.
+위 Python/FastAPI 브라우저 모드는 별도로 유지되며 Tauri가 시작하지 않습니다.
 
 Worker 역할, 복구, 작업별 결과, 알림 동작은
 [백그라운드 AI Queue](docs/features/background-ai-queue.ko.md)를 참고하세요.

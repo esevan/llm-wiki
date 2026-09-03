@@ -120,6 +120,14 @@ const run = async (providerUrl: string) => {
   try {
     await waitFor(() => document.documentElement.dataset.applicationReady === 'true', 'application initialization');
     await step('application launched and initialized through the native command path');
+    const startupSearch = await applicationJson<{
+      results: Array<{ semantic_score: number | null }>;
+      semantic_available: boolean;
+    }>('/search?q=startup&semantic=true');
+    if (!startupSearch.semantic_available || typeof startupSearch.results[0]?.semantic_score !== 'number') {
+      throw new Error('Startup Vault indexing did not prepare bundled semantic Search');
+    }
+    await step('startup indexing prepared the Vault with the bundled embedding model');
     await applicationJson('/provider/config', 'PUT', {
       base_url: providerUrl,
       model: 'deterministic-test-model',
@@ -231,14 +239,20 @@ const run = async (providerUrl: string) => {
     await step('completion, filesystem projection, Lineage, delete, restore, and follow-up behavior passed');
 
     await applicationJson<object>('/index', 'POST', {});
-    const search = await applicationJson<{ results: Array<{ path: string }> }>('/search?q=Native&limit=20');
+    const search = await applicationJson<{
+      results: Array<{ path: string; semantic_score: number | null }>;
+      semantic_available: boolean;
+    }>('/search?q=Native&limit=20&semantic=true');
     if (!search.results.length) throw new Error('Filesystem-backed Search returned no completed-work evidence');
+    if (!search.semantic_available || typeof search.results[0].semantic_score !== 'number') {
+      throw new Error('Bundled embedding model did not serve native semantic Search');
+    }
     const locale = await applicationJson<{ locale: string }>('/settings/locale?browser_locale=en-US');
     await applicationJson('/settings/locale', 'PUT', { locale: locale.locale === 'ko' ? 'en' : 'ko' });
     await applicationJson('/settings/locale', 'PUT', { locale: locale.locale });
     const provider = await applicationJson<Record<string, unknown>>('/provider/config');
     if ('api_key' in provider) throw new Error('Provider configuration exposed the API key');
-    await step('Search, locale restoration, and secret-safe configuration passed through Tauri');
+    await step('bundled offline embeddings, Search, locale restoration, and secret-safe configuration passed through Tauri');
 
     const persistedBoard = await applicationJson<BoardResponse>('/board');
     const persistedCapture = persistedBoard.captures.find(

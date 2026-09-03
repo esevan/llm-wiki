@@ -10,7 +10,9 @@ Search indexes Obsidian-compatible Markdown structure: paths, frontmatter, alias
 tags, wikilinks, references, embeds, and body text. Filesystem changes update the local SQLite FTS
 index, and long result sets paginate without loading everything at once.
 
-Semantic reranking is available when explicitly selected. Structural search remains a fast local
-fallback during model or embedding failure, so existing Knowledge is never locked behind AI uptime.
+Semantic reranking is available when explicitly selected. The native desktop app packages the
+pinned multilingual MiniLM ONNX model, creates embeddings in Rust during startup indexing, and
+does not need a model download or Python runtime. Structural search remains a fast local fallback
+during model or embedding failure, so existing Knowledge is never locked behind AI uptime.
 
 Related Spec Kit: [001 — Fast Vault Search](../../specs/001-fast-vault-search/spec.md)

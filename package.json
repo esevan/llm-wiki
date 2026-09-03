@@ -5,14 +5,14 @@
   "type": "module",
   "scripts": {
     "build": "vite build",
-    "build:sidecar": "uv run python scripts/build_sidecar.py",
-    "build:desktop": "npm run build && npm run build:sidecar",
+    "build:desktop": "npm run prepare:embedding && npm run build",
     "dev": "vite",
     "lint": "eslint frontend/src --max-warnings=0",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
+    "prepare:embedding": "python3 scripts/prepare_embedding_model.py",
     "tauri": "tauri",
-    "tauri:build": "tauri build --config src-tauri/tauri.bundle.conf.json"
+    "tauri:build": "tauri build"
   },
   "dependencies": {
     "@fontsource/dm-mono": "^5.2.6",

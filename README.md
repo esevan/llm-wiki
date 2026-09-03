@@ -53,9 +53,9 @@ fallbacks that preserve private process and human authority during provider fail
 API keys are stored in macOS Keychain or Windows Credential Manager, never in the vault or app
 database. The server binds only to `127.0.0.1`.
 
-The React frontend is also packaged as a Tauri desktop application. Desktop development requires
-Node.js 20+ and the stable Rust toolchain. Tauri starts and stops the isolated Python application
-runtime, fast queue, and durable workers for the selected vault:
+The React frontend is also packaged as a native Tauri desktop application. Desktop development
+requires Node.js 20+ and the stable Rust toolchain. The desktop process opens its SQLite database
+and selected Vault directly through Rust domain commands:
 
 ```text
 npm install
@@ -63,11 +63,16 @@ LLM_WIKI_VAULT=/path/to/your-vault npm run tauri -- dev
 npm run tauri:build
 ```
 
-The release build packages the Python runtime into the `.app`; no separately installed Python or
-web server is required. If `LLM_WIKI_VAULT` is unset, the desktop app uses `Documents/LLM Wiki
-Vault`. The mature Python application layer remains behind a validated, streaming loopback command
-adapter. React never communicates with Python directly, and request cancellation propagates through
-the Tauri transport.
+The desktop build downloads a pinned, checksum-verified multilingual MiniLM ONNX model into the
+ignored build-resource cache and packages it in the application. A released app performs semantic
+indexing and search locally and never downloads an embedding model at startup. Re-run
+`npm run prepare:embedding` to verify or restore the cached build assets.
+
+The release `.app` contains no Python runtime, sidecar, or internal web server. If
+`LLM_WIKI_VAULT` is unset, the desktop app uses `Documents/LLM Wiki Vault`. React invokes separate
+workflow, Vault, settings, jobs, and system commands; chat chunks and cancellation use a native
+Tauri channel. Network sockets are opened only for an explicitly configured external AI provider.
+The Python/FastAPI browser mode above remains separately available and is never started by Tauri.
 
 See [Background AI Queue](docs/features/background-ai-queue.md) for worker roles, recovery,
 task-specific results, and notification behavior.

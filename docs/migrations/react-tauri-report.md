@@ -1,152 +1,118 @@
-# React and Tauri migration report
+# React and native Tauri migration report
 
-**Audit date:** 2026-09-02
-**Overall status:** **COMPLETE**
+This document records the current implementation. The earlier packaged Python sidecar design was
+removed after the native-boundary audit found that it still opened an internal loopback socket.
 
-This follow-up resolved the governance, React navigation/dialog, IPC streaming/cancellation,
-packaged sidecar, worker lifecycle, native-test-harness, runtime god-file, runtime style ownership,
-and AI command-coverage gaps from the first audit. Every migration gate now passes. Repeated real
-macOS WebView runs exposed and verified fixes for asynchronous React navigation, background-job
-quiescence, SQLite writer contention, optional semantic fallback, and frozen-sidecar shutdown.
+## Architecture
 
-## 1–8. Architecture
+Before the native cutover:
 
-1. **Before:** a 240 KB static page owned markup, state, transport, rendering, styling, and every
-   workflow interaction; FastAPI was the only delivery boundary.
-2. **After:** React owns application composition, navigation, primary screens, dialogs, and status
-   docks. Features depend on `ApplicationClient`; HTTP and Tauri implement it. Eleven ordered,
-   domain-named compatibility controllers preserve mature dynamic interaction semantics without
-   duplicating domain logic; no controller exceeds 60 KB. Further conversion of these controllers
-   to declarative hooks is a redesign opportunity rather than a behavior-parity requirement.
-3. **React structure:** `app/` composition/navigation; `features/` Workbench, Search, Compass,
-   Settings, and overlays; `components/` reusable controls; `services/` transports; `types/` typed
-   boundaries; `theme/` tokens and shared styles.
-4. **Theme:** `tokens.css` owns semantic colors, typography, spacing, radii, borders, shadows,
-   controls, layers, motion, focus, and disabled state. Bundled fonts and shared layout styles are
-   isolated from feature behavior.
-5. **Application client:** normal queries use a typed request command. Chat, SSE, and any request
-   with an `AbortSignal` use a request-ID channel with incremental byte chunks and native cancel.
-6. **Tauri/Rust:** the shell validates loopback origin, route family, path, method, and safe headers;
-   owns sidecar startup/readiness/process-group shutdown; and exposes thin request, stream, cancel,
-   and test-only reporting commands.
-7. **Python retained:** the stable workflow, retrieval, jobs, localization, vault, patch, archive,
-   provider, and persistence implementation. PyInstaller packages it as a 20 MB sidecar. Fast and
-   durable workers run as threads inside that one shell-supervised process, with one isolated
-   application/SQLite connection per worker. The removal path is
-   domain-by-domain extraction behind `ApplicationClient`, with behavior tests moved before each
-   extraction; no full rewrite is planned.
-8. **FastAPI retained:** all routes support the existing loopback web product and the internal
-   sidecar boundary. The desktop UI never addresses HTTP or Python directly.
+```text
+React -> generic Tauri HTTP request -> loopback FastAPI sidecar -> Python services -> SQLite/Vault
+```
 
-## 9. API → application → Tauri map
+After the native cutover:
 
-| API family | Classification | Application capability | Tauri adapter | Retention |
-|---|---|---|---|---|
-| Capture/item/transition/workbench | command/query | workflow lifecycle | validated request | retained internal/web |
-| Chat | streaming command | Explore conversation | channel + request ID + cancel | retained internal/web |
-| Draft/refine/conflict/translation/completion jobs | background command/query | durable AI work | enqueue/query/cancel through request adapter | retained internal/web |
-| Work Log/checklist/comments | command/query | Solution evidence | validated request | retained internal/web |
-| Completion/archive/patch/lineage | command/query | publish and reversible vault mutation | validated request | retained internal/web |
-| Search/index/Knowledge | query/command/background | vault retrieval | request; cancellable channel when signalled | retained internal/web |
-| Dashboard/goals | query/command | Compass | validated request | retained internal/web |
-| Jobs/notifications | query/command/stream | durable lifecycle | request + SSE channel | retained internal/web |
-| Provider/locale/i18n | query/command | configuration/localization | validated request | retained internal/web |
-| Health/index events | lifecycle/query/stream | readiness/change signal | request + SSE channel | retained internal/web |
+```text
+React feature -> ApplicationClient -> domain operation mapper
+              -> Tauri workflow/settings/vault/jobs/system command
+              -> Rust application module -> SQLite/Vault
+              -> bundled multilingual ONNX model for local embeddings
+              -> external AI provider only when an AI capability is requested
+```
 
-## 10. Existing API test → command test map
+The desktop executable no longer allocates a localhost port, starts Python, embeds a Python binary,
+or forwards HTTP-shaped requests. `ApplicationGateway`, sidecar build scripts, the
+`desktop-backend` CLI, and PyInstaller are removed. The separately launched Python web product is
+retained for browser users and continues to bind to loopback; it is not started or contacted by the
+desktop application.
 
-All API tests remain. Rust integration tests use the real Python application and isolated SQLite and
-vault paths; they cover the broad command surface and real Fast Queue Chat and durable AI work
-against a deterministic OpenAI-compatible server.
+## Module map
 
-| Existing API behavior | New command evidence | Status |
-|---|---|---|
-| Health, Capture, board, validation | real sidecar create/query/422 | PASS |
-| Index/search/filesystem citation | real vault file/index/search | PASS |
-| Locale resource/setting persistence | native gateway save/read | PASS |
-| Capture promotion and inbox lineage | native gateway promote/board | PASS |
-| Manual update and item detail | native gateway update/read | PASS |
-| Soft delete/restore | native gateway delete/restore/reload | PASS |
-| Problem approval and vault projection | native gateway approve/project | PASS |
-| Solution create/conflict/approve | native gateway lifecycle | PASS |
-| Work Log/comment/checklist persistence | native gateway create/update/read | PASS |
-| Job enqueue/list/cancel | native gateway durable job lifecycle | PASS |
-| Knowledge and provider queries | native gateway real runtime | PASS |
-| Conflict-resolution validation, complete set, restore, and stale rejection | real sidecar/provider plus retained API fixtures | PASS |
-| Bilingual AI draft/refinement and Knowledge translation | real sidecar, workers, provider double, persistence | PASS |
-| Image and derived translation | real sidecar, workers, provider double, localized persistence | PASS |
-| Completion review/report | real sidecar, workers, provider double, notification, vault output | PASS |
-| Patch/completion-document conflicts and Lineage | real sidecar filesystem/Lineage plus retained correction fixtures | PASS |
-| Notification publication/read/dismiss | real sidecar job notification/read plus application fixtures | PASS |
-| Provider-backed Chat | real sidecar, worker, deterministic provider, and streamed native gateway | PASS |
-| Provider-backed draft/refine/failure/retry | real sidecar, workers, deterministic provider, manual recovery | PASS |
-| Provider timeout variants | real sidecar timeout mapped to retryable command state | PASS |
+| Boundary | Location | Responsibility |
+| --- | --- | --- |
+| React screens | `frontend/src/features/` | User-visible screens and interactions |
+| Theme | `frontend/src/theme/` | Tokens, fonts, global and reusable component styles |
+| Application adapter | `frontend/src/services/tauriApplicationClient.ts` | Maps compatibility paths to typed domain operations |
+| Tauri commands | `src-tauri/src/lib.rs` | Domain allowlists, streaming channel, cancellation, E2E hook |
+| Native workflow | `src-tauri/src/native/workflow.rs` | Workflow state, progress, completion, Lineage, handoff |
+| Native jobs | `src-tauri/src/native/jobs.rs` | Durable SQLite jobs, provider execution, notifications |
+| Native vault | `src-tauri/src/native/vault.rs` | Markdown indexing, search, safe reads |
+| Native embeddings | `src-tauri/src/native/semantic.rs` | Offline ONNX inference and semantic reranking |
+| Model manifest | `src-tauri/resources/embedding-model/manifest.json` | Pinned revision, size, and SHA-256 verification |
+| Native settings | `src-tauri/src/native/settings.rs` | Locale, resources, provider configuration |
+| Native schema | `src-tauri/src/native/schema.sql` | Desktop persistence schema compatible with existing core tables |
 
-## 11. BDD coverage matrix
+## API-to-command map
 
-| Behavior | BDD scenario | Existing API test | React UI | Tauri command | Desktop E2E | Status |
-|---|---|---|---|---|---|---|
-| Launch/initial load | Given launch, when ready, then data loads | PASS | PASS | PASS | PASS | PASS |
-| Navigation | Given a screen, when navigation is selected, then one view is active | N/A | PASS | N/A | PASS | PASS |
-| Capture create/validation/persist | Given text/empty text, when saved, then persist/reject | PASS | PASS | PASS | PASS | PASS |
-| Workflow transitions | Given gates, when transitioned, then eligibility is preserved | PASS | PASS | PASS | PASS | PASS |
-| Explore stream/cancel | Given Chat, when chunks arrive/close, then stream/cancel | PASS | PASS | PASS | PASS | PASS |
-| Refinement/stale result | Given source context, when result returns, then only current applies | PASS | PASS | PASS | PASS | PASS |
-| Conflict resolution | Given findings, when resolved, then complete human set is required | PASS | PASS | PASS | PASS | PASS |
-| Work Log/checklist | Given evidence, when saved, then source and checks persist | PASS | PASS | PASS | PASS | PASS |
-| Completion/archive/patch | Given changed/unchanged files, when published, then write/block | PASS | PASS | PASS | PASS | PASS |
-| Search/index/Knowledge | Given a vault note, when searched/read, then evidence returns | PASS | PASS | PASS | PASS | PASS |
-| Locale restoration | Given a locale, when changed/reloaded, then authored state remains | PASS | PASS | PASS | PASS | PASS |
-| Queue/notifications | Given durable work, when state changes, then progress/actions appear | PASS | PASS | PASS | PASS | PASS |
-| Compass/settings | Given goals/config, when saved, then values persist safely | PASS | PASS | PASS | PASS | PASS |
-| Relaunch persistence | Given a Capture, when the desktop process relaunches, then it restores | PASS | PASS | PASS | PASS | PASS |
+| Previous HTTP family | Native application capability | Tauri command |
+| --- | --- | --- |
+| health/events | system state | `system_command` |
+| index/search/knowledge | vault index and read model | `vault_command` |
+| locale/i18n/provider | persisted settings | `settings_command` |
+| captures/problems/features/progress/items/goals | workflow application service | `workflow_command` |
+| jobs/notifications | durable job repository | `jobs_command` |
+| draft/refine/reviews | native provider job submission | `enqueue_ai_job` |
+| chat | provider stream plus AI-run persistence | `conversation_stream` / `cancel_conversation` |
 
-## 12–21. Test and removal ledger
+HTTP status values remain inside the compatibility response returned to the existing UI runtime;
+no HTTP method, header set, URL, or localhost origin crosses the Tauri IPC boundary.
 
-12. **React tests added:** 10 total after the streaming, cancellation, HTTP-adapter, shell, and
-    React-owned navigation cases.
-13. **Tauri command tests added:** 12 total: six Rust unit/security/cancellation tests and six
-    real-sidecar integration tests, including broad workflow/state/side-effect coverage and real
-    Fast Queue Chat, bilingual draft/refine, translation, completion, notification, failure, and
-    retry behavior against a deterministic OpenAI-compatible double.
-14. **Desktop E2E added:** `scripts/run_desktop_e2e.py` launches the release `.app` with isolated
-    vault/database state and a deterministic external-provider double. Its in-WebView scenario
-    performs React navigation and Capture submission; streamed Chat and durable AI work; workflow,
-    Work Log, checklist, completion, filesystem projection, Lineage, follow-up, delete/restore,
-    Search, locale restoration, secret-safe configuration, full sidecar shutdown, and persistence
-    across a second desktop process through the real Tauri command and packaged sidecar stack.
-15. **Existing tests retained:** every Python unit, integration, API, architecture, transition, and
-    browser test.
-16. **Tests removed:** none.
-17. **FastAPI endpoints removed:** none; the web mode and packaged Python application boundary both
-    intentionally use them.
-18. **FastAPI endpoints retained:** all, loopback-only. No external/public remote API was identified.
-19. **Temporary migration shims:** eleven domain-named files under `llm_wiki/static/runtime/`
-    preserve imperative behavior. The 181 KB god file, raw overlay HTML, runtime-injected styles,
-    direct `EventSource`, inline HTML bootstrap, separately launched sidecar, and buffered Chat IPC
-    shims were removed.
-20. **Known limitations:** behavior-preserving controllers remain imperative and have a documented
-    domain-by-domain React-hook removal path. This is a future redesign opportunity, not an
-    incomplete migration gate. Semantic embeddings remain optional; their absence now completes as
-    an explicit lexical-fallback result instead of a failed background job.
-21. **Decisions:** MIG-001/002/004/005 used the requested recommended defaults and are resolved.
-    MIG-003 selected the repository-owned real-WebView harness instead of adding Appium. No product
-    decision or migration implementation item remains.
+## Test migration map
 
-## 22–30. Final verification record
+| Existing behavioral source | Native replacement | Status |
+| --- | --- | --- |
+| Capture/create/board API tests | direct Rust workflow command test | PASS |
+| Approval and conflict gates | direct Rust workflow transition test | PASS |
+| Work Log/comment/checklist tests | direct Rust persistence test | PASS |
+| Delete/restore API behavior | direct Rust visibility test | PASS |
+| Vault indexing/search/read tests | direct Rust filesystem test | PASS |
+| Locale/provider secrecy | direct Rust settings test | PASS |
+| Tauri transport tests | domain-routing React tests and cross-domain Rust rejection | PASS |
+| Retained browser HTTP behavior | existing Python API suite | PASS |
+| Release desktop launch/relaunch | real `.app` E2E | PASS |
+| Bundled model and native semantic search | real ONNX unit/command and `.app` E2E | PASS |
 
-| Gate | Result |
-|---|---|
-| 22. Lint | PASS (Ruff, ESLint, Clippy with warnings denied) |
-| 23. Typecheck | PASS (TypeScript and Rust check) |
-| 24. Frontend production build | PASS |
-| 25. Tauri build/check | PASS; `.app` contains native executable and packaged sidecar |
-| 26. Unit/integration tests | PASS (195 Python + 10 React + 12 Rust) |
-| 27. Existing API tests | PASS (included in 195 Python tests) |
-| 28. Command tests | PASS (12 Rust tests; six use the real Python application) |
-| 29. BDD/UI tests | PASS (37 browser scenarios plus React BDD tests) |
-| 30. Desktop E2E | PASS twice consecutively against the release `.app`, packaged sidecar, real commands, deterministic provider, and full process relaunch |
+## Coverage matrix
 
-## TODO / Decisions Needed From User
+| Behavior | BDD scenario | Existing API | React UI | Rust command | Desktop E2E | Status |
+| --- | --- | --- | --- | --- | --- | --- |
+| Capture and board persistence | Given a thought, when saved, then it appears after reload | PASS | PASS | PASS | PASS | PASS |
+| Workflow review gates | Given an unreviewed item, when advanced, then validation prevents it | PASS | PASS | PASS | PASS | PASS |
+| Work Log and checklist | Given active work, when evidence is added, then it persists | PASS | PASS | PASS | PASS | PASS |
+| Vault lexical and semantic search | Given Markdown, when indexed, then bundled local inference reranks it | PASS | PASS | PASS | PASS | PASS |
+| Chat streaming/cancellation | Given a configured provider, when asked, then chunks stream and can cancel | PASS | PASS | PASS | PASS | PASS |
+| Durable AI jobs | Given an AI task, when queued, then result/error is durable | PASS | PASS | PASS | PASS | PASS |
+| Relaunch persistence | Given saved state, when the app relaunches, then it is restored | PASS | PASS | PASS | PASS | PASS |
 
-None.
+## Verification record
+
+| Check | Result |
+| --- | --- |
+| Python unit/integration/API tests | PASS — 196 |
+| React unit/component tests | PASS — 10 |
+| TypeScript typecheck | PASS |
+| Frontend production build | PASS |
+| Rust command/unit tests | PASS — 10 |
+| Tauri release build | PASS — 286 MB native `.app`, verified embedding model, no bundled sidecar |
+| Desktop E2E | PASS — launch, full workflow, bundled semantic search, relaunch, restoration |
+
+## Retained and removed boundaries
+
+- Retained: FastAPI browser product and its API tests. It is an explicitly separate web delivery
+  mode and is never launched by Tauri.
+- Removed: packaged Python runtime, generic HTTP-shaped Tauri commands, loopback port allocation,
+  sidecar process lifecycle, PyInstaller packaging, and sidecar-only command tests.
+- External network: AI provider requests still use the configured HTTPS endpoint (or loopback HTTP
+  only for a user-selected local model/test double). This is product integration traffic, not
+  desktop internal IPC.
+
+## Known limitations and decisions
+
+- The compatibility mapper still accepts the historic path strings because the remaining bounded
+  imperative UI controllers use them. These strings terminate in the React adapter and are mapped
+  to domain operations; they are not sent as IPC payloads. Replacing the remaining controllers with
+  typed hooks is a presentation refactor and does not require another backend migration.
+- Model binaries remain outside Git because the verified ONNX and tokenizer total about 246 MB.
+  `npm run prepare:embedding` deterministically restores them from the immutable model revision;
+  `tauri:build` always runs that verification before packaging.

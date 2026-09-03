@@ -6,20 +6,18 @@ LLM Wiki 백엔드는 하나의 Web 조립 경계를 둔 Layered Architecture를
 계층에서 애플리케이션 로직과 저장 계층 방향으로만 흐르며, 하위 계층은 Controller나 Web 계층을
 역참조하지 않습니다.
 
-데스크톱 마이그레이션은 도메인 로직을 Rust로 옮기지 않고 React 프레젠테이션 계층과
-Tauri 전달 어댑터를 추가합니다. React 기능 모듈은 `ApplicationClient`에 의존하며 HTTP와
-Tauri 어댑터가 이 경계를 구현합니다. Tauri는 범위가 좁고 검증된 요청/Streaming/취소 명령
-모음만 노출하고, 알려진 애플리케이션 경로군과 안전한 Header만 Loopback Python 사이드카로
-전달합니다. 요청 ID가 증분 Chunk와 취소를 연결합니다. Shell은 사이드카를 하나의 전용 Process
-Group으로 패키징하고 시작, 상태 확인, 종료합니다. Fast Worker와 지속 Worker는 이 관리 대상
-Process 안에서 실행됩니다. 각 동시 지속 Worker는 격리된 애플리케이션 Runtime과 SQLite 연결을
-소유하며 일시적인 Writer 경합은 Queue의 제한된 재시도 정책을 따릅니다.
-Python Runtime이 유일한 애플리케이션/도메인 구현으로 남으므로 HTTP와 데스크톱 전달 계층에
-워크플로 로직이 중복되지 않습니다.
+데스크톱 앱은 React 프레젠테이션과 네이티브 Rust 애플리케이션 계층을 사용합니다. React 기능
+모듈은 `ApplicationClient`에 의존하며 데스크톱 어댑터가 기존 호환 경로를 이름이 있는 도메인
+작업으로 변환합니다. Tauri는 Workflow, Vault, 설정, Job, System 명령과 취소 가능한 Provider
+Streaming 명령을 각각 노출합니다. Rust가 SQLite와 설정된 Vault를 직접 엽니다. 내부 Port를
+할당하거나 HTTP 형태 IPC를 전달하지 않으며 Python을 실행하거나 Python 실행 파일을 패키징하지
+않습니다.
 
 ```text
-React 기능 -> ApplicationClient -> HTTP 어댑터(웹)
-                               -> Tauri 어댑터 -> Rust 요청/Streaming/취소 -> 관리되는 Python 런타임
+React 기능 -> ApplicationClient -> HTTP 어댑터 -> FastAPI(별도 브라우저 제품)
+                               -> Tauri 어댑터 -> Rust 도메인 명령 -> SQLite/Vault
+                                                                  -> 번들 ONNX 임베딩
+                                                                  -> 설정한 AI Provider
 ```
 
 프런트엔드 디자인 토큰, 전역/컴포넌트 스타일, 로컬 번들 폰트는 `frontend/src/theme/`에
@@ -37,11 +35,22 @@ React 기능 -> ApplicationClient -> HTTP 어댑터(웹)
 | Repository | SQLite의 지속 Job 상태와 Checkpoint 저장 | `llm_wiki/repositories/` |
 | Core | 외부 의존성이 없는 Queue 도메인 값·상태·오류 정의 | `llm_wiki/core/` |
 | Adapter | AI 제공자와 외부 메커니즘 연동 | `llm_wiki/adapters/` |
+| 네이티브 데스크톱 애플리케이션 | 데스크톱 Workflow, Job, 설정, Vault 작업 실행 | `src-tauri/src/native/` |
+
+네이티브 Vault 모듈은 앱 시작 시 Markdown을 인덱싱합니다. `native/semantic.rs`는 Tauri 리소스의
+체크섬 고정 다국어 MiniLM 모델을 필요할 때 로드하고 384차원 벡터를 SQLite에 저장한 뒤 사용자가
+선택한 검색 결과를 로컬에서 재정렬합니다. Release 앱은 Runtime에 모델을 내려받지 않으며 재현 가능한
+데스크톱 빌드 준비 단계에서만 검증된 자산을 내려받습니다.
 
 공개 조립 지점은 `web.app.create_app`입니다. 여기에서 `ApplicationRuntime` 하나를 만든 뒤
 `controllers.application.create_http_app`에 전달합니다. Controller는 Repository나 제공자 Adapter를
 직접 만들지 않습니다. Queue 제출은 `services/job_submission.py`, SQLite 생명주기와 상태 전이 규칙은
 `repositories/jobs.py`가 담당합니다.
+
+이 Python 조립 지점은 브라우저 전달 모드에만 남습니다. Tauri는 이를 Import하거나 실행하거나
+접속하지 않습니다. 데스크톱 조립 지점은 `src-tauri/src/lib.rs`이며 얇은 Tauri Handler가 도메인
+작업을 허용 목록으로 제한한 뒤 `src-tauri/src/native/`에 위임합니다. 데스크톱에서 HTTP는 사용자가
+명시적으로 설정한 외부 AI Provider 호출에만 사용됩니다.
 
 ## AI 작업 모듈 지도
 

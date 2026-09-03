@@ -1,14 +1,12 @@
 # LLM Wiki — Continuation Handoff
 
 **Updated**: 2026-09-02
-**Current status**: The compatibility-first React/Tauri migration on
-`feat/react-tauri-migration` passes its Phase 9 audit. React owns primary screens, dialogs, and
-navigation; typed HTTP/Tauri application clients, theme tokens, request-ID streaming/cancellation,
-a self-contained native bundle, isolated durable-worker runtimes, real-sidecar command tests, and
-the release-app desktop scenario all pass. The former 181 KB runtime is now eleven bounded feature
-controllers with styles centralized in the theme. See `docs/migrations/react-tauri-report.md` for
-the complete matrix and retained compatibility rationale.
-**Local URL**: `http://127.0.0.1:8765`  
+**Current status**: React owns the primary screens, dialogs, and navigation. The desktop application
+now uses native Rust workflow, Vault, settings, job, and system modules through domain-specific
+Tauri commands. The prior Python sidecar, internal loopback HTTP gateway, PyInstaller bundle, and
+desktop-backend CLI were removed. Python/FastAPI remains only as a separately launched browser
+product. See `docs/migrations/react-tauri-report.md` for the current matrix.
+**Browser-mode local URL**: `http://127.0.0.1:8765`
 **Vault**: User-selected local Markdown directory
 
 The current roadmap and acceptance order are maintained in [PROJECT_PLAN.md](PROJECT_PLAN.md).
@@ -43,7 +41,7 @@ The current roadmap and acceptance order are maintained in [PROJECT_PLAN.md](PRO
   wikilinks, heading/block references, embeds, and code-fence exclusion.
 - SQLite WAL + FTS5 structural index with changed-file detection, directory routing, link
   graph storage, source hashes, result citations, pagination, filesystem watcher, and SSE.
-- The optional FastEmbed semantic runtime can be installed with the `semantic` extra. Embedding
+- The browser product's optional FastEmbed semantic runtime can be installed with the `semantic` extra. Embedding
   generation and refresh run as durable document jobs when available; lexical search remains
   available while they complete and is the explicit fallback when the extra is absent.
 - The reference 1,000-note structural benchmark is consistently below the 3-second budget.
@@ -120,9 +118,9 @@ is installed at `~/Library/LaunchAgents/com.llm-wiki.plist`. It is local-only (`
 
 - The core/dev environment is synchronized; use `uv sync --all-extras` when semantic and LangGraph
   extras are required.
-- Latest migration run: **195 Python + 10 React + 12 Rust tests, 0 skipped**, plus two consecutive
-  release-app desktop E2E passes. The macOS/Windows/Linux acceptance matrix remains in
-  `.github/workflows/cross-platform.yml`.
+- Latest native cutover run: **196 Python + 10 React + 10 Rust tests, 0 skipped**. The 286 MB release
+  `.app` includes the checksum-verified multilingual MiniLM ONNX model and no sidecar. Real desktop
+  E2E passes launch, workflow, local semantic search, full process relaunch, and state restoration.
 - Ruff lint and 120-column format checks passed across all Python source and tests.
 - Browser JavaScript syntax is separately validated by Node and passed.
 - Latest 1,000-note structural-index benchmark: **1,002.13 ms** (budget: <3,000 ms).
@@ -137,7 +135,7 @@ These are deliberate continuation tasks, not blockers for the currently running 
    three-way merge for non-overlapping edits (current implementation blocks changed files).
 3. Add Windows-native lock/move integration tests and a cross-platform file-lock implementation
    (`portalocker`) before claiming Windows release acceptance.
-4. Implement confirmed SpecKit gaps: independent semantic corpus search; locally bundled fonts;
+4. Implement confirmed SpecKit gaps: independent semantic corpus search;
    deprecated compatibility API markers; removal of the unused report-language setting; Knowledge
    translation tier UI; checklist-edit retranslation; state-changing Knowledge translation request;
    Lineage inference-failure indicator; Conflict Review progress and document deduplication; hard

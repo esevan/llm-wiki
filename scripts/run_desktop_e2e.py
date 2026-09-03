@@ -26,6 +26,10 @@ def main() -> None:
         state = Path(directory)
         vault = state / "vault"
         vault.mkdir()
+        (vault / "startup.md").write_text(
+            "# Startup indexing\n\nThe bundled embedding model indexes this note before the UI starts.\n",
+            encoding="utf-8",
+        )
         result = state / "result.json"
         provider_port = available_port()
         provider = subprocess.Popen(

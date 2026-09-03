@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "identifier": "com.llm-wiki.desktop",
   "build": {
-    "beforeBuildCommand": "npm run build",
+    "beforeBuildCommand": "npm run build:desktop",
     "frontendDist": "../llm_wiki/static"
   },
   "app": {
@@ -23,6 +23,7 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["app"]
+    "targets": ["app"],
+    "resources": ["resources/embedding-model/"]
   }
 }

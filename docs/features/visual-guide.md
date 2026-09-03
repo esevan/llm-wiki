@@ -7,6 +7,8 @@ merged to `main`. They use an isolated documentation Vault and sample records; n
 content or credential value appears in the images. The same React surfaces run in the Tauri
 WebView. Native command behavior is covered separately by the desktop E2E suite.
 
+![Native Tauri application Workbench using isolated sample data](images/00-native-workbench.png)
+
 ## 1. Capture, Problem, and Solution
 
 ![Workbench with Capture, Problem, Solution, active work, and conflict status](images/02-workbench.png)
@@ -43,8 +45,9 @@ Related guides: [Completion and Knowledge](completion-writeback-archive.md) and
 
 ![Vault search result with path, title, and matching context](images/01-search-vault.png)
 
-Vault Search returns local Markdown context and keeps lexical search available even when semantic
-indexing or an external model is unavailable.
+Vault Search returns local Markdown context. The selected semantic result shown here was produced
+by the multilingual embedding model bundled in the `.app`; no embedding service or startup
+download is involved. Lexical search remains available if local inference fails.
 
 Related guide: [Fast vault search](fast-vault-search.md).
 

@@ -20,3 +20,6 @@ Thumbs.db
 .worktrees/
 .tmp/
 /auths/
+src-tauri/resources/embedding-model/*
+!src-tauri/resources/embedding-model/manifest.json
+!src-tauri/resources/embedding-model/NOTICE.md

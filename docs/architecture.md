@@ -6,20 +6,18 @@ LLM Wiki uses a layered backend with a single web composition boundary. Dependen
 delivery toward application logic and persistence; lower layers never reach back into controllers
 or the web application.
 
-The desktop migration adds a React presentation layer and a Tauri delivery adapter without moving
-domain logic into Rust. React feature modules depend on `ApplicationClient`; the HTTP and Tauri
-adapters implement that boundary. Tauri exposes a narrow validated request/stream/cancel command
-set, accepts only known application route families, forwards only safe headers to a loopback Python
-sidecar, and returns a transport-neutral response. Request IDs carry incremental chunks and
-cancellation. The shell packages, starts, health-checks, and stops the sidecar as one owned process
-group. Its fast worker and durable workers run inside that supervised process; every concurrent
-durable worker owns an isolated application runtime and SQLite connection, and transient writer
-contention follows bounded queue retry semantics. The Python runtime remains the single
-application/domain implementation, so HTTP and desktop delivery do not duplicate workflow logic.
+The desktop application uses React presentation and a native Rust application layer. React feature
+modules depend on `ApplicationClient`; its desktop adapter converts historic compatibility paths to
+named domain operations. Tauri exposes separate workflow, vault, settings, jobs, and system
+commands plus a provider-stream command with cancellation. Rust opens SQLite and the configured
+Vault directly. It does not allocate an internal port, forward HTTP-shaped IPC, launch Python, or
+package a Python executable.
 
 ```text
-React feature -> ApplicationClient -> HTTP adapter (web)
-                                  -> Tauri adapter -> Rust request/stream/cancel -> supervised Python runtime
+React feature -> ApplicationClient -> HTTP adapter -> FastAPI (separate browser product)
+                                  -> Tauri adapter -> Rust domain commands -> SQLite/Vault
+                                                                        -> bundled ONNX embeddings
+                                                                        -> configured AI provider
 ```
 
 Frontend design tokens, global/component styles, and locally bundled fonts live under
@@ -37,11 +35,22 @@ code. Their incremental replacement with typed React hooks remains tracked in th
 | Repository | Persist durable job state and checkpoints in SQLite | `llm_wiki/repositories/` |
 | Core | Define dependency-free Queue domain values, states, and errors | `llm_wiki/core/` |
 | Adapter | Integrate with AI providers and other external mechanisms | `llm_wiki/adapters/` |
+| Native desktop application | Execute desktop workflow, jobs, settings, and Vault operations | `src-tauri/src/native/` |
+
+The native Vault module indexes Markdown at application startup. `native/semantic.rs` lazily loads
+the checksum-pinned multilingual MiniLM model from Tauri resources, writes 384-dimensional vectors
+to SQLite, and reranks selected search results locally. The release app never fetches this model at
+runtime; only the reproducible desktop build preparation downloads the verified assets.
 
 `web.app.create_app` is the public composition root. It builds one `ApplicationRuntime`, then
 passes that runtime to `controllers.application.create_http_app`. Controllers do not construct
 repositories or provider adapters. Queue submission belongs to `services/job_submission.py`, while
 SQLite lifecycle and transition rules remain in `repositories/jobs.py`.
+
+That Python composition root is retained only for the browser delivery mode. Tauri does not import,
+spawn, or contact it. The desktop composition root is `src-tauri/src/lib.rs`; thin Tauri handlers
+allowlist a domain operation and delegate to `src-tauri/src/native/`. HTTP is used from the desktop
+only for an explicitly configured external AI provider.
 
 ## AI task module map
 

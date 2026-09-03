@@ -7,6 +7,8 @@
 포함하지 않습니다. Tauri WebView에서도 같은 React 화면을 사용하며, 네이티브 command 동작은 별도
 Desktop E2E suite가 검증합니다.
 
+![격리된 샘플 데이터를 사용하는 네이티브 Tauri 앱 Workbench](images/00-native-workbench.png)
+
 ## 1. Capture, Problem, Solution
 
 ![Capture, Problem, Solution, 진행 중 작업, 충돌 상태를 함께 보여주는 Workbench](images/02-workbench.png)
@@ -43,8 +45,9 @@ Work 탭은 검증 기준, 체크 상태, 진행 메모, 검토 댓글을 함께
 
 ![경로, 제목, 일치 맥락을 보여주는 Vault 검색 결과](images/01-search-vault.png)
 
-Vault 검색은 로컬 Markdown 맥락을 반환하며 semantic indexing이나 외부 모델을 사용할 수 없을 때도
-lexical 검색을 유지합니다.
+Vault 검색은 로컬 Markdown 맥락을 반환합니다. 이 화면에서 선택한 의미 검색 결과는 `.app`에
+포함된 다국어 임베딩 모델이 만들었으며 임베딩 서비스나 시작 시 다운로드가 필요하지 않습니다.
+로컬 추론에 실패해도 lexical 검색은 계속 사용할 수 있습니다.
 
 관련 문서: [빠른 Vault 검색](fast-vault-search.ko.md)
 

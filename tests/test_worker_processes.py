@@ -24,8 +24,9 @@ def test_cli_exposes_independent_spawn_safe_roles() -> None:
     assert 'name=f"llm-wiki-async-worker-{index + 1}"' in source
     assert "for index in range(worker_count)" in source
     assert "args=(args.vault, db_path, 1)" in source
-    assert "durable_stop.set()" in source
-    assert "durable_worker.join(timeout=5)" in source
+    assert "for process in processes:" in source
+    assert "process.terminate()" in source
+    assert "process.join(timeout=5)" in source
 
 
 def test_each_concurrent_worker_owns_an_isolated_application_runtime() -> None:
