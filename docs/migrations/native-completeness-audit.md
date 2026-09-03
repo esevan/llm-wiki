@@ -1,8 +1,7 @@
 # Native completeness audit
 
-This audit covers the packaged Tauri desktop application. The separately launched FastAPI browser
-delivery remains a retained external interface and is not packaged, spawned, or contacted by the
-desktop application.
+This audit covers the native-only Tauri desktop application. The former FastAPI browser delivery
+was retired after this parity audit and remains available only at Git snapshot `caef236`.
 
 ## 1. Clean code
 
@@ -13,7 +12,7 @@ task-result persistence are separate modules. The latest split reduced `jobs.rs`
 lines and `workflow.rs` from 1,391 to 1,195 lines. Clippy runs with warnings denied.
 
 The remaining browser-compatible UI controllers are feature-named and isolated under
-`llm_wiki/static/runtime/`. They are a presentation migration seam, not a desktop transport seam;
+`frontend/public/runtime/`. They are a presentation migration seam, not a desktop transport seam;
 they call the centralized application client and contain no direct Tauri IPC.
 
 ## 2. Bad smells
@@ -31,8 +30,8 @@ compatibility, Compass scoring, Work Log/comments/checklists, completion documen
 conflicts, patches, Vault search, semantic embeddings, settings secrecy, durable jobs, retries and
 cancellation. The release desktop E2E exercises the real React → Tauri → Rust → SQLite/Vault path.
 
-HTTP-only routing, CORS, and browser delivery behavior remain protected by the existing FastAPI
-suite because that delivery is intentionally retained. They are not duplicated in Tauri commands.
+HTTP-only routing, CORS, and server lifecycle assertions were removed with the browser product.
+They are not application behavior and are therefore not duplicated in Tauri commands.
 
 ## 4. Performance
 
@@ -54,9 +53,9 @@ document edits. Desktop E2E verifies persistence across a full process relaunch.
 
 PASS for the packaged application. The `.app` contains no Python executable, FastAPI server,
 sidecar, port allocation, or loopback request path. Embedding preparation and desktop E2E tooling
-were also migrated from Python to Node. Python remains only for the explicitly separate browser
-delivery and its characterization tests; removing that external product would be a product removal,
-not a remaining desktop migration step.
+were also migrated from Python to Node. The subsequent retirement commit removed the browser
+product, Python tests and packaging metadata, and HTTP frontend adapter. The current source tree has
+no tracked Python file.
 
 ## 7. Platform support
 
@@ -78,8 +77,8 @@ by capability in the [visual feature tour](../features/visual-guide.md).
 
 | Check | Result |
 | --- | --- |
-| Retained Python/API characterization | PASS — 196 tests |
-| React component/adapter | PASS — 12 tests |
+| Retired Python/API characterization | PASS — 196 at `caef236`; removed with product |
+| React component/adapter | PASS — 10 tests plus runtime boundary gate |
 | Rust unit/command | PASS — 23 tests |
 | TypeScript typecheck and ESLint | PASS |
 | Rustfmt and Clippy `-D warnings` | PASS |
@@ -87,4 +86,3 @@ by capability in the [visual feature tour](../features/visual-guide.md).
 | Embedding bundle | PASS; five pinned assets verified |
 | macOS Tauri bundle | PASS; `LLM Wiki.app` |
 | Real desktop E2E | PASS; launch, workflow, AI, completion, search, relaunch |
-

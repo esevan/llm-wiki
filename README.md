@@ -39,27 +39,23 @@ Problem that explains why it exists.
 
 ## Quick start
 
-Requirements: Python 3.12+ and [uv](https://docs.astral.sh/uv/).
+Requirements: Node.js 22 LTS, the stable Rust toolchain, and the platform prerequisites from the
+[Tauri prerequisites](https://v2.tauri.app/start/prerequisites/).
 
 ```text
-uv sync --all-extras
-uv run llm-wiki serve --vault /path/to/your-vault
+npm ci
+LLM_WIKI_VAULT=/path/to/your-vault npm run tauri -- dev
 ```
 
-Open `http://127.0.0.1:8765`, then configure your OpenAI-compatible endpoint and models in
-**AI setup**. AI is a required product capability; local search and manual controls are resilience
-fallbacks that preserve private process and human authority during provider failure.
+Configure your OpenAI-compatible endpoint and models in **AI setup**. AI is a required product
+capability; local search and manual controls are resilience fallbacks that preserve private process
+and human authority during provider failure.
 
 API keys are stored in macOS Keychain or Windows Credential Manager, never in the vault or app
-database. The server binds only to `127.0.0.1`.
-
-The React frontend is also packaged as a native Tauri desktop application. Desktop development
-requires Node.js 20+ and the stable Rust toolchain. The desktop process opens its SQLite database
-and selected Vault directly through Rust domain commands:
+database. The desktop process opens its SQLite database and selected Vault directly through Rust
+domain commands:
 
 ```text
-npm install
-LLM_WIKI_VAULT=/path/to/your-vault npm run tauri -- dev
 npm run tauri:build
 ```
 
@@ -70,14 +66,15 @@ indexing and search locally and never downloads an embedding model at startup. R
 
 Nunito, DM Mono, and variable Noto Sans KR are also copied into the application assets during every
 production build. The packaged UI therefore renders Korean and English without a web-font request.
-macOS builds produce an `.app`; Windows and Linux build checks run in the cross-platform CI matrix.
+macOS builds produce an `.app`; Windows builds produce MSI and NSIS installers. A reproducible
+Windows agent workflow is documented in [Windows packaging and installation](docs/windows-packaging.md).
 
 The release `.app` contains no Python runtime, sidecar, or internal web server. If
 `LLM_WIKI_VAULT` is unset, the desktop app uses `Documents/LLM Wiki Vault`. React invokes separate
 workflow, Vault, settings, jobs, and system commands; chat chunks and cancellation use a native
 Tauri channel. Network sockets are opened only for an explicitly configured external AI provider.
-The Python/FastAPI browser mode above remains separately available and is never started by Tauri;
-it is retained only as an explicit browser delivery and behavioral-characterization boundary.
+The former Python/FastAPI browser delivery was retired after native command parity was verified.
+Its final implementation remains available only in Git history at `caef236`.
 
 See [Background AI Queue](docs/features/background-ai-queue.md) for worker roles, recovery,
 task-specific results, and notification behavior.
@@ -122,8 +119,8 @@ default. Every choice remains user-configurable in Advanced options.
 Every specification, plan, implementation, and review must pass the Product Spirit Review Gate in
 the [project constitution](.specify/memory/constitution.md).
 
-Backend layers, dependency direction, and the authoritative AI task module map are documented in
-the [backend architecture guide](docs/architecture.md).
+Application layers, dependency direction, and native task boundaries are documented in the
+[architecture guide](docs/architecture.md).
 
 ```text
 npm test
@@ -132,10 +129,8 @@ npm run lint
 npm run build
 cargo test --manifest-path src-tauri/Cargo.toml
 cargo check --manifest-path src-tauri/Cargo.toml
-uv run ruff check .
-uv run ruff format --check .
-uv run pytest -q
-uv run python benchmarks.py
+npm run tauri:build
+npm run test:desktop
 ```
 
 Spec Kit artifacts live under [specs/](specs/).

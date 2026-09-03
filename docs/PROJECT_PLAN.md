@@ -1,9 +1,8 @@
 # LLM Wiki Project Plan
 
 **Updated**: 2026-09-03
-**Project status**: Native React/Tauri desktop migration complete; the loopback FastAPI browser
-delivery remains a separate, intentionally retained product. The items below are post-migration
-product enhancements, not desktop-cutover blockers.
+**Project status**: Native React/Tauri desktop migration complete. The FastAPI browser delivery was
+retired to Git history at `caef236`. The items below are post-migration product enhancements.
 
 ## Product boundaries
 
@@ -75,15 +74,16 @@ tests pass.
 1. Read [.specify/memory/constitution.md](../.specify/memory/constitution.md).
 2. Select one feature directory in `specs/` and complete its unchecked `tasks.md` items.
 3. Update its requirements, performance, and conflict-safety checklists before implementation.
-4. Run `uv sync --all-extras`, `uv run pytest -q`, and the relevant benchmark after each slice.
+4. Run the React/runtime/Rust suites and packaged desktop E2E after each slice.
 5. Update [CONTINUATION.md](CONTINUATION.md) when the working state or environment changes.
 
 ## Current acceptance evidence
 
 - Native desktop: 12 React tests and 23 Rust unit/command tests pass with no skips.
-- Retained browser contract: 196 Python unit/integration/API/UI tests pass with no skips.
+- The retired browser contract's final 196 tests passed at `caef236`; equivalent application
+  behaviors remain represented by native command and desktop E2E coverage.
 - The packaged macOS application passes real launch, workflow, provider-double, bundled semantic
   search, filesystem, full process relaunch, and restoration E2E.
 - Structural reference benchmark: 1,000 notes index under the 3-second budget.
-- The packaged desktop opens no internal socket and starts no Python process. The optional browser
-  delivery remains a separately launched loopback service.
+- The packaged desktop opens no internal socket and starts no Python process. No browser delivery
+  remains in the current source tree.

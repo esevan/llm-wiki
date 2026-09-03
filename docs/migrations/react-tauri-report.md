@@ -26,9 +26,9 @@ React feature -> ApplicationClient -> domain operation mapper
 
 The desktop executable no longer allocates a localhost port, starts Python, embeds a Python binary,
 or forwards HTTP-shaped requests. `ApplicationGateway`, sidecar build scripts, the
-`desktop-backend` CLI, and PyInstaller are removed. The separately launched Python web product is
-retained for browser users and continues to bind to loopback; it is not started or contacted by the
-desktop application.
+`desktop-backend` CLI, and PyInstaller are removed. After parity verification, the separately
+launched Python web product was also retired in a distinct follow-up commit. Its final source remains
+in Git history at `caef236`.
 
 ## Module map
 
@@ -54,7 +54,7 @@ desktop application.
 | Previous HTTP family | Native application capability | Tauri command |
 | --- | --- | --- |
 | health | system state | `system_command` |
-| browser-only index events | retained HTTP SSE | Not exposed to the desktop |
+| browser-only index events | removed transport wrapper | NOT_APPLICABLE |
 | index/search/knowledge | vault index and read model | `vault_command` |
 | locale/i18n/provider | persisted settings | `settings_command` |
 | captures/problems/features/progress/items/goals | workflow application service | `workflow_command` |
@@ -62,8 +62,8 @@ desktop application.
 | draft/refine/reviews | native provider job submission | `enqueue_ai_job` |
 | chat | provider stream plus AI-run persistence | `conversation_stream` / `cancel_conversation` |
 
-HTTP status values remain inside the compatibility response returned to the existing UI runtime;
-no HTTP method, header set, URL, or localhost origin crosses the Tauri IPC boundary.
+Compatibility status values remain inside the in-memory response returned to the UI runtime; no
+HTTP method, header set, URL, or localhost origin crosses the Tauri IPC boundary.
 
 ## Test migration map
 
@@ -76,7 +76,7 @@ no HTTP method, header set, URL, or localhost origin crosses the Tauri IPC bound
 | Vault indexing/search/read tests | direct Rust filesystem test | PASS |
 | Locale/provider secrecy | direct Rust settings test | PASS |
 | Tauri transport tests | domain-routing React tests and cross-domain Rust rejection | PASS |
-| Retained browser HTTP behavior | existing Python API suite | PASS |
+| Retired browser HTTP-only behavior | removed with browser product; final suite at `caef236` | NOT_APPLICABLE |
 | Release desktop launch/relaunch | real `.app` E2E | PASS |
 | Bundled model and native semantic search | real ONNX unit/command and `.app` E2E | PASS |
 
@@ -96,8 +96,8 @@ no HTTP method, header set, URL, or localhost origin crosses the Tauri IPC bound
 
 | Check | Result |
 | --- | --- |
-| Python unit/integration/API tests | PASS — 196 |
-| React unit/component/adapter tests | PASS — 12 |
+| Retired Python unit/integration/API tests | PASS — 196 at `caef236`; current product has none |
+| React unit/component/adapter tests | PASS — 10 plus runtime boundary gate |
 | TypeScript typecheck | PASS |
 | Frontend production build | PASS |
 | Rust command/unit tests | PASS — 23 |
@@ -106,10 +106,10 @@ no HTTP method, header set, URL, or localhost origin crosses the Tauri IPC bound
 
 ## Retained and removed boundaries
 
-- Retained: FastAPI browser product and its API tests. It is an explicitly separate web delivery
-  mode and is never launched by Tauri.
+- Retained: no HTTP application endpoint or Python runtime.
 - Removed: packaged Python runtime, generic HTTP-shaped Tauri commands, loopback port allocation,
-  sidecar process lifecycle, PyInstaller packaging, and sidecar-only command tests.
+  sidecar process lifecycle, PyInstaller packaging, browser delivery, HTTP adapter, and HTTP-only
+  tests.
 - External network: AI provider requests still use the configured HTTPS endpoint (or loopback HTTP
   only for a user-selected local model/test double). This is product integration traffic, not
   desktop internal IPC.
@@ -120,6 +120,8 @@ no HTTP method, header set, URL, or localhost origin crosses the Tauri IPC bound
   imperative UI controllers use them. These strings terminate in the React adapter and are mapped
   to domain operations; they are not sent as IPC payloads. Replacing the remaining controllers with
   typed hooks is a presentation refactor and does not require another backend migration.
+- Static UI sources now live under `frontend/`, build into ignored `dist/`, and have no HTTP
+  application fallback. The deleted browser source is retained only by Git history.
 - Model binaries remain outside Git because the verified ONNX and tokenizer total about 246 MB.
   `npm run prepare:embedding` deterministically restores them from the immutable model revision;
   `tauri:build` always runs that verification before packaging.

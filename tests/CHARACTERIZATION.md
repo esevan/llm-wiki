@@ -1,11 +1,13 @@
 # Behavior-Driven Characterization Cases
 
 **Purpose**: Preserve the application's externally observable baseline before confirmed behavior
-changes are implemented. These cases describe outcomes rather than internal call structure.
+changes are implemented. These cases describe outcomes rather than internal call structure. Paths
+to removed Python tests below refer to the final parity snapshot `caef236`; current native evidence
+is mapped in `docs/migrations/react-tauri-inventory.md` and `src-tauri/tests/`.
 
 ## How to use this catalog
 
-- `CB-*` records behavior implemented and protected by the current automated suite.
+- `CB-*` records behavior preserved by the native suite or the archived parity evidence.
 - `PA-*` records a confirmed product decision that is not yet fully implemented. It is an acceptance
   case for the future change, not a passing characterization test today.
 - When a `PA-*` case is implemented, add or update the referenced automated test and move the case

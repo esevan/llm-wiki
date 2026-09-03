@@ -104,7 +104,7 @@ fn given_a_capture_when_created_then_it_is_persisted_on_the_native_board() {
 }
 
 #[test]
-fn given_a_python_localization_database_when_opened_then_native_preserves_versions() {
+fn given_a_legacy_localization_database_when_opened_then_native_preserves_versions() {
     let root = tempfile::tempdir().unwrap();
     let db_path = root.path().join("state.sqlite3");
     let connection = rusqlite::Connection::open(&db_path).unwrap();

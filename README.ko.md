@@ -38,26 +38,23 @@ Task 단계는 없습니다. 실행을 Solution에 붙여 두어 일이 존재�
 
 ## 빠른 시작
 
-Python 3.12 이상과 [uv](https://docs.astral.sh/uv/)가 필요합니다.
+Node.js 22 LTS, stable Rust toolchain과 플랫폼별
+[Tauri 사전 요구사항](https://v2.tauri.app/start/prerequisites/)이 필요합니다.
 
 ```text
-uv sync --all-extras
-uv run llm-wiki serve --vault /path/to/your-vault
+npm ci
+LLM_WIKI_VAULT=/path/to/your-vault npm run tauri -- dev
 ```
 
-`http://127.0.0.1:8765`를 열고 **AI setup**에서 OpenAI 호환 엔드포인트와 모델을 설정합니다.
-AI는 필수 제품 기능이며, 로컬 검색과 수동 제어는 제공자 장애 중에도 개인 작업 과정과 사람의
-결정권을 보존하기 위한 fallback입니다.
+**AI 설정**에서 OpenAI 호환 endpoint와 model을 설정합니다. AI는 필수 제품 기능이며, 로컬 검색과
+수동 제어는 provider 장애 중에도 개인 작업 과정과 사용자의 결정권을 보존하기 위한 fallback입니다.
 
 API 키는 vault나 앱 DB가 아니라 macOS Keychain 또는 Windows Credential Manager에 저장됩니다.
 
-React 프런트엔드는 네이티브 Tauri 데스크톱 애플리케이션으로도 패키징됩니다. 데스크톱 개발에는
-Node.js 20 이상과 안정 Rust 툴체인이 필요합니다. 데스크톱 Process는 Rust 도메인 명령을 통해
-SQLite DB와 선택한 Vault를 직접 엽니다.
+React frontend는 네이티브 Tauri 데스크톱 애플리케이션으로 패키징됩니다. 데스크톱 process는 Rust
+도메인 명령을 통해 SQLite DB와 선택한 Vault를 직접 엽니다.
 
 ```text
-npm install
-LLM_WIKI_VAULT=/path/to/your-vault npm run tauri -- dev
 npm run tauri:build
 ```
 
@@ -68,14 +65,15 @@ npm run tauri:build
 
 Nunito, DM Mono, variable Noto Sans KR도 모든 production build에서 앱 asset으로 복사됩니다.
 따라서 패키징 UI는 web font 요청 없이 한국어와 영어를 표시합니다. macOS build는 `.app`을 만들고,
-Windows와 Linux build check는 cross-platform CI matrix에서 실행합니다.
+Windows build는 MSI와 NSIS installer를 만듭니다. Windows agent가 그대로 실행할 수 있는 절차는
+[Windows 패키징 및 설치](docs/windows-packaging.ko.md)에 정리되어 있습니다.
 
 Release `.app`에는 Python Runtime, Sidecar, 내부 Web Server가 없습니다.
 `LLM_WIKI_VAULT`가 없으면 데스크톱 앱은 `Documents/LLM Wiki Vault`를 사용합니다. React는
 Workflow, Vault, 설정, Job, System 명령을 각각 호출하며 Chat Chunk와 취소는 네이티브 Tauri
 Channel을 사용합니다. Socket은 사용자가 명시적으로 설정한 외부 AI Provider 호출에만 열립니다.
-위 Python/FastAPI 브라우저 모드는 명시적인 브라우저 전달·동작 characterization 경계로만 별도
-유지되며 Tauri가 시작하지 않습니다.
+기존 Python/FastAPI 브라우저 전달은 네이티브 명령 parity 검증 후 폐기했습니다. 마지막 구현은
+`caef236` Git history에서만 확인할 수 있습니다.
 
 Worker 역할, 복구, 작업별 결과, 알림 동작은
 [백그라운드 AI Queue](docs/features/background-ai-queue.ko.md)를 참고하세요.
@@ -108,8 +106,8 @@ Markdown으로 유지하고, 한국어 열람본은 휴대 가능한 원본을 �
 모든 Spec·Plan·구현·리뷰는 [프로젝트 Constitution](.specify/memory/constitution.md)의 Product
 Spirit Review Gate를 통과해야 합니다.
 
-백엔드 계층, 의존성 방향, AI 작업별 단일 모듈 지도는
-[백엔드 아키텍처 안내](docs/architecture.ko.md)에 정리되어 있습니다.
+애플리케이션 계층, 의존성 방향, 네이티브 작업 경계는
+[아키텍처 안내](docs/architecture.ko.md)에 정리되어 있습니다.
 
 ```text
 npm test
@@ -118,10 +116,8 @@ npm run lint
 npm run build
 cargo test --manifest-path src-tauri/Cargo.toml
 cargo check --manifest-path src-tauri/Cargo.toml
-uv run ruff check .
-uv run ruff format --check .
-uv run pytest -q
-uv run python benchmarks.py
+npm run tauri:build
+npm run test:desktop
 ```
 
 Spec Kit 산출물은 [specs/](specs/)에 있습니다.

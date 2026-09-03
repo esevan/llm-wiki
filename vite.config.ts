@@ -7,20 +7,20 @@ export default defineConfig(({ mode }) => ({
   plugins: [react()],
   build: {
     assetsInlineLimit: 0,
-    emptyOutDir: false,
-    outDir: '../llm_wiki/static/assets',
+    emptyOutDir: true,
+    outDir: '../dist',
     lib: {
       entry: 'src/main.tsx',
       formats: ['iife'],
       name: 'LlmWikiReact',
-      fileName: () => 'app.js',
+      fileName: () => 'assets/app.js',
     },
     rollupOptions: {
       output: {
         assetFileNames: (assetInfo) =>
           assetInfo.names.some((name) => name.endsWith('.css'))
-            ? 'app.css'
-            : 'fonts/[name]-[hash][extname]',
+            ? 'assets/app.css'
+            : 'assets/fonts/[name]-[hash][extname]',
       },
     },
   },

@@ -1,1 +1,0 @@
-"""Deterministic test adapters."""

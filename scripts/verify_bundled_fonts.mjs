@@ -3,7 +3,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const staticRoot = join(repositoryRoot, 'llm_wiki', 'static');
+const staticRoot = join(repositoryRoot, 'dist');
 const index = readFileSync(join(staticRoot, 'index.html'), 'utf8');
 const fonts = readFileSync(join(staticRoot, 'assets', 'fonts.css'), 'utf8');
 const app = readFileSync(join(staticRoot, 'assets', 'app.css'), 'utf8');

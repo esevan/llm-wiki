@@ -1,14 +1,9 @@
-__pycache__
-*.pyc
-.venv/
-venv/
 node_modules/
 target/
 src-tauri/gen/
 src-tauri/binaries/
 dist/
 build/
-*.egg-info/
 *.log
 .env*
 .DS_Store

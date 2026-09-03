@@ -5,7 +5,7 @@
   "identifier": "com.llm-wiki.desktop",
   "build": {
     "beforeBuildCommand": "npm run build:desktop",
-    "frontendDist": "../llm_wiki/static"
+    "frontendDist": "../dist"
   },
   "app": {
     "security": {

@@ -88,18 +88,19 @@ Status values are `PASS`, `PARTIAL`, `MISSING`, `NOT_APPLICABLE`, and `BLOCKED`.
 - **Streaming/background:** index events, job events and polling, live chat, draft/refine/job enqueue,
   conflict review, image summary, completion review, translation, embedding and lineage work.
 - **Transport-only:** HTTP status/header/CORS/FileResponse mapping and SSE framing.
-- **Intentionally retained external web API:** the separately launched FastAPI browser product. It
-  remains loopback-only and is never packaged, spawned, or contacted by the native desktop app.
+- **Intentionally retained external web API:** none. The FastAPI browser product was retired after
+  native parity and remains available only in Git history at `caef236`.
 - **Obsolete candidates after parity:** the packaged Python boundary, generic HTTP-shaped Tauri
   request command, loopback port allocation, sidecar lifecycle, and PyInstaller bundle were removed.
-  Browser routes remain because removing individual endpoints would break the retained web product;
-  its React delivery uses the typed HTTP adapter while the desktop selects the Tauri adapter.
+  Browser routes, HTTP DTOs, the HTTP adapter, and Python tests were removed together in the
+  explicit retirement commit above the parity snapshot.
 
 ## Known insufficient coverage before migration
 
 - Before migration, no browser scenario ran through a native desktop command boundary; the checked-in
   release-app scenario now covers that boundary and process relaunch.
-- Existing Playwright tests exercise the real DOM but stub HTTP for most workflows.
+- The retired Playwright tests exercised the real DOM but stubbed HTTP for most workflows. Native
+  command and packaged E2E coverage supersede them in the current product.
 - Before migration, no app relaunch/persistence test existed at the desktop shell level; it now does.
 - Immediate provider abort, semantic corpus-wide search, checklist retranslation, progressive
   Conflict Review deduplication, Lineage inference failure UI, queue accessibility, and job-history

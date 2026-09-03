@@ -1,1 +1,0 @@
-"""Web composition layer."""

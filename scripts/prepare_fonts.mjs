@@ -11,7 +11,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const outputRoot = join(repositoryRoot, 'llm_wiki', 'static', 'assets');
+const outputRoot = join(repositoryRoot, 'frontend', 'public', 'assets');
 const fontOutput = join(outputRoot, 'fonts');
 const fontSources = [
   ['@fontsource/dm-mono', '400.css'],

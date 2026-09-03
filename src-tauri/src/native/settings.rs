@@ -33,8 +33,8 @@ fn api_key() -> String {
 
 pub fn resources(locale: &str) -> Result<Value, String> {
     let raw = match locale {
-        "en" => include_str!("../../../llm_wiki/static/i18n/en.json"),
-        "ko" => include_str!("../../../llm_wiki/static/i18n/ko.json"),
+        "en" => include_str!("../../../frontend/public/i18n/en.json"),
+        "ko" => include_str!("../../../frontend/public/i18n/ko.json"),
         _ => return Err("Unsupported locale".into()),
     };
     serde_json::from_str(raw).map_err(|error| error.to_string())

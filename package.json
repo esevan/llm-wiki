@@ -4,18 +4,21 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "build": "npm run prepare:fonts && vite build && npm run verify:fonts",
+    "build": "npm run prepare:fonts && vite build && npm run prepare:shell && npm run verify:fonts",
     "build:desktop": "npm run prepare:embedding && npm run build",
     "dev": "vite",
     "lint": "eslint frontend/src --max-warnings=0",
-    "test": "vitest run",
+    "test": "vitest run && npm run verify:runtime && npm run verify:native-only",
     "typecheck": "tsc --noEmit",
     "prepare:embedding": "node scripts/prepare_embedding_model.mjs",
     "prepare:fonts": "node scripts/prepare_fonts.mjs",
+    "prepare:shell": "node scripts/prepare_ui_shell.mjs",
     "tauri": "tauri",
     "tauri:build": "tauri build",
     "test:desktop": "node scripts/run_desktop_e2e.mjs",
-    "verify:fonts": "node scripts/verify_bundled_fonts.mjs"
+    "verify:fonts": "node scripts/verify_bundled_fonts.mjs",
+    "verify:native-only": "node scripts/verify_native_only.mjs",
+    "verify:runtime": "node scripts/verify_runtime.mjs"
   },
   "dependencies": {
     "@fontsource/dm-mono": "^5.2.6",

@@ -1,95 +1,74 @@
-# Backend architecture
+# Native application architecture
 
 **English** | [한국어](architecture.ko.md)
 
-LLM Wiki uses a layered backend with a single web composition boundary. Dependencies point from
-delivery toward application logic and persistence; lower layers never reach back into controllers
-or the web application.
-
-The desktop application uses React presentation and a native Rust application layer. React feature
-modules depend on `ApplicationClient`; its desktop adapter converts historic compatibility paths to
-named domain operations. Tauri exposes separate workflow, vault, settings, jobs, and system
-commands plus a provider-stream command with cancellation. Rust opens SQLite and the configured
-Vault directly. It does not allocate an internal port, forward HTTP-shaped IPC, launch Python, or
-package a Python executable.
+LLM Wiki is a native-only React and Tauri application. React depends on one typed
+`ApplicationClient`; the Tauri adapter maps presentation compatibility operations to a small set
+of allowlisted domain commands. Rust owns application behavior, SQLite persistence, Vault file
+access, background jobs, provider integration, localization, and offline semantic retrieval.
 
 ```text
-React feature -> ApplicationClient -> HTTP adapter -> FastAPI (separate browser product)
-                                  -> Tauri adapter -> Rust domain commands -> SQLite/Vault
-                                                                        -> bundled ONNX embeddings
-                                                                        -> configured AI provider
+React feature -> ApplicationClient -> Tauri domain command -> Rust application module
+                                                       -> SQLite / Markdown Vault
+                                                       -> bundled ONNX embeddings
+                                                       -> configured AI provider
 ```
 
-Frontend design tokens, global/component styles, and locally bundled fonts live under
-`frontend/src/theme/`. Primary screens are domain modules under `frontend/src/features/`. The
-remaining imperative behavior is split into eleven bounded, domain-named controllers under
-`llm_wiki/static/runtime/`; React owns navigation, dialogs, and dock surfaces. Controllers contain
-no injected styles or raw visual constants, and the HTML entry point contains no inline bootstrap
-code. Their incremental replacement with typed React hooks remains tracked in the migration audit.
+There is no FastAPI server, internal TCP listener, Python process, sidecar, HTTP application
+adapter, or web delivery mode. `http://ipc.localhost` in the content-security policy is Tauri's
+virtual WebView IPC origin and does not represent a listening socket. HTTP is used only when a user
+configures an external AI provider.
 
-| Layer | Responsibility | Main location |
+## Frontend boundaries
+
+| Boundary | Location | Responsibility |
 | --- | --- | --- |
-| Web | Build the application runtime and expose the public app factory | `llm_wiki/web/` |
-| Controller | Validate HTTP input, map responses, and bind routes to use cases | `llm_wiki/controllers/` |
-| Service | Execute workflow use cases, submit jobs, and run task handlers | `llm_wiki/services/` |
-| Repository | Persist durable job state and checkpoints in SQLite | `llm_wiki/repositories/` |
-| Core | Define dependency-free Queue domain values, states, and errors | `llm_wiki/core/` |
-| Adapter | Integrate with AI providers and other external mechanisms | `llm_wiki/adapters/` |
-| Native desktop application | Execute desktop workflow, jobs, settings, and Vault operations | `src-tauri/src/native/` |
+| App shell | `frontend/src/app/` | Window navigation and top-level composition |
+| Features | `frontend/src/features/` | Domain screens and visible interaction surfaces |
+| Shared UI | `frontend/src/components/` | Reusable primitives only |
+| Application client | `frontend/src/services/` | Typed Tauri application boundary |
+| Theme | `frontend/src/theme/` | Semantic tokens, global rules, and component styles |
+| Static controllers | `frontend/public/runtime/` | Eleven bounded compatibility controllers |
+| Localization | `frontend/public/i18n/` | Bundled English and Korean resources |
+| Build output | `dist/` | Ignored, reproducible frontend artifact consumed by Tauri |
 
-The native Vault module starts Markdown indexing on a blocking-worker thread after application
-state is ready, so first-window creation does not wait for a Vault scan or ONNX model load.
-`native/semantic.rs` lazily loads
-the checksum-pinned multilingual MiniLM model from Tauri resources, writes 384-dimensional vectors
-to SQLite, and reranks selected search results locally. The release app never fetches this model at
-runtime; only the reproducible desktop build preparation downloads the verified assets. Nunito,
-DM Mono, and Noto Sans KR are likewise bundled and verified during the frontend build.
+The compatibility controllers contain no raw `fetch` or direct IPC. They call the centralized
+application client; only `tauriApplicationClient.ts` imports Tauri `invoke` and `Channel`.
 
-`web.app.create_app` is the public composition root. It builds one `ApplicationRuntime`, then
-passes that runtime to `controllers.application.create_http_app`. Controllers do not construct
-repositories or provider adapters. Queue submission belongs to `services/job_submission.py`, while
-SQLite lifecycle and transition rules remain in `repositories/jobs.py`.
+## Native boundaries
 
-That Python composition root is retained only for the browser delivery mode. Tauri does not import,
-spawn, or contact it. The desktop composition root is `src-tauri/src/lib.rs`; thin Tauri handlers
-allowlist a domain operation and delegate to `src-tauri/src/native/`. HTTP is used from the desktop
-only for an explicitly configured external AI provider.
+| Boundary | Location | Responsibility |
+| --- | --- | --- |
+| Tauri entry | `src-tauri/src/lib.rs` | Validate domain allowlists and delegate commands |
+| Workflow | `src-tauri/src/native/workflow.rs` | Capture, Problem, Solution, transitions, evidence, and Compass |
+| Jobs | `src-tauri/src/native/jobs.rs` | Durable lifecycle, retry, timeout, and cancellation |
+| Result handlers | `src-tauri/src/native/job_results.rs` | Validate and persist task-specific results |
+| Completion/Lineage | `completion.rs`, `lineage.rs` | Completion records and auditable lineage |
+| Vault | `vault.rs`, `patches.rs`, `projection.rs` | Safe Markdown indexing, search, and atomic writes |
+| Semantic engine | `semantic.rs` | Bundled multilingual ONNX inference |
+| Settings | `settings.rs`, `localization.rs` | Locale, provider routing, and secret-safe settings |
+| Provider | `src-tauri/src/provider.rs` | The only external AI protocol adapter |
 
-## AI task module map
+Tauri commands remain thin: they select a domain, validate the operation boundary, invoke
+`NativeApplication`, and translate the result. Persistent writes use transactions or temporary-file
+replacement, source hashes block stale publication, and Windows overwrite uses `ReplaceFileW`.
 
-Each durable task has one `TaskDescriptor` and one searchable task module:
+## Startup and resources
 
-| Task | Handler module |
-| --- | --- |
-| Draft | `services/handlers/drafting.py` |
-| Refine | `services/handlers/refinement.py` |
-| Image Summary | `services/handlers/image_summary.py` |
-| Completion Review | `services/handlers/completion_review.py` |
-| Knowledge translation | `services/handlers/knowledge_translation.py` |
-| Capture, Work Log, comment, and checklist translation | `services/handlers/derived_translation.py` |
-| Embedding refresh | `services/handlers/embeddings.py` |
-| Conflict Review | `services/handlers/conflict_review.py` |
-| Workbench organization | `services/handlers/organization.py` |
-| Lineage inference | `services/handlers/lineage.py` |
-| Completion report | `services/handlers/completion_report.py` |
+The window becomes available before Vault indexing. A blocking worker performs the initial scan and
+loads the checksum-pinned multilingual MiniLM model only when semantic work needs it. The release
+application never downloads a model or font at runtime. Build preparation verifies five model files
+and copies 148 WOFF2 subsets for Nunito, DM Mono, and Noto Sans KR.
 
-Shared provider setup, target validation, handler registration, and worker orchestration live in
-`provider.py`, `targets.py`, `catalog.py`, `registry.py`, and `worker.py`. Task behavior does not go
-into those shared modules.
+## Verification boundaries
 
-Conflict Review normalizes provider output in its handler and stores review-scoped conflicts through
-`WorkflowEngine`. The browser submits a complete set of human resolutions to the application
-controller; the workflow service validates the set and commits resolutions plus the existing
-conflict report/address gate in one SQLite transaction. Source-query comparison rejects stale
-reviews. Provider output never contains or persists the human action.
+- Vitest protects React composition and the Tauri application adapter.
+- `verify_runtime.mjs` parses all eleven compatibility controllers and rejects an HTTP fallback.
+- Rust unit and command tests exercise real SQLite, filesystem, workflow, cancellation, and ONNX
+  behavior.
+- The packaged desktop E2E uses React → Tauri → Rust → SQLite/Vault and verifies full relaunch.
+- macOS produces an `.app`; the Windows workflow produces MSI and NSIS installers using
+  [the Windows agent guide](windows-packaging.md).
 
-## Enforced design rules
-
-Architecture tests reject reverse layer imports, internal import cycles, duplicate or misplaced
-task descriptors, restored superseded modules, and excessive branching in Queue-facing backend
-functions. API-level compatibility tests run against the public web factory so refactors preserve
-the observable contract. These checks live in `tests/test_architecture.py` and
-`tests/test_ai_task_inventory.py`.
-
-See [Background AI Queue](features/background-ai-queue.md) for user-visible Queue behavior and
-[Conflict Resolution Workflow](features/conflict-resolution-workflow.md) for the review decision flow.
+The retired FastAPI implementation and its characterization tests remain inspectable at Git commit
+`caef236`; see [the retirement record](migrations/python-browser-retirement.md).

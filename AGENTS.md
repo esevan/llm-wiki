@@ -13,8 +13,9 @@
 ## Stable verification commands
 
 - Run verification as separate commands so persistent approval rules can match each command.
-- Use `uv run pytest -q` for the test suite.
-- Use exactly `node -e "const fs=require('fs'); const s=fs.readFileSync('llm_wiki/static/index.html','utf8').match(/<script>([\\s\\S]*)<\\/script>/)[1]; new Function(s); console.log('browser script parses')"` for browser-script syntax validation.
+- Use `npm test` for React, adapter, and native UI runtime tests.
+- Use `cargo test --manifest-path src-tauri/Cargo.toml` for native unit and command tests.
+- Use `npm run test:desktop` for the packaged application E2E suite after a release build.
 - Use `git diff --check` for whitespace validation.
 - Do not vary the inline JavaScript or its success message with task-specific wording.
 
