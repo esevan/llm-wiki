@@ -1,10 +1,11 @@
 mod completion;
 pub(crate) mod conversation_context;
-mod database;
+pub(crate) mod database;
 mod job_results;
 pub mod jobs;
 pub(crate) mod lineage;
 mod localization;
+mod migrations;
 mod patches;
 mod projection;
 mod refinement;

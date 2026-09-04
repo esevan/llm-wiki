@@ -78,6 +78,9 @@ Provider 호출에만 열립니다. 자세한 내용은
 [최초 실행 Vault 설정](docs/features/first-run-vault-setup.ko.md)을 참고하세요.
 [애플리케이션 설정 저장소](docs/features/application-settings.ko.md)에서 파일 구조, 기존 SQLite
 설정 이전, 플랫폼별 경로를 확인할 수 있습니다.
+Workflow 데이터는 순서가 고정된 transaction 기반 SQLite schema migration을 사용하며, 더 새로운
+앱이 만든 호환되지 않는 DB는 열지 않습니다. 자세한 내용은
+[SQLite schema migration](docs/database-migrations.ko.md)을 참고하세요.
 기존 Python/FastAPI 브라우저 전달은 네이티브 명령 parity 검증 후 폐기했습니다. 마지막 구현은
 `caef236` Git history에서만 확인할 수 있습니다.
 

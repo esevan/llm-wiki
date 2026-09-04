@@ -35,10 +35,12 @@ They are not application behavior and are therefore not duplicated in Tauri comm
 
 ## 4. Performance
 
-PASS. Database schema migration now runs once during application construction instead of on every
-command. SQLite uses a busy timeout. The window no longer waits for a Vault walk or 224 MB ONNX
-model initialization: lexical and semantic indexing run on a blocking worker after application
-state is managed. The embedding model is loaded lazily once and reused, while unchanged documents
+PASS. Database schema changes now use ordered, transactional versions during startup instead of
+running on every command. Existing databases are normalized before legacy settings import, and
+reopening at the current version is a no-op. SQLite uses a busy timeout. The window no longer waits
+for a Vault walk or 224 MB ONNX model initialization: lexical and semantic indexing run on a
+blocking worker after application state is managed. The embedding model is loaded lazily once and
+reused, while unchanged documents
 reuse source-hash-matched vectors.
 
 ## 5. Stability

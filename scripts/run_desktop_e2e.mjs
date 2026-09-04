@@ -13,6 +13,10 @@ function executablePath() {
   return path.join(root, "src-tauri/target/release/llm-wiki-desktop");
 }
 
+function applicationArguments() {
+  return process.platform === "darwin" ? ["-ApplePersistenceIgnoreState", "YES"] : [];
+}
+
 async function availablePort() {
   return await new Promise((resolve, reject) => {
     const listener = net.createServer();
@@ -79,7 +83,7 @@ let application;
 try {
   let payload;
   for (let launch = 1; launch <= 2; launch += 1) {
-    application = spawn(executablePath(), [], { cwd: root, env: environment, stdio: "inherit" });
+    application = spawn(executablePath(), applicationArguments(), { cwd: root, env: environment, stdio: "inherit" });
     payload = await waitForResult(result, application, launch);
     if (payload.status !== "relaunch") break;
     if (application.exitCode === null) {

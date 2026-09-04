@@ -78,6 +78,7 @@ Status values are `PASS`, `PARTIAL`, `MISSING`, `NOT_APPLICABLE`, and `BLOCKED`.
 | UI-024 | Startup/shutdown/relaunch | Runtime initializes index/settings/jobs; workers terminate with shell; persisted state reloads | filesystem, SQLite, processes | `test_cli.py`, `test_worker_processes.py` | `app/lifecycle` | high / medium | PASS | PASS | PASS | PASS |
 | UI-025 | Reviewed patch apply/undo | Hash mismatch blocks; accepted patch is atomic and reversible | vault filesystem + mirror hash | `test_patches.py`, CB-004 | `features/completion` | high / high | PASS | PASS | PASS | PASS |
 | UI-026 | Choose Vault on first launch | New installs block normal interaction until an existing directory is selected; cancel remains pending; existing installs retain the legacy default | native folder picker + home settings file; no indexing before selection | CB-022/023, React tests, Rust startup tests, desktop E2E | `features/vault-setup` | high / high | PASS | PASS | PASS | PASS |
+| DB-001 | Upgrade SQLite on startup | Given an unversioned or older DB, startup applies ordered migrations and preserves data; a failed step rolls back; a newer DB is rejected | SQLite schema and `PRAGMA user_version` | Rust migration/command tests, desktop launch and relaunch E2E | `app/lifecycle` | high / high | NOT_APPLICABLE | PASS | PASS | PASS |
 
 ## Endpoint classification
 

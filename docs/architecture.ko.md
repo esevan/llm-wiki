@@ -47,6 +47,7 @@ FastAPI server, 내부 TCP listener, Python process, sidecar, HTTP application a
 | Vault | `vault.rs`, `patches.rs`, `projection.rs` | 안전한 Markdown index, 검색, atomic write |
 | Semantic engine | `semantic.rs` | 번들 다국어 ONNX 추론 |
 | 설정 | `settings.rs`, `localization.rs` | Atomic home 설정, locale/provider routing, 기존 설정 이전 |
+| Database | `database.rs`, `migrations.rs`, `schema.sql` | Connection, 순차 schema version, 기존 schema 정규화 |
 | Provider | `src-tauri/src/provider.rs` | 유일한 외부 AI protocol adapter |
 
 Tauri command는 도메인 선택, 작업 경계 검증, `NativeApplication` 호출, 결과 변환만 담당합니다.
@@ -57,7 +58,9 @@ Windows overwrite는 `ReplaceFileW`를 사용합니다.
 
 새 설치에서는 React 온보딩 layer가 앱 조작을 차단하고 얇은 Tauri command가 네이티브 폴더 선택기를
 엽니다. Rust가 선택 경로를 검증해 `~/.llm-workbench/settings.json`에 저장한 뒤 해당 Vault로 앱을
-재시작합니다. 기존 DB는 선택 화면 없이 이전 Documents Vault를 승계하고 locale/provider 값을 한 번
+재시작합니다. 기존 version 0 DB는 locale/provider 값을 가져오기 전에 순서가 고정된 SQLite
+migration을 transaction 안에서 실행합니다. 더 새로운 앱이 만든 DB는 자동 downgrade하지 않고
+열기를 거부합니다. 기존 DB는 선택 화면 없이 이전 Documents Vault를 승계하고 설정 값을 한 번
 가져옵니다. 창은 Vault indexing보다 먼저 표시되지만 설정 미완료 중에는 색인을
 시작하지 않습니다. Blocking worker가 초기 scan을 실행하고 semantic 작업이 필요할 때만 checksum 고정
 다국어 MiniLM model을 로드합니다. Release 앱은 runtime에 model이나 font를 내려받지 않습니다. Build

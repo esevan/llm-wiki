@@ -5,7 +5,6 @@ mod provider;
 
 pub use native::{NativeApplication, NativeOperation, NativeResponse};
 use std::path::PathBuf;
-use tauri::path::BaseDirectory;
 use tauri::Manager;
 use tauri_plugin_dialog::DialogExt;
 
@@ -73,13 +72,38 @@ fn application_paths() -> Result<(VaultResolution, PathBuf, PathBuf), String> {
         .or_else(|| dirs::home_dir().map(|path| path.join(".llm-workbench")))
         .ok_or("The user home directory is unavailable")?;
     let settings_path = settings_dir.join("settings.json");
-    native::settings::migrate_legacy(&db, &settings_path)?;
+    if db.is_file() {
+        native::database::initialize(&db)
+            .map_err(|error| format!("Could not migrate the application database: {error}"))?;
+    }
+    native::settings::migrate_legacy(&db, &settings_path)
+        .map_err(|error| format!("Could not import legacy application settings: {error}"))?;
     let forced = std::env::var_os("LLM_WIKI_VAULT").map(PathBuf::from);
     Ok((
         resolve_vault(default_vault, &db, &settings_path, forced)?,
         db,
         settings_path,
     ))
+}
+
+fn bundled_resource_dir(app: &tauri::App) -> Result<PathBuf, String> {
+    app.path()
+        .resource_dir()
+        .or_else(|error| {
+            #[cfg(target_os = "macos")]
+            {
+                std::env::current_exe()
+                    .ok()
+                    .and_then(|path| path.parent().map(|parent| parent.join("../Resources")))
+                    .and_then(|path| path.canonicalize().ok())
+                    .ok_or(error)
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                Err(error)
+            }
+        })
+        .map_err(|error| format!("Could not resolve bundled resources: {error}"))
 }
 
 fn execute_domain(
@@ -175,16 +199,14 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(conversation::RequestRegistry::default())
         .setup(|app| {
-            let (vault, db, settings_path) = application_paths()?;
+            let (vault, db, settings_path) = application_paths()
+                .map_err(|error| format!("Could not resolve application paths: {error}"))?;
             let VaultResolution {
                 path,
                 setup_required,
                 persist_path,
             } = vault;
-            let model_dir = app
-                .path()
-                .resolve("resources/embedding-model", BaseDirectory::Resource)
-                .map_err(|error| error.to_string())?;
+            let model_dir = bundled_resource_dir(app)?.join("resources/embedding-model");
             if setup_required {
                 native::settings::mark_vault_setup_pending(&settings_path)?;
             } else if persist_path {
@@ -196,7 +218,8 @@ pub fn run() {
                 settings_path,
                 Some(model_dir),
                 setup_required,
-            )?;
+            )
+            .map_err(|error| format!("Could not initialize native application state: {error}"))?;
             let background_index = application.clone();
             let should_index = !setup_required;
             app.manage(application);
@@ -361,6 +384,34 @@ mod tests {
         let original = std::fs::read_to_string(&settings).unwrap();
         native::settings::migrate_legacy(&db, &settings).unwrap();
         assert_eq!(std::fs::read_to_string(&settings).unwrap(), original);
+    }
+
+    #[test]
+    fn old_provider_schema_is_upgraded_before_settings_migration() {
+        let state = tempdir().unwrap();
+        let db = state.path().join("legacy.sqlite3");
+        let settings = state.path().join(".llm-workbench/settings.json");
+        let connection = rusqlite::Connection::open(&db).unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE provider_settings(
+                   id INTEGER PRIMARY KEY,base_url TEXT NOT NULL,model TEXT NOT NULL);
+                 INSERT INTO provider_settings VALUES (1,'https://example.test/v1','legacy-model');",
+            )
+            .unwrap();
+        drop(connection);
+
+        native::database::initialize(&db).unwrap();
+        native::settings::migrate_legacy(&db, &settings).unwrap();
+
+        let provider = native::settings::provider(&settings).unwrap();
+        assert_eq!(provider["base_url"], "https://example.test/v1");
+        assert_eq!(provider["model"], "legacy-model");
+        assert_eq!(provider["advanced_model"], "");
+        assert_eq!(provider["advanced_tasks"]["problem_drafting"], true);
+        assert_eq!(provider["advanced_tasks"]["workbench_organization"], false);
+        assert_eq!(provider["report_language"], "ko");
+        assert_eq!(provider["async_worker_count"], 2);
     }
 
     #[test]

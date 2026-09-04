@@ -79,7 +79,7 @@ tests pass.
 
 ## Current acceptance evidence
 
-- Native desktop: 14 React tests and 26 Rust unit/command tests pass with no skips.
+- Native desktop: 14 React tests and 33 Rust unit/command tests pass with no skips.
 - The retired browser contract's final 196 tests passed at `caef236`; equivalent application
   behaviors remain represented by native command and desktop E2E coverage.
 - The packaged macOS application passes real launch, workflow, provider-double, bundled semantic

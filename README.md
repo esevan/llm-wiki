@@ -78,6 +78,8 @@ for an explicitly configured external AI provider. See
 [First-run Vault setup](docs/features/first-run-vault-setup.md).
 See [Application settings storage](docs/features/application-settings.md) for the file schema,
 legacy SQLite migration, and platform paths.
+Workflow data uses ordered, transactional SQLite schema migrations and rejects databases created by
+a newer incompatible app. See [SQLite schema migrations](docs/database-migrations.md).
 The former Python/FastAPI browser delivery was retired after native command parity was verified.
 Its final implementation remains available only in Git history at `caef236`.
 

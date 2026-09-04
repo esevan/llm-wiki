@@ -130,6 +130,13 @@ fn given_a_legacy_localization_database_when_opened_then_native_preserves_versio
     );
     assert_eq!(board.status, 200, "{}", board.body);
     assert_eq!(board.body["captures"][0]["text"], "기존 데이터");
+    let connection = rusqlite::Connection::open(&db_path).unwrap();
+    assert_eq!(
+        connection
+            .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
+            .unwrap(),
+        2
+    );
 }
 
 #[test]

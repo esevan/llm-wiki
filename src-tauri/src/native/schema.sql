@@ -1,6 +1,4 @@
-PRAGMA journal_mode=WAL;
-PRAGMA foreign_keys=ON;
-
+-- Migration 1 baseline. Keep immutable; append migrations in migrations.rs.
 CREATE TABLE IF NOT EXISTS captures (
   id TEXT PRIMARY KEY,
   text TEXT NOT NULL,

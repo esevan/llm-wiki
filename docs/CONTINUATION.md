@@ -14,6 +14,9 @@ retired after parity verification and is available only in Git history at `caef2
 - SQLite stores workflow, indexes, and jobs. Non-secret application settings live in the atomic
   `~/.llm-workbench/settings.json`; provider secrets remain in the OS credential store.
   Markdown Vault writes use source hashes and atomic replace.
+- SQLite schema changes are ordered in `native/migrations.rs`, recorded with `PRAGMA user_version`,
+  and committed atomically per version. Version-zero Python/native databases migrate on startup;
+  newer unsupported versions fail closed.
 - New installations require an explicit native folder choice; existing installations retain their
   former Documents Vault without a migration prompt.
 - The multilingual embedding model and all required fonts are bundled; runtime downloads are not
@@ -23,7 +26,7 @@ retired after parity verification and is available only in Git history at `caef2
 ## Verification record
 
 - React/adapter/runtime: 14 Vitest tests plus the eleven-module runtime parse and HTTP-fallback gate.
-- Rust: 26 unit and command tests.
+- Rust: 33 unit and command tests.
 - macOS: release `.app` build and real launch/workflow/search/relaunch E2E pass.
 - Windows/Linux/macOS: lint, typecheck, Rust tests, and unbundled Tauri build are configured in CI.
 - Windows MSI/NSIS packaging and optional installation are automated by

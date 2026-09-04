@@ -49,6 +49,7 @@ application client; only `tauriApplicationClient.ts` imports Tauri `invoke` and 
 | Vault | `vault.rs`, `patches.rs`, `projection.rs` | Safe Markdown indexing, search, and atomic writes |
 | Semantic engine | `semantic.rs` | Bundled multilingual ONNX inference |
 | Settings | `settings.rs`, `localization.rs` | Atomic home settings, locale/provider routing, and legacy import |
+| Database | `database.rs`, `migrations.rs`, `schema.sql` | Connections, ordered schema versions, and legacy normalization |
 | Provider | `src-tauri/src/provider.rs` | The only external AI protocol adapter |
 
 Tauri commands remain thin: they select a domain, validate the operation boundary, invoke
@@ -61,7 +62,9 @@ On a new installation, the React onboarding layer blocks application interaction
 command opens the native folder picker. Rust validates and persists the chosen path in
 `~/.llm-workbench/settings.json`, then restarts the application against that Vault. Existing
 databases adopt their former Documents Vault without a prompt and import legacy locale/provider
-values once. The window becomes available before Vault indexing; indexing does not start while setup
+values once. Existing version-zero databases are upgraded through ordered, transactional SQLite
+migrations before that import. A database created by a newer app is rejected instead of being
+silently downgraded. The window becomes available before Vault indexing; indexing does not start while setup
 is pending. A blocking worker performs the initial scan and loads the checksum-pinned multilingual
 MiniLM model only when semantic work needs it. The release application never downloads a model or
 font at runtime. Build preparation verifies five model files and copies 148 WOFF2 subsets for
