@@ -14,6 +14,11 @@ first-run state, explicit locale choice, provider endpoint and model routing, re
 background worker count. API keys are never written there; macOS Keychain or Windows Credential
 Manager continues to own provider secrets.
 
+The current settings document is version 2. `introCompleted` is written as `false` only for a
+genuine new installation and becomes `true` when the introduction is skipped or completed. A
+missing field means an installation predates the introduction, so upgrades do not unexpectedly
+show first-install motion.
+
 Settings writes use a process-wide lock and temporary-file replacement. On Unix, the directory is
 restricted to mode `0700` and the file to `0600`. Workflow records, indexes, jobs, notifications,
 and generated application state remain in the platform application-data SQLite database.

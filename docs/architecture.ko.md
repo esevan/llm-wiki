@@ -56,12 +56,15 @@ Windows overwrite는 `ReplaceFileW`를 사용합니다.
 
 ## 시작과 리소스
 
-새 설치에서는 React 온보딩 layer가 앱 조작을 차단하고 얇은 Tauri command가 네이티브 폴더 선택기를
-엽니다. Rust가 선택 경로를 검증해 `~/.llm-workbench/settings.json`에 저장한 뒤 해당 Vault로 앱을
+새 설치에서는 Rust가 중앙 메인 창 위에 현재 모니터 크기의 투명·무테·always-on-top Tauri 창을
+만듭니다. 전용 React entry surface는 시작 animation만 담당하며, 완료를 얇은 Tauri command에
+위임합니다. Command는 최초 1회 상태를 기록하고 overlay를 닫은 뒤 네이티브 폴더 선택기를 엽니다.
+Rust가 선택 경로를 검증해 `~/.llm-workbench/settings.json`에 저장한 뒤 해당 Vault로 앱을
 재시작합니다. 기존 version 0 DB는 locale/provider 값을 가져오기 전에 순서가 고정된 SQLite
 migration을 transaction 안에서 실행합니다. 더 새로운 앱이 만든 DB는 자동 downgrade하지 않고
 열기를 거부합니다. 기존 DB는 선택 화면 없이 이전 Documents Vault를 승계하고 설정 값을 한 번
-가져옵니다. 창은 Vault indexing보다 먼저 표시되지만 설정 미완료 중에는 색인을
+가져옵니다. 소개 상태가 없는 설정은 기존 설치로 판단하므로 animation을 새로 표시하지 않습니다.
+창은 Vault indexing보다 먼저 표시되지만 설정 미완료 중에는 색인을
 시작하지 않습니다. Blocking worker가 초기 scan을 실행하고 semantic 작업이 필요할 때만 checksum 고정
 다국어 MiniLM model을 로드합니다. Release 앱은 runtime에 model이나 font를 내려받지 않습니다. Build
 준비 단계가 model 파일 5개와 Nunito, DM Mono, Noto Sans KR WOFF2 subset 148개를 검증합니다.
@@ -72,6 +75,8 @@ migration을 transaction 안에서 실행합니다. 더 새로운 앱이 만든 
 - `verify_runtime.mjs`가 호환 controller 11개를 parse하고 HTTP fallback을 거부합니다.
 - Rust 단위·command test가 실제 SQLite, filesystem, workflow, cancellation, ONNX 동작을 검증합니다.
 - 패키징 desktop E2E는 React → Tauri → Rust → SQLite/Vault와 전체 재실행을 검증합니다.
+- 패키징 최초 설치 acceptance는 투명 overlay, 네이티브 선택기 handoff, 선택 취소 복구, process
+  재실행 뒤 비재생을 검증합니다.
 - macOS는 `.app`을 만들며 Windows agent는 [Windows 패키징 안내](windows-packaging.ko.md)에 따라 MSI와
   NSIS installer를 만듭니다.
 

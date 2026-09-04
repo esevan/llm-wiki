@@ -92,7 +92,7 @@ HTTP method, header set, URL, or localhost origin crosses the Tauri IPC boundary
 | Chat streaming/cancellation | Given a configured provider, when asked, then chunks stream and can cancel | PASS | PASS | PASS | PASS | PASS |
 | Durable AI jobs | Given an AI task, when queued, then result/error is durable | PASS | PASS | PASS | PASS | PASS |
 | Relaunch persistence | Given saved state, when the app relaunches, then it is restored | PASS | PASS | PASS | PASS | PASS |
-| First-run Vault selection | Given a new install, when a folder is selected, then it is persisted and restored | NOT_APPLICABLE | PASS | PASS | PASS | PASS |
+| First-install welcome and Vault selection | Given a genuine new install, when the transparent welcome finishes or is skipped, then the OS picker opens once and the selected Vault is persisted | NOT_APPLICABLE | PASS | PASS | PASS | PASS |
 | Home application settings | Given configuration or a legacy DB, when settings change or migrate, then one atomic non-secret home file owns them | PASS | PASS | PASS | PASS | PASS |
 
 ## Verification record

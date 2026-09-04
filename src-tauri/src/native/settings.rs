@@ -17,6 +17,7 @@ struct AppSettings {
     version: u8,
     vault_path: Option<PathBuf>,
     vault_setup_pending: bool,
+    intro_completed: Option<bool>,
     locale: Option<SavedLocale>,
     provider: Option<SavedProvider>,
 }
@@ -127,7 +128,7 @@ fn update(path: &Path, change: impl FnOnce(&mut AppSettings)) -> Result<AppSetti
         .lock()
         .map_err(|_| "Application settings lock is unavailable")?;
     let mut settings = read(path)?;
-    settings.version = 1;
+    settings.version = 2;
     change(&mut settings);
     write(path, &settings)?;
     Ok(settings)
@@ -150,7 +151,7 @@ pub fn migrate_legacy(db_path: &Path, settings_path: &Path) -> Result<(), String
     let connection = Connection::open_with_flags(db_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
         .map_err(|error| error.to_string())?;
     let mut settings = AppSettings {
-        version: 1,
+        version: 2,
         ..AppSettings::default()
     };
     let mut found = false;
@@ -232,9 +233,23 @@ pub fn vault_startup(settings_path: &Path) -> Result<VaultStartup, String> {
     })
 }
 
-pub fn mark_vault_setup_pending(settings_path: &Path) -> Result<(), String> {
+pub fn mark_vault_setup_pending(settings_path: &Path, intro_required: bool) -> Result<(), String> {
     update(settings_path, |settings| {
         settings.vault_setup_pending = true;
+        if intro_required {
+            settings.intro_completed = Some(false);
+        }
+    })?;
+    Ok(())
+}
+
+pub fn intro_required(settings_path: &Path) -> Result<bool, String> {
+    Ok(read(settings_path)?.intro_completed == Some(false))
+}
+
+pub fn complete_intro(settings_path: &Path) -> Result<(), String> {
+    update(settings_path, |settings| {
+        settings.intro_completed = Some(true);
     })?;
     Ok(())
 }

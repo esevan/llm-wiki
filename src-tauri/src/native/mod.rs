@@ -141,11 +141,16 @@ impl NativeApplication {
         self.settings_path.clone()
     }
 
-    pub fn vault_setup_status(&self) -> Value {
-        json!({
+    pub fn vault_setup_status(&self) -> Result<Value, String> {
+        Ok(json!({
             "required": self.vault_setup_required,
+            "introRequired": settings::intro_required(&self.settings_path)?,
             "path": if self.vault_setup_required { Value::Null } else { Value::String(self.vault.to_string_lossy().into_owned()) }
-        })
+        }))
+    }
+
+    pub fn complete_first_run_intro(&self) -> Result<(), String> {
+        settings::complete_intro(&self.settings_path)
     }
 
     pub fn save_vault_selection(&self, path: &Path) -> Result<(), String> {

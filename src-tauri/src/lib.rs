@@ -1,17 +1,18 @@
 mod conversation;
 mod desktop_e2e;
+mod first_run;
 mod native;
 mod provider;
 
 pub use native::{NativeApplication, NativeOperation, NativeResponse};
 use std::path::PathBuf;
 use tauri::Manager;
-use tauri_plugin_dialog::DialogExt;
 
 struct VaultResolution {
     path: PathBuf,
     setup_required: bool,
     persist_path: bool,
+    intro_required: bool,
 }
 
 fn resolve_vault(
@@ -25,6 +26,7 @@ fn resolve_vault(
             path,
             setup_required: false,
             persist_path: false,
+            intro_required: false,
         });
     }
     let database_existed = db.is_file();
@@ -33,26 +35,34 @@ fn resolve_vault(
             path,
             setup_required: false,
             persist_path: false,
+            intro_required: false,
         }),
         native::settings::VaultStartup::Configured(_) => Ok(VaultResolution {
             path: default,
             setup_required: true,
             persist_path: false,
+            intro_required: false,
         }),
-        native::settings::VaultStartup::Pending => Ok(VaultResolution {
-            path: default,
-            setup_required: true,
-            persist_path: false,
-        }),
+        native::settings::VaultStartup::Pending => {
+            let intro_required = native::settings::intro_required(settings_path)?;
+            Ok(VaultResolution {
+                path: default,
+                setup_required: true,
+                persist_path: false,
+                intro_required,
+            })
+        }
         native::settings::VaultStartup::Unset if database_existed => Ok(VaultResolution {
             path: default,
             setup_required: false,
             persist_path: true,
+            intro_required: false,
         }),
         native::settings::VaultStartup::Unset => Ok(VaultResolution {
             path: default,
             setup_required: true,
             persist_path: false,
+            intro_required: true,
         }),
     }
 }
@@ -158,7 +168,18 @@ fn jobs_command(
 fn vault_setup_status(
     application: tauri::State<'_, NativeApplication>,
 ) -> Result<serde_json::Value, String> {
-    Ok(application.vault_setup_status())
+    application.vault_setup_status()
+}
+
+#[tauri::command]
+async fn complete_first_run_intro(
+    app: tauri::AppHandle,
+    application: tauri::State<'_, NativeApplication>,
+) -> Result<bool, String> {
+    if first_run::complete_intro_and_choose_vault(&app, &application)? {
+        app.restart();
+    }
+    Ok(false)
 }
 
 #[tauri::command]
@@ -166,17 +187,10 @@ async fn choose_vault(
     app: tauri::AppHandle,
     application: tauri::State<'_, NativeApplication>,
 ) -> Result<bool, String> {
-    let selected = app
-        .dialog()
-        .file()
-        .set_title("Choose your LLM Wiki Vault")
-        .blocking_pick_folder();
-    let Some(selected) = selected else {
-        return Ok(false);
-    };
-    let path = selected.into_path().map_err(|error| error.to_string())?;
-    application.save_vault_selection(&path)?;
-    app.restart();
+    if first_run::choose_vault(&app, &application)? {
+        app.restart();
+    }
+    Ok(false)
 }
 
 #[tauri::command]
@@ -205,10 +219,11 @@ pub fn run() {
                 path,
                 setup_required,
                 persist_path,
+                intro_required,
             } = vault;
             let model_dir = bundled_resource_dir(app)?.join("resources/embedding-model");
             if setup_required {
-                native::settings::mark_vault_setup_pending(&settings_path)?;
+                native::settings::mark_vault_setup_pending(&settings_path, intro_required)?;
             } else if persist_path {
                 native::settings::save_vault_path(&settings_path, &path)?;
             }
@@ -223,6 +238,9 @@ pub fn run() {
             let background_index = application.clone();
             let should_index = !setup_required;
             app.manage(application);
+            if intro_required {
+                first_run::create_intro_window(app)?;
+            }
             if should_index {
                 tauri::async_runtime::spawn_blocking(move || {
                     let _ = background_index.execute_domain(
@@ -244,6 +262,7 @@ pub fn run() {
             jobs_command,
             enqueue_ai_job,
             vault_setup_status,
+            complete_first_run_intro,
             choose_vault,
             conversation::conversation_stream,
             conversation::cancel_conversation,
@@ -270,6 +289,7 @@ mod tests {
         let default = state.path().join("default-vault");
         let first_launch = resolve_vault(default.clone(), &db, &settings, None).unwrap();
         assert!(first_launch.setup_required);
+        assert!(first_launch.intro_required);
         assert_eq!(first_launch.path, default);
 
         let application = NativeApplication::with_vault_setup(
@@ -280,8 +300,17 @@ mod tests {
             first_launch.setup_required,
         )
         .unwrap();
-        native::settings::mark_vault_setup_pending(&settings).unwrap();
-        assert_eq!(application.vault_setup_status()["required"], true);
+        native::settings::mark_vault_setup_pending(&settings, true).unwrap();
+        assert_eq!(application.vault_setup_status().unwrap()["required"], true);
+        assert_eq!(
+            application.vault_setup_status().unwrap()["introRequired"],
+            true
+        );
+        application.complete_first_run_intro().unwrap();
+        assert_eq!(
+            application.vault_setup_status().unwrap()["introRequired"],
+            false
+        );
 
         let selected = state.path().join("chosen-vault");
         std::fs::create_dir(&selected).unwrap();
@@ -312,6 +341,7 @@ mod tests {
 
         assert!(!restored.setup_required);
         assert!(restored.persist_path);
+        assert!(!restored.intro_required);
         assert_eq!(restored.path, default);
     }
 

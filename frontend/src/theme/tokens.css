@@ -27,6 +27,13 @@
   --color-border-positive: #d3eddd;
   --color-border-worklog: #e6d6de;
   --color-shadow-soft: #38212b0b;
+  --color-overlay-veil: rgb(39 36 42 / 34%);
+  --color-overlay-glow: rgb(255 43 133 / 42%);
+  --color-overlay-highlight: rgb(255 241 91 / 55%);
+  --color-overlay-cool: rgb(201 242 223 / 64%);
+  --color-overlay-ink: rgb(39 36 42 / 76%);
+  --color-overlay-surface: rgb(255 255 255 / 78%);
+  --color-overlay-surface-strong: rgb(255 255 255 / 92%);
 
   --font-family-body: 'Nunito', 'Noto Sans KR Variable', system-ui, sans-serif;
   --font-family-mono: 'DM Mono', ui-monospace, monospace;
@@ -57,6 +64,8 @@
   --layer-menu: 1000;
   --motion-fast: 150ms;
   --motion-normal: 320ms;
+  --motion-intro-enter: 720ms;
+  --motion-intro-scene: 2600ms;
   --focus-ring: 2px solid #ffc6df;
 
   /* Compatibility aliases consumed by the behavior-preserving stylesheet. */

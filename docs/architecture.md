@@ -58,11 +58,14 @@ replacement, source hashes block stale publication, and Windows overwrite uses `
 
 ## Startup and resources
 
-On a new installation, the React onboarding layer blocks application interaction while a thin Tauri
-command opens the native folder picker. Rust validates and persists the chosen path in
+On a new installation, Rust creates a current-monitor-sized transparent, borderless, always-on-top
+Tauri window above the centered main window. Its dedicated React entry surface owns only the
+welcome motion and delegates completion to one thin Tauri command. That command records the
+one-time state, removes the overlay, and opens the native folder picker. Rust validates and persists the chosen path in
 `~/.llm-workbench/settings.json`, then restarts the application against that Vault. Existing
 databases adopt their former Documents Vault without a prompt and import legacy locale/provider
-values once. Existing version-zero databases are upgraded through ordered, transactional SQLite
+values once; missing introduction state is treated as an existing installation and never backfills
+the motion. Existing version-zero databases are upgraded through ordered, transactional SQLite
 migrations before that import. A database created by a newer app is rejected instead of being
 silently downgraded. The window becomes available before Vault indexing; indexing does not start while setup
 is pending. A blocking worker performs the initial scan and loads the checksum-pinned multilingual
@@ -77,6 +80,8 @@ Nunito, DM Mono, and Noto Sans KR.
 - Rust unit and command tests exercise real SQLite, filesystem, workflow, cancellation, and ONNX
   behavior.
 - The packaged desktop E2E uses React → Tauri → Rust → SQLite/Vault and verifies full relaunch.
+- Packaged first-install acceptance verifies the transparent overlay, native picker handoff, picker
+  cancellation recovery, and no replay after process relaunch.
 - macOS produces an `.app`; the Windows workflow produces MSI and NSIS installers using
   [the Windows agent guide](windows-packaging.md).
 

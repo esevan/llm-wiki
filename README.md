@@ -70,8 +70,9 @@ macOS builds produce an `.app`; Windows builds produce MSI and NSIS installers. 
 Windows agent workflow is documented in [Windows packaging and installation](docs/windows-packaging.md).
 
 The release `.app` contains no Python runtime, sidecar, or internal web server. A new installation
-opens a native folder picker before the Workbench becomes interactive and remembers the selected
-Markdown Vault. Existing installations retain `Documents/LLM Wiki Vault`; `LLM_WIKI_VAULT` remains
+shows one transparent, full-monitor welcome motion above the centered app, then opens a native
+folder picker and remembers the selected Markdown Vault. The welcome has no replay control.
+Existing installations retain `Documents/LLM Wiki Vault`; `LLM_WIKI_VAULT` remains
 a development override. React invokes separate workflow, Vault, settings, jobs, and system
 commands; chat chunks and cancellation use a native Tauri channel. Network sockets are opened only
 for an explicitly configured external AI provider. See

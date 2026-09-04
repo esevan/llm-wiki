@@ -14,6 +14,10 @@ Windows에서 `~`는 현재 사용자 프로필이므로 실제 위치는
 들어갑니다. API key는 이 파일에 기록하지 않으며 계속 macOS Keychain 또는 Windows Credential
 Manager가 관리합니다.
 
+현재 설정 문서 version은 2입니다. `introCompleted`는 완전히 새로운 설치에서만 `false`로 기록하고,
+소개를 건너뛰거나 완료하면 `true`가 됩니다. 이 필드가 없으면 소개 기능 이전의 기존 설치로 판단하므로
+upgrade 뒤 최초 설치 animation이 갑자기 나타나지 않습니다.
+
 설정 저장은 process-wide lock과 임시 파일 교체를 사용합니다. Unix에서는 디렉터리 권한을 `0700`,
 파일 권한을 `0600`으로 제한합니다. Workflow 기록, 색인, Job, 알림, 생성된 애플리케이션 상태는
 플랫폼 앱 데이터 위치의 SQLite DB에 유지됩니다.

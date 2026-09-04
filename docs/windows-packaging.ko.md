@@ -54,10 +54,11 @@ powershell -ExecutionPolicy Bypass -File .\scripts\package_windows.ps1 -Install
 ## 설치 후 검증
 
 1. 시작 메뉴에서 **LLM Wiki**를 실행합니다.
-2. 최초 실행 네이티브 Vault 선택기에서 기존 Markdown 폴더를 선택합니다.
+2. 최초 설치에서 중앙 앱 위로 무테 투명 animation이 나타나는지 확인한 뒤 **소개 건너뛰기** 또는
+   **Vault 선택**으로 기존 Markdown 폴더를 선택합니다.
 3. Terminal, Python process, localhost service 없이 Workbench가 열리는지 확인합니다.
 4. Capture를 만들고 앱을 완전히 종료한 뒤 다시 실행하여 Capture가 유지되고 Vault 선택기가 다시
-   나타나지 않는지 확인합니다.
+   나타나지 않고 시작 animation도 다시 재생되지 않는지 확인합니다.
 5. 선택한 Vault에 Markdown 파일을 넣고 **Vault 검색**에서 의미 기반을
    켠 뒤 background indexing 이후 노트가 반환되는지 확인합니다.
 6. AI 설정에서 API key가 설정 여부로만 표시되는지 확인합니다. Key는 Windows Credential Manager에
