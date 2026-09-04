@@ -10,7 +10,27 @@ describe('First-run introduction', () => {
     expect(screen.getByRole('main')).toHaveClass('first-run-intro');
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'A calmer place for unfinished thoughts.' })).toBeVisible();
+    expect(screen.getByRole('heading').querySelectorAll('span')).toHaveLength(2);
     expect(screen.getByRole('button', { name: 'Skip intro' })).toBeVisible();
+  });
+
+  it('Given Korean copy, when the welcome surface appears, then phrases stay on deliberate lines', () => {
+    const language = vi.spyOn(window.navigator, 'language', 'get').mockReturnValue('ko-KR');
+
+    try {
+      render(<FirstRunIntro onFinish={vi.fn()} />);
+
+      const heading = screen.getByRole('heading', { name: '정리되지 않은 생각을 위한 차분한 공간.' });
+      expect(Array.from(heading.querySelectorAll('span'), (line) => line.textContent)).toEqual([
+        '정리되지 않은',
+        '생각을 위한',
+        '차분한 공간.',
+      ]);
+      expect(screen.getByText('떠오른 조각을 담고,')).toBeVisible();
+      expect(screen.getByText('준비됐을 때 다듬으세요.')).toBeVisible();
+    } finally {
+      language.mockRestore();
+    }
   });
 
   it('Given the introduction, when the user advances every scene, then Vault selection starts once', async () => {

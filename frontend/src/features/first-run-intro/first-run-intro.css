@@ -109,18 +109,24 @@
 }
 
 .intro-copy h1 {
-  max-width: 14ch;
   margin: 0;
-  font-size: clamp(34px, 5vw, 72px);
+  font-size: clamp(34px, 4.2vw, 52px);
   line-height: 1.04;
   letter-spacing: -.045em;
+  word-break: keep-all;
+}
+
+.intro-copy h1 span,
+.intro-copy > p:last-child span {
+  display: block;
+  white-space: nowrap;
 }
 
 .intro-copy > p:last-child {
-  max-width: 42ch;
   margin: var(--space-5) 0 0;
   font-size: clamp(var(--font-size-md), 1.6vw, var(--font-size-lg));
   line-height: 1.5;
+  word-break: keep-all;
 }
 
 .intro-art {
@@ -203,7 +209,7 @@
 @media (max-width: 760px) {
   .intro-stage { grid-template-columns: 1fr; justify-items: center; gap: var(--space-3); text-align: center; }
   .intro-art { width: min(54vw, 280px); }
-  .intro-copy h1 { max-width: 18ch; }
+  .intro-copy h1 { font-size: clamp(26px, 7vw, 42px); }
   .intro-copy > p:last-child { margin-top: var(--space-3); }
 }
 

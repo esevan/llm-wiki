@@ -7,7 +7,8 @@ separate transparent, borderless window sized to the current monitor: the center
 window remains beneath a translucent animated layer so the introduction feels like part of the
 desktop rather than another application dialog. The same React/CSS motion runs on macOS and
 Windows, and operating-system reduced-motion preferences disable automatic scene changes and
-decorative animation.
+decorative animation. The English and Korean versions use curated phrase-level line breaks so headings
+remain balanced and Korean words are never split between lines.
 
 The introduction appears once. **Skip intro** and **Choose Vault** both permanently complete it and
 open the native operating-system folder picker; there is deliberately no replay setting or menu

@@ -15,9 +15,18 @@ const copy = {
     error: 'The Vault picker could not be opened.',
     retry: 'Try again',
     scenes: [
-      ['A calmer place for unfinished thoughts.', 'Capture fragments now. Shape them when they are ready.'],
-      ['Your knowledge stays yours.', 'A local Markdown Vault, searchable and portable.'],
-      ['From question to working answer.', 'Follow the thread, keep the evidence, and move work forward.'],
+      {
+        title: ['A calmer place for', 'unfinished thoughts.'],
+        body: ['Capture fragments now.', 'Shape them when they are ready.'],
+      },
+      {
+        title: ['Your knowledge', 'stays yours.'],
+        body: ['A local Markdown Vault,', 'searchable and portable.'],
+      },
+      {
+        title: ['From question to', 'working answer.'],
+        body: ['Follow the thread, keep the evidence,', 'and move work forward.'],
+      },
     ],
   },
   ko: {
@@ -28,9 +37,18 @@ const copy = {
     error: 'Vault 선택기를 열 수 없습니다.',
     retry: '다시 시도',
     scenes: [
-      ['정리되지 않은 생각을 위한 차분한 공간.', '떠오른 조각을 담고, 준비됐을 때 다듬으세요.'],
-      ['지식은 온전히 사용자에게 남습니다.', '로컬 Markdown Vault로 검색하고 어디서든 옮길 수 있어요.'],
-      ['질문에서 실제 답까지.', '맥락과 근거를 지키며 작업을 앞으로 이어가세요.'],
+      {
+        title: ['정리되지 않은', '생각을 위한', '차분한 공간.'],
+        body: ['떠오른 조각을 담고,', '준비됐을 때 다듬으세요.'],
+      },
+      {
+        title: ['지식은 온전히', '사용자에게 남습니다.'],
+        body: ['로컬 Markdown Vault로 검색하고,', '어디서든 옮길 수 있어요.'],
+      },
+      {
+        title: ['질문에서', '실제 답까지.'],
+        body: ['맥락과 근거를 지키며,', '작업을 앞으로 이어가세요.'],
+      },
     ],
   },
 } as const;
@@ -70,6 +88,7 @@ export function FirstRunIntro({ onFinish }: FirstRunIntroProps) {
   const language = navigator.language.toLowerCase().startsWith('ko') ? 'ko' : 'en';
   const text = copy[language];
   const [scene, setScene] = useState(0);
+  const currentScene = text.scenes[scene];
   const [phase, setPhase] = useState<'ready' | 'working' | 'error'>('ready');
   const headingRef = useRef<HTMLHeadingElement>(null);
 
@@ -114,8 +133,21 @@ export function FirstRunIntro({ onFinish }: FirstRunIntroProps) {
         <SceneArtwork scene={scene} />
         <div className="intro-copy">
           <p className="intro-eyebrow">LLM WIKI</p>
-          <h1 id="first-run-intro-title" ref={headingRef} tabIndex={-1}>{text.scenes[scene][0]}</h1>
-          <p>{text.scenes[scene][1]}</p>
+          <h1
+            id="first-run-intro-title"
+            ref={headingRef}
+            tabIndex={-1}
+            aria-label={currentScene.title.join(' ')}
+          >
+            {currentScene.title.map((line) => (
+              <span key={line} aria-hidden="true">{line}</span>
+            ))}
+          </h1>
+          <p>
+            {currentScene.body.map((line) => (
+              <span key={line}>{line}</span>
+            ))}
+          </p>
         </div>
       </section>
       <nav className="intro-controls" aria-label="Introduction progress">
