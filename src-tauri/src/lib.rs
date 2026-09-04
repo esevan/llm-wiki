@@ -97,23 +97,16 @@ fn application_paths() -> Result<(VaultResolution, PathBuf, PathBuf), String> {
 }
 
 fn bundled_resource_dir(app: &tauri::App) -> Result<PathBuf, String> {
-    app.path()
-        .resource_dir()
-        .or_else(|error| {
-            #[cfg(target_os = "macos")]
-            {
-                std::env::current_exe()
-                    .ok()
-                    .and_then(|path| path.parent().map(|parent| parent.join("../Resources")))
-                    .and_then(|path| path.canonicalize().ok())
-                    .ok_or(error)
-            }
-            #[cfg(not(target_os = "macos"))]
-            {
-                Err(error)
-            }
-        })
-        .map_err(|error| format!("Could not resolve bundled resources: {error}"))
+    let resource_dir = app.path().resource_dir();
+    #[cfg(target_os = "macos")]
+    let resource_dir = resource_dir.or_else(|error| {
+        std::env::current_exe()
+            .ok()
+            .and_then(|path| path.parent().map(|parent| parent.join("../Resources")))
+            .and_then(|path| path.canonicalize().ok())
+            .ok_or(error)
+    });
+    resource_dir.map_err(|error| format!("Could not resolve bundled resources: {error}"))
 }
 
 fn execute_domain(
