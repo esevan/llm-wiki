@@ -2,6 +2,7 @@ use llm_wiki_desktop::{NativeApplication, NativeOperation, NativeResponse};
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
+use std::sync::Once;
 use std::thread;
 use std::time::Duration;
 use tempfile::TempDir;
@@ -13,6 +14,11 @@ struct Harness {
 
 impl Harness {
     fn new() -> Self {
+        static TEST_PROVIDER: Once = Once::new();
+        TEST_PROVIDER.call_once(|| {
+            std::env::set_var("LLM_WIKI_TEST_MODE", "1");
+            std::env::set_var("LLM_WIKI_TEST_API_KEY", "application-command-test-key");
+        });
         let root = tempfile::tempdir().unwrap();
         let app = NativeApplication::isolated(
             &root.path().join("vault"),

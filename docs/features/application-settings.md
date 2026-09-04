@@ -13,6 +13,8 @@ On Windows, `~` is the current user profile, so the path is
 first-run state, explicit locale choice, provider endpoint and model routing, report language, and
 background worker count. API keys are never written there; macOS Keychain or Windows Credential
 Manager continues to own provider secrets.
+AI setup reports credential-store access and save failures directly instead of attempting a
+provider request without a stored key.
 
 The current settings document is version 2. `introCompleted` is written as `false` only for a
 genuine new installation and becomes `true` when the introduction is skipped or completed. A

@@ -75,11 +75,20 @@ fn key_entry() -> Result<keyring::Entry, String> {
     keyring::Entry::new("llm-wiki", "provider-api-key").map_err(|error| error.to_string())
 }
 
-fn api_key() -> String {
-    std::env::var("LLM_WIKI_TEST_API_KEY")
-        .ok()
-        .or_else(|| key_entry().ok().and_then(|entry| entry.get_password().ok()))
-        .unwrap_or_default()
+fn api_key() -> Result<Option<String>, String> {
+    if std::env::var("LLM_WIKI_TEST_MODE").as_deref() == Ok("1") {
+        if let Some(secret) = std::env::var("LLM_WIKI_TEST_API_KEY")
+            .ok()
+            .filter(|secret| !secret.is_empty())
+        {
+            return Ok(Some(secret));
+        }
+    }
+    match key_entry()?.get_password() {
+        Ok(secret) if !secret.is_empty() => Ok(Some(secret)),
+        Ok(_) | Err(keyring::Error::NoEntry) => Ok(None),
+        Err(error) => Err(format!("Could not access the OS credential store: {error}")),
+    }
 }
 
 fn read(path: &Path) -> Result<AppSettings, String> {
@@ -314,8 +323,12 @@ pub fn provider(settings_path: &Path) -> Result<Value, String> {
                 .into(),
         );
     }
+    let (api_key_configured, api_key_error) = match api_key() {
+        Ok(secret) => (secret.is_some(), None),
+        Err(error) => (false, Some(error)),
+    };
     Ok(
-        json!({"base_url":provider.base_url,"model":provider.model,"advanced_model":provider.advanced_model,"advanced_tasks":tasks,"report_language":provider.report_language,"async_worker_count":provider.async_worker_count,"api_key_configured":!api_key().is_empty()}),
+        json!({"base_url":provider.base_url,"model":provider.model,"advanced_model":provider.advanced_model,"advanced_tasks":tasks,"report_language":provider.report_language,"async_worker_count":provider.async_worker_count,"api_key_configured":api_key_configured,"api_key_error":api_key_error}),
     )
 }
 
@@ -391,5 +404,38 @@ pub fn provider_credentials_for(
     } else {
         provider.model
     };
-    Ok((provider.base_url, model, api_key()))
+    let api_key = api_key()?.ok_or("Configure an API key in AI setup before using AI")?;
+    Ok((provider.base_url, model, api_key))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::key_entry;
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn provider_credential_uses_macos_keychain() {
+        assert!(key_entry()
+            .unwrap()
+            .get_credential()
+            .is::<keyring::macos::MacCredential>());
+    }
+
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn provider_credential_uses_windows_credential_manager() {
+        assert!(key_entry()
+            .unwrap()
+            .get_credential()
+            .is::<keyring::windows::WinCredential>());
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn provider_credential_uses_linux_secret_service() {
+        assert!(key_entry()
+            .unwrap()
+            .get_credential()
+            .is::<keyring::secret_service::SsCredential>());
+    }
 }

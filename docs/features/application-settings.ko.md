@@ -13,6 +13,8 @@ Windows에서 `~`는 현재 사용자 프로필이므로 실제 위치는
 선택한 언어, provider endpoint와 model routing, report 언어, background worker 수가 이 파일에
 들어갑니다. API key는 이 파일에 기록하지 않으며 계속 macOS Keychain 또는 Windows Credential
 Manager가 관리합니다.
+AI 설정은 저장된 키 없이 provider 요청을 시도하지 않고 자격 증명 저장소 접근 및 저장 실패를
+직접 표시합니다.
 
 현재 설정 문서 version은 2입니다. `introCompleted`는 완전히 새로운 설치에서만 `false`로 기록하고,
 소개를 건너뛰거나 완료하면 `true`가 됩니다. 이 필드가 없으면 소개 기능 이전의 기존 설치로 판단하므로
