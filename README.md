@@ -121,6 +121,10 @@ default. Every choice remains user-configurable in Advanced options.
 
 ## Development
 
+Create isolated task branches with the shared-cache worktree helper described in
+[Fast task worktrees](docs/worktree-workflow.md). New worktrees reuse Node dependencies, compiled
+Rust dependencies, and verified embedding assets instead of rebuilding them from zero.
+
 Every specification, plan, implementation, and review must pass the Product Spirit Review Gate in
 the [project constitution](.specify/memory/constitution.md).
 

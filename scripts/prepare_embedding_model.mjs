@@ -7,7 +7,11 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const modelDir = path.join(root, 'src-tauri', 'resources', 'embedding-model');
+const modelDirArgument = process.argv.indexOf('--model-dir');
+const modelDir = modelDirArgument === -1
+  ? path.join(root, 'src-tauri', 'resources', 'embedding-model')
+  : path.resolve(process.argv[modelDirArgument + 1]);
+const checkOnly = process.argv.includes('--check-only');
 const manifest = JSON.parse(await (await import('node:fs/promises')).readFile(path.join(modelDir, 'manifest.json'), 'utf8'));
 
 const digest = async (file) => {
@@ -29,6 +33,9 @@ for (const asset of manifest.files) {
   if (await valid(target, asset.size, asset.sha256)) {
     console.log(`embedding asset verified: ${asset.name}`);
     continue;
+  }
+  if (checkOnly) {
+    throw new Error(`Embedding asset is missing or invalid: ${asset.name}`);
   }
   const partial = `${target}.part`;
   await rm(partial, { force: true });

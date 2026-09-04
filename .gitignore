@@ -1,5 +1,5 @@
-node_modules/
-target/
+node_modules
+target
 src-tauri/gen/
 src-tauri/binaries/
 dist/

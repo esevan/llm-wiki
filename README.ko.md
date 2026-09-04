@@ -109,6 +109,10 @@ Markdown으로 유지하고, 한국어 열람본은 휴대 가능한 원본을 �
 
 ## 개발
 
+[빠른 작업 Worktree](docs/worktree-workflow.ko.md)에 설명한 shared-cache helper로 격리된 task branch를
+만듭니다. 새 Worktree는 Node dependency, compile된 Rust dependency, 검증된 embedding asset을
+처음부터 다시 준비하지 않고 재사용합니다.
+
 모든 Spec·Plan·구현·리뷰는 [프로젝트 Constitution](.specify/memory/constitution.md)의 Product
 Spirit Review Gate를 통과해야 합니다.
 
