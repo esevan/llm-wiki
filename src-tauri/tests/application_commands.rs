@@ -303,6 +303,18 @@ fn given_locale_and_provider_settings_then_secrets_are_not_returned_to_the_ui() 
     );
     assert_eq!(provider.status, 200);
     assert!(provider.body.get("api_key").is_none());
+    assert!(harness.app.settings_path().is_file());
+    let connection = rusqlite::Connection::open(harness.app.db_path()).unwrap();
+    for removed_table in ["app_settings", "locale_settings", "provider_settings"] {
+        let exists: bool = connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=?)",
+                [removed_table],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(!exists, "{removed_table} must not be created in SQLite");
+    }
 }
 
 #[test]

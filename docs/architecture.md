@@ -4,12 +4,14 @@
 
 LLM Wiki is a native-only React and Tauri application. React depends on one typed
 `ApplicationClient`; the Tauri adapter maps presentation compatibility operations to a small set
-of allowlisted domain commands. Rust owns application behavior, SQLite persistence, Vault file
-access, background jobs, provider integration, localization, and offline semantic retrieval.
+of allowlisted domain commands. Rust owns application behavior, SQLite workflow persistence,
+home-directory application settings, Vault file access, background jobs, provider integration,
+localization, and offline semantic retrieval.
 
 ```text
 React feature -> ApplicationClient -> Tauri domain command -> Rust application module
-                                                       -> SQLite / Markdown Vault
+                                                       -> SQLite / ~/.llm-workbench settings
+                                                       -> Markdown Vault
                                                        -> bundled ONNX embeddings
                                                        -> configured AI provider
 ```
@@ -46,7 +48,7 @@ application client; only `tauriApplicationClient.ts` imports Tauri `invoke` and 
 | Completion/Lineage | `completion.rs`, `lineage.rs` | Completion records and auditable lineage |
 | Vault | `vault.rs`, `patches.rs`, `projection.rs` | Safe Markdown indexing, search, and atomic writes |
 | Semantic engine | `semantic.rs` | Bundled multilingual ONNX inference |
-| Settings | `settings.rs`, `localization.rs` | Locale, provider routing, and secret-safe settings |
+| Settings | `settings.rs`, `localization.rs` | Atomic home settings, locale/provider routing, and legacy import |
 | Provider | `src-tauri/src/provider.rs` | The only external AI protocol adapter |
 
 Tauri commands remain thin: they select a domain, validate the operation boundary, invoke
@@ -56,9 +58,10 @@ replacement, source hashes block stale publication, and Windows overwrite uses `
 ## Startup and resources
 
 On a new installation, the React onboarding layer blocks application interaction while a thin Tauri
-command opens the native folder picker. Rust validates and persists the chosen path, then restarts
-the application against that Vault. Existing databases adopt their former Documents Vault without
-a prompt. The window becomes available before Vault indexing; indexing does not start while setup
+command opens the native folder picker. Rust validates and persists the chosen path in
+`~/.llm-workbench/settings.json`, then restarts the application against that Vault. Existing
+databases adopt their former Documents Vault without a prompt and import legacy locale/provider
+values once. The window becomes available before Vault indexing; indexing does not start while setup
 is pending. A blocking worker performs the initial scan and loads the checksum-pinned multilingual
 MiniLM model only when semantic work needs it. The release application never downloads a model or
 font at runtime. Build preparation verifies five model files and copies 148 WOFF2 subsets for

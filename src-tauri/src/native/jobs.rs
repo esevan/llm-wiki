@@ -154,6 +154,7 @@ pub fn cancel(db_path: &Path, registry: &JobRegistry, job_id: &str) -> Result<Va
 
 pub async fn enqueue(
     db_path: PathBuf,
+    settings_path: PathBuf,
     vault: PathBuf,
     registry: JobRegistry,
     semantic: crate::native::semantic::SemanticEngine,
@@ -205,15 +206,26 @@ pub async fn enqueue(
     connection.execute("INSERT INTO ai_jobs_v2(id,task_kind,entity_type,entity_id,status,input_json,idempotency_key) VALUES (?,?,?,?,'queued',?,?)", params![job_id,task_kind,entity_type,entity_id,input.to_string(),idempotency_key]).map_err(|e| e.to_string())?;
     let spawned_id = job_id.clone();
     let spawned_db = db_path.clone();
+    let spawned_settings = settings_path.clone();
     let token = registry.register(&job_id)?;
     tauri::async_runtime::spawn(async move {
-        let _ = run(spawned_db, vault, registry, semantic, token, spawned_id).await;
+        let _ = run(
+            spawned_db,
+            spawned_settings,
+            vault,
+            registry,
+            semantic,
+            token,
+            spawned_id,
+        )
+        .await;
     });
     get_for_id(&job_id, task_kind, entity_type, entity_id)
 }
 
 pub fn retry(
     db_path: &Path,
+    settings_path: &Path,
     vault: &Path,
     registry: &JobRegistry,
     semantic: &crate::native::semantic::SemanticEngine,
@@ -229,6 +241,7 @@ pub fn retry(
     }
     let spawned_id = job_id.to_owned();
     let spawned_db = db_path.to_owned();
+    let spawned_settings = settings_path.to_owned();
     let spawned_vault = vault.to_owned();
     let spawned_registry = registry.clone();
     let spawned_semantic = semantic.clone();
@@ -236,6 +249,7 @@ pub fn retry(
     tauri::async_runtime::spawn(async move {
         let _ = run(
             spawned_db,
+            spawned_settings,
             spawned_vault,
             spawned_registry,
             spawned_semantic,
@@ -260,13 +274,14 @@ fn get_for_id(
 
 async fn run(
     db_path: PathBuf,
+    settings_path: PathBuf,
     vault: PathBuf,
     registry: JobRegistry,
     semantic: crate::native::semantic::SemanticEngine,
     token: CancellationToken,
     job_id: String,
 ) -> Result<(), String> {
-    let outcome = run_inner(&db_path, &vault, &semantic, &token, &job_id).await;
+    let outcome = run_inner(&db_path, &settings_path, &vault, &semantic, &token, &job_id).await;
     if let Err(error) = &outcome {
         database::open(&db_path)?.execute(
             "UPDATE ai_jobs_v2 SET status='failed',error_code='application_error',error_message=?,finished_at=CURRENT_TIMESTAMP WHERE id=? AND status='running'",
@@ -279,6 +294,7 @@ async fn run(
 
 async fn run_inner(
     db_path: &Path,
+    settings_path: &Path,
     vault: &Path,
     semantic: &crate::native::semantic::SemanticEngine,
     token: &CancellationToken,
@@ -315,7 +331,7 @@ async fn run_inner(
         (other, _) => other,
     };
     let (base_url, model, api_key) =
-        crate::native::settings::provider_credentials_for(db_path, model_task)?;
+        crate::native::settings::provider_credentials_for(settings_path, model_task)?;
     let source_hash = match task.as_str() {
         "image_summary" => {
             let image: String = database::open(db_path)?

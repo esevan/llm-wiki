@@ -87,8 +87,10 @@ pub(crate) async fn conversation_stream(
         &locale,
         &message,
     )?;
-    let (base_url, model, api_key) =
-        native::settings::provider_credentials_for(&application.db_path(), request.model_task)?;
+    let (base_url, model, api_key) = native::settings::provider_credentials_for(
+        &application.settings_path(),
+        request.model_task,
+    )?;
     if model.trim().is_empty() {
         return Err("Provider model is required".into());
     }

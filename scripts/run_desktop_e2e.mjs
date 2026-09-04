@@ -68,6 +68,7 @@ const environment = {
   ...process.env,
   LLM_WIKI_VAULT: vault,
   LLM_WIKI_DB: path.join(state, "state.sqlite3"),
+  LLM_WORKBENCH_HOME: path.join(state, ".llm-workbench"),
   LLM_WIKI_E2E_RESULT: result,
   LLM_WIKI_E2E_PROVIDER_URL: `http://127.0.0.1:${providerPort}/v1`,
   LLM_WIKI_TEST_MODE: "1",
@@ -89,6 +90,15 @@ try {
     await unlink(result);
   }
   if (payload?.status !== "passed") throw new Error(`Desktop scenario failed: ${JSON.stringify(payload)}`);
+  const settingsText = await readFile(path.join(environment.LLM_WORKBENCH_HOME, "settings.json"), "utf8");
+  const settings = JSON.parse(settingsText);
+  if (settings.provider?.baseUrl !== environment.LLM_WIKI_E2E_PROVIDER_URL) {
+    throw new Error("Desktop settings did not persist in the isolated home directory.");
+  }
+  if (settingsText.includes(environment.LLM_WIKI_TEST_API_KEY)) {
+    throw new Error("Desktop settings exposed the provider API key.");
+  }
+  payload.steps.push("non-secret settings persisted in the isolated home file without an API key");
   console.log("desktop E2E passed");
   for (const step of payload.steps) console.log(`- ${step}`);
 } finally {

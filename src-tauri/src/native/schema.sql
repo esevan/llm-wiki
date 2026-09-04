@@ -244,20 +244,6 @@ CREATE TABLE IF NOT EXISTS workbench_category_overrides (
   category TEXT NOT NULL,
   PRIMARY KEY(entity_type, entity_id)
 );
-CREATE TABLE IF NOT EXISTS app_settings (
-  key TEXT PRIMARY KEY,
-  value TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS provider_settings (
-  id INTEGER PRIMARY KEY CHECK(id = 1),
-  base_url TEXT NOT NULL DEFAULT 'https://api.openai.com/v1',
-  model TEXT NOT NULL DEFAULT '',
-  advanced_model TEXT NOT NULL DEFAULT '',
-  advanced_tasks TEXT NOT NULL DEFAULT '{}',
-  report_language TEXT NOT NULL DEFAULT 'ko',
-  async_worker_count INTEGER NOT NULL DEFAULT 2
-);
-INSERT OR IGNORE INTO provider_settings(id) VALUES (1);
 CREATE TABLE IF NOT EXISTS vault_documents (
   path TEXT PRIMARY KEY,
   title TEXT NOT NULL,
@@ -293,11 +279,6 @@ CREATE TRIGGER IF NOT EXISTS vault_documents_au AFTER UPDATE ON vault_documents 
   INSERT INTO vault_documents_fts(rowid,path,title,body)
   VALUES (new.rowid,new.path,new.title,new.body);
 END;
-CREATE TABLE IF NOT EXISTS locale_settings (
-  id INTEGER PRIMARY KEY CHECK(id = 1),
-  locale TEXT NOT NULL,
-  explicit INTEGER NOT NULL DEFAULT 0
-);
 CREATE TABLE IF NOT EXISTS localized_content (
   entity_type TEXT NOT NULL,
   entity_id TEXT NOT NULL,

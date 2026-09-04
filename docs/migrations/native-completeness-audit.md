@@ -81,7 +81,7 @@ mixed-language dead ends. Four current packaged-app screenshots are organized by
 | --- | --- |
 | Retired Python/API characterization | PASS — 196 at `caef236`; removed with product |
 | React component/adapter | PASS — 14 tests plus runtime boundary gate |
-| Rust unit/command | PASS — 25 tests |
+| Rust unit/command | PASS — 26 tests |
 | TypeScript typecheck and ESLint | PASS |
 | Rustfmt and Clippy `-D warnings` | PASS |
 | Frontend production build | PASS; 148 local WOFF2 subsets verified |

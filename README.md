@@ -51,9 +51,9 @@ Configure your OpenAI-compatible endpoint and models in **AI setup**. AI is a re
 capability; local search and manual controls are resilience fallbacks that preserve private process
 and human authority during provider failure.
 
-API keys are stored in macOS Keychain or Windows Credential Manager, never in the vault or app
-database. The desktop process opens its SQLite database and selected Vault directly through Rust
-domain commands:
+Non-secret settings are stored in `~/.llm-workbench/settings.json`. API keys are stored in macOS
+Keychain or Windows Credential Manager, never in the Vault, settings file, or app database. The
+desktop process opens its SQLite database and selected Vault directly through Rust domain commands:
 
 ```text
 npm run tauri:build
@@ -76,6 +76,8 @@ a development override. React invokes separate workflow, Vault, settings, jobs, 
 commands; chat chunks and cancellation use a native Tauri channel. Network sockets are opened only
 for an explicitly configured external AI provider. See
 [First-run Vault setup](docs/features/first-run-vault-setup.md).
+See [Application settings storage](docs/features/application-settings.md) for the file schema,
+legacy SQLite migration, and platform paths.
 The former Python/FastAPI browser delivery was retired after native command parity was verified.
 Its final implementation remains available only in Git history at `caef236`.
 

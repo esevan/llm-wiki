@@ -7,6 +7,8 @@
 
 - [최초 실행 Vault 설정](first-run-vault-setup.ko.md)은 색인 시작 전에 Markdown 폴더를 사용자가
   명시적으로 선택하게 합니다.
+- [애플리케이션 설정 저장소](application-settings.ko.md)는 provider 비밀정보를 노출하지 않으면서
+  사용자 설정을 Workflow SQLite DB와 분리합니다.
 
 ## 작업을 캡처하고 구체화하기
 

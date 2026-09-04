@@ -18,6 +18,7 @@ struct VaultResolution {
 fn resolve_vault(
     default: PathBuf,
     db: &std::path::Path,
+    settings_path: &std::path::Path,
     forced: Option<PathBuf>,
 ) -> Result<VaultResolution, String> {
     if let Some(path) = forced {
@@ -28,7 +29,7 @@ fn resolve_vault(
         });
     }
     let database_existed = db.is_file();
-    match native::settings::vault_startup(db)? {
+    match native::settings::vault_startup(settings_path)? {
         native::settings::VaultStartup::Configured(path) if path.is_dir() => Ok(VaultResolution {
             path,
             setup_required: false,
@@ -57,7 +58,7 @@ fn resolve_vault(
     }
 }
 
-fn application_paths() -> Result<(VaultResolution, PathBuf), String> {
+fn application_paths() -> Result<(VaultResolution, PathBuf, PathBuf), String> {
     let default_vault = dirs::document_dir()
         .map(|path| path.join("LLM Wiki Vault"))
         .ok_or("A local vault path is required")?;
@@ -67,8 +68,18 @@ fn application_paths() -> Result<(VaultResolution, PathBuf), String> {
     let db = std::env::var_os("LLM_WIKI_DB")
         .map(PathBuf::from)
         .unwrap_or_else(|| data_dir.join("llm-wiki.sqlite3"));
+    let settings_dir = std::env::var_os("LLM_WORKBENCH_HOME")
+        .map(PathBuf::from)
+        .or_else(|| dirs::home_dir().map(|path| path.join(".llm-workbench")))
+        .ok_or("The user home directory is unavailable")?;
+    let settings_path = settings_dir.join("settings.json");
+    native::settings::migrate_legacy(&db, &settings_path)?;
     let forced = std::env::var_os("LLM_WIKI_VAULT").map(PathBuf::from);
-    Ok((resolve_vault(default_vault, &db, forced)?, db))
+    Ok((
+        resolve_vault(default_vault, &db, &settings_path, forced)?,
+        db,
+        settings_path,
+    ))
 }
 
 fn execute_domain(
@@ -164,7 +175,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(conversation::RequestRegistry::default())
         .setup(|app| {
-            let (vault, db) = application_paths()?;
+            let (vault, db, settings_path) = application_paths()?;
             let VaultResolution {
                 path,
                 setup_required,
@@ -174,16 +185,18 @@ pub fn run() {
                 .path()
                 .resolve("resources/embedding-model", BaseDirectory::Resource)
                 .map_err(|error| error.to_string())?;
-            let application =
-                NativeApplication::with_vault_setup(path, db, Some(model_dir), setup_required)?;
             if setup_required {
-                native::settings::mark_vault_setup_pending(&application.db_path())?;
+                native::settings::mark_vault_setup_pending(&settings_path)?;
             } else if persist_path {
-                native::settings::save_vault_path(
-                    &application.db_path(),
-                    &application.vault_path(),
-                )?;
+                native::settings::save_vault_path(&settings_path, &path)?;
             }
+            let application = NativeApplication::with_vault_setup(
+                path,
+                db,
+                settings_path,
+                Some(model_dir),
+                setup_required,
+            )?;
             let background_index = application.clone();
             let should_index = !setup_required;
             app.manage(application);
@@ -230,34 +243,37 @@ mod tests {
     fn first_launch_requires_a_vault_and_restores_the_selected_folder() {
         let state = tempdir().unwrap();
         let db = state.path().join("state.sqlite3");
+        let settings = state.path().join("settings.json");
         let default = state.path().join("default-vault");
-        let first_launch = resolve_vault(default.clone(), &db, None).unwrap();
+        let first_launch = resolve_vault(default.clone(), &db, &settings, None).unwrap();
         assert!(first_launch.setup_required);
         assert_eq!(first_launch.path, default);
 
         let application = NativeApplication::with_vault_setup(
             first_launch.path,
             db.clone(),
+            settings.clone(),
             None,
             first_launch.setup_required,
         )
         .unwrap();
-        native::settings::mark_vault_setup_pending(&db).unwrap();
+        native::settings::mark_vault_setup_pending(&settings).unwrap();
         assert_eq!(application.vault_setup_status()["required"], true);
 
         let selected = state.path().join("chosen-vault");
         std::fs::create_dir(&selected).unwrap();
         application.save_vault_selection(&selected).unwrap();
-        let restored = resolve_vault(default, &db, None).unwrap();
+        let restored = resolve_vault(default, &db, &settings, None).unwrap();
         assert!(!restored.setup_required);
         assert_eq!(restored.path, selected.canonicalize().unwrap());
         assert!(matches!(
-            native::settings::vault_startup(&db).unwrap(),
+            native::settings::vault_startup(&settings).unwrap(),
             VaultStartup::Configured(_)
         ));
 
         std::fs::remove_dir(&selected).unwrap();
-        let unavailable = resolve_vault(state.path().join("fallback"), &db, None).unwrap();
+        let unavailable =
+            resolve_vault(state.path().join("fallback"), &db, &settings, None).unwrap();
         assert!(unavailable.setup_required);
     }
 
@@ -265,14 +281,86 @@ mod tests {
     fn existing_installation_without_a_vault_setting_keeps_the_legacy_default() {
         let state = tempdir().unwrap();
         let db = state.path().join("state.sqlite3");
+        let settings = state.path().join("settings.json");
         let default = state.path().join("legacy-default-vault");
         NativeApplication::isolated(&default, &db).unwrap();
 
-        let restored = resolve_vault(default.clone(), &db, None).unwrap();
+        let restored = resolve_vault(default.clone(), &db, &settings, None).unwrap();
 
         assert!(!restored.setup_required);
         assert!(restored.persist_path);
         assert_eq!(restored.path, default);
+    }
+
+    #[test]
+    fn legacy_sqlite_settings_migrate_once_to_the_home_settings_file() {
+        let state = tempdir().unwrap();
+        let db = state.path().join("legacy.sqlite3");
+        let settings = state.path().join(".llm-workbench/settings.json");
+        let vault = state.path().join("vault");
+        std::fs::create_dir(&vault).unwrap();
+        let connection = rusqlite::Connection::open(&db).unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE app_settings(key TEXT PRIMARY KEY,value TEXT NOT NULL);
+                 CREATE TABLE locale_settings(id INTEGER PRIMARY KEY,locale TEXT NOT NULL,explicit INTEGER NOT NULL);
+                 CREATE TABLE provider_settings(
+                   id INTEGER PRIMARY KEY,base_url TEXT NOT NULL,model TEXT NOT NULL,
+                   advanced_model TEXT NOT NULL,advanced_tasks TEXT NOT NULL,
+                   report_language TEXT NOT NULL,async_worker_count INTEGER NOT NULL);",
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO app_settings(key,value) VALUES ('vault_path',?)",
+                [vault.to_string_lossy().as_ref()],
+            )
+            .unwrap();
+        connection
+            .execute("INSERT INTO locale_settings VALUES (1,'ko',1)", [])
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO provider_settings VALUES (1,'https://example.test/v1','small','large','{\"problem_drafting\":true}','en',4)",
+                [],
+            )
+            .unwrap();
+        drop(connection);
+
+        native::settings::migrate_legacy(&db, &settings).unwrap();
+
+        assert!(matches!(
+            native::settings::vault_startup(&settings).unwrap(),
+            VaultStartup::Configured(path) if path == vault
+        ));
+        assert_eq!(
+            native::settings::locale(&settings, "en").unwrap()["locale"],
+            "ko"
+        );
+        let provider = native::settings::provider(&settings).unwrap();
+        assert_eq!(provider["model"], "small");
+        assert_eq!(provider["advanced_model"], "large");
+        assert_eq!(provider["async_worker_count"], 4);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(&settings).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+            assert_eq!(
+                std::fs::metadata(settings.parent().unwrap())
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o700
+            );
+        }
+
+        let original = std::fs::read_to_string(&settings).unwrap();
+        native::settings::migrate_legacy(&db, &settings).unwrap();
+        assert_eq!(std::fs::read_to_string(&settings).unwrap(), original);
     }
 
     #[test]

@@ -4,12 +4,13 @@
 
 LLM Wiki는 React와 Tauri로 구성한 네이티브 전용 애플리케이션입니다. React는 하나의 typed
 `ApplicationClient`에 의존하며 Tauri adapter는 프레젠테이션 호환 작업을 제한된 도메인 command로
-변환합니다. Rust가 애플리케이션 동작, SQLite persistence, Vault 파일 접근, background job, provider
-연동, localization, offline semantic retrieval을 소유합니다.
+변환합니다. Rust가 애플리케이션 동작, SQLite Workflow persistence, home 디렉터리 설정, Vault 파일
+접근, background job, provider 연동, localization, offline semantic retrieval을 소유합니다.
 
 ```text
 React 기능 -> ApplicationClient -> Tauri 도메인 command -> Rust 애플리케이션 모듈
-                                                    -> SQLite / Markdown Vault
+                                                    -> SQLite / ~/.llm-workbench 설정
+                                                    -> Markdown Vault
                                                     -> 번들 ONNX 임베딩
                                                     -> 설정한 AI provider
 ```
@@ -45,7 +46,7 @@ FastAPI server, 내부 TCP listener, Python process, sidecar, HTTP application a
 | Completion/Lineage | `completion.rs`, `lineage.rs` | 완료 기록과 감사 가능한 lineage |
 | Vault | `vault.rs`, `patches.rs`, `projection.rs` | 안전한 Markdown index, 검색, atomic write |
 | Semantic engine | `semantic.rs` | 번들 다국어 ONNX 추론 |
-| 설정 | `settings.rs`, `localization.rs` | Locale, provider routing, secret-safe 설정 |
+| 설정 | `settings.rs`, `localization.rs` | Atomic home 설정, locale/provider routing, 기존 설정 이전 |
 | Provider | `src-tauri/src/provider.rs` | 유일한 외부 AI protocol adapter |
 
 Tauri command는 도메인 선택, 작업 경계 검증, `NativeApplication` 호출, 결과 변환만 담당합니다.
@@ -55,8 +56,9 @@ Windows overwrite는 `ReplaceFileW`를 사용합니다.
 ## 시작과 리소스
 
 새 설치에서는 React 온보딩 layer가 앱 조작을 차단하고 얇은 Tauri command가 네이티브 폴더 선택기를
-엽니다. Rust가 선택 경로를 검증·저장한 뒤 해당 Vault로 앱을 재시작합니다. 기존 DB는 선택 화면 없이
-이전 Documents Vault를 승계합니다. 창은 Vault indexing보다 먼저 표시되지만 설정 미완료 중에는 색인을
+엽니다. Rust가 선택 경로를 검증해 `~/.llm-workbench/settings.json`에 저장한 뒤 해당 Vault로 앱을
+재시작합니다. 기존 DB는 선택 화면 없이 이전 Documents Vault를 승계하고 locale/provider 값을 한 번
+가져옵니다. 창은 Vault indexing보다 먼저 표시되지만 설정 미완료 중에는 색인을
 시작하지 않습니다. Blocking worker가 초기 scan을 실행하고 semantic 작업이 필요할 때만 checksum 고정
 다국어 MiniLM model을 로드합니다. Release 앱은 runtime에 model이나 font를 내려받지 않습니다. Build
 준비 단계가 model 파일 5개와 Nunito, DM Mono, Noto Sans KR WOFF2 subset 148개를 검증합니다.

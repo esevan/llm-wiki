@@ -10,12 +10,13 @@ Closing the picker leaves setup incomplete and returns to the setup screen. It d
 create or adopt the default Documents folder. After a folder is selected, the native application:
 
 1. verifies that the selection is an existing directory;
-2. stores the canonical path in the local SQLite application settings;
+2. stores the canonical path in `~/.llm-workbench/settings.json`;
 3. restarts against the selected Vault; and
 4. indexes its Markdown in the background with the bundled embedding model.
 
-The SQLite workflow database remains in the platform application-data folder. Vault documents stay
-as portable Markdown in the folder the user chose. Existing installations without an explicit
+The SQLite workflow database remains in the platform application-data folder and no longer owns
+application settings. Vault documents stay as portable Markdown in the folder the user chose.
+Existing installations without an explicit
 Vault setting retain the former `Documents/LLM Wiki Vault` location and do not see a migration
 prompt. `LLM_WIKI_VAULT` remains an explicit development and test override.
 

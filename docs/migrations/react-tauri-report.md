@@ -46,7 +46,7 @@ in Git history at `caef236`.
 | Native vault | `src-tauri/src/native/vault.rs` | Markdown indexing, search, safe reads |
 | Native embeddings | `src-tauri/src/native/semantic.rs` | Offline ONNX inference and semantic reranking |
 | Model manifest | `src-tauri/resources/embedding-model/manifest.json` | Pinned revision, size, and SHA-256 verification |
-| Native settings | `src-tauri/src/native/settings.rs` | Locale, resources, provider configuration |
+| Native settings | `src-tauri/src/native/settings.rs` | Atomic home-file settings, legacy SQLite import, locale and provider configuration |
 | Vault onboarding | `frontend/src/features/vault-setup/`, `src-tauri/src/native/settings.rs` | Native folder selection and persisted first-run state |
 | Native schema | `src-tauri/src/native/schema.sql` | Desktop persistence schema compatible with existing core tables |
 
@@ -93,6 +93,7 @@ HTTP method, header set, URL, or localhost origin crosses the Tauri IPC boundary
 | Durable AI jobs | Given an AI task, when queued, then result/error is durable | PASS | PASS | PASS | PASS | PASS |
 | Relaunch persistence | Given saved state, when the app relaunches, then it is restored | PASS | PASS | PASS | PASS | PASS |
 | First-run Vault selection | Given a new install, when a folder is selected, then it is persisted and restored | NOT_APPLICABLE | PASS | PASS | PASS | PASS |
+| Home application settings | Given configuration or a legacy DB, when settings change or migrate, then one atomic non-secret home file owns them | PASS | PASS | PASS | PASS | PASS |
 
 ## Verification record
 
@@ -102,7 +103,7 @@ HTTP method, header set, URL, or localhost origin crosses the Tauri IPC boundary
 | React unit/component/adapter tests | PASS — 14 plus runtime boundary gate |
 | TypeScript typecheck | PASS |
 | Frontend production build | PASS |
-| Rust command/unit tests | PASS — 25 |
+| Rust command/unit tests | PASS — 26 |
 | Tauri release build | PASS — native `.app`, verified embedding model and fonts, no bundled sidecar |
 | Desktop E2E | PASS — launch, full workflow, bundled semantic search, relaunch, restoration |
 
@@ -131,6 +132,7 @@ HTTP method, header set, URL, or localhost origin crosses the Tauri IPC boundary
   The base Tauri configuration remains `all` for Windows/Linux packaging, and CI performs native
   build checks on macOS, Windows, and Linux.
 - New installations select an existing Vault through the native OS picker before indexing starts.
-  The canonical path is stored in the same SQLite database as other application settings. Existing
-  databases without this setting adopt and persist the former default path without an onboarding
-  interruption.
+  The canonical path and other non-secret settings are stored in
+  `~/.llm-workbench/settings.json`; SQLite is reserved for workflow, indexes, and jobs. Existing
+  SQLite settings are imported once, while databases without a Vault setting adopt and persist the
+  former default path without an onboarding interruption.

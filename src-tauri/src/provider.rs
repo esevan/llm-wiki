@@ -15,7 +15,7 @@ pub(crate) async fn provider_request(
     }
     let outcome = async {
         let (base_url, model, api_key) = native::settings::provider_credentials_for(
-            &application.db_path(),
+            &application.settings_path(),
             "problem_enrichment",
         )?;
         let client = reqwest::Client::builder()

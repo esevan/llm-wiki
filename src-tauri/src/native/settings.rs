@@ -1,13 +1,57 @@
-use crate::native::database;
-use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
+use rusqlite::{Connection, OpenFlags, OptionalExtension};
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 
 pub enum VaultStartup {
     Configured(PathBuf),
     Pending,
     Unset,
 }
+
+#[derive(Clone, Default, Deserialize, Serialize)]
+#[serde(default, rename_all = "camelCase")]
+struct AppSettings {
+    version: u8,
+    vault_path: Option<PathBuf>,
+    vault_setup_pending: bool,
+    locale: Option<SavedLocale>,
+    provider: Option<SavedProvider>,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+struct SavedLocale {
+    value: String,
+    explicit: bool,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(default, rename_all = "camelCase")]
+struct SavedProvider {
+    base_url: String,
+    model: String,
+    advanced_model: String,
+    advanced_tasks: Value,
+    report_language: String,
+    async_worker_count: i64,
+}
+
+impl Default for SavedProvider {
+    fn default() -> Self {
+        Self {
+            base_url: "https://api.openai.com/v1".into(),
+            model: String::new(),
+            advanced_model: String::new(),
+            advanced_tasks: json!({}),
+            report_language: "ko".into(),
+            async_worker_count: 2,
+        }
+    }
+}
+
+static SETTINGS_WRITE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
 const TASKS: &[(&str, bool)] = &[
     ("capture_assistance", true),
@@ -37,79 +81,170 @@ fn api_key() -> String {
         .unwrap_or_default()
 }
 
-pub fn vault_startup(db_path: &Path) -> Result<VaultStartup, String> {
-    if !db_path.is_file() {
-        return Ok(VaultStartup::Unset);
+fn read(path: &Path) -> Result<AppSettings, String> {
+    if !path.is_file() {
+        return Ok(AppSettings::default());
+    }
+    let content = fs::read_to_string(path).map_err(|error| error.to_string())?;
+    serde_json::from_str(&content).map_err(|error| {
+        format!(
+            "Application settings are invalid at {}: {error}",
+            path.display()
+        )
+    })
+}
+
+fn write(path: &Path, settings: &AppSettings) -> Result<(), String> {
+    let parent = path
+        .parent()
+        .ok_or("Application settings path has no parent")?;
+    fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(parent, fs::Permissions::from_mode(0o700))
+            .map_err(|error| error.to_string())?;
+    }
+    let temporary = parent.join(format!(".settings.{}.tmp", uuid::Uuid::new_v4()));
+    let content = serde_json::to_string_pretty(settings).map_err(|error| error.to_string())?;
+    fs::write(&temporary, format!("{content}\n")).map_err(|error| error.to_string())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&temporary, fs::Permissions::from_mode(0o600))
+            .map_err(|error| error.to_string())?;
+    }
+    if let Err(error) = crate::native::vault::replace_file(&temporary, path) {
+        let _ = fs::remove_file(&temporary);
+        return Err(error.to_string());
+    }
+    Ok(())
+}
+
+fn update(path: &Path, change: impl FnOnce(&mut AppSettings)) -> Result<AppSettings, String> {
+    let _guard = SETTINGS_WRITE_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .map_err(|_| "Application settings lock is unavailable")?;
+    let mut settings = read(path)?;
+    settings.version = 1;
+    change(&mut settings);
+    write(path, &settings)?;
+    Ok(settings)
+}
+
+fn table_exists(connection: &Connection, table: &str) -> Result<bool, String> {
+    connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=?)",
+            [table],
+            |row| row.get(0),
+        )
+        .map_err(|error| error.to_string())
+}
+
+pub fn migrate_legacy(db_path: &Path, settings_path: &Path) -> Result<(), String> {
+    if settings_path.is_file() || !db_path.is_file() {
+        return Ok(());
     }
     let connection = Connection::open_with_flags(db_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
         .map_err(|error| error.to_string())?;
-    let has_settings: bool = connection
-        .query_row(
-            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='app_settings')",
-            [],
-            |row| row.get(0),
-        )
-        .map_err(|error| error.to_string())?;
-    if !has_settings {
-        return Ok(VaultStartup::Unset);
+    let mut settings = AppSettings {
+        version: 1,
+        ..AppSettings::default()
+    };
+    let mut found = false;
+    if table_exists(&connection, "app_settings")? {
+        settings.vault_path = connection
+            .query_row(
+                "SELECT value FROM app_settings WHERE key='vault_path'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(|error| error.to_string())?
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from);
+        settings.vault_setup_pending = connection
+            .query_row(
+                "SELECT value FROM app_settings WHERE key='vault_setup_pending'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(|error| error.to_string())?
+            .as_deref()
+            == Some("1");
+        found |= settings.vault_path.is_some() || settings.vault_setup_pending;
     }
-    let path: Option<String> = connection
-        .query_row(
-            "SELECT value FROM app_settings WHERE key='vault_path'",
-            [],
-            |row| row.get(0),
-        )
-        .optional()
-        .map_err(|error| error.to_string())?;
-    if let Some(path) = path.filter(|value| !value.is_empty()) {
-        return Ok(VaultStartup::Configured(PathBuf::from(path)));
+    if table_exists(&connection, "locale_settings")? {
+        settings.locale = connection
+            .query_row(
+                "SELECT locale,explicit FROM locale_settings WHERE id=1",
+                [],
+                |row| {
+                    Ok(SavedLocale {
+                        value: row.get(0)?,
+                        explicit: row.get::<_, i64>(1)? != 0,
+                    })
+                },
+            )
+            .optional()
+            .map_err(|error| error.to_string())?;
+        found |= settings.locale.is_some();
     }
-    let pending: Option<String> = connection
-        .query_row(
-            "SELECT value FROM app_settings WHERE key='vault_setup_pending'",
-            [],
-            |row| row.get(0),
-        )
-        .optional()
-        .map_err(|error| error.to_string())?;
-    Ok(if pending.as_deref() == Some("1") {
+    if table_exists(&connection, "provider_settings")? {
+        settings.provider = connection
+            .query_row(
+                "SELECT base_url,model,advanced_model,advanced_tasks,report_language,async_worker_count FROM provider_settings WHERE id=1",
+                [],
+                |row| {
+                    let advanced_tasks = row.get::<_, String>(3)?;
+                    Ok(SavedProvider {
+                        base_url: row.get(0)?,
+                        model: row.get(1)?,
+                        advanced_model: row.get(2)?,
+                        advanced_tasks: serde_json::from_str(&advanced_tasks).unwrap_or_else(|_| json!({})),
+                        report_language: row.get(4)?,
+                        async_worker_count: row.get(5)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(|error| error.to_string())?;
+        found |= settings.provider.is_some();
+    }
+    if found {
+        write(settings_path, &settings)?;
+    }
+    Ok(())
+}
+
+pub fn vault_startup(settings_path: &Path) -> Result<VaultStartup, String> {
+    let settings = read(settings_path)?;
+    if let Some(path) = settings.vault_path {
+        return Ok(VaultStartup::Configured(path));
+    }
+    Ok(if settings.vault_setup_pending {
         VaultStartup::Pending
     } else {
         VaultStartup::Unset
     })
 }
 
-pub fn mark_vault_setup_pending(db_path: &Path) -> Result<(), String> {
-    database::open(db_path)?
-        .execute(
-            "INSERT INTO app_settings(key,value) VALUES ('vault_setup_pending','1') ON CONFLICT(key) DO UPDATE SET value='1'",
-            [],
-        )
-        .map_err(|error| error.to_string())?;
+pub fn mark_vault_setup_pending(settings_path: &Path) -> Result<(), String> {
+    update(settings_path, |settings| {
+        settings.vault_setup_pending = true;
+    })?;
     Ok(())
 }
 
-pub fn save_vault_path(db_path: &Path, vault: &Path) -> Result<(), String> {
-    let value = vault
-        .to_str()
-        .ok_or("Vault path must contain valid Unicode")?;
-    let mut connection = database::open(db_path)?;
-    let transaction = connection
-        .transaction()
-        .map_err(|error| error.to_string())?;
-    transaction
-        .execute(
-            "INSERT INTO app_settings(key,value) VALUES ('vault_path',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-            [value],
-        )
-        .map_err(|error| error.to_string())?;
-    transaction
-        .execute(
-            "DELETE FROM app_settings WHERE key='vault_setup_pending'",
-            [],
-        )
-        .map_err(|error| error.to_string())?;
-    transaction.commit().map_err(|error| error.to_string())
+pub fn save_vault_path(settings_path: &Path, vault: &Path) -> Result<(), String> {
+    update(settings_path, |settings| {
+        settings.vault_path = Some(vault.to_owned());
+        settings.vault_setup_pending = false;
+    })?;
+    Ok(())
 }
 
 pub fn resources(locale: &str) -> Result<Value, String> {
@@ -121,49 +256,43 @@ pub fn resources(locale: &str) -> Result<Value, String> {
     serde_json::from_str(raw).map_err(|error| error.to_string())
 }
 
-pub fn locale(db_path: &Path, browser_locale: &str) -> Result<Value, String> {
-    let connection = database::open(db_path)?;
-    let saved: Option<(String, i64)> = connection
-        .query_row(
-            "SELECT locale,explicit FROM locale_settings WHERE id=1",
-            [],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )
-        .optional()
-        .map_err(|error| error.to_string())?;
-    let (locale, explicit) = saved.unwrap_or_else(|| {
-        (
+pub fn locale(settings_path: &Path, browser_locale: &str) -> Result<Value, String> {
+    let saved = read(settings_path)?.locale;
+    let locale = saved
+        .as_ref()
+        .map(|value| value.value.as_str())
+        .unwrap_or_else(|| {
             if browser_locale.to_lowercase().starts_with("ko") {
                 "ko"
             } else {
                 "en"
             }
-            .into(),
-            0,
-        )
-    });
-    Ok(json!({"locale":locale,"explicit":explicit != 0}))
+        });
+    Ok(json!({"locale":locale,"explicit":saved.is_some_and(|value| value.explicit)}))
 }
 
-pub fn save_locale(db_path: &Path, input: &Value) -> Result<Value, String> {
+pub fn save_locale(settings_path: &Path, input: &Value) -> Result<Value, String> {
     let locale = input.get("locale").and_then(Value::as_str).unwrap_or("");
     if !matches!(locale, "ko" | "en") {
         return Err("Unsupported locale".into());
     }
-    let connection = database::open(db_path)?;
-    connection.execute("INSERT INTO locale_settings(id,locale,explicit) VALUES (1,?,1) ON CONFLICT(id) DO UPDATE SET locale=excluded.locale,explicit=1", [locale]).map_err(|error| error.to_string())?;
+    update(settings_path, |settings| {
+        settings.locale = Some(SavedLocale {
+            value: locale.into(),
+            explicit: true,
+        });
+    })?;
     Ok(json!({"locale":locale,"explicit":true}))
 }
 
-pub fn provider(db_path: &Path) -> Result<Value, String> {
-    let connection = database::open(db_path)?;
-    let row = connection.query_row("SELECT base_url,model,advanced_model,advanced_tasks,report_language,async_worker_count FROM provider_settings WHERE id=1", [], |row| Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?,row.get::<_,String>(2)?,row.get::<_,String>(3)?,row.get::<_,String>(4)?,row.get::<_,i64>(5)?))).map_err(|error| error.to_string())?;
-    let saved: Value = serde_json::from_str(&row.3).unwrap_or_else(|_| json!({}));
+pub fn provider(settings_path: &Path) -> Result<Value, String> {
+    let provider = read(settings_path)?.provider.unwrap_or_default();
     let mut tasks = serde_json::Map::new();
     for (name, default) in TASKS {
         tasks.insert(
             (*name).into(),
-            saved
+            provider
+                .advanced_tasks
                 .get(*name)
                 .and_then(Value::as_bool)
                 .unwrap_or(*default)
@@ -171,11 +300,11 @@ pub fn provider(db_path: &Path) -> Result<Value, String> {
         );
     }
     Ok(
-        json!({"base_url":row.0,"model":row.1,"advanced_model":row.2,"advanced_tasks":tasks,"report_language":row.4,"async_worker_count":row.5,"api_key_configured":!api_key().is_empty()}),
+        json!({"base_url":provider.base_url,"model":provider.model,"advanced_model":provider.advanced_model,"advanced_tasks":tasks,"report_language":provider.report_language,"async_worker_count":provider.async_worker_count,"api_key_configured":!api_key().is_empty()}),
     )
 }
 
-pub fn save_provider(db_path: &Path, input: &Value) -> Result<Value, String> {
+pub fn save_provider(settings_path: &Path, input: &Value) -> Result<Value, String> {
     let base_url = input
         .get("base_url")
         .and_then(Value::as_str)
@@ -204,8 +333,16 @@ pub fn save_provider(db_path: &Path, input: &Value) -> Result<Value, String> {
     if !(1..=32).contains(&workers) {
         return Err("Async worker count must be between 1 and 32".into());
     }
-    let connection = database::open(db_path)?;
-    connection.execute("UPDATE provider_settings SET base_url=?,model=?,advanced_model=?,advanced_tasks=?,report_language=?,async_worker_count=? WHERE id=1", params![base_url,model,advanced_model,advanced_tasks.to_string(),report_language,workers]).map_err(|error| error.to_string())?;
+    update(settings_path, |settings| {
+        settings.provider = Some(SavedProvider {
+            base_url: base_url.into(),
+            model: model.into(),
+            advanced_model: advanced_model.into(),
+            advanced_tasks,
+            report_language: report_language.into(),
+            async_worker_count: workers,
+        });
+    })?;
     if let Some(secret) = input
         .get("api_key")
         .and_then(Value::as_str)
@@ -215,28 +352,18 @@ pub fn save_provider(db_path: &Path, input: &Value) -> Result<Value, String> {
             .set_password(secret)
             .map_err(|error| error.to_string())?;
     }
-    provider(db_path)
+    provider(settings_path)
 }
 
 pub fn provider_credentials_for(
-    db_path: &Path,
+    settings_path: &Path,
     task: &str,
 ) -> Result<(String, String, String), String> {
-    let (base_url, default_model, advanced_model, advanced_tasks): (
-        String,
-        String,
-        String,
-        String,
-    ) = database::open(db_path)?
-        .query_row(
-            "SELECT base_url,model,advanced_model,advanced_tasks FROM provider_settings WHERE id=1",
-            [],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-        )
-        .map_err(|error| error.to_string())?;
-    let advanced = serde_json::from_str::<Value>(&advanced_tasks)
-        .ok()
-        .and_then(|value| value.get(task).and_then(Value::as_bool))
+    let provider = read(settings_path)?.provider.unwrap_or_default();
+    let advanced = provider
+        .advanced_tasks
+        .get(task)
+        .and_then(Value::as_bool)
         .unwrap_or_else(|| {
             TASKS
                 .iter()
@@ -244,10 +371,10 @@ pub fn provider_credentials_for(
                 .map(|(_, enabled)| *enabled)
                 .unwrap_or(false)
         });
-    let model = if advanced && !advanced_model.trim().is_empty() {
-        advanced_model
+    let model = if advanced && !provider.advanced_model.trim().is_empty() {
+        provider.advanced_model
     } else {
-        default_model
+        provider.model
     };
-    Ok((base_url, model, api_key()))
+    Ok((provider.base_url, model, api_key()))
 }

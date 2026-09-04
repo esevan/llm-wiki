@@ -64,6 +64,13 @@ an unsuccessful exit code, and reports MSI code 3010 as a successful install tha
    semantic search, and confirm that the note is returned after background indexing.
 6. Open AI Setup and confirm that an API key is reported only as configured/not configured. The key
    is stored through Windows Credential Manager and is never returned to React.
+7. Confirm `%USERPROFILE%\.llm-workbench\settings.json` contains the Vault and non-secret UI/provider
+   settings, while the application-data SQLite database contains workflow and index data only.
+
+The installer does not overwrite or remove the home settings file during upgrades. A previous
+SQLite-backed installation imports its settings once when the home file is absent. Build and E2E
+automation set `LLM_WORKBENCH_HOME` to an isolated temporary directory so agent runs never modify
+the interactive Windows user's configuration.
 
 `http://ipc.localhost` in the Tauri content-security policy is WebView2's virtual IPC origin; it is
 not a listening TCP socket. Network connections occur only when the user configures an external AI

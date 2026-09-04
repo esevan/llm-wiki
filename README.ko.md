@@ -49,7 +49,8 @@ LLM_WIKI_VAULT=/path/to/your-vault npm run tauri -- dev
 **AI 설정**에서 OpenAI 호환 endpoint와 model을 설정합니다. AI는 필수 제품 기능이며, 로컬 검색과
 수동 제어는 provider 장애 중에도 개인 작업 과정과 사용자의 결정권을 보존하기 위한 fallback입니다.
 
-API 키는 vault나 앱 DB가 아니라 macOS Keychain 또는 Windows Credential Manager에 저장됩니다.
+비밀정보가 아닌 설정은 `~/.llm-workbench/settings.json`에 저장합니다. API key는 Vault, 설정 파일,
+앱 DB가 아니라 macOS Keychain 또는 Windows Credential Manager에 저장됩니다.
 
 React frontend는 네이티브 Tauri 데스크톱 애플리케이션으로 패키징됩니다. 데스크톱 process는 Rust
 도메인 명령을 통해 SQLite DB와 선택한 Vault를 직접 엽니다.
@@ -75,6 +76,8 @@ override로 유지됩니다. React는 Workflow, Vault, 설정, Job, System 명�
 Chunk와 취소는 네이티브 Tauri Channel을 사용합니다. Socket은 사용자가 명시적으로 설정한 외부 AI
 Provider 호출에만 열립니다. 자세한 내용은
 [최초 실행 Vault 설정](docs/features/first-run-vault-setup.ko.md)을 참고하세요.
+[애플리케이션 설정 저장소](docs/features/application-settings.ko.md)에서 파일 구조, 기존 SQLite
+설정 이전, 플랫폼별 경로를 확인할 수 있습니다.
 기존 Python/FastAPI 브라우저 전달은 네이티브 명령 parity 검증 후 폐기했습니다. 마지막 구현은
 `caef236` Git history에서만 확인할 수 있습니다.
 

@@ -7,6 +7,8 @@ Start with [Product Spirit](../product-spirit.md), or use the
 
 - [First-run Vault setup](first-run-vault-setup.md) keeps the Markdown folder under explicit user
   control before indexing starts.
+- [Application settings storage](application-settings.md) separates user configuration from the
+  workflow SQLite database without exposing provider secrets.
 
 ## Capture and shape work
 

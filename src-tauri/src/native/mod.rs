@@ -21,6 +21,7 @@ use std::path::{Path, PathBuf};
 #[derive(Clone)]
 pub struct NativeApplication {
     db_path: PathBuf,
+    settings_path: PathBuf,
     vault: PathBuf,
     vault_setup_required: bool,
     semantic: semantic::SemanticEngine,
@@ -48,21 +49,32 @@ impl NativeApplication {
         db_path: PathBuf,
         embedding_model_dir: Option<PathBuf>,
     ) -> Result<Self, String> {
-        Self::build(vault, db_path, embedding_model_dir, false)
+        let settings_path = dirs::home_dir()
+            .ok_or("The user home directory is unavailable")?
+            .join(".llm-workbench/settings.json");
+        Self::build(vault, db_path, settings_path, embedding_model_dir, false)
     }
 
     pub fn with_vault_setup(
         vault: PathBuf,
         db_path: PathBuf,
+        settings_path: PathBuf,
         embedding_model_dir: Option<PathBuf>,
         vault_setup_required: bool,
     ) -> Result<Self, String> {
-        Self::build(vault, db_path, embedding_model_dir, vault_setup_required)
+        Self::build(
+            vault,
+            db_path,
+            settings_path,
+            embedding_model_dir,
+            vault_setup_required,
+        )
     }
 
     fn build(
         vault: PathBuf,
         db_path: PathBuf,
+        settings_path: PathBuf,
         embedding_model_dir: Option<PathBuf>,
         vault_setup_required: bool,
     ) -> Result<Self, String> {
@@ -75,6 +87,7 @@ impl NativeApplication {
         database::initialize(&db_path)?;
         Ok(Self {
             db_path,
+            settings_path,
             vault,
             vault_setup_required,
             semantic: semantic::SemanticEngine::new(embedding_model_dir),
@@ -83,7 +96,17 @@ impl NativeApplication {
     }
 
     pub fn isolated(vault: &Path, db_path: &Path) -> Result<Self, String> {
-        Self::new(vault.to_owned(), db_path.to_owned(), None)
+        let settings_path = db_path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join("settings.json");
+        Self::build(
+            vault.to_owned(),
+            db_path.to_owned(),
+            settings_path,
+            None,
+            false,
+        )
     }
 
     #[cfg(test)]
@@ -92,10 +115,16 @@ impl NativeApplication {
         db_path: &Path,
         embedding_model_dir: &Path,
     ) -> Result<Self, String> {
-        Self::new(
+        let settings_path = db_path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join("settings.json");
+        Self::build(
             vault.to_owned(),
             db_path.to_owned(),
+            settings_path,
             Some(embedding_model_dir.to_owned()),
+            false,
         )
     }
 
@@ -105,6 +134,10 @@ impl NativeApplication {
 
     pub fn vault_path(&self) -> PathBuf {
         self.vault.clone()
+    }
+
+    pub fn settings_path(&self) -> PathBuf {
+        self.settings_path.clone()
     }
 
     pub fn vault_setup_status(&self) -> Value {
@@ -119,7 +152,7 @@ impl NativeApplication {
             return Err("Choose an existing Vault folder".into());
         }
         let selected = path.canonicalize().map_err(|error| error.to_string())?;
-        settings::save_vault_path(&self.db_path, &selected)
+        settings::save_vault_path(&self.settings_path, &selected)
     }
 
     pub fn execute(&self, operation: NativeOperation) -> NativeResponse {
@@ -173,6 +206,7 @@ impl NativeApplication {
     pub async fn enqueue_job(&self, input: Value) -> NativeResponse {
         match jobs::enqueue(
             self.db_path.clone(),
+            self.settings_path.clone(),
             self.vault.clone(),
             self.jobs.clone(),
             self.semantic.clone(),
@@ -262,16 +296,16 @@ impl NativeApplication {
                 input.get("locale").and_then(Value::as_str).unwrap_or("en"),
             )?,
             "locale.get" => settings::locale(
-                &self.db_path,
+                &self.settings_path,
                 input
                     .get("browserLocale")
                     .and_then(Value::as_str)
                     .unwrap_or("en"),
             )?,
-            "locale.save" => settings::save_locale(&self.db_path, input)?,
+            "locale.save" => settings::save_locale(&self.settings_path, input)?,
             "i18n.get" => settings::resources(id("locale")?)?,
-            "provider.get" => settings::provider(&self.db_path)?,
-            "provider.save" => settings::save_provider(&self.db_path, input)?,
+            "provider.get" => settings::provider(&self.settings_path)?,
+            "provider.save" => settings::save_provider(&self.settings_path, input)?,
             "capture.create" => workflow::create_capture(&self.db_path, input)?,
             "board.get" => workflow::board_for_locale(
                 &self.db_path,
@@ -403,6 +437,7 @@ impl NativeApplication {
             "jobs.cancel" => jobs::cancel(&self.db_path, &self.jobs, id("jobId")?)?,
             "jobs.retry" => jobs::retry(
                 &self.db_path,
+                &self.settings_path,
                 &self.vault,
                 &self.jobs,
                 &self.semantic,
