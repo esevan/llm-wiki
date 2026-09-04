@@ -15,6 +15,13 @@ Human-approved completion creates an Obsidian-compatible Playbook plus raw evide
 structured Markdown patches, and archive moves use source hashes to block accidental overwrites of
 external edits. Completed Knowledge remains portable and searchable without LLM Wiki.
 
+Completing from a Solution closes the whole linked work chain in one database transaction. Every
+open Solution belonging to the origin Problem and the Problem itself receive the explicit
+`completed` state; an already archived Solution keeps its archival state. The originating Capture
+remains preserved for Lineage but, because it has been refined into that Problem, is no longer an
+open inbox item. The command result reports the closed Solution, Problem, and Capture identifiers
+so clients do not need to infer whether the cascade succeeded.
+
 Before the final report is generated, LLM Wiki rebuilds the current Lineage and uses its referenced
 evidence as the report input. Regeneration refreshes Lineage and the document together. See
 [Lineage Knowledge Layer](lineage-knowledge-layer.md).

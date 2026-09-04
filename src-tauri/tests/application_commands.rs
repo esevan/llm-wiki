@@ -438,6 +438,28 @@ fn given_a_completed_problem_then_native_archives_evidence_and_protects_external
         json!({"problemId":id(&problem),"reason":"Human review complete"}),
     );
     assert_eq!(completed.status, 200, "{}", completed.body);
+    assert_eq!(completed.body["closed"]["problem"], id(&problem));
+    assert_eq!(completed.body["closed"]["capture"], id(&capture));
+    assert_eq!(completed.body["closed"]["solutions"][0], id(&solution));
+    let problem_record = harness.call(
+        "workflow",
+        "problem.record",
+        json!({"problemId":id(&problem)}),
+    );
+    assert_eq!(problem_record.body["state"], "completed");
+    let completed_solutions = harness.call(
+        "workflow",
+        "workbench.completed",
+        json!({"limit":20,"locale":"en"}),
+    );
+    assert_eq!(
+        completed_solutions.body["solutions"][0]["state"],
+        "completed"
+    );
+    let board = harness.call("workflow", "board.get", json!({}));
+    assert!(board.body["captures"].as_array().unwrap().is_empty());
+    assert!(board.body["problems"].as_array().unwrap().is_empty());
+    assert!(board.body["features"].as_array().unwrap().is_empty());
     let path = completed.body["path"].as_str().unwrap();
     let playbook = harness._root.path().join("vault").join(path);
     let content = std::fs::read_to_string(&playbook).unwrap();

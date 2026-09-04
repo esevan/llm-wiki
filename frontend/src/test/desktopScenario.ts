@@ -46,6 +46,11 @@ interface BoardResponse {
 
 interface CompletionResponse {
   path: string;
+  closed: {
+    solutions: string[];
+    problem: string;
+    capture: string | null;
+  };
 }
 
 interface LineageResponse {
@@ -235,6 +240,13 @@ const run = async (providerUrl: string) => {
       reason: 'Native desktop E2E verification',
     });
     if (!completed.path.endsWith('.md')) throw new Error('Completion did not produce a Knowledge document');
+    if (
+      completed.closed.problem !== problem.id ||
+      completed.closed.capture !== workflowCapture.id ||
+      !completed.closed.solutions.includes(solution.id)
+    ) {
+      throw new Error('Completion did not close the full Capture, Problem, and Solution chain');
+    }
     const lineage = await applicationJson<LineageResponse>(`/features/${solution.id}/lineage`);
     if (lineage.lineage.stages.map((stage) => stage.kind).join(',') !== 'capture,problem,solution,complete') {
       throw new Error('Completed Lineage did not preserve all workflow stages');

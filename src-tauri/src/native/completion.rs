@@ -40,7 +40,7 @@ pub(crate) fn complete(
     problem_id: &str,
     input: &Value,
 ) -> Result<Value, String> {
-    let connection = database::open(db_path)?;
+    let mut connection = database::open(db_path)?;
     let (capture_id, statement, detail): (Option<String>, String, String) = connection
         .query_row(
             "SELECT capture_id,statement,detail FROM problems WHERE id=?",
@@ -82,7 +82,7 @@ pub(crate) fn complete(
     let path = format!("{directory}/{name}.md");
     let raw_path = format!("{directory}/assets/{name}.raw.md");
     let mut raw = format!("# Raw work record: {statement}\n\n## Problem\n\n{detail}\n\n## Completion decision\n\n{reason}\n\n## Feedback and workflow history\n");
-    if let Some(capture_id) = capture_id {
+    if let Some(capture_id) = capture_id.as_deref() {
         if let Ok(capture) = connection.query_row(
             "SELECT text FROM captures WHERE id=?",
             [capture_id],
@@ -173,15 +173,26 @@ pub(crate) fn complete(
     vault::atomic_write(vault_root, &raw_path, &raw)?;
     vault::atomic_write(vault_root, &path, &summary)?;
     let source_hash = digest(&summary);
-    connection.execute("INSERT OR REPLACE INTO completion_playbooks(problem_id,path,source_hash) VALUES (?,?,?)", params![problem_id,path,source_hash]).map_err(|error| error.to_string())?;
-    connection
+    drop(solution_statement);
+    let transaction = connection
+        .transaction()
+        .map_err(|error| error.to_string())?;
+    transaction.execute("INSERT OR REPLACE INTO completion_playbooks(problem_id,path,source_hash) VALUES (?,?,?)", params![problem_id,path,source_hash]).map_err(|error| error.to_string())?;
+    transaction
+        .execute(
+            "UPDATE features SET state='completed' WHERE problem_id=? AND state!='archived'",
+            [problem_id],
+        )
+        .map_err(|error| error.to_string())?;
+    transaction
         .execute(
             "UPDATE problems SET state='completed' WHERE id=?",
             [problem_id],
         )
         .map_err(|error| error.to_string())?;
+    transaction.commit().map_err(|error| error.to_string())?;
     Ok(
-        json!({"path":path,"problem_id":problem_id,"source_hash":source_hash,"lineage":lineage.get("lineage").cloned().unwrap_or(lineage)}),
+        json!({"path":path,"problem_id":problem_id,"source_hash":source_hash,"closed":{"solutions":solutions.iter().map(|solution| &solution.0).collect::<Vec<_>>(),"problem":problem_id,"capture":capture_id},"lineage":lineage.get("lineage").cloned().unwrap_or(lineage)}),
     )
 }
 
