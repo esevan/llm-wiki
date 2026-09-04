@@ -14,6 +14,9 @@ AI can summarize a screenshot and assess each validation criterion, but it canno
 Human-approved completion creates an Obsidian-compatible Playbook plus raw evidence. Regeneration,
 structured Markdown patches, and archive moves use source hashes to block accidental overwrites of
 external edits. Completed Knowledge remains portable and searchable without LLM Wiki.
+If a tracked completed-work file is missing, its Solution remains visible: regeneration queues a
+replacement in the background, while deletion clears the stale generated-file record. Once no
+tracked path remains, the unavailable delete action is no longer shown.
 
 Completing from a Solution closes the whole linked work chain in one database transaction. Every
 open Solution belonging to the origin Problem and the Problem itself receive the explicit

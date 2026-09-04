@@ -24,6 +24,16 @@ export interface ApplicationClient {
 declare global {
   interface Window {
     llmWikiApplication: ApplicationClient;
+    llmWikiFormatSystemTime: (
+      value: string,
+      locale: string,
+      options?: Intl.DateTimeFormatOptions,
+    ) => string;
+    workbenchBoard?: {
+      problems?: Array<{ id: string; state: string }>;
+      features?: Array<{ id: string; state: string }>;
+    };
+    loadBoard: () => Promise<void>;
     __TAURI_INTERNALS__?: object;
   }
 }

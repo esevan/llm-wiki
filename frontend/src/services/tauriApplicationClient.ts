@@ -62,7 +62,7 @@ const operationFor = (request: ApplicationRequest): NativeOperation => {
   if (method === 'PUT' && path === '/provider/config') return { name: 'provider.save', input: body };
   if (method === 'POST' && path === '/provider/test') return { name: 'provider.test', input: {} };
   if (method === 'POST' && path === '/ai/enrich-problem') return { name: 'problem.enrich', input: { ...body, locale } };
-  if (method === 'POST' && path === '/captures') return { name: 'capture.create', input: body };
+  if (method === 'POST' && path === '/captures') return { name: 'capture.create', input: { ...body, locale } };
   if (method === 'GET' && path === '/board') return { name: 'board.get', input: { locale } };
   if (method === 'GET' && path === '/dashboard') return { name: 'compass.dashboard', input: {} };
   if (method === 'POST' && path === '/goals') return { name: 'compass.goal.create', input: body };

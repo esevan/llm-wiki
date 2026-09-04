@@ -13,6 +13,9 @@ In Progress Solution은 텍스트·스크린샷·댓글·검증 체크리스트�
 
 사람이 승인한 완료는 Obsidian 호환 Playbook과 원시 근거를 만듭니다. 재생성, 구조화된 Markdown
 패치, 아카이브 이동은 source hash로 외부 수정을 보호합니다.
+추적 중인 완료 문서를 찾을 수 없어도 Solution은 계속 표시됩니다. 재생성은 백그라운드에서 대체
+문서 생성을 enqueue하고, 삭제는 오래된 생성 파일 기록을 정리합니다. 추적 경로가 없어지면 사용할
+수 없는 삭제 버튼도 더 이상 표시하지 않습니다.
 
 Solution에서 완료하면 연결된 작업 계보 전체를 하나의 database transaction으로 닫습니다. 원본
 Problem에 속한 열려 있는 모든 Solution과 Problem 자체가 명시적인 `completed` 상태가 되며, 이미

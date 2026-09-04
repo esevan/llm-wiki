@@ -37,6 +37,19 @@ describe('Tauri domain command adapter', () => {
     });
   });
 
+  it('Given a Korean Capture, when it is saved, then the authored locale reaches the translation scheduler', async () => {
+    vi.mocked(invoke).mockResolvedValue({ status: 201, body: { id: 'capture-1', text: '기록' } });
+    await new TauriApplicationClient().request({
+      path: '/captures',
+      method: 'POST',
+      headers: { 'X-LLM-Wiki-Locale': 'ko' },
+      body: JSON.stringify({ text: '기록' }),
+    });
+    expect(invoke).toHaveBeenCalledWith('workflow_command', {
+      operation: { name: 'capture.create', input: { text: '기록', locale: 'ko' } },
+    });
+  });
+
   it('Given Korean content and a native-only feature, then locale and domain data survive without an HTTP route crossing IPC', async () => {
     vi.mocked(invoke).mockResolvedValue({ status: 204, body: null });
     await new TauriApplicationClient().request({

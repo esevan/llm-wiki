@@ -36,6 +36,7 @@ interface CreatedRecord {
 interface BoardRecord {
   id: string;
   text?: string;
+  state?: string;
   localized_versions?: Record<string, { text?: string }>;
 }
 
@@ -43,6 +44,16 @@ interface BoardResponse {
   captures: BoardRecord[];
   problems: BoardRecord[];
 }
+
+const waitForJobKind = async (taskKind: string, entityId: string) => {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    const result = await applicationJson<{ jobs: Array<JobResponse & { entity_id?: string }> }>('/jobs');
+    const job = result.jobs.find((item) => item.task_kind === taskKind && item.entity_id === entityId);
+    if (job) return job;
+    await new Promise((resolve) => window.setTimeout(resolve, 50));
+  }
+  throw new Error(`${taskKind} was not queued for ${entityId}`);
+};
 
 interface CompletionResponse {
   path: string;
@@ -192,20 +203,42 @@ const run = async (providerUrl: string) => {
     const refinementJob = await applicationJson<JobResponse>(`/problems/${problem.id}/refine`, 'POST');
     const refinement = await waitForJobResult<{ title: string }>(refinementJob.id);
     if (refinement.title !== 'Refined problem') throw new Error('Native refinement result was not returned');
-    await applicationJson<void>(`/problems/${problem.id}/approve`, 'POST');
+    await window.loadBoard();
+    await waitFor(() => Boolean(document.querySelector(`[data-approve-problem="${problem.id}"]`)), 'Problem approval action');
+    document.querySelector<HTMLButtonElement>(`[data-approve-problem="${problem.id}"]`)?.click();
+    await waitFor(
+      () => window.workbenchBoard?.problems?.some((item: { id: string; state: string }) => item.id === problem.id && item.state === 'approved') ?? false,
+      'Problem approval from its Workbench action',
+    );
+    await step('Problem approval responded to the packaged Workbench click and refreshed its state');
+    document.querySelector<HTMLButtonElement>(`[data-next-chat-id="${problem.id}"]`)?.click();
+    await waitFor(
+      () => document.querySelector<HTMLDialogElement>('#chat-modal')?.open ?? false,
+      'next Solution exploration from its Workbench action',
+    );
+    document.querySelector<HTMLDialogElement>('#chat-modal')?.close();
     const solution = await applicationJson<CreatedRecord>(`/problems/${problem.id}/features`, 'POST', {
       title: 'Native desktop Solution',
       outcome: 'The packaged command path preserves workflow behavior.',
       non_goals: 'No external provider call.',
       validation_criteria: '- [ ] Native command state persists',
     });
-    const conflictJob = await applicationJson<JobResponse>(`/features/${solution.id}/conflict-review`, 'POST');
+    await window.loadBoard();
+    document.querySelector<HTMLButtonElement>(`[data-solution-action="conflict"][data-solution-id="${solution.id}"]`)?.click();
+    const conflictJob = await waitForJobKind('conflict_review', solution.id);
     const conflictReview = await waitForJobResult<{ conflicts: unknown[] }>(conflictJob.id);
     if (conflictReview.conflicts.length) throw new Error('Deterministic desktop conflict review was not clear');
     await applicationJson<void>(`/features/${solution.id}/conflict`, 'PUT', {
       state: 'clear',
       citation: 'Native desktop deterministic review',
     });
+    await applicationJson<void>(`/features/${solution.id}/approve`, 'POST');
+    await window.loadBoard();
+    document.querySelector<HTMLButtonElement>(`[data-solution-action="stage"][data-solution-state="proposed"][data-solution-id="${solution.id}"]`)?.click();
+    await waitFor(
+      () => window.workbenchBoard?.features?.some((item) => item.id === solution.id && item.state === 'proposed') ?? false,
+      'move to proposed from its Workbench action',
+    );
     await applicationJson<void>(`/features/${solution.id}/approve`, 'POST');
     const progress = await applicationJson<CreatedRecord>(`/features/${solution.id}/progress`, 'POST', {
       body: 'Native command evidence',
@@ -229,7 +262,9 @@ const run = async (providerUrl: string) => {
     await waitForIdleJobs();
     await step('refinement, conflict review, workflow, Work Log, comments, and checklist passed');
 
-    const reviewJob = await applicationJson<JobResponse>(`/features/${solution.id}/completion-review`, 'POST');
+    await window.loadBoard();
+    document.querySelector<HTMLButtonElement>(`[data-solution-action="review"][data-solution-id="${solution.id}"]`)?.click();
+    const reviewJob = await waitForJobKind('completion_review', solution.id);
     const review = await waitForJobResult<{ report: { resolution: string } }>(reviewJob.id);
     if (review.report.resolution !== 'complete') throw new Error('Native completion review was not deterministic');
     const notifications = await applicationJson<{ unread_count: number }>('/notifications?unread_only=true');

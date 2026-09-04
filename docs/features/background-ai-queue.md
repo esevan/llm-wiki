@@ -16,7 +16,7 @@ without losing recoverable work.
 ![Starting conflict review acknowledges that the durable job continues in the background](images/09-background-job-queued.png)
 
 The bottom-right Queue names the target item and explains what each durable task is doing. Its cards
-show readable status, step progress, time, safe failures, cancellation, retry, and only the result
+show readable status, step progress, system-timezone time, safe failures, cancellation, retry, and only the result
 actions that make sense for that task. A task with a result names its destination while running,
 then enables a prominent **Open result page** action when complete. Results open the owning workflow
 surface or a concise summary; raw job JSON is not used as the user-facing result. Draft and Refine
@@ -27,7 +27,8 @@ and a persisted unread bell alert because it requires a user decision.
 
 Knowledge translation resumes from paragraph checkpoints and publishes the completed translation
 to the Vault before deleting its SQLite working checkpoints. Capture and Work Log text enqueue
-derived translations immediately; authored source text is never overwritten. Queue cards distinguish
+derived translations immediately using the language active when the user saved them; authored source
+text is never overwritten. Queue cards distinguish
 Capture text, Work Log entries, comments, and checklist items so each translation target remains
 understandable without exposing its internal ID. Embedding refresh is durable and lexical search
 remains available while it runs.

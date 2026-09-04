@@ -92,7 +92,8 @@ is mapped in `docs/migrations/react-tauri-inventory.md` and `src-tauri/tests/`.
 - **When** the authored source is saved,
 - **Then** the save returns without waiting for AI and derived translation work is enqueued without
   replacing the authored source.
-- **Automated evidence**: `tests/test_api.py`, `tests/test_localization.py`
+- **Automated evidence**: `src-tauri/tests/application_commands.rs`,
+  `frontend/src/services/tauriApplicationClient.test.ts`
 - **Transition note**: existing checklist body edits are covered by `PA-005`.
 
 ### CB-011 — Durable Queue state is visible and payload-safe
@@ -206,6 +207,41 @@ is mapped in `docs/migrations/react-tauri-inventory.md` and `src-tauri/tests/`.
   and legacy settings are imported only when the home file is absent.
 - **Automated evidence**: `src-tauri/src/lib.rs`, `src-tauri/tests/application_commands.rs`,
   `scripts/run_desktop_e2e.mjs`
+
+### CB-024 — Problem approval responds from the Workbench card
+
+- **Given** a draft Problem card,
+- **When** the user activates its approval action,
+- **Then** the action shows progress, persists approval, refreshes the card to its approved state,
+  and reports a visible error if persistence fails.
+- **Automated evidence**: `frontend/src/test/desktopScenario.ts`,
+  `src-tauri/tests/application_commands.rs`
+
+### CB-025 — Stored UTC timestamps display in the system timezone
+
+- **Given** a timestamp persisted by SQLite in UTC without an explicit offset,
+- **When** the frontend renders Queue, Work Log, or Lineage time,
+- **Then** the value is interpreted as UTC and formatted in the operating system's current timezone
+  and selected display locale.
+- **Automated evidence**: `frontend/src/services/systemTime.test.ts`
+
+### CB-026 — Dynamic Workbench actions respond in the packaged app
+
+- **Given** a Problem or Solution card rendered after a board refresh,
+- **When** the user starts Conflict Review, Completion Review, next-Solution exploration, or moves
+  an in-progress Solution back to proposed,
+- **Then** the delegated action responds, shows progress where applicable, and opens or persists the
+  requested workflow state.
+- **Automated evidence**: `frontend/src/test/desktopScenario.ts`
+
+### CB-027 — Missing completed-work files remain recoverable
+
+- **Given** a completed Solution whose tracked document cannot be found in the Vault,
+- **When** the user regenerates it or clears the stale generated-file record,
+- **Then** regeneration is queued with visible feedback and deletion succeeds without requiring the
+  already-missing file; deletion is hidden when no tracked file record remains.
+- **Automated evidence**: `src-tauri/tests/application_commands.rs`,
+  `frontend/src/test/desktopScenario.ts`
 
 ## Pending acceptance scenarios
 

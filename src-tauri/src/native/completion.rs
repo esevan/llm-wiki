@@ -305,7 +305,8 @@ pub(crate) fn remove(
         .map_err(|error| error.to_string())?
         .ok_or("Completed-work document is not tracked for this Problem")?;
     if !force {
-        if let Ok(content) = fs::read_to_string(vault::resolve_markdown(vault_root, &path, true)?) {
+        let tracked_file = vault_root.join(&path);
+        if let Ok(content) = fs::read_to_string(&tracked_file) {
             if digest(&content) != expected {
                 return Err("This completed-work document was modified outside LLM Wiki. Delete again with force to remove generated files.".into());
             }

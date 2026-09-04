@@ -236,13 +236,21 @@ impl NativeApplication {
             return response;
         }
         let derived = match name.as_str() {
+            "capture.create" => Some(("captures", "text")),
             "solution.progress.add" => Some(("solution_progress_entries", "body")),
             "solution.comment.add" => Some(("solution_progress_comments", "body")),
             "solution.checklist.add" => Some(("solution_checklist_items", "body")),
             _ => None,
         };
         if let Some((entity_type, field)) = derived {
-            let source = input.get("body").and_then(Value::as_str).unwrap_or("");
+            let source = input
+                .get(if name == "capture.create" {
+                    "text"
+                } else {
+                    "body"
+                })
+                .and_then(Value::as_str)
+                .unwrap_or("");
             if !source.trim().is_empty() {
                 let _ = self
                     .enqueue_job(json!({

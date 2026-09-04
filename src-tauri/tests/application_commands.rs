@@ -109,6 +109,50 @@ fn given_a_capture_when_created_then_it_is_persisted_on_the_native_board() {
     assert_eq!(board.body["captures"][0]["text"], "Native thought");
 }
 
+#[tokio::test]
+async fn given_a_capture_when_created_then_derived_translation_is_enqueued_and_persisted() {
+    let harness = Harness::new();
+    let provider = provider_once(json!({
+        "ko":"번역된 캡처",
+        "en":"Translated capture"
+    }));
+    harness.call(
+        "settings",
+        "provider.save",
+        json!({"base_url":provider,"model":"test-model"}),
+    );
+
+    let capture = harness
+        .app
+        .execute_workflow(NativeOperation {
+            name: "capture.create".into(),
+            input: json!({"text":"작성한 캡처","locale":"ko"}),
+        })
+        .await;
+
+    assert_eq!(capture.status, 201, "{}", capture.body);
+    let jobs = harness.call("jobs", "jobs.list", json!({}));
+    let translation = jobs.body["jobs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|job| {
+            job["task_kind"] == "derived_translation"
+                && job["entity_type"] == "captures"
+                && job["entity_id"] == capture.body["id"]
+        })
+        .expect("Capture translation job was not enqueued");
+    let queued = NativeResponse {
+        status: 202,
+        body: translation.clone(),
+    };
+    wait_for_job(&harness, &queued);
+    let english = harness.call("workflow", "board.get", json!({"locale":"en"}));
+    let korean = harness.call("workflow", "board.get", json!({"locale":"ko"}));
+    assert_eq!(english.body["captures"][0]["text"], "Translated capture");
+    assert_eq!(korean.body["captures"][0]["text"], "작성한 캡처");
+}
+
 #[test]
 fn given_a_legacy_localization_database_when_opened_then_native_preserves_versions() {
     let root = tempfile::tempdir().unwrap();
@@ -505,6 +549,30 @@ fn given_a_completed_problem_then_native_archives_evidence_and_protects_external
     assert_eq!(removed.status, 204, "{}", removed.body);
     assert!(!playbook.exists());
     assert!(!raw.exists());
+
+    let regenerated = harness.call(
+        "workflow",
+        "problem.complete",
+        json!({"problemId":id(&problem),"reason":"Restore missing report","regenerate":true}),
+    );
+    let regenerated_path = harness
+        ._root
+        .path()
+        .join("vault")
+        .join(regenerated.body["path"].as_str().unwrap());
+    std::fs::remove_file(&regenerated_path).unwrap();
+    let missing = harness.call(
+        "workflow",
+        "workbench.completed",
+        json!({"limit":20,"locale":"en"}),
+    );
+    assert_eq!(missing.body["solutions"][0]["archive_status"], "missing");
+    let cleared = harness.call(
+        "workflow",
+        "problem.playbook.delete",
+        json!({"problemId":id(&problem),"force":false}),
+    );
+    assert_eq!(cleared.status, 204, "{}", cleared.body);
 }
 
 #[test]

@@ -4,6 +4,7 @@ import { flushSync } from 'react-dom';
 import { App } from './app/App';
 import { FirstRunIntro } from './features/first-run-intro/FirstRunIntro';
 import { createApplicationClient } from './services/applicationClient';
+import { formatSystemTime } from './services/systemTime';
 import { completeFirstRunIntro } from './services/vaultSetupClient';
 import { installDesktopScenario } from './test/desktopScenario';
 import './theme/tokens.css';
@@ -13,6 +14,7 @@ const rootElement = document.getElementById('root');
 if (!rootElement) throw new Error('React root was not found');
 
 window.llmWikiApplication = createApplicationClient();
+window.llmWikiFormatSystemTime = formatSystemTime;
 const isFirstRunIntro = new URLSearchParams(window.location.search).get('surface') === 'first-run-intro';
 if (isFirstRunIntro) document.documentElement.classList.add('first-run-intro-surface');
 flushSync(() => {

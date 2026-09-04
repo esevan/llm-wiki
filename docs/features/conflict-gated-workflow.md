@@ -18,4 +18,9 @@ There is no Task stage. Explore never changes state, AI drafts remain editable, 
 requires human action. Soft deletion removes an item from view without deleting private history or
 vault files.
 
+Problem approval responds directly from the card: the action shows an in-progress state, refreshes
+the Workbench after success, and leaves a visible error message when approval cannot be saved.
+The same delegated interaction path opens next-Solution exploration, queues Conflict Review and
+Completion Review, and moves Solutions between proposed and in-progress states.
+
 Related Spec Kit: [002 — Conflict-Gated Workflow](../../specs/002-conflict-gated-workflow/spec.md)
