@@ -18,6 +18,9 @@
 - 앱이 지원하는 version보다 새로운 DB는 수정하지 않고 열기를 거부합니다.
 - Version 2 호환 migration은 기존 field 단위 localization 데이터를 보존하고 Python 앱에서
   조건부로 추가했던 것으로 확인된 모든 column을 추가합니다.
+- Version 3은 기존 작업을 모두 보존하면서 레거시 `ai_jobs_v2` 테이블을 네이티브 기본값으로 다시
+  구성합니다. 따라서 Python 애플리케이션에서 생성된 DB에서도 새 작업의 실행 방식, 결과 형식,
+  진행률, timestamp 기본값이 빠지지 않습니다.
 
 ## Migration 추가 방법
 

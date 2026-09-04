@@ -1,7 +1,7 @@
 use rusqlite::{params, Connection, Transaction, TransactionBehavior};
 use serde_json::Value;
 
-pub const CURRENT_SCHEMA_VERSION: i64 = 2;
+pub const CURRENT_SCHEMA_VERSION: i64 = 3;
 
 type MigrationFunction = for<'connection> fn(&Transaction<'connection>) -> Result<(), String>;
 type LegacyLocalizationRow = (String, String, String, String, String, String, String);
@@ -22,6 +22,11 @@ const MIGRATIONS: &[Migration] = &[
         version: 2,
         name: "normalize legacy Python schema",
         run: normalize_legacy_schema,
+    },
+    Migration {
+        version: 3,
+        name: "normalize AI job defaults",
+        run: normalize_ai_jobs,
     },
 ];
 
@@ -162,6 +167,45 @@ fn normalize_legacy_schema(transaction: &Transaction<'_>) -> Result<(), String> 
         add_missing_column(transaction, table, column, declaration)?;
     }
     Ok(())
+}
+
+fn normalize_ai_jobs(transaction: &Transaction<'_>) -> Result<(), String> {
+    if !table_exists(transaction, "ai_jobs_v2")? {
+        return Ok(());
+    }
+    transaction
+        .execute_batch(
+            "CREATE TABLE ai_jobs_v3 (
+               id TEXT PRIMARY KEY, task_kind TEXT NOT NULL, entity_type TEXT NOT NULL DEFAULT '',
+               entity_id TEXT NOT NULL DEFAULT '', status TEXT NOT NULL,
+               input_json TEXT NOT NULL DEFAULT '{}', result_json TEXT NOT NULL DEFAULT '{}',
+               source_hash TEXT NOT NULL DEFAULT '', model TEXT NOT NULL DEFAULT '',
+               execution_mode TEXT NOT NULL DEFAULT 'native', idempotency_key TEXT NOT NULL DEFAULT '',
+               result_interface TEXT NOT NULL DEFAULT 'inline_preview',
+               notification_policy TEXT NOT NULL DEFAULT 'none',
+               progress_completed INTEGER NOT NULL DEFAULT 0, progress_total INTEGER NOT NULL DEFAULT 1,
+               attempt INTEGER NOT NULL DEFAULT 0, worker_id TEXT NOT NULL DEFAULT '',
+               lease_token TEXT NOT NULL DEFAULT '', lease_expires_at TEXT, heartbeat_at TEXT,
+               available_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+               error_code TEXT NOT NULL DEFAULT '', error_message TEXT NOT NULL DEFAULT '',
+               created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, started_at TEXT, finished_at TEXT
+             );
+             INSERT INTO ai_jobs_v3(
+               id,task_kind,entity_type,entity_id,status,input_json,result_json,source_hash,model,
+               execution_mode,idempotency_key,result_interface,notification_policy,
+               progress_completed,progress_total,attempt,worker_id,lease_token,lease_expires_at,
+               heartbeat_at,available_at,error_code,error_message,created_at,started_at,finished_at
+             )
+             SELECT
+               id,task_kind,entity_type,entity_id,status,input_json,result_json,source_hash,model,
+               execution_mode,idempotency_key,result_interface,notification_policy,
+               progress_completed,progress_total,attempt,worker_id,lease_token,lease_expires_at,
+               heartbeat_at,available_at,error_code,error_message,created_at,started_at,finished_at
+             FROM ai_jobs_v2;
+             DROP TABLE ai_jobs_v2;
+             ALTER TABLE ai_jobs_v3 RENAME TO ai_jobs_v2;",
+        )
+        .map_err(|error| error.to_string())
 }
 
 fn table_exists(connection: &Connection, table: &str) -> Result<bool, String> {
@@ -372,6 +416,64 @@ mod tests {
                 })
                 .unwrap(),
             "Version one"
+        );
+    }
+
+    #[test]
+    fn legacy_ai_job_schema_gains_safe_defaults_without_losing_history() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE ai_jobs_v2 (
+                   id TEXT PRIMARY KEY, task_kind TEXT NOT NULL, entity_type TEXT NOT NULL DEFAULT '',
+                   entity_id TEXT NOT NULL DEFAULT '', status TEXT NOT NULL,
+                   input_json TEXT NOT NULL DEFAULT '{}', result_json TEXT NOT NULL DEFAULT '{}',
+                   source_hash TEXT NOT NULL DEFAULT '', model TEXT NOT NULL DEFAULT '',
+                   execution_mode TEXT NOT NULL, idempotency_key TEXT NOT NULL DEFAULT '',
+                   result_interface TEXT NOT NULL DEFAULT 'none',
+                   notification_policy TEXT NOT NULL DEFAULT 'none',
+                   progress_completed INTEGER NOT NULL DEFAULT 0, progress_total INTEGER NOT NULL DEFAULT 0,
+                   attempt INTEGER NOT NULL DEFAULT 0, worker_id TEXT NOT NULL DEFAULT '',
+                   lease_token TEXT NOT NULL DEFAULT '', lease_expires_at TEXT, heartbeat_at TEXT,
+                   available_at TEXT NOT NULL, error_code TEXT NOT NULL DEFAULT '',
+                   error_message TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL,
+                   started_at TEXT, finished_at TEXT
+                 );
+                 INSERT INTO ai_jobs_v2(
+                   id,task_kind,status,execution_mode,available_at,created_at
+                 ) VALUES ('legacy','workflow_draft','completed','asynchronous','before','before');
+                 PRAGMA user_version=2;",
+            )
+            .unwrap();
+
+        apply(&mut connection).unwrap();
+
+        assert_eq!(schema_version(&connection).unwrap(), CURRENT_SCHEMA_VERSION);
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT execution_mode,available_at,created_at FROM ai_jobs_v2 WHERE id='legacy'",
+                    [],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?)),
+                )
+                .unwrap(),
+            ("asynchronous".into(), "before".into(), "before".into())
+        );
+        connection
+            .execute(
+                "INSERT INTO ai_jobs_v2(id,task_kind,status) VALUES ('new','workflow_draft','queued')",
+                [],
+            )
+            .unwrap();
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT execution_mode,result_interface,progress_total FROM ai_jobs_v2 WHERE id='new'",
+                    [],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, i64>(2)?)),
+                )
+                .unwrap(),
+            ("native".into(), "inline_preview".into(), 1)
         );
     }
 

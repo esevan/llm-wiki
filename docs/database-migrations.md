@@ -19,6 +19,9 @@ command or legacy settings import can read the database.
 - A database with a version newer than the application supports is rejected without modification.
 - The version 2 compatibility migration preserves the former field-level localization data and
   adds every column known to have been introduced conditionally by the Python application.
+- Version 3 rebuilds the legacy `ai_jobs_v2` table with native defaults while preserving every
+  existing job. New jobs therefore receive execution, result, progress, and timestamp defaults
+  even when the database originated in the Python application.
 
 ## Adding a migration
 

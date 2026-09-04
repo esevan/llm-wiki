@@ -203,7 +203,21 @@ pub async fn enqueue(
         return get(&db_path, &existing);
     }
     let job_id = id();
-    connection.execute("INSERT INTO ai_jobs_v2(id,task_kind,entity_type,entity_id,status,input_json,idempotency_key) VALUES (?,?,?,?,'queued',?,?)", params![job_id,task_kind,entity_type,entity_id,input.to_string(),idempotency_key]).map_err(|e| e.to_string())?;
+    connection.execute(
+        "INSERT INTO ai_jobs_v2(
+           id,task_kind,entity_type,entity_id,status,input_json,execution_mode,idempotency_key,
+           result_interface,progress_total,available_at,created_at
+         ) VALUES (?,?,?,?,'queued',?,'native',?,'inline_preview',1,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)",
+        params![
+            job_id,
+            task_kind,
+            entity_type,
+            entity_id,
+            input.to_string(),
+            idempotency_key
+        ],
+    )
+    .map_err(|error| error.to_string())?;
     let spawned_id = job_id.clone();
     let spawned_db = db_path.clone();
     let spawned_settings = settings_path.clone();
