@@ -21,7 +21,7 @@ Severity is always written as High, Medium, or Low and also receives a distinct 
 Every card requires exactly one human choice:
 
 - **Apply recommendation** records that the Solution needs revision. An optional comment can explain the intended change. The Solution remains conflicted until it is revised and a fresh current review supports continuation.
-- **Accept conflict** intentionally preserves the Solution direction. A rationale is required so the exception can be understood and reused later.
+- **Ignore conflict** intentionally preserves the Solution direction. A rationale is required so the exception can be understood and reused later. The durable internal action remains `accept_conflict` for compatibility with existing decisions.
 
 The footer reports total, resolved, and unresolved counts. **Continue** remains unavailable until every card has a valid action and every accepted conflict has rationale. If saving fails, the dialog stays open and keeps the entered decisions.
 

@@ -318,6 +318,10 @@ is mapped in `docs/migrations/react-tauri-inventory.md` and `src-tauri/tests/`.
 
 ## Remaining decision-dependent cases
 
+- **CB-034 — Conflict choice labels are unambiguous**: Each conflict card presents exactly
+  **Apply recommendation** and **Ignore conflict**. Ignoring still requires a rationale and persists
+  the compatible `accept_conflict` action value.
+
 - **CB-033 — Zero-conflict decision remains user-controlled**: Completed reports with no conflict
   items expose **No conflict** for clear, insufficient-evidence, and legacy unknown recommendations.
   Reports containing conflicts continue to require item-level resolutions.
