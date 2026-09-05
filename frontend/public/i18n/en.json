@@ -545,5 +545,12 @@
   "conflict_review.run_new": "Run new review",
   "conflict_review.no_saved_result_title": "No review result",
   "conflict_review.no_saved_result": "No saved Conflict Review yet. Choose Run new review from More actions.",
-  "conflict_review.declare_clear": "No conflict"
+  "conflict_review.declare_clear": "No conflict",
+  "conflict_review.keep_conflicted": "Keep conflicted",
+  "conflict_review.decision_note": "Decision note (optional)",
+  "conflict_review.status_label": "Review summary",
+  "conflict_review.coverage_label": "Evidence coverage",
+  "conflict_review.candidates_label": "Reviewed evidence",
+  "conflict_review.authority_label": "Your decision",
+  "conflict_review.authority_hint": "AI provides evidence. You decide whether this Solution can proceed."
 }

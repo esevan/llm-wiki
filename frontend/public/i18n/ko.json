@@ -545,5 +545,12 @@
   "conflict_review.run_new": "새 검토 실행",
   "conflict_review.no_saved_result_title": "검토 결과 없음",
   "conflict_review.no_saved_result": "저장된 충돌 검토 결과가 없습니다. 더보기에서 새 검토 실행을 선택하세요.",
-  "conflict_review.declare_clear": "충돌 없음"
+  "conflict_review.declare_clear": "충돌 없음",
+  "conflict_review.keep_conflicted": "충돌 상태 유지",
+  "conflict_review.decision_note": "결정 메모 (선택 사항)",
+  "conflict_review.status_label": "검토 요약",
+  "conflict_review.coverage_label": "근거 준비 현황",
+  "conflict_review.candidates_label": "검토한 근거",
+  "conflict_review.authority_label": "사용자의 결정",
+  "conflict_review.authority_hint": "AI는 근거를 제공합니다. 솔루션을 진행할지는 사용자가 결정합니다."
 }

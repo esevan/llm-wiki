@@ -9,6 +9,7 @@ import { completeFirstRunIntro } from './services/vaultSetupClient';
 import { installDesktopScenario } from './test/desktopScenario';
 import './theme/tokens.css';
 import './theme/legacy-components.css';
+import './theme/conflict-review.css';
 
 const rootElement = document.getElementById('root');
 if (!rootElement) throw new Error('React root was not found');

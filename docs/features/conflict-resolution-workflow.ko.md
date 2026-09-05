@@ -2,6 +2,10 @@
 
 [English](conflict-resolution-workflow.md) | **한국어**
 
+검토 모달은 내용에 맞춰 높이가 정해지고 작은 화면에서는 본문을 스크롤합니다. 결정 메모
+아래에는 같은 높이의 텍스트 버튼을 정렬하고 닫기는 상단 모서리에 배치합니다. 한국어와
+영어에서 같은 레이아웃을 사용하며 충돌 선택지는 넓은 클릭 영역과 선택 상태를 표시합니다.
+
 ![충돌 검토와 사용자 결정이 끝날 때까지 미해결 Solution을 명확히 제한하는 화면](images/02-workbench-board.png)
 
 Conflict Review는 AI 원문 보고서가 아니라 제안된 Solution 안에서 진행하는 결정 워크플로입니다. Vault 근거와 현재 Solution이 충돌하면 완료된 Queue 결과에 충돌별 카드가 표시됩니다.

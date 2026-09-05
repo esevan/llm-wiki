@@ -232,6 +232,11 @@ const run = async (providerUrl: string) => {
     await waitFor(() => !!document.querySelector('#conflict-review-saved-result') && !!document.querySelector<HTMLDialogElement>('#item-detail-modal')?.open, 'completed conflict result on second click');
     const noConflict = document.querySelector<HTMLButtonElement>('#item-detail-notes button[data-conflict-decision="clear"]');
     if (!noConflict) throw new Error('Zero-conflict report did not offer the No conflict decision');
+    const decisionButtons = [...document.querySelectorAll<HTMLButtonElement>('.conflict-decision-actions button')];
+    const noteRect = document.getElementById('conflict-decision-note')!.getBoundingClientRect();
+    const decisionRects = decisionButtons.map(button => button.getBoundingClientRect());
+    if (decisionRects.length !== 2 || decisionRects.some(rect => rect.width < 100 || rect.height < 44 || rect.top < noteRect.bottom)) throw new Error('Conflict decisions must be readable buttons below the note');
+    if (Math.abs(decisionRects[0].top - decisionRects[1].top) > 1 || Math.abs(decisionRects[0].height - decisionRects[1].height) > 1) throw new Error('Conflict decision buttons are misaligned');
     const repeated = await applicationJson<{ jobs: Array<JobResponse & { entity_id: string }> }>('/jobs');
     if (repeated.jobs.filter(job => job.task_kind === 'conflict_review' && job.entity_id === solution.id).length !== 1) throw new Error('Repeated conflict click created duplicate work');
     document.querySelector<HTMLDialogElement>('#item-detail-modal')?.close();

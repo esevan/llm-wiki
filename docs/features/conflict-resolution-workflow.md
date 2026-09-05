@@ -2,6 +2,10 @@
 
 **English** | [한국어](conflict-resolution-workflow.ko.md)
 
+The review dialog sizes to its content and scrolls on smaller screens. Decision notes sit above
+aligned text buttons, with a separate close control in the top corner. Korean and English use
+the same layout; conflict choices have larger clickable rows and a visible selected state.
+
 ![An unresolved Solution remains visibly gated until conflict review and a human decision are complete](images/02-workbench-board.png)
 
 Conflict Review is a decision workflow inside a proposed Solution, not a raw AI report. When Vault evidence disagrees with the current Solution, the completed Queue result opens one card per conflict.
