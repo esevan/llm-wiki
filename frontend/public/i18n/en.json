@@ -539,6 +539,10 @@
   "conflict_review.continue": "Continue",
   "conflict_review.open_error": "Could not open Conflict Review",
   "conflict_review.result_title": "Conflict review · saved result",
-  "conflict_review.saved_hint": "Saved review. If the Solution or Vault evidence changed, run a fresh review.",
-  "conflict_review.rerun": "Run fresh review"
+  "conflict_review.saved_hint": "Saved review. To analyze changed Solution or Vault evidence, choose Run new review from the card’s More actions.",
+  "conflict_review.rerun": "Run fresh review",
+  "conflict_review.view_result": "View review result",
+  "conflict_review.run_new": "Run new review",
+  "conflict_review.no_saved_result_title": "No review result",
+  "conflict_review.no_saved_result": "No saved Conflict Review yet. Choose Run new review from More actions."
 }

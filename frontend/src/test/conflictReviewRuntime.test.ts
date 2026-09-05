@@ -30,16 +30,22 @@ it.each(['queued', 'running', 'retryable'])('CB-030 shows the active %s job even
   expect(h.open).not.toHaveBeenCalled();
   expect(document.querySelector<HTMLElement>('#queue-panel')!.hidden).toBe(false);
 });
-it.each([{ jobs: [] }, { jobs: [job('failed')] }])('CB-030 creates a review when no reusable result exists', async ({ jobs }) => {
+it.each([{ jobs: [] }, { jobs: [job('failed')] }])('CB-032 does not create a review from the result button when none is reusable', async ({ jobs }) => {
   const h = setup(jobs);
   await h.run('solution', h.button);
-  expect(h.api).toHaveBeenCalledWith('/features/solution/conflict-review', expect.objectContaining({ method: 'POST' }));
+  expect(h.api).toHaveBeenCalledTimes(1);
+  expect(h.notice).toHaveBeenCalledWith('No saved Conflict Review yet. Choose Run new review from More actions.', 'No review result');
 });
 it('CB-030 allows an explicit fresh review after completion', async () => {
   const h = setup([job('completed')]);
   await h.run('solution', h.button, true);
   expect(h.api).toHaveBeenCalledTimes(2);
   expect(h.open).not.toHaveBeenCalled();
+});
+it('CB-032 creates a first review only from the explicit More action', async () => {
+  const h = setup([]);
+  await h.run('solution', h.button, true);
+  expect(h.api).toHaveBeenCalledWith('/features/solution/conflict-review', expect.objectContaining({ method: 'POST' }));
 });
 it('CB-030 reports lookup failure without blindly submitting another review', async () => {
   const h = setup([]);

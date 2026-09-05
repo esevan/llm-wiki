@@ -318,6 +318,10 @@ is mapped in `docs/migrations/react-tauri-inventory.md` and `src-tauri/tests/`.
 
 ## Remaining decision-dependent cases
 
+- **CB-032 — Conflict result and rerun are distinct actions**: Proposed Solution cards expose
+  saved-result viewing as the primary action and fresh analysis only inside More actions. The
+  result action never creates work when no reusable report exists; the explicit menu action does.
+
 - **CB-031 — FAB outside dismissal**: Queue and notification popups close on outside clicks,
   preserving the underlying click action and synchronizing aria-expanded. Panel/trigger descendants
   are excluded, the other FAB dismisses the previous popup, and unmount removes the listener.

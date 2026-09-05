@@ -8,10 +8,11 @@
 
 ## Flow
 
-Conflict Review reopens the latest completed report instead of creating another AI job.
-While a review is active, clicking it opens Queue without duplicating work. Saved reports
-offer **Run fresh review** for changed Solution or Vault evidence; this is an explicit new
-request, not automatic approval. Queue also opens reports saved by earlier native versions.
+**View review result** reopens the latest completed report instead of creating another AI job.
+While a review is active, it opens Queue without duplicating work. **Run new review** lives in
+the Solution card's **More actions** menu for changed Solution or Vault evidence; this is an
+explicit new request, not automatic approval. If there is no saved report, the result action
+points to that menu instead of starting work. Queue also opens reports saved by earlier versions.
 
 1. **Capture** a thought without classifying it.
 2. Use AI conversation and Refinement to understand and review a **Problem**.

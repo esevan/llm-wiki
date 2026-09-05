@@ -539,6 +539,10 @@
   "conflict_review.continue": "계속",
   "conflict_review.open_error": "충돌 검토를 열 수 없습니다",
   "conflict_review.result_title": "충돌 검토 · 저장된 결과",
-  "conflict_review.saved_hint": "저장된 검토입니다. 솔루션이나 Vault 근거가 변경됐다면 새 검토를 실행하세요.",
-  "conflict_review.rerun": "새 검토 실행"
+  "conflict_review.saved_hint": "저장된 검토입니다. 솔루션이나 Vault 근거가 변경됐다면 카드의 더보기에서 새 검토를 실행하세요.",
+  "conflict_review.rerun": "새 검토 실행",
+  "conflict_review.view_result": "검토 결과 확인",
+  "conflict_review.run_new": "새 검토 실행",
+  "conflict_review.no_saved_result_title": "검토 결과 없음",
+  "conflict_review.no_saved_result": "저장된 충돌 검토 결과가 없습니다. 더보기에서 새 검토 실행을 선택하세요."
 }
