@@ -16,6 +16,7 @@ file. LLM Wiki then offers a separate Knowledge publication action. Only explici
 the Obsidian-compatible Playbook and raw evidence. Regeneration, structured Markdown patches, and
 archive moves use source hashes to block accidental overwrites of external edits. Published Knowledge
 remains portable and searchable without LLM Wiki.
+Saved-document action labels remain available on hover or keyboard focus, including when a row is near the panel edge.
 If a tracked completed-work file is missing, its Solution remains visible: regeneration queues a
 replacement in the background, while deletion clears the stale generated-file record. Once no
 tracked path remains, the unavailable delete action is no longer shown.
