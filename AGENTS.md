@@ -40,3 +40,12 @@
 
 - In Korean translations and Korean user-facing copy, refer to the person using the product as `사용자`; do not translate "user" or "human" as `인간`.
 - This terminology rule does not require changing English governance terms, source quotations, or technical identifiers.
+
+## UI design quality
+
+- When creating a screen or component, or making substantive layout or visual changes, read and apply
+  [the project UI design skill](.agents/skills/ui-design/SKILL.md), even when the request does not name it.
+- Follow its design direction, shared-token/component guidance, and rendered visual review before
+  declaring the UI complete. Report any visual checks that could not be performed.
+- For copy-only changes or behavior fixes without a visual redesign, keep the scope focused; this
+  skill does not require an unrelated restyle.

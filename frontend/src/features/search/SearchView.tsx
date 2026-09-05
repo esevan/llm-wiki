@@ -7,9 +7,13 @@ export function SearchView({ active }: { active: boolean }) {
       <form className="searchbox" id="search-form">
         <input id="query" placeholder="Search paths, tags, headings, or words…" />
         <label className="pill"><input id="semantic" type="checkbox" /> Semantic</label>
-        <IconButton kind="primary" label="Search vault">⌕</IconButton>
+        <IconButton kind="primary" label="Search vault" labelVisible>⌕</IconButton>
       </form>
-      <section id="results" className="results" />
+      <section id="results" className="results" aria-live="polite">
+        <div className="search-state">
+          <div><strong>Start with a word, path, or idea.</strong><span>Search stays in your local Vault and opens the source when you choose a result.</span></div>
+        </div>
+      </section>
     </section>
   );
 }

@@ -7,6 +7,21 @@ React/Tauri cutover reached `main`. They use an isolated documentation Vault and
 personal Vault content or credential value appears. Each image represents a product capability,
 while the later detailed images document deeper workflow states.
 
+The screenshots below preserve the workflow examples that were captured for this guide. The current
+application uses the calmer cream-and-pale-rail appearance described in the next section, so its
+surface styling may differ from these historical images.
+
+## Reading the workspace
+
+LLM Wiki uses a warm cream workspace with a calm pale navigation rail and restrained pink accents.
+The current view names the primary task first; Capture stays compact, while active Solutions,
+workflow lanes, and reusable context receive the strongest visual weight. Cards, drawers, dialogs,
+Queue, and notifications share the same readable surface, focus, and status treatment. Search
+starts with an explicit local-Vault prompt and shows loading, empty, or failure feedback in place.
+At narrow desktop widths navigation wraps and the workbench actions remain available rather than
+overflowing. These presentation changes do not change approval boundaries: AI may prepare or
+organize work, and people still choose every workflow transition.
+
 ![Packaged native Tauri Workbench with a Capture persisted through commands](../images/native-app/workbench.jpg)
 
 ## 1. Capture, Problem, and Solution

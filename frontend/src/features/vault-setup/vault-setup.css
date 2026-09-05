@@ -5,12 +5,15 @@
   display: grid;
   place-items: center;
   padding: var(--space-5);
+  overflow-y: auto;
   background: color-mix(in srgb, var(--color-status-info) 72%, transparent);
   backdrop-filter: blur(8px);
 }
 
 .vault-setup-card {
   width: min(520px, 100%);
+  max-height: calc(100dvh - var(--space-8));
+  overflow-y: auto;
   padding: var(--space-8);
   border: var(--border-default);
   border-radius: var(--radius-dialog);

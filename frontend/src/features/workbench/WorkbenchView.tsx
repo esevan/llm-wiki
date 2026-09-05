@@ -11,15 +11,15 @@ export function WorkbenchView({ active }: { active: boolean }) {
         <h2>Start with a Capture.</h2>
         <p>Capture a thought first. Then AI helps turn it into a reviewable Problem.</p>
         <form className="capture" id="capture">
-          <input id="capture-text" placeholder="e.g. I keep losing track of decisions…" required />
-          <IconButton kind="primary" label="Save Capture">+</IconButton>
+          <input id="capture-text" aria-label="Capture your thought" placeholder="e.g. I keep losing track of decisions…" required />
+          <IconButton kind="primary" label="Save Capture" labelVisible>+</IconButton>
         </form>
       </section>
       <div className="board-head">
         <h2>Your workbench</h2>
         <span id="organize-status">Keep attention on what matters now.</span>
-        <IconButton id="organize" kind="tiny hot" label="Organize workbench">✦</IconButton>
-        <IconButton id="flow-toggle" label="Show flow">⤳</IconButton>
+        <IconButton id="organize" kind="tiny hot" label="Organize workbench" labelVisible>✦</IconButton>
+        <IconButton id="flow-toggle" label="Show flow" labelVisible>⤳</IconButton>
       </div>
       <section id="flow-view" className="flow-view" hidden />
       <section className="board" id="board" />

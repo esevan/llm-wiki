@@ -119,7 +119,7 @@
 .intro-copy h1 span,
 .intro-copy > p:last-child span {
   display: block;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
 .intro-copy > p:last-child {

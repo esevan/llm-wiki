@@ -66,7 +66,7 @@
   --motion-normal: 320ms;
   --motion-intro-enter: 720ms;
   --motion-intro-scene: 2600ms;
-  --focus-ring: 2px solid #ffc6df;
+  --focus-ring: 3px solid #d91969;
 
   /* Compatibility aliases consumed by the behavior-preserving stylesheet. */
   --pink: var(--color-accent-primary);

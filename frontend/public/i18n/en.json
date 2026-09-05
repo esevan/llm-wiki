@@ -552,5 +552,18 @@
   "conflict_review.coverage_label": "Evidence coverage",
   "conflict_review.candidates_label": "Reviewed evidence",
   "conflict_review.authority_label": "Your decision",
-  "conflict_review.authority_hint": "AI provides evidence. You decide whether this Solution can proceed."
+  "conflict_review.authority_hint": "AI provides evidence. You decide whether this Solution can proceed.",
+  "compass.goal_label": "Direction goal",
+  "search.error_title": "Search could not finish",
+  "search.loading_body": "Looking through the local notes you selected.",
+  "search.start_title": "Start with a word, path, or idea.",
+  "common.retry": "Retry",
+  "workbench.capture_label": "Capture your thought",
+  "search.empty_body": "Try a broader word, a folder name, or semantic search.",
+  "search.empty_title": "No matching notes yet.",
+  "search.start_body": "Search stays in your local Vault and opens the source when you choose a result.",
+  "search.loading_title": "Searching your Vault…",
+  "ai_setup.connection_group": "Connection",
+  "ai_setup.models_group": "Model routing",
+  "ai_setup.credential_group": "Credential"
 }

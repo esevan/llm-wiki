@@ -552,5 +552,18 @@
   "conflict_review.coverage_label": "근거 준비 현황",
   "conflict_review.candidates_label": "검토한 근거",
   "conflict_review.authority_label": "사용자의 결정",
-  "conflict_review.authority_hint": "AI는 근거를 제공합니다. 솔루션을 진행할지는 사용자가 결정합니다."
+  "conflict_review.authority_hint": "AI는 근거를 제공합니다. 솔루션을 진행할지는 사용자가 결정합니다.",
+  "compass.goal_label": "방향 목표",
+  "search.error_title": "검색을 완료할 수 없습니다",
+  "search.loading_body": "선택한 로컬 노트를 살펴보고 있습니다.",
+  "search.start_title": "단어, 경로 또는 아이디어로 시작하세요.",
+  "common.retry": "다시 시도",
+  "workbench.capture_label": "생각 Capture",
+  "search.empty_body": "더 넓은 단어, 폴더 이름 또는 의미 검색을 시도하세요.",
+  "search.empty_title": "일치하는 노트가 아직 없습니다.",
+  "search.start_body": "검색은 로컬 Vault 안에서 이루어지며, 사용자가 결과를 선택하면 원문을 엽니다.",
+  "search.loading_title": "Vault를 검색하는 중…",
+  "ai_setup.connection_group": "연결",
+  "ai_setup.models_group": "모델 설정",
+  "ai_setup.credential_group": "인증 정보"
 }

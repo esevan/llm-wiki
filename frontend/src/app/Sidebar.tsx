@@ -20,6 +20,7 @@ export function Sidebar({ activeView, onSelectView }: SidebarProps) {
         {navigation.map(([view, label]) => (
           <button
             className={activeView === view ? 'active' : undefined}
+            aria-current={activeView === view ? 'page' : undefined}
             data-view={view}
             key={view}
             onClick={() => onSelectView(view)}
