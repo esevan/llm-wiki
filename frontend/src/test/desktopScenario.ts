@@ -235,6 +235,16 @@ const run = async (providerUrl: string) => {
     document.querySelector<HTMLDialogElement>('#item-detail-modal')?.close();
     document.querySelector<HTMLButtonElement>('#queue-toggle')?.click();
     await waitFor(() => !!document.querySelector(`[data-job-id="${conflictJob.id}"] [data-job-action="result"]:not([disabled])`), 'Queue conflict result action');
+    for (const name of ['queue', 'alert']) {
+      const panel = document.getElementById(`${name}-panel`)!;
+      const toggle = document.getElementById(`${name}-toggle`)!;
+      if (panel.hidden) toggle.click();
+      panel.querySelector<HTMLElement>('h2')!.click();
+      if (panel.hidden) throw new Error(`${name} popup closed on an internal click`);
+      document.querySelector<HTMLElement>('#board')!.click();
+      if (!panel.hidden || toggle.getAttribute('aria-expanded') !== 'false') throw new Error(`${name} popup did not dismiss on outside click`);
+    }
+    document.getElementById('queue-toggle')!.click();
     document.querySelector<HTMLButtonElement>(`[data-job-id="${conflictJob.id}"] [data-job-action="result"]`)?.click();
     await waitFor(() => !!document.querySelector<HTMLDialogElement>('#item-detail-modal')?.open, 'Queue opens saved conflict report');
     document.querySelector<HTMLDialogElement>('#item-detail-modal')?.close();

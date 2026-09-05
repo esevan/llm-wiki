@@ -318,6 +318,10 @@ is mapped in `docs/migrations/react-tauri-inventory.md` and `src-tauri/tests/`.
 
 ## Remaining decision-dependent cases
 
+- **CB-031 — FAB outside dismissal**: Queue and notification popups close on outside clicks,
+  preserving the underlying click action and synchronizing aria-expanded. Panel/trigger descendants
+  are excluded, the other FAB dismisses the previous popup, and unmount removes the listener.
+
 - **CB-030 — Completed Conflict Review is reopenable**: Native enqueue/list/get/result expose
   routable destinations for legacy inline-preview records. A repeated conflict click reads current
   job state, reopens the latest completed report without POST, and shows Queue for active work.

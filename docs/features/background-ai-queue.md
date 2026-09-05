@@ -2,6 +2,9 @@
 
 **English** | [한국어](background-ai-queue.ko.md)
 
+Queue and notification FAB popups close when you click outside their panel and trigger.
+Clicks inside remain usable; clicking the other FAB dismisses the previous popup.
+
 Completed native jobs expose their result destinations, including older records stored as
 inline previews. Conflict reviews, completion reviews, and completion reports have an enabled
 result button when complete. A full progress bar with **Completed** is finished work, not a

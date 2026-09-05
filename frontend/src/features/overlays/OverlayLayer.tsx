@@ -5,6 +5,21 @@ function IconAction({ dialog, label }: { dialog: string; label: string }) {
 }
 
 export function OverlayLayer() {
+  useEffect(() => {
+    const dismissOutside = (event: MouseEvent) => {
+      if (!(event.target instanceof Node)) return;
+      for (const name of ['queue', 'alert']) {
+        const panel = document.getElementById(`${name}-panel`);
+        const toggle = document.getElementById(`${name}-toggle`);
+        if (!panel || panel.hidden || panel.contains(event.target) || toggle?.contains(event.target)) continue;
+        panel.hidden = true;
+        toggle?.setAttribute('aria-expanded', 'false');
+      }
+    };
+    // Capture before result actions replace DOM or stop propagation. Never consume the click.
+    document.addEventListener('click', dismissOutside, true);
+    return () => document.removeEventListener('click', dismissOutside, true);
+  }, []);
   return (
     <div className="overlay-layer">
       <dialog id="feature-modal"><form className="modal" id="feature-form"><h2>Propose a way forward</h2><input type="hidden" id="feature-problem" /><label htmlFor="feature-title">Short name</label><input id="feature-title" required placeholder="A clear, human outcome" /><label htmlFor="feature-outcome">Intended outcome</label><textarea id="feature-outcome" required placeholder="What will be true when this works?" /><label htmlFor="feature-nongoals">Non-goals</label><textarea id="feature-nongoals" placeholder="What this will not try to solve" /><footer><IconAction dialog="feature-modal" label="Cancel" /><button className="primary icon-action" data-tooltip="Save proposal" aria-label="Save proposal">✓</button></footer></form></dialog>
@@ -25,3 +40,4 @@ export function OverlayLayer() {
     </div>
   );
 }
+import { useEffect } from 'react';
