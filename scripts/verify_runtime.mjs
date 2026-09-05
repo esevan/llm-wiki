@@ -18,4 +18,12 @@ if (/fetch\(['"]\/api/.test(runtime) || /HttpApplicationClient/.test(runtime)) {
   throw new Error('Native runtime contains a retired HTTP application transport');
 }
 
+const workbench = readFileSync(join(frontendRoot, 'public', 'runtime', 'workbench.js'), 'utf8');
+if (/class="card\$\{important\}"[^>]*draggable="true"/.test(workbench)) {
+  throw new Error('Workbench action buttons must not be nested inside a draggable card');
+}
+if (!/class="card-drag-handle" draggable="true"/.test(workbench)) {
+  throw new Error('Workbench cards must expose a dedicated drag handle');
+}
+
 console.log('native UI runtime parses without an HTTP fallback');

@@ -2,6 +2,7 @@ use rusqlite::{params, Connection, Transaction, TransactionBehavior};
 use serde_json::Value;
 
 pub const CURRENT_SCHEMA_VERSION: i64 = 3;
+const MAX_ADDITIVE_COMPATIBLE_SCHEMA_VERSION: i64 = 4;
 
 type MigrationFunction = for<'connection> fn(&Transaction<'connection>) -> Result<(), String>;
 type LegacyLocalizationRow = (String, String, String, String, String, String, String);
@@ -31,6 +32,12 @@ const MIGRATIONS: &[Migration] = &[
 ];
 
 pub fn apply(connection: &mut Connection) -> Result<(), String> {
+    let current_version = schema_version(connection)?;
+    if current_version > CURRENT_SCHEMA_VERSION
+        && current_version <= MAX_ADDITIVE_COMPATIBLE_SCHEMA_VERSION
+    {
+        return Ok(());
+    }
     apply_plan(connection, MIGRATIONS, CURRENT_SCHEMA_VERSION)
 }
 
@@ -486,6 +493,19 @@ mod tests {
 
         assert!(error.contains("newer than supported"));
         assert_eq!(schema_version(&connection).unwrap(), 99);
+    }
+
+    #[test]
+    fn additive_work_tracking_database_is_accepted_without_downgrading() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(include_str!("schema.sql"))
+            .unwrap();
+        connection.pragma_update(None, "user_version", 4).unwrap();
+
+        apply(&mut connection).unwrap();
+
+        assert_eq!(schema_version(&connection).unwrap(), 4);
     }
 
     #[test]

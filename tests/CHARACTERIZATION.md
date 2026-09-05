@@ -243,6 +243,22 @@ is mapped in `docs/migrations/react-tauri-inventory.md` and `src-tauri/tests/`.
 - **Automated evidence**: `src-tauri/tests/application_commands.rs`,
   `frontend/src/test/desktopScenario.ts`
 
+### CB-028 — Pointer clicks are not captured by card dragging
+
+- **Given** a Workbench card that contains approval, exploration, review, or stage actions,
+- **When** the user clicks an action with a physical pointer in the macOS WebView,
+- **Then** the action receives the click without the card's drag behavior intercepting it, while
+  card reordering remains available from a dedicated drag handle.
+- **Automated evidence**: `scripts/verify_runtime.mjs`, `frontend/src/test/desktopScenario.ts`
+
+### CB-029 — The released app can reopen an additive schema-4 database
+
+- **Given** an installation database upgraded by the additive work-tracking preview,
+- **When** the current released app opens that schema-4 database,
+- **Then** it preserves the newer schema version and starts normally instead of aborting as an
+  unsupported downgrade; unknown later schema versions still fail closed.
+- **Automated evidence**: `src-tauri/src/native/migrations.rs`
+
 ## Pending acceptance scenarios
 
 ### PA-001 — Independent semantic corpus search
