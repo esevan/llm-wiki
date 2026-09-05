@@ -9,7 +9,7 @@
     "dev": "vite",
     "lint": "eslint frontend/src --max-warnings=0",
     "macos:signing:register": "node scripts/register_macos_signing_identity.mjs",
-    "test": "vitest run && npm run test:macos-signing && npm run verify:runtime && npm run verify:native-only",
+    "test": "vitest run && npm run test:macos-signing && npm run verify:runtime && npm run verify:native-only && npm run verify:work-tracking-boundaries",
     "typecheck": "tsc --noEmit",
     "prepare:embedding": "node scripts/prepare_embedding_model.mjs",
     "prepare:fonts": "node scripts/prepare_fonts.mjs",
@@ -21,6 +21,7 @@
     "test:desktop": "node scripts/run_desktop_e2e.mjs",
     "verify:fonts": "node scripts/verify_bundled_fonts.mjs",
     "verify:native-only": "node scripts/verify_native_only.mjs",
+    "verify:work-tracking-boundaries": "node scripts/verify_work_tracking_boundaries.mjs",
     "verify:runtime": "node scripts/verify_runtime.mjs"
   },
   "dependencies": {

@@ -34,13 +34,74 @@ fn slug(value: &str) -> String {
     }
 }
 
-pub(crate) fn complete(
+pub(crate) fn complete(db_path: &Path, problem_id: &str, input: &Value) -> Result<Value, String> {
+    let mut connection = database::open(db_path)?;
+    let capture_id: Option<String> = connection
+        .query_row(
+            "SELECT capture_id FROM problems WHERE id=?",
+            [problem_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| error.to_string())?
+        .ok_or("Problem not found")?;
+    let solutions = connection
+        .prepare("SELECT id FROM features WHERE problem_id=? ORDER BY created_at")
+        .and_then(|mut statement| {
+            statement
+                .query_map([problem_id], |row| row.get::<_, String>(0))?
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .map_err(|error| error.to_string())?;
+    let reason = input.get("reason").and_then(Value::as_str).unwrap_or("");
+    let review_id = input
+        .get("review_id")
+        .or_else(|| input.get("reviewId"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let transaction = connection
+        .transaction()
+        .map_err(|error| error.to_string())?;
+    let tracked:bool=transaction.query_row("SELECT EXISTS(SELECT 1 FROM work_tracking_links WHERE entity_type='problems' AND entity_id=?)",[problem_id],|row|row.get(0)).map_err(|error|error.to_string())?;
+    if tracked {
+        return Err("Tracked work requires the exact completion review in its Chat session".into());
+    }
+    transaction.execute(
+        "INSERT INTO problem_completion_decisions(id,problem_id,review_id,reason) VALUES (?,?,?,?)",
+        params![Uuid::new_v4().to_string(), problem_id, review_id, reason],
+    ).map_err(|error| error.to_string())?;
+    transaction
+        .execute(
+            "UPDATE features SET state='completed' WHERE problem_id=? AND state!='archived'",
+            [problem_id],
+        )
+        .map_err(|error| error.to_string())?;
+    transaction
+        .execute(
+            "UPDATE problems SET state='completed' WHERE id=?",
+            [problem_id],
+        )
+        .map_err(|error| error.to_string())?;
+    transaction.commit().map_err(|error| error.to_string())?;
+    Ok(json!({
+        "path": Value::Null,
+        "problem_id": problem_id,
+        "publication_state": "offered",
+        "closed": {"solutions": solutions, "problem": problem_id, "capture": capture_id}
+    }))
+}
+
+pub(crate) fn publish_playbook(
     db_path: &Path,
     vault_root: &Path,
     problem_id: &str,
     input: &Value,
 ) -> Result<Value, String> {
     let mut connection = database::open(db_path)?;
+    let tracked:bool=connection.query_row("SELECT EXISTS(SELECT 1 FROM work_tracking_links WHERE entity_type='problems' AND entity_id=?)",[problem_id],|row|row.get(0)).map_err(|error|error.to_string())?;
+    if tracked {
+        return Err("Tracked Knowledge requires a separate exact draft and publication review in its Chat session".into());
+    }
     let (capture_id, statement, detail): (Option<String>, String, String) = connection
         .query_row(
             "SELECT capture_id,statement,detail FROM problems WHERE id=?",
@@ -52,11 +113,6 @@ pub(crate) fn complete(
         .ok_or("Problem not found")?;
     ensure_unmodified(&connection, vault_root, problem_id)?;
     let reason = input.get("reason").and_then(Value::as_str).unwrap_or("");
-    let review_id = input
-        .get("review_id")
-        .or_else(|| input.get("reviewId"))
-        .and_then(Value::as_str)
-        .unwrap_or("");
     let mut solution_statement = connection.prepare(
         "SELECT id,title,outcome,non_goals,validation_criteria,state FROM features WHERE problem_id=? ORDER BY created_at",
     ).map_err(|error| error.to_string())?;
@@ -156,13 +212,6 @@ pub(crate) fn complete(
     } else {
         format!("\n\n## Completion Report\n\n{}", report.trim())
     };
-    if !input
-        .get("regenerate")
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
-    {
-        connection.execute("INSERT INTO problem_completion_decisions(id,problem_id,review_id,reason) VALUES (?,?,?,?)", params![Uuid::new_v4().to_string(),problem_id,review_id,reason]).map_err(|error| error.to_string())?;
-    }
     let lineage = solutions
         .first()
         .map(|solution| lineage::create(db_path, &solution.0, false))
@@ -178,18 +227,6 @@ pub(crate) fn complete(
         .transaction()
         .map_err(|error| error.to_string())?;
     transaction.execute("INSERT OR REPLACE INTO completion_playbooks(problem_id,path,source_hash) VALUES (?,?,?)", params![problem_id,path,source_hash]).map_err(|error| error.to_string())?;
-    transaction
-        .execute(
-            "UPDATE features SET state='completed' WHERE problem_id=? AND state!='archived'",
-            [problem_id],
-        )
-        .map_err(|error| error.to_string())?;
-    transaction
-        .execute(
-            "UPDATE problems SET state='completed' WHERE id=?",
-            [problem_id],
-        )
-        .map_err(|error| error.to_string())?;
     transaction.commit().map_err(|error| error.to_string())?;
     Ok(
         json!({"path":path,"problem_id":problem_id,"source_hash":source_hash,"closed":{"solutions":solutions.iter().map(|solution| &solution.0).collect::<Vec<_>>(),"problem":problem_id,"capture":capture_id},"lineage":lineage.get("lineage").cloned().unwrap_or(lineage)}),

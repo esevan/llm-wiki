@@ -206,7 +206,7 @@ pub(super) fn prepare_result(context: JobContext<'_>, result: Value) -> Result<V
             .optional()
             .map_err(|error| error.to_string())?
             .unwrap_or_default();
-        return crate::native::completion::complete(
+        return crate::native::completion::publish_playbook(
             db_path,
             vault,
             entity_id,

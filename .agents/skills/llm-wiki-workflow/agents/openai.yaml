@@ -1,0 +1,10 @@
+interface:
+  display_name: "LLM Wiki Workflow"
+  short_description: "Bring Workbench into a natural Chat workflow"
+  default_prompt: "Use $llm-wiki-workflow to briefly catch me up on my current work and continue naturally."
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "llm-wiki"
+      description: "Read and update revisioned LLM Wiki work sessions"
+      transport: "stdio"

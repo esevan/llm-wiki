@@ -294,6 +294,8 @@ CREATE INDEX IF NOT EXISTS idx_localized_content_entity
 CREATE TABLE IF NOT EXISTS ai_runs (
   id TEXT PRIMARY KEY, entity_type TEXT NOT NULL, entity_id TEXT NOT NULL,
   kind TEXT NOT NULL, input_text TEXT NOT NULL, output_text TEXT NOT NULL DEFAULT '',
+  model TEXT NOT NULL DEFAULT '', source_revision TEXT NOT NULL DEFAULT '',
+  context_scope TEXT NOT NULL DEFAULT '', retrieval_snapshot_hash TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE TABLE IF NOT EXISTS ai_jobs_v2 (

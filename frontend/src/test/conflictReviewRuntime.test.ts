@@ -2,56 +2,45 @@ import source from '../../public/runtime/conflicts.js?raw';
 import { beforeEach, expect, it, vi } from 'vitest';
 
 const action = source.slice(source.indexOf('async function runConflictReview('), source.indexOf('function showConflictReviewResult('));
-const job = (status: string, id = 'existing') => ({ id, task_kind: 'conflict_review', entity_id: 'solution', status });
-function setup(jobs: ReturnType<typeof job>[]) {
-  const api = vi.fn(async (path: string) => path === '/jobs' ? { jobs } : job('queued', 'new'));
-  const open = vi.fn(), refresh = vi.fn(), notice = vi.fn();
-  const run = new Function('api', 'openJobResult', 'refreshQueue', 'showNotice', '$', 'itemDetailModal', `
-    let activeConflictAbort=null, activeConflictRun='', queueJobs=[];
-    const terminalJobStates=new Set(['completed','awaiting_review','failed','cancelled','stale']);
-    const renderQueue=()=>{}, conflictCopy=(_key,fallback)=>fallback;
+
+function setup(beginTrackedConflictReview: ReturnType<typeof vi.fn> = vi.fn(async () => undefined)) {
+  const openChat = vi.fn();
+  const notice = vi.fn();
+  Object.assign(window, { beginTrackedConflictReview });
+  const run = new Function('openChat', 'showNotice', 'conflictCopy', `
     ${action}; return runConflictReview;
-  `)(api, open, refresh, notice, (selector: string) => document.querySelector(selector), { close: vi.fn() });
-  return { api, open, refresh, notice, run, button: document.querySelector('button')! };
+  `)(openChat, notice, (_key: string, fallback: string) => fallback);
+  return { openChat, notice, beginTrackedConflictReview, run, button: document.querySelector('button')! };
 }
-beforeEach(() => { document.body.innerHTML = '<button id="queue-toggle">Review</button><section id="queue-panel" hidden></section>'; });
-it('CB-030 reopens a completed review without submitting another job', async () => {
-  const h = setup([job('completed')]);
-  await h.run('solution', h.button);
-  expect(h.open).toHaveBeenCalledWith('existing');
-  expect(h.api).toHaveBeenCalledTimes(1);
+
+beforeEach(() => {
+  document.body.innerHTML = '<button>Review</button>';
+  delete (window as Window & { beginTrackedConflictReview?: unknown }).beginTrackedConflictReview;
+});
+
+it('opens Conflict Review in the current Chat instead of submitting a hidden job', async () => {
+  const h = setup();
+  await h.run('solution', h.button, true);
+  expect(h.openChat).toHaveBeenCalledWith('features', 'solution');
+  expect(h.beginTrackedConflictReview).toHaveBeenCalledWith('solution');
   expect(h.notice).not.toHaveBeenCalled();
   expect(h.button.disabled).toBe(false);
+  expect(h.button.hasAttribute('aria-busy')).toBe(false);
 });
-it.each(['queued', 'running', 'retryable'])('CB-030 shows the active %s job even on explicit rerun', async status => {
-  const h = setup([job(status), job('completed', 'older')]);
-  await h.run('solution', h.button, true);
-  expect(h.api).toHaveBeenCalledTimes(1);
-  expect(h.open).not.toHaveBeenCalled();
-  expect(document.querySelector<HTMLElement>('#queue-panel')!.hidden).toBe(false);
-});
-it.each([{ jobs: [] }, { jobs: [job('failed')] }])('CB-032 does not create a review from the result button when none is reusable', async ({ jobs }) => {
-  const h = setup(jobs);
+
+it('still opens Chat when tracking orchestration is unavailable', async () => {
+  const h = setup();
+  delete (window as Window & { beginTrackedConflictReview?: unknown }).beginTrackedConflictReview;
   await h.run('solution', h.button);
-  expect(h.api).toHaveBeenCalledTimes(1);
-  expect(h.notice).toHaveBeenCalledWith('No saved Conflict Review yet. Choose Run new review from More actions.', 'No review result');
+  expect(h.openChat).toHaveBeenCalledWith('features', 'solution');
+  expect(h.beginTrackedConflictReview).not.toHaveBeenCalled();
+  expect(h.notice).not.toHaveBeenCalled();
 });
-it('CB-030 allows an explicit fresh review after completion', async () => {
-  const h = setup([job('completed')]);
-  await h.run('solution', h.button, true);
-  expect(h.api).toHaveBeenCalledTimes(2);
-  expect(h.open).not.toHaveBeenCalled();
-});
-it('CB-032 creates a first review only from the explicit More action', async () => {
-  const h = setup([]);
-  await h.run('solution', h.button, true);
-  expect(h.api).toHaveBeenCalledWith('/features/solution/conflict-review', expect.objectContaining({ method: 'POST' }));
-});
-it('CB-030 reports lookup failure without blindly submitting another review', async () => {
-  const h = setup([]);
-  h.api.mockRejectedValueOnce(new Error('Unavailable'));
+
+it('reports current-Chat orchestration failures and restores the action', async () => {
+  const h = setup(vi.fn(async () => { throw new Error('Unavailable'); }));
   await h.run('solution', h.button);
-  expect(h.api).toHaveBeenCalledTimes(1);
   expect(h.notice).toHaveBeenCalledWith('Unavailable', 'Could not open Conflict Review');
   expect(h.button.disabled).toBe(false);
+  expect(h.button.hasAttribute('aria-busy')).toBe(false);
 });

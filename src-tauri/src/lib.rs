@@ -1,7 +1,14 @@
+mod adapters;
+pub mod application;
 mod conversation;
 mod desktop_e2e;
+mod domain;
 mod first_run;
+mod gui_owner;
+pub mod mcp;
+pub mod mcp_ipc;
 mod native;
+mod ports;
 mod provider;
 
 pub use native::{NativeApplication, NativeOperation, NativeResponse};
@@ -96,6 +103,10 @@ fn application_paths() -> Result<(VaultResolution, PathBuf, PathBuf), String> {
     ))
 }
 
+pub async fn run_mcp(connection_id: String) -> Result<(), String> {
+    mcp_ipc::run_stdio_bridge(connection_id).await
+}
+
 fn bundled_resource_dir(app: &tauri::App) -> Result<PathBuf, String> {
     let resource_dir = app.path().resource_dir();
     #[cfg(target_os = "macos")]
@@ -158,6 +169,20 @@ fn jobs_command(
 }
 
 #[tauri::command]
+fn work_tracking_command(
+    application: tauri::State<'_, NativeApplication>,
+    window: tauri::WebviewWindow,
+    mut operation: NativeOperation,
+) -> Result<NativeResponse, String> {
+    let context = serde_json::json!({"window":window.label()});
+    operation.input["reviewContext"] = context.clone();
+    if operation.input.get("proposal").is_some() {
+        operation.input["proposal"]["reviewContext"] = context;
+    }
+    Ok(application.execute_work_tracking(operation))
+}
+
+#[tauri::command]
 fn vault_setup_status(
     application: tauri::State<'_, NativeApplication>,
 ) -> Result<serde_json::Value, String> {
@@ -208,6 +233,7 @@ pub fn run() {
         .setup(|app| {
             let (vault, db, settings_path) = application_paths()
                 .map_err(|error| format!("Could not resolve application paths: {error}"))?;
+            app.manage(gui_owner::GuiOwnerLock::acquire(&db)?);
             let VaultResolution {
                 path,
                 setup_required,
@@ -229,8 +255,16 @@ pub fn run() {
             )
             .map_err(|error| format!("Could not initialize native application state: {error}"))?;
             let background_index = application.clone();
+            let background_projector = application.work_tracking_service();
+            let mcp_service = application.work_tracking_service();
             let should_index = !setup_required;
             app.manage(application);
+            tauri::async_runtime::spawn(native::work_tracking_projector::run(background_projector));
+            tauri::async_runtime::spawn(async move {
+                if let Err(error) = mcp_ipc::run_gui_listener(mcp_service).await {
+                    eprintln!("MCP local IPC listener stopped: {error}");
+                }
+            });
             if intro_required {
                 first_run::create_intro_window(app)?;
             }
@@ -253,6 +287,7 @@ pub fn run() {
             settings_command,
             workflow_command,
             jobs_command,
+            work_tracking_command,
             enqueue_ai_job,
             vault_setup_status,
             complete_first_run_intro,
@@ -261,6 +296,7 @@ pub fn run() {
             conversation::cancel_conversation,
             desktop_e2e::desktop_e2e_mode,
             desktop_e2e::desktop_e2e_complete,
+            desktop_e2e::desktop_e2e_mcp_probe,
             provider::provider_request
         ])
         .run(tauri::generate_context!())

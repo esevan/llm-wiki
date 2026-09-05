@@ -5,6 +5,7 @@ import {
   type DesktopE2eResult,
 } from '../services/tauriApplicationClient';
 import { getVaultSetupStatus } from '../services/vaultSetupClient';
+import { invoke } from '@tauri-apps/api/core';
 
 const waitFor = async (condition: () => boolean, description: string) => {
   if (condition()) return;
@@ -56,7 +57,8 @@ const waitForJobKind = async (taskKind: string, entityId: string) => {
 };
 
 interface CompletionResponse {
-  path: string;
+  path: null;
+  publication_state: 'offered';
   closed: {
     solutions: string[];
     problem: string;
@@ -223,62 +225,14 @@ const run = async (providerUrl: string) => {
       non_goals: 'No external provider call.',
       validation_criteria: '- [ ] Native command state persists',
     });
-    await window.loadBoard();
-    document.querySelector<HTMLButtonElement>(`[data-solution-action="conflict"][data-conflict-force="true"][data-solution-id="${solution.id}"]`)?.click();
-    const conflictJob = await waitForJobKind('conflict_review', solution.id);
-    const conflictReview = await waitForJobResult<{ conflicts: unknown[] }>(conflictJob.id);
-    if (conflictReview.conflicts.length) throw new Error('Deterministic desktop conflict review was not clear');
-    document.querySelector<HTMLButtonElement>(`[data-solution-action="conflict"][data-solution-id="${solution.id}"]`)?.click();
-    await waitFor(() => !!document.querySelector('#conflict-review-saved-result') && !!document.querySelector<HTMLDialogElement>('#item-detail-modal')?.open, 'completed conflict result on second click');
-    document.querySelector<HTMLDialogElement>('#item-detail-modal')?.close();
-    await (window as Window & { setLocale: (locale: string, persist?: boolean) => Promise<void> }).setLocale('ko', false);
-    await waitFor(() => document.documentElement.lang === 'ko', 'Korean locale selection');
-    document.querySelector<HTMLButtonElement>(`[data-solution-action="conflict"][data-solution-id="${solution.id}"]`)?.click();
-    await waitFor(() => !!document.querySelector('#conflict-review-saved-result') && !!document.querySelector<HTMLDialogElement>('#item-detail-modal')?.open, 'Korean completed conflict result');
-    const noConflict = document.querySelector<HTMLButtonElement>('#item-detail-notes button[data-conflict-decision="clear"]');
-    if (!noConflict) throw new Error('Zero-conflict report did not offer the No conflict decision');
-    if (noConflict.textContent !== '충돌 없음') throw new Error('Zero-conflict action was not localized to Korean');
-    const noConflictRect = noConflict.getBoundingClientRect();
-    const hitTarget = document.elementFromPoint(
-      noConflictRect.left + noConflictRect.width / 2,
-      noConflictRect.top + noConflictRect.height / 2,
-    );
-    if (!hitTarget || !noConflict.contains(hitTarget)) throw new Error('Korean No conflict action is obscured at its click target');
-    const decisionButtons = [...document.querySelectorAll<HTMLButtonElement>('.conflict-decision-actions button')];
-    const noteRect = document.getElementById('conflict-decision-note')!.getBoundingClientRect();
-    const decisionRects = decisionButtons.map(button => button.getBoundingClientRect());
-    if (decisionRects.length !== 2 || decisionRects.some(rect => rect.width < 100 || rect.height < 44 || rect.top < noteRect.bottom)) throw new Error('Conflict decisions must be readable buttons below the note');
-    if (Math.abs(decisionRects[0].top - decisionRects[1].top) > 1 || Math.abs(decisionRects[0].height - decisionRects[1].height) > 1) throw new Error('Conflict decision buttons are misaligned');
-    const repeated = await applicationJson<{ jobs: Array<JobResponse & { entity_id: string }> }>('/jobs');
-    if (repeated.jobs.filter(job => job.task_kind === 'conflict_review' && job.entity_id === solution.id).length !== 1) throw new Error('Repeated conflict click created duplicate work');
-    noConflict.click();
-    await waitFor(
-      () => !(document.querySelector<HTMLDialogElement>('#item-detail-modal')?.open ?? false) && window.workbenchBoard?.features?.some((item: { id: string; conflict_state: string }) => item.id === solution.id && item.conflict_state === 'clear') === true,
-      'Korean No conflict click saved its native clear decision',
-    );
-    await (window as Window & { setLocale: (locale: string, persist?: boolean) => Promise<void> }).setLocale('en', false);
-    document.querySelector<HTMLButtonElement>('#queue-toggle')?.click();
-    await waitFor(() => !!document.querySelector(`[data-job-id="${conflictJob.id}"] [data-job-action="result"]:not([disabled])`), 'Queue conflict result action');
-    for (const name of ['queue', 'alert']) {
-      const panel = document.getElementById(`${name}-panel`)!;
-      const toggle = document.getElementById(`${name}-toggle`)!;
-      if (panel.hidden) toggle.click();
-      panel.querySelector<HTMLElement>('h2')!.click();
-      if (panel.hidden) throw new Error(`${name} popup closed on an internal click`);
-      document.querySelector<HTMLElement>('#board')!.click();
-      if (!panel.hidden || toggle.getAttribute('aria-expanded') !== 'false') throw new Error(`${name} popup did not dismiss on outside click`);
-    }
-    document.getElementById('queue-toggle')!.click();
-    document.querySelector<HTMLButtonElement>(`[data-job-id="${conflictJob.id}"] [data-job-action="result"]`)?.click();
-    await waitFor(() => !!document.querySelector<HTMLDialogElement>('#item-detail-modal')?.open, 'Queue opens saved conflict report');
-    document.querySelector<HTMLDialogElement>('#item-detail-modal')?.close();
-    await applicationJson<void>(`/features/${solution.id}/approve`, 'POST');
-    await window.loadBoard();
-    document.querySelector<HTMLButtonElement>(`[data-solution-action="stage"][data-solution-state="proposed"][data-solution-id="${solution.id}"]`)?.click();
-    await waitFor(
-      () => window.workbenchBoard?.features?.some((item) => item.id === solution.id && item.state === 'proposed') ?? false,
-      'move to proposed from its Workbench action',
-    );
+    const hiddenConflict = await window.llmWikiApplication.request({path:`/features/${solution.id}/conflict-review`,method:'POST'});
+    if (hiddenConflict.ok) throw new Error('Hidden conflict model job was allowed');
+    await applicationJson('/work-tracking/vault/lexical','POST',{scope:'workbench',query:'startup',limit:4});
+    await applicationJson('/work-tracking/vault/semantic','POST',{scope:'workbench',query:'startup',limit:4});
+    await applicationJson<void>(`/features/${solution.id}/conflict`, 'PUT', {
+      state: 'clear',
+      citation: 'Native desktop deterministic review',
+    });
     await applicationJson<void>(`/features/${solution.id}/approve`, 'POST');
     const progress = await applicationJson<CreatedRecord>(`/features/${solution.id}/progress`, 'POST', {
       body: 'Native command evidence',
@@ -314,7 +268,9 @@ const run = async (providerUrl: string) => {
     const completed = await applicationJson<CompletionResponse>(`/problems/${problem.id}/complete`, 'POST', {
       reason: 'Native desktop E2E verification',
     });
-    if (!completed.path.endsWith('.md')) throw new Error('Completion did not produce a Knowledge document');
+    if (completed.path !== null || completed.publication_state !== 'offered') {
+      throw new Error('Completion unexpectedly published Knowledge');
+    }
     if (
       completed.closed.problem !== problem.id ||
       completed.closed.capture !== workflowCapture.id ||
@@ -322,6 +278,10 @@ const run = async (providerUrl: string) => {
     ) {
       throw new Error('Completion did not close the full Capture, Problem, and Solution chain');
     }
+    const published = await applicationJson<{ path: string }>(`/problems/${problem.id}/completion-playbook`, 'POST', {
+      reason: 'Native desktop E2E verification',
+    });
+    if (!published.path.endsWith('.md')) throw new Error('Explicit Knowledge publication did not create a document');
     const lineage = await applicationJson<LineageResponse>(`/features/${solution.id}/lineage`);
     if (lineage.lineage.stages.map((stage) => stage.kind).join(',') !== 'capture,problem,solution,complete') {
       throw new Error('Completed Lineage did not preserve all workflow stages');
@@ -350,6 +310,26 @@ const run = async (providerUrl: string) => {
     const provider = await applicationJson<Record<string, unknown>>('/provider/config');
     if ('api_key' in provider) throw new Error('Provider configuration exposed the API key');
     await step('bundled offline embeddings, Search, locale restoration, and secret-safe configuration passed through Tauri');
+
+    const connection=await applicationJson<{id:string}>('/work-tracking/connections','POST',{name:'Packaged E2E only',scopes:['session:read','session:write'],topicIds:[],checkpointPolicy:'confirm_each'});
+    const external=await invoke<{sessionId:string}>('desktop_e2e_mcp_probe',{connectionId:connection.id,revoked:false});
+    const same=await applicationJson<{sessionId:string;capture:{summary:string}}>('/work-tracking/sessions/'+external.sessionId);
+    if(same.sessionId!==external.sessionId)throw Error('GUI and MCP did not share persistence');
+    window.dispatchEvent(new CustomEvent('llm-wiki:tracked-resume',{detail:{sessionId:external.sessionId}}));
+    await waitFor(()=>!!document.querySelector('#chat-modal[open]'),'external work resumed in Chat');
+    await waitFor(()=>!!document.querySelector('#chat-column nav[aria-label] button'),'tracked continuation actions');
+    const propose=document.querySelector<HTMLButtonElement>('#chat-column nav[aria-label] button');
+    propose?.click();
+    await waitFor(()=>!!document.querySelector('#work-tracking-cards article'),'real Problem review card');
+    const accept=document.querySelector<HTMLButtonElement>('#work-tracking-cards article footer button:last-child');
+    accept?.click();
+    await waitFor(()=>!document.querySelector('#work-tracking-cards article'),'accepted Problem card');
+    const adopted=await applicationJson<{linkedWorkflow:{problem:{id:string}}}>('/work-tracking/sessions/'+external.sessionId);
+    if(!adopted.linkedWorkflow.problem?.id)throw Error('Real Chat acceptance did not adopt the Problem');
+    (document.querySelector('#chat-modal') as HTMLDialogElement).close();
+    await applicationJson('/work-tracking/connections/'+connection.id,'DELETE');
+    await invoke('desktop_e2e_mcp_probe',{connectionId:connection.id,revoked:true});
+    await step('packaged stdio child → GUI owner → Chat Problem acceptance → connection revocation passed');
 
     const persistedBoard = await applicationJson<BoardResponse>('/board');
     const persistedCapture = persistedBoard.captures.find(

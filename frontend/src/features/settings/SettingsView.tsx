@@ -1,4 +1,5 @@
 import { IconButton } from '../../components/IconButton';
+import { McpConnections } from './McpConnections';
 
 const advancedTasks = [
   ['capture_assistance', 'Capture discussion and refinement'],
@@ -53,6 +54,7 @@ export function SettingsView({ active }: { active: boolean }) {
           </footer>
         </form>
         <p id="provider-status" className="meta" role="status" aria-live="polite" />
+        <McpConnections />
       </section>
     </section>
   );

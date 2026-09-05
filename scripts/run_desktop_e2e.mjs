@@ -8,6 +8,7 @@ import process from "node:process";
 const root = path.resolve(import.meta.dirname, "..");
 
 function executablePath() {
+  if (process.env.LLM_WIKI_E2E_EXECUTABLE) return path.resolve(process.env.LLM_WIKI_E2E_EXECUTABLE);
   if (process.platform === "darwin") return path.join(root, "src-tauri/target/release/bundle/macos/LLM Wiki.app/Contents/MacOS/llm-wiki-desktop");
   if (process.platform === "win32") return path.join(root, "src-tauri/target/release/llm-wiki-desktop.exe");
   return path.join(root, "src-tauri/target/release/llm-wiki-desktop");
@@ -36,7 +37,7 @@ async function waitForResult(result, child, launch) {
     } catch (error) {
       if (error.code !== "ENOENT") throw error;
     }
-    if (child.exitCode !== null) break;
+    if (child.exitCode !== null || child.signalCode !== null) break;
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
   let completedSteps = [];
@@ -45,7 +46,7 @@ async function waitForResult(result, child, launch) {
 }
 
 async function terminate(child) {
-  if (!child || child.exitCode !== null) return;
+  if (!child || child.exitCode !== null || child.signalCode !== null) return;
   child.kill("SIGTERM");
   await Promise.race([
     new Promise((resolve) => child.once("exit", resolve)),
@@ -77,6 +78,7 @@ const environment = {
   LLM_WIKI_E2E_PROVIDER_URL: `http://127.0.0.1:${providerPort}/v1`,
   LLM_WIKI_TEST_MODE: "1",
   LLM_WIKI_TEST_API_KEY: "desktop-e2e-key",
+  LLM_WIKI_MCP_ENDPOINT: process.platform === 'win32' ? `\\\\.\\pipe\\llm-wiki-e2e-${path.basename(state)}` : path.join(path.relative(root,state),'ipc','mcp.sock'),
 };
 
 let application;

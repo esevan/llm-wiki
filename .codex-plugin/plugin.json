@@ -1,0 +1,19 @@
+{
+  "name": "llm-wiki",
+  "version": "0.1.0",
+  "description": "Bring the current LLM Wiki Workbench into Codex or ChatGPT desktop and track work without leaving chat.",
+  "author": {
+    "name": "LLM Wiki"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "LLM Wiki",
+    "shortDescription": "Track and resume Workbench work in chat.",
+    "longDescription": "LLM Wiki provides a local MCP bridge and a conversational workflow skill for Capture, Problem, Solution, Work Log, completion, and separate Knowledge publication.",
+    "developerName": "LLM Wiki",
+    "category": "Productivity",
+    "capabilities": ["Local MCP", "Workbench context", "Vault evidence"],
+    "defaultPrompt": "Show my current LLM Wiki work and help me continue it naturally in this chat."
+  },
+  "mcpServers": "./.mcp.json"
+}

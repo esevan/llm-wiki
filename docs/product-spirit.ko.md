@@ -39,8 +39,9 @@ Problem에 연결됩니다.
 
 ## 5. Private process, portable knowledge.
 
-대화·초안·Refinement·진행 기록은 개인 로컬 과정으로 남습니다. 사람이 승인한 완료만 Obsidian 호환
-Playbook과 원시 근거 묶음을 만듭니다. 이 Markdown은 LLM Wiki 없이도 유용하며 이후 충돌 검토의
+대화·초안·Refinement·진행 기록·완료 결정은 개인 로컬 과정으로 남습니다. 완료와 발행은 서로 다른
+사용자 결정입니다. 사용자가 Knowledge 발행을 명시적으로 승인해야 Obsidian 호환 Playbook과 원시
+근거 묶음을 만듭니다. 이 Markdown은 LLM Wiki 없이도 유용하며 이후 충돌 검토의
 Knowledge로 검색할 수 있습니다.
 앱이 관리하는 Knowledge는 영문 Markdown을 휴대 가능한 canonical 원본으로 사용합니다. 한국어
 열람본은 요청할 때 파생하며, 정확히 같은 현재 원본에 대해서만 재사용합니다. 한국어 열람본이

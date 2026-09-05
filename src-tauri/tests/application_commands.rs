@@ -185,7 +185,7 @@ fn given_a_legacy_localization_database_when_opened_then_native_preserves_versio
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        3
+        5
     );
 }
 
@@ -491,6 +491,15 @@ fn given_a_completed_problem_then_native_archives_evidence_and_protects_external
     assert_eq!(completed.body["closed"]["problem"], id(&problem));
     assert_eq!(completed.body["closed"]["capture"], id(&capture));
     assert_eq!(completed.body["closed"]["solutions"][0], id(&solution));
+    assert!(completed.body["path"].is_null());
+    assert_eq!(completed.body["publication_state"], "offered");
+    assert_eq!(
+        std::fs::read_dir(harness._root.path().join("vault"))
+            .unwrap()
+            .count(),
+        0,
+        "completion must not publish Knowledge"
+    );
     let problem_record = harness.call(
         "workflow",
         "problem.record",
@@ -510,7 +519,13 @@ fn given_a_completed_problem_then_native_archives_evidence_and_protects_external
     assert!(board.body["captures"].as_array().unwrap().is_empty());
     assert!(board.body["problems"].as_array().unwrap().is_empty());
     assert!(board.body["features"].as_array().unwrap().is_empty());
-    let path = completed.body["path"].as_str().unwrap();
+    let published = harness.call(
+        "workflow",
+        "problem.playbook.publish",
+        json!({"problemId":id(&problem),"reason":"Human review complete"}),
+    );
+    assert_eq!(published.status, 200, "{}", published.body);
+    let path = published.body["path"].as_str().unwrap();
     let playbook = harness._root.path().join("vault").join(path);
     let content = std::fs::read_to_string(&playbook).unwrap();
     assert!(content.contains("## Executive Summary"));
@@ -550,9 +565,15 @@ fn given_a_completed_problem_then_native_archives_evidence_and_protects_external
     assert!(!playbook.exists());
     assert!(!raw.exists());
 
-    let regenerated = harness.call(
+    let recompleted = harness.call(
         "workflow",
         "problem.complete",
+        json!({"problemId":id(&problem),"reason":"Restore missing report","regenerate":true}),
+    );
+    assert!(recompleted.body["path"].is_null());
+    let regenerated = harness.call(
+        "workflow",
+        "problem.playbook.publish",
         json!({"problemId":id(&problem),"reason":"Restore missing report","regenerate":true}),
     );
     let regenerated_path = harness
@@ -812,7 +833,7 @@ fn given_a_reviewed_knowledge_patch_when_source_changes_then_apply_and_undo_are_
 }
 
 #[tokio::test]
-async fn given_a_native_conflict_job_when_resolved_then_decisions_are_durable() {
+async fn conflict_review_cannot_spawn_a_hidden_provider_job() {
     let harness = Harness::new();
     let capture = harness.call(
         "workflow",
@@ -834,14 +855,9 @@ async fn given_a_native_conflict_job_when_resolved_then_decisions_are_durable() 
         "solution.create",
         json!({"problemId":id(&problem),"title":"Offline only","outcome":"No network","validation_criteria":"- [ ] Reviewed"}),
     );
-    let provider = provider_once(json!({
-        "conflicts":[{
-            "id":"conflict-1","target_id":"decisions.md","target_title":"Prior decision",
-            "severity":"high","category":"Scope","summary":"The scopes differ",
-            "current_claim":"No network","existing_claim":"Remote sync required",
-            "impact":"User choice required","recommendation":"Choose one","evidence":[]
-        }]
-    }));
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let provider = format!("http://{}", listener.local_addr().unwrap());
     harness.call(
         "settings",
         "provider.save",
@@ -853,32 +869,22 @@ async fn given_a_native_conflict_job_when_resolved_then_decisions_are_durable() 
             "taskKind":"conflict_review","entityType":"features","entityId":id(&solution),"locale":"en"
         }))
         .await;
-    assert_eq!(queued.status, 202, "{}", queued.body);
-    let result = wait_for_job(&harness, &queued);
-    let run_id = result.body["result"]["run_id"].as_str().unwrap();
-    // CB-030: legacy inline_preview records expose the same destination on all reads.
-    assert_eq!(queued.body["result_interface"], "conflict_review");
-    assert_eq!(result.body["result_interface"], "conflict_review");
-    let current = harness.call("jobs", "jobs.get", json!({"jobId":id(&queued)}));
-    assert_eq!(current.body["result_interface"], "conflict_review");
-    let listed = harness.call("jobs", "jobs.list", json!({}));
-    let listed_job = listed.body["jobs"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|job| job["id"] == queued.body["id"])
-        .unwrap();
-    assert_eq!(listed_job["result_interface"], "conflict_review");
-    let saved = harness.call(
-        "workflow",
-        "solution.conflict.resolve",
-        json!({"runId":run_id,"resolutions":[{"conflict_id":"conflict-1","action":"accept_conflict","rationale":"Offline is intentional"}]}),
-    );
-    assert_eq!(saved.body["state"], "clear", "{}", saved.body);
-    let restored = harness.call("jobs", "jobs.conflict.get", json!({"runId":run_id}));
+    assert!(queued.status >= 400, "{}", queued.body);
+    assert!(queued.body.to_string().contains("current Chat"));
     assert_eq!(
-        restored.body["conflicts"][0]["resolution"]["rationale"],
-        "Offline is intentional"
+        listener.accept().unwrap_err().kind(),
+        std::io::ErrorKind::WouldBlock
+    );
+    let connection = rusqlite::Connection::open(harness.app.db_path()).unwrap();
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT count(*) FROM ai_jobs_v2 WHERE task_kind='conflict_review'",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+        0
     );
 }
 

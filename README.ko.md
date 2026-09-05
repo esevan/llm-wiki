@@ -30,6 +30,7 @@ LLM Wiki는 여섯 가지 타협할 수 없는 원칙에서 출발합니다.
 | 진짜 Problem 이해하기 | AI Refinement가 맥락을 보존하고 검토 가능한 Problem을 제안합니다. |
 | 해결 방향 선택하기 | 승인된 Problem에서 Solution을 만들고 Knowledge 기반 충돌 검토가 clear일 때 시작합니다. |
 | 진행 중인 일 이어가기 | In Progress Solution을 강조하고 Work Log에 텍스트·스크린샷·댓글·검증 기준을 남깁니다. |
+| 다른 Chat에서 작업하기 | 로컬 Codex와 ChatGPT 데스크톱이 범위가 지정된 stdio MCP를 통해 같은 Workbench를 이어서 읽고 업데이트합니다. |
 | 근거로 완료하기 | AI가 기록된 근거를 검토하되 완료 결정은 사람이 내립니다. |
 | 결과 재사용하기 | 완료된 결과만 Obsidian 호환 Playbook과 검색 가능한 Knowledge가 됩니다. |
 | AI 작업 중에도 빠르게 반응하기 | 숨겨진 Fast Queue는 상호작용 요청을 제한하고 지속 작업은 백그라운드 Queue에서 조회·복구합니다. |
@@ -107,6 +108,7 @@ Markdown으로 유지하고, 한국어 열람본은 휴대 가능한 원본을 �
 - [Product Spirit과 제품 결정](docs/product-spirit.ko.md)
 - [실행 화면으로 보는 기능 둘러보기](docs/features/visual-guide.ko.md)
 - [빠른 Vault 검색](docs/features/fast-vault-search.ko.md)
+- [Codex·ChatGPT 데스크톱 작업 추적](docs/features/mcp-workbench-bridge.ko.md)
 - [Problem 중심 Workbench](docs/features/conflict-gated-workflow.ko.md)
 - [완료·Knowledge·아카이브](docs/features/completion-writeback-archive.ko.md)
 - [Compass](docs/features/direction-dashboard.ko.md)

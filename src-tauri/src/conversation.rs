@@ -31,6 +31,8 @@ pub(crate) struct ConversationInput {
     message: String,
     mode: String,
     locale: String,
+    #[serde(default)]
+    evidence_refs: Vec<String>,
 }
 
 impl RequestRegistry {
@@ -75,6 +77,7 @@ pub(crate) async fn conversation_stream(
         message,
         mode,
         locale,
+        evidence_refs,
     } = input;
     if message.trim().is_empty() {
         return Err("message is required".into());
@@ -86,6 +89,7 @@ pub(crate) async fn conversation_stream(
         &mode,
         &locale,
         &message,
+        &evidence_refs,
     )?;
     let (base_url, model, api_key) = native::settings::provider_credentials_for(
         &application.settings_path(),
@@ -95,6 +99,9 @@ pub(crate) async fn conversation_stream(
         return Err("Provider model is required".into());
     }
     let token = registry.register(&request_id).await?;
+    let source_revision = request.source_revision.clone();
+    let context_scope = request.context_scope.clone();
+    let retrieval_snapshot_hash = request.retrieval_snapshot_hash.clone();
     let registry = registry.inner().clone();
     let db_path = application.db_path();
     tauri::async_runtime::spawn(async move {
@@ -166,7 +173,17 @@ pub(crate) async fn conversation_stream(
                     return Ok(());
                 }
             }
-            native::workflow::record_ai_run(&db_path, &entity_type, &entity_id, &message, &output)?;
+            native::workflow::record_ai_run(
+                &db_path,
+                &entity_type,
+                &entity_id,
+                &message,
+                &output,
+                &model,
+                &source_revision,
+                &context_scope,
+                &retrieval_snapshot_hash,
+            )?;
             let _ = on_event.send(StreamEvent::Chunk {
                 data: b"event: done\ndata: done\n\n".to_vec(),
             });

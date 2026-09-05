@@ -80,4 +80,22 @@ describe('Tauri domain command adapter', () => {
     await expect(new TauriApplicationClient().request({ path: '/board', signal: controller.signal })).rejects.toMatchObject({ name: 'AbortError' });
     expect(invoke).not.toHaveBeenCalled();
   });
+
+  it('routes tracked-session reads and writes only through the work-tracking command',async()=>{
+    vi.mocked(invoke).mockResolvedValue({status:200,body:{sessionId:'session-1',headRevision:2}});
+    const client=new TauriApplicationClient();
+    await client.request({path:'/work-tracking/sessions/session-1'});
+    await client.request({path:'/work-tracking/append',method:'POST',body:JSON.stringify({operationId:'a'})});
+    expect(invoke).toHaveBeenNthCalledWith(1,'work_tracking_command',{operation:{name:'work_tracking.session',input:{sessionId:'session-1'}}});
+    expect(invoke).toHaveBeenNthCalledWith(2,'work_tracking_command',{operation:{name:'work_tracking.append',input:{operationId:'a'}}});
+  });
+
+  it('routes scoped evidence and publication deferral through the shared work-tracking boundary',async()=>{
+    vi.mocked(invoke).mockResolvedValue({status:200,body:{}});
+    const client=new TauriApplicationClient();
+    await client.request({path:'/work-tracking/vault/lexical',method:'POST',body:JSON.stringify({query:'conflict',scope:'topic',targetId:'LLM Wiki'})});
+    await client.request({path:'/work-tracking/knowledge/defer',method:'POST',body:JSON.stringify({sessionId:'s',completionRevision:4})});
+    expect(invoke).toHaveBeenNthCalledWith(1,'work_tracking_command',{operation:{name:'work_tracking.vault.lexical',input:{query:'conflict',scope:'topic',targetId:'LLM Wiki'}}});
+    expect(invoke).toHaveBeenNthCalledWith(2,'work_tracking_command',{operation:{name:'work_tracking.knowledge.defer',input:{sessionId:'s',completionRevision:4}}});
+  });
 });

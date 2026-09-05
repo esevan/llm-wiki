@@ -1,8 +1,7 @@
 use rusqlite::{params, Connection, Transaction, TransactionBehavior};
 use serde_json::Value;
 
-pub const CURRENT_SCHEMA_VERSION: i64 = 3;
-const MAX_ADDITIVE_COMPATIBLE_SCHEMA_VERSION: i64 = 4;
+pub const CURRENT_SCHEMA_VERSION: i64 = 5;
 
 type MigrationFunction = for<'connection> fn(&Transaction<'connection>) -> Result<(), String>;
 type LegacyLocalizationRow = (String, String, String, String, String, String, String);
@@ -29,15 +28,81 @@ const MIGRATIONS: &[Migration] = &[
         name: "normalize AI job defaults",
         run: normalize_ai_jobs,
     },
+    Migration {
+        version: 4,
+        name: "add dual-chat work tracking",
+        run: add_work_tracking,
+    },
+    Migration {
+        version: 5,
+        name: "add bound work reviews",
+        run: add_bound_reviews,
+    },
 ];
 
-pub fn apply(connection: &mut Connection) -> Result<(), String> {
-    let current_version = schema_version(connection)?;
-    if current_version > CURRENT_SCHEMA_VERSION
-        && current_version <= MAX_ADDITIVE_COMPATIBLE_SCHEMA_VERSION
-    {
-        return Ok(());
+fn add_bound_reviews(tx: &Transaction<'_>) -> Result<(), String> {
+    tx.execute_batch("CREATE TABLE work_tracking_reviews (
+      id TEXT PRIMARY KEY, connection_id TEXT NOT NULL REFERENCES mcp_connections(id),
+      operation_id TEXT NOT NULL, action TEXT NOT NULL, payload_hash TEXT NOT NULL,
+      payload_json TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'pending',
+      expires_at TEXT NOT NULL, created_at TEXT NOT NULL,
+      UNIQUE(connection_id,operation_id,action)
+    ); CREATE TABLE work_tracking_workspace (id INTEGER PRIMARY KEY CHECK(id=1), revision INTEGER NOT NULL DEFAULT 0, selection_json TEXT);
+    INSERT INTO work_tracking_workspace(id) VALUES(1);
+    CREATE TABLE work_tracking_publication_jobs(review_id TEXT PRIMARY KEY REFERENCES work_tracking_reviews(id),state TEXT NOT NULL DEFAULT 'pending',attempts INTEGER NOT NULL DEFAULT 0,next_attempt_at TEXT,safe_error_code TEXT);
+    CREATE TABLE work_tracking_entity_versions(entity_type TEXT NOT NULL,entity_id TEXT NOT NULL,revision INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(entity_type,entity_id));
+    ALTER TABLE mcp_elicitation_challenges ADD COLUMN target_snapshot_json TEXT;
+    CREATE TABLE work_tracking_topic_memberships(topic_id TEXT NOT NULL,entity_type TEXT NOT NULL,entity_id TEXT NOT NULL,PRIMARY KEY(topic_id,entity_type,entity_id));
+    CREATE TABLE knowledge_publication_undos(review_id TEXT PRIMARY KEY,draft_id TEXT NOT NULL,draft_revision INTEGER NOT NULL,recovery_path TEXT NOT NULL,created_at TEXT NOT NULL);
+    CREATE INDEX work_tracking_pending_projection_order ON work_tracking_projection_jobs(created_at) WHERE state IN ('pending','claimed') AND attempts<5;
+    CREATE TRIGGER topic_membership_removed AFTER DELETE ON work_tracking_topic_memberships BEGIN DELETE FROM work_tracking_evidence_grants WHERE scope_kind='topic' AND scope_target=OLD.topic_id AND path=OLD.entity_id; UPDATE work_tracking_workspace SET revision=revision+1 WHERE id=1; END;
+    CREATE TRIGGER topic_membership_added AFTER INSERT ON work_tracking_topic_memberships BEGIN UPDATE work_tracking_workspace SET revision=revision+1 WHERE id=1; END;").map_err(|error| error.to_string())?;
+    for table in [
+        "captures",
+        "problems",
+        "features",
+        "solution_progress_entries",
+        "completions",
+        "work_tracking_sessions",
+    ] {
+        let exists: bool = tx
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=?)",
+                [table],
+                |row| row.get(0),
+            )
+            .map_err(|error| error.to_string())?;
+        if !exists {
+            continue;
+        }
+        tx.execute_batch(&format!("INSERT INTO work_tracking_entity_versions(entity_type,entity_id) SELECT '{table}',id FROM {table};")).map_err(|error|error.to_string())?;
+        for action in ["INSERT", "UPDATE", "DELETE"] {
+            let row = if action == "DELETE" { "OLD" } else { "NEW" };
+            tx.execute_batch(&format!("CREATE TRIGGER tracked_revision_{table}_{action} AFTER {action} ON {table} BEGIN UPDATE work_tracking_workspace SET revision=revision+1 WHERE id=1; INSERT INTO work_tracking_entity_versions(entity_type,entity_id,revision) VALUES('{table}',{row}.id,1) ON CONFLICT(entity_type,entity_id) DO UPDATE SET revision=revision+1; END;")).map_err(|error|error.to_string())?;
+        }
     }
+    for (table,related,actions) in [
+        ("captures","s.capture_id={row}.id",vec!["UPDATE"]),
+        ("solution_checklist_items","s.id IN (SELECT session_id FROM work_tracking_links WHERE entity_type='features' AND entity_id={row}.feature_id)",vec!["INSERT","UPDATE","DELETE"]),
+        ("solution_progress_comments","s.id IN (SELECT l.session_id FROM work_tracking_links l JOIN solution_progress_entries p ON p.feature_id=l.entity_id WHERE l.entity_type='features' AND p.id={row}.entry_id)",vec!["INSERT","UPDATE","DELETE"]),
+        ("solution_progress_entries","s.id IN (SELECT session_id FROM work_tracking_links WHERE entity_type='features' AND entity_id={row}.feature_id)",vec!["UPDATE","DELETE"]),
+        ("completion_reviews","s.id IN (SELECT session_id FROM work_tracking_links WHERE entity_type='features' AND entity_id={row}.feature_id)",vec!["INSERT","UPDATE","DELETE"]),
+        ("completions","s.id IN (SELECT session_id FROM work_tracking_links WHERE entity_type='features' AND entity_id={row}.feature_id)",vec!["INSERT","UPDATE","DELETE"]),
+    ] {
+        let exists:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=?)",[table],|row|row.get(0)).map_err(|error|error.to_string())?;if !exists{continue;}
+        for action in actions {
+            let row=if action=="DELETE"{"OLD"}else{"NEW"};let related=related.replace("{row}",row);
+            tx.execute_batch(&format!("CREATE TRIGGER tracked_detail_{table}_{action} AFTER {action} ON {table} BEGIN
+            INSERT INTO work_tracking_events(id,session_id,revision,previous_event_id,stream_id,source_sequence,kind,payload_json,payload_hash,occurred_at,ingested_at)
+            SELECT lower(hex(randomblob(16))),s.id,s.head_revision+1,s.head_event_id,'workbench',COALESCE((SELECT MAX(source_sequence)+1 FROM work_tracking_events WHERE session_id=s.id AND stream_id='workbench'),1),'workflow_link',json_object('entityType','{table}','entityId',{row}.id,'operation','{action}'),lower(hex(randomblob(32))),strftime('%Y-%m-%dT%H:%M:%fZ','now'),strftime('%Y-%m-%dT%H:%M:%fZ','now') FROM work_tracking_sessions s WHERE {related};
+            UPDATE work_tracking_sessions SET head_revision=head_revision+1,head_event_id=(SELECT id FROM work_tracking_events WHERE session_id=work_tracking_sessions.id ORDER BY revision DESC LIMIT 1),updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id IN (SELECT s.id FROM work_tracking_sessions s WHERE {related});
+            END;")).map_err(|error|error.to_string())?;
+        }
+    }
+    Ok(())
+}
+
+pub fn apply(connection: &mut Connection) -> Result<(), String> {
     apply_plan(connection, MIGRATIONS, CURRENT_SCHEMA_VERSION)
 }
 
@@ -213,6 +278,41 @@ fn normalize_ai_jobs(transaction: &Transaction<'_>) -> Result<(), String> {
              ALTER TABLE ai_jobs_v3 RENAME TO ai_jobs_v2;",
         )
         .map_err(|error| error.to_string())
+}
+
+fn add_work_tracking(transaction: &Transaction<'_>) -> Result<(), String> {
+    for (column, declaration) in [
+        ("model", "TEXT NOT NULL DEFAULT ''"),
+        ("source_revision", "TEXT NOT NULL DEFAULT ''"),
+        ("context_scope", "TEXT NOT NULL DEFAULT ''"),
+        ("retrieval_snapshot_hash", "TEXT NOT NULL DEFAULT ''"),
+    ] {
+        add_missing_column(transaction, "ai_runs", column, declaration)?;
+    }
+    if table_exists(transaction, "mcp_connections")? {
+        add_missing_column(
+            transaction,
+            "mcp_connections",
+            "allowed_topics_json",
+            "TEXT NOT NULL DEFAULT '[]'",
+        )?;
+    }
+    let schema = include_str!("work_tracking_schema.sql");
+    let (tables, triggers) = schema
+        .split_once("-- Existing Workbench mutations")
+        .ok_or("Work-tracking schema marker is missing")?;
+    transaction
+        .execute_batch(tables)
+        .map_err(|error| error.to_string())?;
+    if table_exists(transaction, "problems")?
+        && table_exists(transaction, "features")?
+        && table_exists(transaction, "solution_progress_entries")?
+    {
+        transaction
+            .execute_batch(&format!("-- Existing Workbench mutations{triggers}"))
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(())
 }
 
 fn table_exists(connection: &Connection, table: &str) -> Result<bool, String> {
@@ -496,16 +596,15 @@ mod tests {
     }
 
     #[test]
-    fn additive_work_tracking_database_is_accepted_without_downgrading() {
+    fn work_tracking_database_advances_to_bound_reviews() {
         let mut connection = Connection::open_in_memory().unwrap();
-        connection
-            .execute_batch(include_str!("schema.sql"))
-            .unwrap();
-        connection.pragma_update(None, "user_version", 4).unwrap();
+        apply_plan(&mut connection, &MIGRATIONS[..4], 4).unwrap();
+        assert_eq!(schema_version(&connection).unwrap(), 4);
 
         apply(&mut connection).unwrap();
 
-        assert_eq!(schema_version(&connection).unwrap(), 4);
+        assert_eq!(schema_version(&connection).unwrap(), CURRENT_SCHEMA_VERSION);
+        assert!(table_exists(&connection, "work_tracking_reviews").unwrap());
     }
 
     #[test]

@@ -1,6 +1,39 @@
+import { useEffect, useRef, useState } from 'react';
 import { IconButton } from '../../components/IconButton';
+import { useWorkTrackingText } from '../chat/useWorkTrackingText';
+
+let refreshSequence=0;
+const refreshWorkbenchSnapshot = async () => {
+  const sequence=++refreshSequence;
+  if (!window.llmWikiApplication) return;
+  try {
+  const response=await window.llmWikiApplication.request({path:'/work-tracking/current'});
+  if (!response.ok) return;
+  const detail=await response.json();
+  if(sequence===refreshSequence) window.dispatchEvent(new CustomEvent('llm-wiki:work-tracking-refresh',{detail}));
+  } catch { /* Keep the last snapshot; a later focus/read retries without disturbing input. */ }
+};
 
 export function WorkbenchView({ active }: { active: boolean }) {
+  const t=useWorkTrackingText();
+  const [tracked, setTracked] = useState<Array<{ trackedSessionId: string; capture: string; headRevision: number; sourceInterface: string; state: string; recentProgress?: Array<{eventId:string;payload:{summary?:string}}> }>>([]);
+  useEffect(() => {
+    const update = (event: Event) => setTracked((event as CustomEvent).detail.activeWork ?? []);
+    window.addEventListener('llm-wiki:work-tracking-refresh', update);
+    return () => window.removeEventListener('llm-wiki:work-tracking-refresh', update);
+  }, []);
+  const activeRef=useRef(active);
+  activeRef.current=active;
+  useEffect(()=>{
+    const refresh=()=>{if(activeRef.current) void refreshWorkbenchSnapshot();};
+    const visible=()=>{if(document.visibilityState==='visible')refresh();};
+    window.addEventListener('focus',refresh);
+    document.addEventListener('visibilitychange',visible);
+    window.addEventListener('llm-wiki:work-tracking-written',refresh);
+    const timer=window.setInterval(refresh,15_000);
+    if(active)refresh();
+    return()=>{window.removeEventListener('focus',refresh);document.removeEventListener('visibilitychange',visible);window.removeEventListener('llm-wiki:work-tracking-written',refresh);window.clearInterval(timer);};
+  },[active]);
   return (
     <section id="workbench" className={`view${active ? ' active' : ''}`}>
       <header className="top">
@@ -23,6 +56,13 @@ export function WorkbenchView({ active }: { active: boolean }) {
       </div>
       <section id="flow-view" className="flow-view" hidden />
       <section className="board" id="board" />
+      <section className="tracked-workbench" aria-label={t('card.region')}>
+        {tracked.map((work,index) => <article key={work.trackedSessionId ?? index} className="work-tracking-card">
+          <h3 data-user-content>{work.capture}</h3><p>{t('source.'+work.sourceInterface)} · {t('state.'+work.state)} · {t('card.revision')} {work.headRevision}</p>
+          {work.recentProgress?.map(entry => <p key={entry.eventId} data-user-content>{entry.payload.summary}</p>)}
+          <button type="button" onClick={() => window.dispatchEvent(new CustomEvent('llm-wiki:tracked-resume', {detail:{sessionId:work.trackedSessionId}}))}>{t('workbench.resume')}</button>
+        </article>)}
+      </section>
       <section className="workbench-context">
         <article className="context-panel">
           <div className="panel-head">

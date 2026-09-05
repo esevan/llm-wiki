@@ -16,6 +16,14 @@ fn digest(value: &str) -> String {
 
 pub(crate) fn create(db_path: &Path, feature_id: &str, force: bool) -> Result<Value, String> {
     let connection = database::open(db_path)?;
+    create_on(&connection, feature_id, force)
+}
+
+pub(crate) fn create_on(
+    connection: &rusqlite::Connection,
+    feature_id: &str,
+    force: bool,
+) -> Result<Value, String> {
     let (problem_id, title, outcome, solution_created): (String, String, String, String) =
         connection
             .query_row(
@@ -50,7 +58,7 @@ pub(crate) fn create(db_path: &Path, feature_id: &str, force: bool) -> Result<Va
     if !force {
         let existing = connection.query_row("SELECT id FROM lineage_snapshots WHERE feature_id=? AND source_hash=? AND schema_version=? ORDER BY version DESC LIMIT 1", params![feature_id, source_hash, SCHEMA_VERSION], |row| row.get::<_, String>(0)).optional().map_err(|error| error.to_string())?;
         if let Some(snapshot_id) = existing {
-            return load(&connection, feature_id, &snapshot_id);
+            return load(connection, feature_id, &snapshot_id);
         }
     }
     let version: i64 = connection
@@ -67,7 +75,7 @@ pub(crate) fn create(db_path: &Path, feature_id: &str, force: bool) -> Result<Va
     let mut evidence = Map::new();
     if let (Some(capture_id), Some((text, created))) = (capture_id.as_deref(), capture.as_ref()) {
         add_stage(
-            &connection,
+            connection,
             &snapshot_id,
             &mut stages,
             &mut claims,
@@ -84,7 +92,7 @@ pub(crate) fn create(db_path: &Path, feature_id: &str, force: bool) -> Result<Va
         )?;
     }
     add_stage(
-        &connection,
+        connection,
         &snapshot_id,
         &mut stages,
         &mut claims,
@@ -100,7 +108,7 @@ pub(crate) fn create(db_path: &Path, feature_id: &str, force: bool) -> Result<Va
         },
     )?;
     add_stage(
-        &connection,
+        connection,
         &snapshot_id,
         &mut stages,
         &mut claims,
@@ -117,7 +125,7 @@ pub(crate) fn create(db_path: &Path, feature_id: &str, force: bool) -> Result<Va
     )?;
     if let Some((reason, created, decision_id)) = completion {
         add_stage(
-            &connection,
+            connection,
             &snapshot_id,
             &mut stages,
             &mut claims,

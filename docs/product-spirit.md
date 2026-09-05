@@ -41,8 +41,9 @@ to the Problem that explains why it matters.
 
 ## 5. Private process, portable knowledge.
 
-Chats, drafts, refinements, and progress remain private local process. Human-approved completion
-creates an Obsidian-compatible Playbook and raw evidence bundle. That Markdown remains useful
+Chats, drafts, refinements, progress, and completed-work decisions remain private local process.
+Completion and publication are separate human decisions. Explicit Knowledge publication creates an
+Obsidian-compatible Playbook and raw evidence bundle. That Markdown remains useful
 without LLM Wiki and can be searched as Knowledge for future conflict review.
 App-managed Knowledge uses English Markdown as its canonical portable source. A Korean reading
 version is derived on request and can be reused only for the exact current source; it never replaces

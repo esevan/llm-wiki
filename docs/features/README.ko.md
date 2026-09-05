@@ -12,6 +12,8 @@
 
 ## 작업을 캡처하고 구체화하기
 
+- [Codex·ChatGPT 데스크톱 작업 추적](mcp-workbench-bridge.ko.md)은 Workbench 화면을 요구하지
+  않으면서 인앱 Chat과 로컬 외부 Chat을 같은 workflow에 연결합니다.
 - [Problem 중심 Workbench](conflict-gated-workflow.ko.md)는 화면의 흐름을
   **Capture → Problem → Solution**으로 구성합니다.
 - [Refinement Preview](refinement-preview-status.ko.md)는 AI 제안을 검토하는 동안 맥락을 보존합니다.

@@ -9,9 +9,11 @@ mod migrations;
 mod patches;
 mod projection;
 mod refinement;
-mod semantic;
+pub(crate) mod semantic;
 pub mod settings;
-mod vault;
+pub(crate) mod vault;
+pub(crate) mod work_tracking;
+pub(crate) mod work_tracking_projector;
 mod workbench;
 pub mod workflow;
 
@@ -27,6 +29,7 @@ pub struct NativeApplication {
     vault_setup_required: bool,
     semantic: semantic::SemanticEngine,
     jobs: jobs::JobRegistry,
+    work_tracking: crate::application::work_tracking_service::WorkTrackingApplicationService,
 }
 
 #[derive(Debug, Deserialize)]
@@ -86,14 +89,36 @@ impl NativeApplication {
             std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
         }
         database::initialize(&db_path)?;
+        let semantic = semantic::SemanticEngine::new(embedding_model_dir);
+        let store = crate::adapters::sqlite::SqliteWorkTrackingStore::new(&db_path);
+        store
+            .ensure_native_connection()
+            .map_err(|error| error.message.clone())?;
+        let vault_adapter =
+            crate::adapters::vault::MarkdownVaultAdapter::new(&db_path, &vault, semantic.clone());
         Ok(Self {
             db_path,
             settings_path,
             vault,
             vault_setup_required,
-            semantic: semantic::SemanticEngine::new(embedding_model_dir),
+            semantic,
             jobs: jobs::JobRegistry::default(),
+            work_tracking:
+                crate::application::work_tracking_service::WorkTrackingApplicationService::new(
+                    store,
+                    vault_adapter,
+                ),
         })
+    }
+
+    pub fn execute_work_tracking(&self, operation: NativeOperation) -> NativeResponse {
+        work_tracking::execute(&self.work_tracking, operation)
+    }
+
+    pub fn work_tracking_service(
+        &self,
+    ) -> crate::application::work_tracking_service::WorkTrackingApplicationService {
+        self.work_tracking.clone()
     }
 
     pub fn isolated(vault: &Path, db_path: &Path) -> Result<Self, String> {
@@ -231,7 +256,7 @@ impl NativeApplication {
     pub async fn execute_workflow(&self, operation: NativeOperation) -> NativeResponse {
         let name = operation.name.clone();
         let input = operation.input.clone();
-        let mut response = self.execute_domain("workflow", operation);
+        let response = self.execute_domain("workflow", operation);
         if !(200..300).contains(&response.status) {
             return response;
         }
@@ -260,16 +285,6 @@ impl NativeApplication {
                         "source_locale":input.get("locale").and_then(Value::as_str).unwrap_or("en")
                     }))
                     .await;
-            }
-        }
-        if name == "problem.complete" {
-            let problem_id = input.get("problemId").and_then(Value::as_str).unwrap_or("");
-            let job = self.enqueue_job(json!({
-                "taskKind":"completion_report","entityType":"problems","entityId":problem_id,
-                "refresh_lineage":false,"locale":input.get("locale").and_then(Value::as_str).unwrap_or("en")
-            })).await;
-            if job.status == 202 {
-                response.body["report_job_id"] = job.body["id"].clone();
             }
         }
         response
@@ -350,15 +365,16 @@ impl NativeApplication {
                 workflow::update_checklist(&self.db_path, id("itemId")?, input)?
             }
             "solution.follow_up" => workflow::follow_up_problem(&self.db_path, id("solutionId")?)?,
-            "problem.complete" => {
-                completion::complete(&self.db_path, &self.vault, id("problemId")?, input)?
-            }
+            "problem.complete" => completion::complete(&self.db_path, id("problemId")?, input)?,
             "problem.playbook.delete" => completion::remove(
                 &self.db_path,
                 &self.vault,
                 id("problemId")?,
                 input.get("force").and_then(Value::as_bool).unwrap_or(false),
             )?,
+            "problem.playbook.publish" => {
+                completion::publish_playbook(&self.db_path, &self.vault, id("problemId")?, input)?
+            }
             "solution.lineage" => lineage::get(&self.db_path, id("solutionId")?)?,
             "solution.lineage.evidence" => {
                 lineage::evidence(&self.db_path, id("solutionId")?, id("evidenceId")?)?

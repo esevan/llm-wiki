@@ -30,6 +30,7 @@ See [Product Spirit in the product](docs/product-spirit.md) for the design impli
 | Understand the real problem | AI-guided Refinement preserves context and proposes a reviewable Problem. |
 | Choose a way forward | A human-approved Problem can produce a Solution; Knowledge-backed conflict review must be clear before work starts. |
 | Resume active work | In Progress Solutions are highlighted; Work Log stores text, screenshots, comments, and validation checks. |
+| Work from another Chat | Local Codex and ChatGPT desktop can resume and update the same Workbench through scoped stdio MCP. |
 | Complete with evidence | AI reviews recorded evidence, while the human retains the completion decision. |
 | Reuse the result | Only completed work becomes an Obsidian-compatible Playbook and searchable Knowledge. |
 | Stay responsive during AI work | One hidden Fast Queue throttles interaction; durable work remains visible and recoverable in the background Queue. |
@@ -118,6 +119,7 @@ default. Every choice remains user-configurable in Advanced options.
 - [Product Spirit and product decisions](docs/product-spirit.md)
 - [Visual feature tour](docs/features/visual-guide.md)
 - [Fast vault search](docs/features/fast-vault-search.md)
+- [Work tracking from Codex and ChatGPT desktop](docs/features/mcp-workbench-bridge.md)
 - [Problem-centered Workbench](docs/features/conflict-gated-workflow.md)
 - [Completion, Knowledge, and archive](docs/features/completion-writeback-archive.md)
 - [Compass](docs/features/direction-dashboard.md)

@@ -3,9 +3,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
 #[cfg(test)]
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Mutex, OnceLock};
 
 pub enum VaultStartup {
     Configured(PathBuf),
@@ -110,6 +110,7 @@ fn set_test_api_key(secret: String) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(not(test))]
 fn read_keychain_api_key() -> ApiKeyResult {
     match key_entry()?.get_password() {
         Ok(secret) if !secret.is_empty() => Ok(Some(secret)),
@@ -140,10 +141,17 @@ fn cache_api_key(result: ApiKeyResult) -> Result<(), String> {
 }
 
 fn api_key() -> ApiKeyResult {
-    if test_mode() {
-        return test_api_key();
+    #[cfg(test)]
+    {
+        test_api_key()
     }
-    cached_api_key(read_keychain_api_key)
+    #[cfg(not(test))]
+    {
+        if test_mode() {
+            return test_api_key();
+        }
+        cached_api_key(read_keychain_api_key)
+    }
 }
 
 fn read(path: &Path) -> Result<AppSettings, String> {
@@ -477,8 +485,14 @@ mod tests {
     static TEST_ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
     fn reset_test_credential_state() {
-        *TEST_API_KEY.get_or_init(|| Mutex::new(None)).lock().unwrap() = None;
-        *API_KEY_CACHE.get_or_init(|| Mutex::new(None)).lock().unwrap() = None;
+        *TEST_API_KEY
+            .get_or_init(|| Mutex::new(None))
+            .lock()
+            .unwrap() = None;
+        *API_KEY_CACHE
+            .get_or_init(|| Mutex::new(None))
+            .lock()
+            .unwrap() = None;
         KEYRING_OPERATION_COUNT.store(0, Ordering::SeqCst);
     }
 
@@ -520,7 +534,10 @@ mod tests {
             }));
         }
         for worker in workers {
-            assert_eq!(worker.join().unwrap(), Err("credential access denied".into()));
+            assert_eq!(
+                worker.join().unwrap(),
+                Err("credential access denied".into())
+            );
         }
         assert_eq!(reads.load(Ordering::SeqCst), 1);
         reset_test_credential_state();

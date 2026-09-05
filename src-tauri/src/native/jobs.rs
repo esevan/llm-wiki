@@ -189,6 +189,9 @@ pub async fn enqueue(
             .ok_or_else(|| format!("{key} is required"))
     };
     let task_kind = required("taskKind")?;
+    if task_kind == "conflict_review" {
+        return Err("Conflict review uses the current Chat session; start it from Chat".into());
+    }
     let entity_type = required("entityType")?;
     let entity_id = required("entityId")?;
     if !matches!(
@@ -429,7 +432,7 @@ async fn run_inner(
         "image_summary" => {
             r#"Return JSON only with exactly this shape: {"ko":{"summary":string},"en":{"summary":string}}."#
         }
-        "conflict_review" => r#"Return JSON with "conflicts" and summary."#,
+        "conflict_review" => return Err("Conflict review requires the current Chat session".into()),
         "completion_review" => "Return a completion decision with problem_recommendation.",
         "workbench_organization" => {
             r#"Return JSON with "entries" containing entity_type, entity_id, category, attention_rank, and rationale. Do not change workflow states."#

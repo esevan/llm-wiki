@@ -594,7 +594,27 @@ pub fn progress(db_path: &Path, feature_id: &str) -> Result<Value, String> {
         let entry_id: String = row.get(0)?;
         let mut comments_statement = connection.prepare("SELECT id,body,created_at FROM solution_progress_comments WHERE entry_id=? ORDER BY created_at")?;
         let comments = comments_statement.query_map([&entry_id], |comment| Ok(json!({"id": comment.get::<_,String>(0)?, "body": comment.get::<_,String>(1)?, "created_at": comment.get::<_,String>(2)?})))?.collect::<Result<Vec<_>,_>>()?;
-        Ok(json!({"id":entry_id,"body":row.get::<_,String>(1)?,"image_data":row.get::<_,String>(2)?,"image_media_type":row.get::<_,String>(3)?,"image_summary":row.get::<_,String>(4)?,"created_at":row.get::<_,String>(5)?,"comments":comments,"localized_versions":{}}))
+        let mut entry = json!({"id":entry_id,"body":row.get::<_,String>(1)?,"image_data":row.get::<_,String>(2)?,"image_media_type":row.get::<_,String>(3)?,"image_summary":row.get::<_,String>(4)?,"created_at":row.get::<_,String>(5)?,"comments":comments,"localized_versions":{}});
+        // Structured checkpoint data stays in the immutable event, not a second
+        // mutable copy. Both Workbench and Chat read the same source evidence.
+        let tracked = connection.query_row(
+            "SELECT e.id,e.payload_json,CASE WHEN e.stream_id IN ('in_app_chat:native-in-app-chat','external:native-in-app-chat','workbench') THEN 'in_app_chat' ELSE 'external_mcp_chat' END,s.id,e.occurred_at FROM work_tracking_links l JOIN work_tracking_events e ON e.id=l.source_event_id JOIN work_tracking_sessions s ON s.id=l.session_id WHERE l.entity_type='solution_progress_entries' AND l.entity_id=? AND l.relationship='accepted_progress'",
+            [&entry_id], |row| Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?,row.get::<_,String>(2)?,row.get::<_,String>(3)?,row.get::<_,String>(4)?)),
+        ).optional()?;
+        if let Some((event_id, payload, origin, session_id, occurred_at)) = tracked {
+            if let Ok(payload) = serde_json::from_str::<Value>(&payload) {
+                for key in ["summary", "changes", "decisions", "evidenceRefs", "artifactRefs", "validation", "verification", "outcomes", "blockers", "nextSteps"] {
+                    if let Some(value) = payload.get(key) {
+                        entry[key] = value.clone();
+                    }
+                }
+            }
+            entry["origin"] = json!(origin);
+            entry["occurredAt"] = json!(occurred_at);
+            entry["sourceEventId"] = json!(event_id);
+            entry["sessionId"] = json!(session_id);
+        }
+        Ok(entry)
     }).map_err(|error| error.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|error| error.to_string())?;
     let mut checklist_statement = connection.prepare("SELECT id,body,checked,created_at,updated_at FROM solution_checklist_items WHERE feature_id=? ORDER BY created_at").map_err(|error| error.to_string())?;
     let checklist = checklist_statement.query_map([feature_id], |row| Ok(json!({"id":row.get::<_,String>(0)?,"body":row.get::<_,String>(1)?,"checked":row.get::<_,i64>(2)? != 0,"created_at":row.get::<_,String>(3)?,"updated_at":row.get::<_,String>(4)?}))).map_err(|error| error.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|error| error.to_string())?;
@@ -961,7 +981,20 @@ pub fn update_item(
 ) -> Result<Value, String> {
     let title = required_text(input, "title")?;
     let detail = input.get("detail").and_then(Value::as_str).unwrap_or("");
-    let connection = database::open(db_path)?;
+    let mut connection = database::open(db_path)?;
+    let transaction = connection
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .map_err(|error| error.to_string())?;
+    let linked:bool=transaction.query_row("SELECT EXISTS(SELECT 1 FROM work_tracking_links WHERE entity_type=? AND entity_id=? UNION ALL SELECT 1 FROM work_tracking_sessions WHERE capture_id=? AND ?='captures')",params![entity_type,entity_id,entity_id,entity_type],|row|row.get(0)).map_err(|error|error.to_string())?;
+    let revision:i64=transaction.query_row("SELECT revision FROM work_tracking_entity_versions WHERE entity_type=? AND entity_id=?",params![entity_type,entity_id],|row|row.get(0)).optional().map_err(|error|error.to_string())?.unwrap_or(0);
+    if (linked || input.get("expectedSourceRevision").is_some())
+        && input["expectedSourceRevision"].as_i64() != Some(revision)
+    {
+        return Err(format!(
+            "head_conflict: Item changed; refresh before saving (revision {revision})"
+        ));
+    }
+    let connection = &transaction;
     let changed = match entity_type {
         "captures" => connection.execute(
             "UPDATE captures SET text=? WHERE id=?",
@@ -982,8 +1015,9 @@ pub fn update_item(
         return Err("Item not found".into());
     }
     if let Some(versions) = input.get("localized_versions") {
-        localization::save_versions(&connection, entity_type, entity_id, versions)?;
+        localization::save_versions(connection, entity_type, entity_id, versions)?;
     }
+    transaction.commit().map_err(|error| error.to_string())?;
     Ok(Value::Null)
 }
 
@@ -998,7 +1032,7 @@ pub fn item_for_locale(
     locale: &str,
 ) -> Result<Value, String> {
     let connection = database::open(db_path)?;
-    match entity_type {
+    let value_result:Result<Value,String>=match entity_type {
         "captures" => connection.query_row(
             "SELECT id,text,created_at FROM captures WHERE id=?", [entity_id],
             |row| Ok(json!({"id":row.get::<_,String>(0)?,"kind":"capture","title":row.get::<_,String>(1)?,"detail":row.get::<_,String>(1)?,"state":"captured","created_at":row.get::<_,String>(2)?})),
@@ -1017,7 +1051,11 @@ pub fn item_for_locale(
             Ok(localized)
         }
         _ => Err("Unsupported item type".into()),
-    }
+    };
+    let mut value = value_result?;
+    value["sourceRevision"]=json!(connection.query_row("SELECT revision FROM work_tracking_entity_versions WHERE entity_type=? AND entity_id=?",params![entity_type,entity_id],|row|row.get::<_,i64>(0)).optional().map_err(|error|error.to_string())?.unwrap_or(0));
+    value["trackedSessionId"]=connection.query_row("SELECT s.id FROM work_tracking_links l JOIN work_tracking_sessions s ON s.id=l.session_id WHERE l.entity_type=? AND l.entity_id=? AND s.state!='completed' ORDER BY s.updated_at DESC LIMIT 1",params![entity_type,entity_id],|row|row.get::<_,String>(0)).optional().map_err(|error|error.to_string())?.map(Value::from).unwrap_or(Value::Null);
+    Ok(value)
 }
 
 pub fn supplement_localization(
@@ -1060,12 +1098,17 @@ pub fn set_importance(db_path: &Path, input: &Value) -> Result<Value, String> {
     Ok(Value::Null)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn record_ai_run(
     db_path: &Path,
     entity_type: &str,
     entity_id: &str,
     input: &str,
     output: &str,
+    model: &str,
+    source_revision: &str,
+    context_scope: &str,
+    retrieval_snapshot_hash: &str,
 ) -> Result<(), String> {
     let table = match entity_type {
         "captures" | "problems" | "features" => entity_type,
@@ -1082,7 +1125,19 @@ pub fn record_ai_run(
     if !exists {
         return Err("Item not found".into());
     }
-    connection.execute("INSERT INTO ai_runs(id,entity_type,entity_id,kind,input_text,output_text) VALUES (?,?,?,'workflow_chat',?,?)", params![id(),entity_type,entity_id,input,output]).map_err(|error| error.to_string())?;
+    for token in output.split(|character: char| {
+        character.is_whitespace()
+            || matches!(character, '[' | ']' | '(' | ')' | ',' | '.' | ':' | ';')
+    }) {
+        if !token.starts_with("ev_") {
+            continue;
+        }
+        let valid:bool=connection.query_row("SELECT EXISTS(SELECT 1 FROM work_tracking_evidence_grants g JOIN vault_documents d ON d.path=g.path AND d.source_hash=g.revision WHERE g.evidence_id=? AND g.connection_id='native-in-app-chat' AND g.expires_at>=?)",params![token,chrono::Utc::now().to_rfc3339()],|row|row.get(0)).map_err(|error|error.to_string())?;
+        if !valid {
+            return Err("AI response cited unavailable evidence".into());
+        }
+    }
+    connection.execute("INSERT INTO ai_runs(id,entity_type,entity_id,kind,input_text,output_text,model,source_revision,context_scope,retrieval_snapshot_hash) VALUES (?,?,?,'workflow_chat',?,?,?,?,?,?)", params![id(),entity_type,entity_id,input,output,model,source_revision,context_scope,retrieval_snapshot_hash]).map_err(|error| error.to_string())?;
     Ok(())
 }
 
@@ -1151,7 +1206,7 @@ pub fn transitions(entity_type: Option<&str>) -> Value {
 
 pub fn apply_transition(
     db_path: &Path,
-    vault: &Path,
+    _vault: &Path,
     entity_type: &str,
     entity_id: &str,
     input: &Value,
@@ -1188,7 +1243,7 @@ pub fn apply_transition(
                 .optional()
                 .map_err(|error| error.to_string())?
                 .ok_or("Solution not found")?;
-            crate::native::completion::complete(db_path, vault, &problem_id, fields)
+            crate::native::completion::complete(db_path, &problem_id, fields)
         }
         _ => Err("Unsupported workflow transition".into()),
     }

@@ -11,7 +11,7 @@ interface NativeOperation {
   input: Record<string, unknown>;
 }
 
-type NativeCommand = 'system_command' | 'vault_command' | 'settings_command' | 'workflow_command' | 'jobs_command' | 'enqueue_ai_job' | 'provider_request';
+type NativeCommand = 'system_command' | 'vault_command' | 'settings_command' | 'workflow_command' | 'work_tracking_command' | 'jobs_command' | 'enqueue_ai_job' | 'provider_request';
 
 export interface DesktopE2eResult {
   status: 'passed' | 'failed' | 'relaunch' | 'progress';
@@ -65,6 +65,33 @@ const operationFor = (request: ApplicationRequest): NativeOperation => {
   if (method === 'POST' && path === '/captures') return { name: 'capture.create', input: { ...body, locale } };
   if (method === 'GET' && path === '/board') return { name: 'board.get', input: { locale } };
   if (method === 'GET' && path === '/dashboard') return { name: 'compass.dashboard', input: {} };
+  if (method === 'POST' && path === '/work-tracking/open') return { name: 'work_tracking.open', input: body };
+  if (method === 'POST' && path === '/work-tracking/selection') return { name: 'work_tracking.selection', input: body };
+  if (method === 'PUT' && path === '/work-tracking/topic-membership') return { name: 'work_tracking.topic.membership', input: body };
+  if (method === 'POST' && path === '/work-tracking/open/review') return { name: 'work_tracking.open.review', input: body };
+  if (method === 'POST' && path === '/work-tracking/advance/preview') return { name: 'work_tracking.advance.preview', input: body };
+  if (method === 'POST' && path === '/work-tracking/advance/review') return { name: 'work_tracking.advance.review', input: body };
+  if (method === 'GET' && path === '/work-tracking/connections') return { name: 'work_tracking.connection.list', input: {} };
+  if (method === 'POST' && path === '/work-tracking/connections') return { name: 'work_tracking.connection.create', input: body };
+  if (method === 'POST' && path === '/work-tracking/append') return { name: 'work_tracking.append', input: body };
+  if (method === 'POST' && path === '/work-tracking/advance') return { name: 'work_tracking.advance', input: body };
+  if (method === 'GET' && path === '/work-tracking/current') return { name: 'work_tracking.current', input: { limit: Number(url.searchParams.get('limit') ?? 10) } };
+  if (method === 'GET' && path === '/work-tracking/overview') return { name: 'work_tracking.overview', input: { limit: Number(url.searchParams.get('limit') ?? 20), cursor: url.searchParams.get('cursor'), snapshotRevision: url.searchParams.has('snapshotRevision') ? Number(url.searchParams.get('snapshotRevision')) : null } };
+  if (method === 'POST' && path === '/work-tracking/vault/lexical') return { name: 'work_tracking.vault.lexical', input: body };
+  if (method === 'POST' && path === '/work-tracking/vault/semantic') return { name: 'work_tracking.vault.semantic', input: body };
+  if (method === 'POST' && path === '/work-tracking/vault/evidence') return { name: 'work_tracking.vault.evidence', input: body };
+  if (method === 'POST' && path === '/work-tracking/knowledge/draft') return { name: 'work_tracking.knowledge.draft.save', input: body };
+  if (method === 'POST' && path === '/work-tracking/knowledge/publish') return { name: 'work_tracking.knowledge.publish', input: body };
+  if (method === 'POST' && path === '/work-tracking/knowledge/draft/review') return { name: 'work_tracking.knowledge.draft.review', input: body };
+  if (method === 'POST' && path === '/work-tracking/knowledge/publish/preview') return { name: 'work_tracking.knowledge.publish.preview', input: body };
+  if (method === 'POST' && path === '/work-tracking/knowledge/publish/review') return { name: 'work_tracking.knowledge.publish.review', input: body };
+  if (method === 'POST' && path === '/work-tracking/knowledge/withdraw/preview') return { name: 'work_tracking.knowledge.withdraw.preview', input: body };
+  if (method === 'POST' && path === '/work-tracking/knowledge/withdraw/review') return { name: 'work_tracking.knowledge.withdraw.review', input: body };
+  if (method === 'POST' && path === '/work-tracking/knowledge/defer') return { name: 'work_tracking.knowledge.defer', input: body };
+  ids = match(path, /^\/work-tracking\/sessions\/([^/]+)$/);
+  if (ids && method === 'GET') return withIds('work_tracking.session', { sessionId: ids[0] });
+  ids = match(path, /^\/work-tracking\/connections\/([^/]+)$/);
+  if (ids && method === 'DELETE') return withIds('work_tracking.connection.revoke', { connectionId: ids[0] });
   if (method === 'POST' && path === '/goals') return { name: 'compass.goal.create', input: body };
   if (method === 'GET' && path === '/transitions') return { name: 'transitions.list', input: {} };
   if (method === 'GET' && path === '/jobs') return { name: 'jobs.list', input: {} };
@@ -114,6 +141,7 @@ const operationFor = (request: ApplicationRequest): NativeOperation => {
   ids = match(path, /^\/problems\/([^/]+)\/complete$/);
   if (ids && method === 'POST') return withIds('problem.complete', { problemId: ids[0] });
   ids = match(path, /^\/problems\/([^/]+)\/completion-playbook$/);
+  if (ids && method === 'POST') return withIds('problem.playbook.publish', { problemId: ids[0] });
   if (ids && method === 'DELETE') return { name: 'problem.playbook.delete', input: { problemId: ids[0], force: url.searchParams.get('force') === 'true' } };
   ids = match(path, /^\/problems\/([^/]+)\/completion-playbook\/regenerate$/);
   if (ids && method === 'POST') return { name: 'jobs.enqueue', input: { taskKind: 'completion_report', entityType: 'problems', entityId: ids[0], refresh_lineage: true, locale } };
@@ -148,7 +176,7 @@ const operationFor = (request: ApplicationRequest): NativeOperation => {
   ids = match(path, /^\/(captures|problems|features)\/([^/]+)\/refinement-context$/);
   if (ids && method === 'GET') return withIds('refinement.context', { entityType: ids[0], entityId: ids[1], locale });
   ids = match(path, /^\/(captures|problems|features)\/([^/]+)\/(chat|next-chat|completed-chat)$/);
-  if (ids && method === 'POST') return { name: 'conversation.stream', input: { entityType: ids[0], entityId: ids[1], message: body.message, mode: ids[2] === 'next-chat' ? 'next' : ids[2] === 'completed-chat' ? 'completed' : 'refine', locale } };
+  if (ids && method === 'POST') return { name: 'conversation.stream', input: { entityType: ids[0], entityId: ids[1], message: body.message, evidenceRefs: body.evidenceRefs ?? [], mode: ids[2] === 'next-chat' ? 'next' : ids[2] === 'completed-chat' ? 'completed' : 'refine', locale } };
   ids = match(path, /^\/(captures|problems|features)\/([^/]+)\/(draft|refine)$/);
   if (ids && method === 'POST') return { name: 'jobs.enqueue', input: { ...body, taskKind: ids[2] === 'draft' ? 'workflow_draft' : 'workflow_refinement', entityType: ids[0], entityId: ids[1], locale } };
   ids = match(path, /^\/features\/([^/]+)\/(conflict-review|completion-review)$/);
@@ -195,6 +223,7 @@ const commandFor = (operation: NativeOperation): NativeCommand => {
   if (root === 'vault' || root === 'knowledge') return 'vault_command';
   if (root === 'locale' || root === 'provider' || root === 'i18n') return 'settings_command';
   if (root === 'jobs' || root === 'notifications') return 'jobs_command';
+  if (root === 'work_tracking') return 'work_tracking_command';
   return 'workflow_command';
 };
 
@@ -273,6 +302,7 @@ export class TauriApplicationClient implements ApplicationClient {
           message: operation.input.message,
           mode: operation.input.mode,
           locale: operation.input.locale,
+          evidenceRefs: operation.input.evidenceRefs ?? [],
         },
         onEvent,
       });
@@ -282,4 +312,21 @@ export class TauriApplicationClient implements ApplicationClient {
       throw error;
     }
   }
+}
+
+export async function saveTrackedWorkWithRefresh(
+  client: ApplicationClient,
+  sessionId: string,
+  request: ApplicationRequest,
+  canRetry: (latest: unknown) => boolean,
+): Promise<ApplicationResponse> {
+  const first=await client.request(request);
+  if (first.status!==409) return first;
+  const error=await first.json<{error?:{code?:string}}>();
+  if (error.error?.code!== 'head_conflict') return first;
+  const latestResponse=await client.request({path:`/work-tracking/sessions/${encodeURIComponent(sessionId)}`});
+  const latest=await latestResponse.json<{headRevision?:number}>();
+  if (!canRetry(latest) || typeof latest.headRevision!=='number' || !request.body) return first;
+  const body=JSON.parse(request.body) as Record<string,unknown>;
+  return client.request({...request,body:JSON.stringify({...body,expectedHeadRevision:latest.headRevision})});
 }

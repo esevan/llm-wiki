@@ -21,6 +21,31 @@ export interface ApplicationClient {
   request(request: ApplicationRequest): Promise<ApplicationResponse>;
 }
 
+export type WorkTrackingStage = 'capture' | 'problem' | 'solution' | 'checkpoint' | 'conflict' | 'completion' | 'knowledge';
+export type WorkTrackingProjection = 'pending_review' | 'queued' | 'claimed' | 'waiting_solution' | 'applied' | 'ignored_late' | 'conflict' | 'failed';
+
+export interface WorkTrackingCardModel {
+  id: string;
+  stage: WorkTrackingStage;
+  title: string;
+  summary: string;
+  revision: number;
+  projectionStatus?: WorkTrackingProjection;
+  publicationState?: 'not_requested' | 'offered' | 'deferred' | 'draft_review' | 'draft_saved' | 'published';
+  draftMarkdown?: string;
+  editable?: boolean;
+}
+
+export interface WorkTrackingSession {
+  sessionId: string;
+  headEventId: string;
+  headRevision: number;
+  state: 'active' | 'completion_proposed' | 'completed';
+  publicationState: string;
+  recentEvents: Array<Record<string, unknown>>;
+  nextActions: string[];
+}
+
 declare global {
   interface Window {
     llmWikiApplication: ApplicationClient;

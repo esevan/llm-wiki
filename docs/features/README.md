@@ -12,6 +12,8 @@ Start with [Product Spirit](../product-spirit.md), or use the
 
 ## Capture and shape work
 
+- [Work tracking from Codex and ChatGPT desktop](mcp-workbench-bridge.md) keeps in-app Chat and
+  local external Chat on the same Workbench workflow without requiring the Workbench screen.
 - [Problem-centered Workbench](conflict-gated-workflow.md) organizes the visible workflow as
   **Capture → Problem → Solution**.
 - [Refinement Preview](refinement-preview-status.md) preserves context while AI prepares a proposal
