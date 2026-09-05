@@ -856,6 +856,19 @@ async fn given_a_native_conflict_job_when_resolved_then_decisions_are_durable() 
     assert_eq!(queued.status, 202, "{}", queued.body);
     let result = wait_for_job(&harness, &queued);
     let run_id = result.body["result"]["run_id"].as_str().unwrap();
+    // CB-030: legacy inline_preview records expose the same destination on all reads.
+    assert_eq!(queued.body["result_interface"], "conflict_review");
+    assert_eq!(result.body["result_interface"], "conflict_review");
+    let current = harness.call("jobs", "jobs.get", json!({"jobId":id(&queued)}));
+    assert_eq!(current.body["result_interface"], "conflict_review");
+    let listed = harness.call("jobs", "jobs.list", json!({}));
+    let listed_job = listed.body["jobs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|job| job["id"] == queued.body["id"])
+        .unwrap();
+    assert_eq!(listed_job["result_interface"], "conflict_review");
     let saved = harness.call(
         "workflow",
         "solution.conflict.resolve",

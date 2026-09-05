@@ -8,6 +8,11 @@
 
 ## Flow
 
+Conflict Review reopens the latest completed report instead of creating another AI job.
+While a review is active, clicking it opens Queue without duplicating work. Saved reports
+offer **Run fresh review** for changed Solution or Vault evidence; this is an explicit new
+request, not automatic approval. Queue also opens reports saved by earlier native versions.
+
 1. **Capture** a thought without classifying it.
 2. Use AI conversation and Refinement to understand and review a **Problem**.
 3. Approve the Problem, explore a **Solution**, and review its intended outcome, boundaries, and validation criteria.

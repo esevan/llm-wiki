@@ -42,13 +42,31 @@ fn id() -> String {
     Uuid::new_v4().to_string()
 }
 
+fn result_interface(task: &str, stored: String) -> String {
+    if stored != "inline_preview" {
+        return stored;
+    }
+    match task {
+        "conflict_review" => "conflict_review",
+        "completion_review" => "completion_review",
+        "completion_report" => "completed_knowledge",
+        "image_summary" => "solution_work_summary",
+        "knowledge_translation" => "knowledge_document",
+        "embedding_refresh" => "embedding_coverage",
+        "workbench_organization" => "workbench",
+        "lineage_inference" => "solution_lineage",
+        _ => "inline_preview",
+    }
+    .to_owned()
+}
+
 fn job_view(row: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {
     Ok(json!({
         "id": row.get::<_, String>(0)?, "task_kind": row.get::<_, String>(1)?,
         "entity_type": row.get::<_, String>(2)?, "entity_id": row.get::<_, String>(3)?,
         "status": row.get::<_, String>(4)?,
         "progress": {"completed": row.get::<_, i64>(5)?, "total": row.get::<_, i64>(6)?},
-        "result_interface": row.get::<_, String>(7)?,
+        "result_interface": result_interface(&row.get::<_, String>(1)?, row.get(7)?),
         "error": match row.get::<_, String>(8)? { value if value.is_empty() => Value::Null, code => json!({"code":code,"message":row.get::<_,String>(9)?}) },
         "created_at": row.get::<_, String>(10)?, "started_at": row.get::<_, Option<String>>(11)?,
         "finished_at": row.get::<_, Option<String>>(12)?,
@@ -60,7 +78,9 @@ const JOB_SELECT: &str = "SELECT id,task_kind,entity_type,entity_id,status,progr
 pub fn list(db_path: &Path) -> Result<Value, String> {
     let connection = database::open(db_path)?;
     let mut statement = connection
-        .prepare(&format!("{JOB_SELECT} ORDER BY created_at DESC"))
+        .prepare(&format!(
+            "{JOB_SELECT} ORDER BY created_at DESC, rowid DESC"
+        ))
         .map_err(|e| e.to_string())?;
     let jobs = statement
         .query_map([], job_view)
@@ -80,9 +100,9 @@ pub fn get(db_path: &Path, job_id: &str) -> Result<Value, String> {
 
 pub fn result(db_path: &Path, job_id: &str) -> Result<Value, String> {
     let connection = database::open(db_path)?;
-    connection.query_row("SELECT status,result_interface,result_json FROM ai_jobs_v2 WHERE id=?", [job_id], |row| {
+    connection.query_row("SELECT status,result_interface,result_json,task_kind FROM ai_jobs_v2 WHERE id=?", [job_id], |row| {
         let raw: String = row.get(2)?;
-        Ok(json!({"job_id":job_id,"status":row.get::<_,String>(0)?,"result_interface":row.get::<_,String>(1)?,"result":serde_json::from_str::<Value>(&raw).unwrap_or(Value::Null)}))
+        Ok(json!({"job_id":job_id,"status":row.get::<_,String>(0)?,"result_interface":result_interface(&row.get::<_,String>(3)?,row.get(1)?),"result":serde_json::from_str::<Value>(&raw).unwrap_or(Value::Null)}))
     }).optional().map_err(|e| e.to_string())?.ok_or_else(|| "AI job not found".into())
 }
 
@@ -282,7 +302,7 @@ fn get_for_id(
     entity_id: String,
 ) -> Result<Value, String> {
     Ok(
-        json!({"id":job_id,"task_kind":task_kind,"entity_type":entity_type,"entity_id":entity_id,"status":"queued","progress":{"completed":0,"total":1},"result_interface":"inline_preview","error":null}),
+        json!({"id":job_id,"task_kind":task_kind,"entity_type":entity_type,"entity_id":entity_id,"status":"queued","progress":{"completed":0,"total":1},"result_interface":result_interface(&task_kind,"inline_preview".into()),"error":null}),
     )
 }
 

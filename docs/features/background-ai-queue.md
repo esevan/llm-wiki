@@ -2,6 +2,12 @@
 
 **English** | [한국어](background-ai-queue.ko.md)
 
+Completed native jobs expose their result destinations, including older records stored as
+inline previews. Conflict reviews, completion reviews, and completion reports have an enabled
+result button when complete. A full progress bar with **Completed** is finished work, not a
+pending phase; open the result to review it. Repeated Conflict Review clicks reopen saved
+results; use **Run fresh review** to request new evidence analysis.
+
 LLM Wiki separates AI execution into two process-level paths so interaction stays responsive
 without losing recoverable work.
 

@@ -536,5 +536,9 @@
   "conflict_review.legacy_note": "This earlier report is readable, but run a fresh review to save item resolutions.",
   "conflict_review.decision_required": "Review each conflict and choose a resolution.",
   "conflict_review.saved": "Saved",
-  "conflict_review.continue": "Continue"
+  "conflict_review.continue": "Continue",
+  "conflict_review.open_error": "Could not open Conflict Review",
+  "conflict_review.result_title": "Conflict review · saved result",
+  "conflict_review.saved_hint": "Saved review. If the Solution or Vault evidence changed, run a fresh review.",
+  "conflict_review.rerun": "Run fresh review"
 }

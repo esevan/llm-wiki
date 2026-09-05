@@ -228,6 +228,16 @@ const run = async (providerUrl: string) => {
     const conflictJob = await waitForJobKind('conflict_review', solution.id);
     const conflictReview = await waitForJobResult<{ conflicts: unknown[] }>(conflictJob.id);
     if (conflictReview.conflicts.length) throw new Error('Deterministic desktop conflict review was not clear');
+    document.querySelector<HTMLButtonElement>(`[data-solution-action="conflict"][data-solution-id="${solution.id}"]`)?.click();
+    await waitFor(() => !!document.querySelector('#conflict-review-rerun') && !!document.querySelector<HTMLDialogElement>('#item-detail-modal')?.open, 'completed conflict result on second click');
+    const repeated = await applicationJson<{ jobs: Array<JobResponse & { entity_id: string }> }>('/jobs');
+    if (repeated.jobs.filter(job => job.task_kind === 'conflict_review' && job.entity_id === solution.id).length !== 1) throw new Error('Repeated conflict click created duplicate work');
+    document.querySelector<HTMLDialogElement>('#item-detail-modal')?.close();
+    document.querySelector<HTMLButtonElement>('#queue-toggle')?.click();
+    await waitFor(() => !!document.querySelector(`[data-job-id="${conflictJob.id}"] [data-job-action="result"]:not([disabled])`), 'Queue conflict result action');
+    document.querySelector<HTMLButtonElement>(`[data-job-id="${conflictJob.id}"] [data-job-action="result"]`)?.click();
+    await waitFor(() => !!document.querySelector<HTMLDialogElement>('#item-detail-modal')?.open, 'Queue opens saved conflict report');
+    document.querySelector<HTMLDialogElement>('#item-detail-modal')?.close();
     await applicationJson<void>(`/features/${solution.id}/conflict`, 'PUT', {
       state: 'clear',
       citation: 'Native desktop deterministic review',

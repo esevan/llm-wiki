@@ -318,6 +318,12 @@ is mapped in `docs/migrations/react-tauri-inventory.md` and `src-tauri/tests/`.
 
 ## Remaining decision-dependent cases
 
+- **CB-030 — Completed Conflict Review is reopenable**: Native enqueue/list/get/result expose
+  routable destinations for legacy inline-preview records. A repeated conflict click reads current
+  job state, reopens the latest completed report without POST, and shows Queue for active work.
+  Explicit fresh review submits only when no review is active. Lookup failure does not enqueue.
+  Runtime behavior tests and packaged desktop E2E cover repeat-click and Queue result opening.
+
 - **TD-006 — Durable history TTL**: Add expiration boundary cases after the retention period is
   selected.
 - **TD-020 — Queue accessibility**: Add keyboard, focus, screen-reader announcement, contrast, and
