@@ -2,7 +2,7 @@
 
 **English** | [한국어](application-settings.ko.md)
 
-LLM Wiki stores non-secret application settings in one user-owned JSON file:
+LLM Wiki stores application settings, including the API key, in one user-owned JSON file:
 
 ```text
 ~/.llm-workbench/settings.json
@@ -11,10 +11,9 @@ LLM Wiki stores non-secret application settings in one user-owned JSON file:
 On Windows, `~` is the current user profile, so the path is
 `%USERPROFILE%\.llm-workbench\settings.json`. The file contains the selected Vault path,
 first-run state, explicit locale choice, provider endpoint and model routing, report language, and
-background worker count. API keys are never written there; macOS Keychain or Windows Credential
-Manager continues to own provider secrets.
-AI setup reports credential-store access and save failures directly instead of attempting a
-provider request without a stored key.
+background worker count, and API key. The API key is never returned through the UI or MCP, and it
+is never written to the Vault or application database. A blank API-key field preserves the stored
+key while other provider settings are updated.
 
 The current settings document is version 2. `introCompleted` is written as `false` only for a
 genuine new installation and becomes `true` when the introduction is skipped or completed. A

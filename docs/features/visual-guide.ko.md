@@ -80,8 +80,8 @@ Compass는 개인 활동을 성과 점수로 바꾸지 않고 현재 방향을 �
 
 ![Endpoint, model routing, Worker 수, 마스킹된 자격 증명 상태를 보여주는 네이티브 AI 설정](../images/native-app/ai-settings.jpg)
 
-AI 설정은 endpoint·model routing과 자격 증명을 분리합니다. 저장된 키는 native secret storage에
-보관하며 그 값을 UI로 돌려주지 않습니다.
+AI 설정은 endpoint·model routing과 API key를 분리합니다. 저장된 키는 로컬 설정 파일에 보관하며
+그 값을 UI로 돌려주지 않습니다.
 
 관련 문서: [백그라운드 AI Queue](background-ai-queue.ko.md)
 

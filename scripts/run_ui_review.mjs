@@ -32,8 +32,6 @@ const child = spawn(executable, ["-ApplePersistenceIgnoreState", "YES"], {
   stdio: "ignore",
   env: {
     ...process.env,
-    LLM_WIKI_TEST_MODE: "1",
-    LLM_WIKI_TEST_API_KEY: "ui-review-test-key",
     LLM_WORKBENCH_HOME: path.join(state, ".llm-workbench"),
     LLM_WIKI_VAULT: vault,
     LLM_WIKI_DB: path.join(state, "state.sqlite3"),

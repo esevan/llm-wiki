@@ -52,8 +52,9 @@ Configure your OpenAI-compatible endpoint and models in **AI setup**. AI is a re
 capability; local search and manual controls are resilience fallbacks that preserve private process
 and human authority during provider failure.
 
-Non-secret settings are stored in `~/.llm-workbench/settings.json`. API keys are stored in macOS
-Keychain or Windows Credential Manager, never in the Vault, settings file, or app database. The
+Settings, including the API key, are stored in `~/.llm-workbench/settings.json`. On Unix, its
+directory is owner-only (`0700`) and the file is owner-readable only (`0600`). The API key is never
+returned to the UI, MCP, or logs, and is never stored in the Vault or app database. The
 desktop process opens its SQLite database and selected Vault directly through Rust domain commands:
 
 ```text

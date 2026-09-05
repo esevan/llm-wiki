@@ -49,7 +49,7 @@ semantic runtime is absent, embedding work completes with lexical fallback and z
 coverage. AI output remains a proposal or derived representation: workflow
 state, approval, completion, and Knowledge decisions remain under user control.
 
-![AI Settings keeps endpoint and model routing visible while the credential value remains in native secret storage](images/07-ai-settings.png)
+![AI Settings keeps endpoint and model routing visible while the API key value remains masked](images/07-ai-settings.png)
 
 See [feature specification](../../specs/009-background-ai-queue/spec.md) and
 [worker contract](../../specs/009-background-ai-queue/contracts/worker-contract.md). The

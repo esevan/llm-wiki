@@ -45,16 +45,9 @@ npm run review:ui
 ```
 
 It builds the normal signed macOS bundle, then starts it with a new temporary Vault, SQLite
-database, settings directory, and in-memory test credential. The review process does not read or
-write the user's Keychain credential, selected Vault, or normal application data. It remains open
+database, and settings directory. The review process does not read or write the user's selected
+Vault or normal application data. It remains open
 until the reviewer closes it; its temporary state path is printed to the terminal.
-
-## Credential prompts
-
-Provider status reads the Keychain at most once during an app process. A denied access result is
-also retained for that process, preventing concurrent status requests from repeatedly prompting.
-Saving an API key refreshes the in-process value; after changing a Keychain permission without
-saving a key, restart the app to retry access.
 
 ## Install a verified replacement
 
@@ -66,7 +59,7 @@ node scripts/install_macos_app.mjs --replace
 
 It verifies the candidate before changing `/Applications/LLM Wiki.app`, compares its designated
 requirement with the installed app, and copies only after they match. It never deletes or resets
-`~/.llm-workbench`, the application database, Keychain entries, or TCC privacy permissions. The
+`~/.llm-workbench`, the application database, or TCC privacy permissions. The
 previous app bundle is retained at a uniquely named
 `/Applications/LLM Wiki.app.previous-<timestamp>-<process-id>` path for recovery, so a later
 replacement never overwrites a recovery copy.
@@ -78,10 +71,8 @@ the displayed signatures, then make that one-time migration explicit:
 node scripts/install_macos_app.mjs --replace --accept-designated-requirement-change
 ```
 
-The old app bundle remains as the recovery copy. A provider key created by the former ad-hoc app
-may need to be entered once after this migration because its old Keychain access rule named the
-old build's cdhash. Keep the same signing identity thereafter so subsequent replacements retain
-the new Keychain and TCC identity. This workflow does not prove that a particular folder permission
+The old app bundle remains as the recovery copy. Keep the same signing identity thereafter so
+subsequent replacements retain the TCC identity. This workflow does not prove that a particular folder permission
 will be retained; validate that once by granting access, installing a second signed build, and
 opening the same folder.
 

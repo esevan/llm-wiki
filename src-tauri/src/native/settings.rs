@@ -3,8 +3,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
-#[cfg(test)]
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 pub enum VaultStartup {
@@ -39,6 +37,7 @@ struct SavedProvider {
     advanced_tasks: Value,
     report_language: String,
     async_worker_count: i64,
+    api_key: Option<String>,
 }
 
 impl Default for SavedProvider {
@@ -50,16 +49,12 @@ impl Default for SavedProvider {
             advanced_tasks: json!({}),
             report_language: "ko".into(),
             async_worker_count: 2,
+            api_key: None,
         }
     }
 }
 
 static SETTINGS_WRITE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-type ApiKeyResult = Result<Option<String>, String>;
-static API_KEY_CACHE: OnceLock<Mutex<Option<ApiKeyResult>>> = OnceLock::new();
-static TEST_API_KEY: OnceLock<Mutex<Option<Option<String>>>> = OnceLock::new();
-#[cfg(test)]
-static KEYRING_OPERATION_COUNT: AtomicUsize = AtomicUsize::new(0);
 
 const TASKS: &[(&str, bool)] = &[
     ("capture_assistance", true),
@@ -77,82 +72,6 @@ const TASKS: &[(&str, bool)] = &[
     ("problem_enrichment", false),
     ("knowledge_translation", false),
 ];
-
-fn key_entry() -> Result<keyring::Entry, String> {
-    #[cfg(test)]
-    KEYRING_OPERATION_COUNT.fetch_add(1, Ordering::SeqCst);
-    keyring::Entry::new("llm-wiki", "provider-api-key").map_err(|error| error.to_string())
-}
-
-fn test_mode() -> bool {
-    std::env::var("LLM_WIKI_TEST_MODE").as_deref() == Ok("1")
-}
-
-fn test_api_key() -> ApiKeyResult {
-    let cached = TEST_API_KEY
-        .get_or_init(|| Mutex::new(None))
-        .lock()
-        .map_err(|_| "Test credential store is unavailable".to_string())?
-        .clone();
-    if let Some(secret) = cached {
-        return Ok(secret);
-    }
-    Ok(std::env::var("LLM_WIKI_TEST_API_KEY")
-        .ok()
-        .filter(|secret| !secret.is_empty()))
-}
-
-fn set_test_api_key(secret: String) -> Result<(), String> {
-    *TEST_API_KEY
-        .get_or_init(|| Mutex::new(None))
-        .lock()
-        .map_err(|_| "Test credential store is unavailable".to_string())? = Some(Some(secret));
-    Ok(())
-}
-
-#[cfg(not(test))]
-fn read_keychain_api_key() -> ApiKeyResult {
-    match key_entry()?.get_password() {
-        Ok(secret) if !secret.is_empty() => Ok(Some(secret)),
-        Ok(_) | Err(keyring::Error::NoEntry) => Ok(None),
-        Err(error) => Err(format!("Could not access the OS credential store: {error}")),
-    }
-}
-
-fn cached_api_key(read: impl FnOnce() -> ApiKeyResult) -> ApiKeyResult {
-    let mut cache = API_KEY_CACHE
-        .get_or_init(|| Mutex::new(None))
-        .lock()
-        .map_err(|_| "Credential cache is unavailable".to_string())?;
-    if let Some(result) = cache.as_ref() {
-        return result.clone();
-    }
-    let result = read();
-    *cache = Some(result.clone());
-    result
-}
-
-fn cache_api_key(result: ApiKeyResult) -> Result<(), String> {
-    *API_KEY_CACHE
-        .get_or_init(|| Mutex::new(None))
-        .lock()
-        .map_err(|_| "Credential cache is unavailable".to_string())? = Some(result);
-    Ok(())
-}
-
-fn api_key() -> ApiKeyResult {
-    #[cfg(test)]
-    {
-        test_api_key()
-    }
-    #[cfg(not(test))]
-    {
-        if test_mode() {
-            return test_api_key();
-        }
-        cached_api_key(read_keychain_api_key)
-    }
-}
 
 fn read(path: &Path) -> Result<AppSettings, String> {
     if !path.is_file() {
@@ -180,13 +99,25 @@ fn write(path: &Path, settings: &AppSettings) -> Result<(), String> {
     }
     let temporary = parent.join(format!(".settings.{}.tmp", uuid::Uuid::new_v4()));
     let content = serde_json::to_string_pretty(settings).map_err(|error| error.to_string())?;
-    fs::write(&temporary, format!("{content}\n")).map_err(|error| error.to_string())?;
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&temporary, fs::Permissions::from_mode(0o600))
+        use std::fs::OpenOptions;
+        use std::io::Write;
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&temporary)
+            .map_err(|error| error.to_string())?;
+        file.write_all(format!("{content}\n").as_bytes())
+            .map_err(|error| error.to_string())?;
+        file.set_permissions(fs::Permissions::from_mode(0o600))
             .map_err(|error| error.to_string())?;
     }
+    #[cfg(not(unix))]
+    fs::write(&temporary, format!("{content}\n")).map_err(|error| error.to_string())?;
     if let Err(error) = crate::native::vault::replace_file(&temporary, path) {
         let _ = fs::remove_file(&temporary);
         return Err(error.to_string());
@@ -280,6 +211,7 @@ pub fn migrate_legacy(db_path: &Path, settings_path: &Path) -> Result<(), String
                         advanced_tasks: serde_json::from_str(&advanced_tasks).unwrap_or_else(|_| json!({})),
                         report_language: row.get(4)?,
                         async_worker_count: row.get(5)?,
+                        api_key: None,
                     })
                 },
             )
@@ -386,12 +318,8 @@ pub fn provider(settings_path: &Path) -> Result<Value, String> {
                 .into(),
         );
     }
-    let (api_key_configured, api_key_error) = match api_key() {
-        Ok(secret) => (secret.is_some(), None),
-        Err(error) => (false, Some(error)),
-    };
     Ok(
-        json!({"base_url":provider.base_url,"model":provider.model,"advanced_model":provider.advanced_model,"advanced_tasks":tasks,"report_language":provider.report_language,"async_worker_count":provider.async_worker_count,"api_key_configured":api_key_configured,"api_key_error":api_key_error}),
+        json!({"base_url":provider.base_url,"model":provider.model,"advanced_model":provider.advanced_model,"advanced_tasks":tasks,"report_language":provider.report_language,"async_worker_count":provider.async_worker_count,"api_key_configured":provider.api_key.as_ref().is_some_and(|key| !key.is_empty())}),
     )
 }
 
@@ -424,7 +352,16 @@ pub fn save_provider(settings_path: &Path, input: &Value) -> Result<Value, Strin
     if !(1..=32).contains(&workers) {
         return Err("Async worker count must be between 1 and 32".into());
     }
+    let api_key = input
+        .get("api_key")
+        .and_then(Value::as_str)
+        .filter(|secret| !secret.is_empty())
+        .map(str::to_owned);
     update(settings_path, |settings| {
+        let existing_api_key = settings
+            .provider
+            .as_ref()
+            .and_then(|provider| provider.api_key.clone());
         settings.provider = Some(SavedProvider {
             base_url: base_url.into(),
             model: model.into(),
@@ -432,22 +369,9 @@ pub fn save_provider(settings_path: &Path, input: &Value) -> Result<Value, Strin
             advanced_tasks,
             report_language: report_language.into(),
             async_worker_count: workers,
+            api_key: api_key.or(existing_api_key),
         });
     })?;
-    if let Some(secret) = input
-        .get("api_key")
-        .and_then(Value::as_str)
-        .filter(|secret| !secret.is_empty())
-    {
-        if test_mode() {
-            set_test_api_key(secret.into())?;
-        } else {
-            key_entry()?
-                .set_password(secret)
-                .map_err(|error| error.to_string())?;
-            cache_api_key(Ok(Some(secret.into())))?;
-        }
-    }
     provider(settings_path)
 }
 
@@ -467,12 +391,15 @@ pub fn provider_credentials_for(
                 .map(|(_, enabled)| *enabled)
                 .unwrap_or(false)
         });
+    let api_key = provider
+        .api_key
+        .filter(|key| !key.is_empty())
+        .ok_or("Configure an API key in AI setup before using AI")?;
     let model = if advanced && !provider.advanced_model.trim().is_empty() {
         provider.advanced_model
     } else {
         provider.model
     };
-    let api_key = api_key()?.ok_or("Configure an API key in AI setup before using AI")?;
     Ok((provider.base_url, model, api_key))
 }
 
@@ -480,93 +407,112 @@ pub fn provider_credentials_for(
 mod tests {
     use super::*;
     use serde_json::json;
-    use std::sync::Mutex;
-
-    static TEST_ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-
-    fn reset_test_credential_state() {
-        *TEST_API_KEY
-            .get_or_init(|| Mutex::new(None))
-            .lock()
-            .unwrap() = None;
-        *API_KEY_CACHE
-            .get_or_init(|| Mutex::new(None))
-            .lock()
-            .unwrap() = None;
-        KEYRING_OPERATION_COUNT.store(0, Ordering::SeqCst);
-    }
 
     #[test]
-    fn test_mode_never_reads_or_writes_the_os_credential_store() {
-        let _guard = TEST_ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
-        std::env::set_var("LLM_WIKI_TEST_MODE", "1");
-        std::env::remove_var("LLM_WIKI_TEST_API_KEY");
-        reset_test_credential_state();
+    fn provider_key_is_stored_locally_but_never_returned() {
         let state = tempfile::tempdir().unwrap();
         let settings_path = state.path().join("settings.json");
 
-        assert_eq!(api_key().unwrap(), None);
-        save_provider(
+        let public = save_provider(
             &settings_path,
             &json!({"base_url":"https://example.test/v1","model":"test","api_key":"test-only-key"}),
         )
         .unwrap();
-        assert_eq!(api_key().unwrap().as_deref(), Some("test-only-key"));
-        assert_eq!(KEYRING_OPERATION_COUNT.load(Ordering::SeqCst), 0);
-        std::env::remove_var("LLM_WIKI_TEST_MODE");
-        reset_test_credential_state();
-    }
 
-    #[test]
-    fn cached_keychain_error_is_shared_by_concurrent_passive_reads() {
-        let _guard = TEST_ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
-        std::env::remove_var("LLM_WIKI_TEST_MODE");
-        reset_test_credential_state();
-        let reads = std::sync::Arc::new(AtomicUsize::new(0));
-        let mut workers = Vec::new();
-        for _ in 0..8 {
-            let reads = reads.clone();
-            workers.push(std::thread::spawn(move || {
-                cached_api_key(|| {
-                    reads.fetch_add(1, Ordering::SeqCst);
-                    Err("credential access denied".into())
-                })
-            }));
-        }
-        for worker in workers {
-            assert_eq!(
-                worker.join().unwrap(),
-                Err("credential access denied".into())
-            );
-        }
-        assert_eq!(reads.load(Ordering::SeqCst), 1);
-        reset_test_credential_state();
-    }
-
-    #[test]
-    #[cfg(target_os = "macos")]
-    fn provider_credential_uses_macos_keychain() {
-        assert!(key_entry()
+        assert!(public.get("api_key").is_none());
+        assert_eq!(public["api_key_configured"], true);
+        assert!(fs::read_to_string(&settings_path)
             .unwrap()
-            .get_credential()
-            .is::<keyring::macos::MacCredential>());
+            .contains("test-only-key"));
+        assert_eq!(
+            provider_credentials_for(&settings_path, "capture_assistance")
+                .unwrap()
+                .2,
+            "test-only-key"
+        );
     }
 
     #[test]
-    #[cfg(target_os = "windows")]
-    fn provider_credential_uses_windows_credential_manager() {
-        assert!(key_entry()
-            .unwrap()
-            .get_credential()
-            .is::<keyring::windows::WinCredential>());
+    fn unrelated_provider_edits_preserve_the_api_key() {
+        let state = tempfile::tempdir().unwrap();
+        let settings_path = state.path().join("settings.json");
+        save_provider(
+            &settings_path,
+            &json!({"base_url":"https://example.test/v1","model":"original","api_key":"test-only-key"}),
+        )
+        .unwrap();
+
+        let public = save_provider(
+            &settings_path,
+            &json!({"base_url":"https://example.test/v1","model":"updated"}),
+        )
+        .unwrap();
+
+        assert!(public.get("api_key").is_none());
+        assert_eq!(public["api_key_configured"], true);
+        assert_eq!(
+            provider_credentials_for(&settings_path, "capture_assistance")
+                .unwrap()
+                .2,
+            "test-only-key"
+        );
     }
 
     #[test]
-    #[cfg(target_os = "linux")]
-    fn provider_credential_uses_linux_secret_service() {
-        assert!(key_entry()
-            .unwrap()
-            .get_credential()
-            .is::<keyring::secret_service::SsCredential>());
+    fn empty_api_key_preserves_the_stored_key() {
+        let state = tempfile::tempdir().unwrap();
+        let settings_path = state.path().join("settings.json");
+        save_provider(
+            &settings_path,
+            &json!({"base_url":"https://example.test/v1","api_key":"test-only-key"}),
+        )
+        .unwrap();
+
+        save_provider(
+            &settings_path,
+            &json!({"base_url":"https://example.test/v1","api_key":""}),
+        )
+        .unwrap();
+
+        assert_eq!(
+            provider_credentials_for(&settings_path, "capture_assistance")
+                .unwrap()
+                .2,
+            "test-only-key"
+        );
+    }
+
+    #[test]
+    fn legacy_provider_settings_without_an_api_key_remain_readable() {
+        let state = tempfile::tempdir().unwrap();
+        let settings_path = state.path().join("settings.json");
+        fs::write(
+            &settings_path,
+            r#"{"version":2,"provider":{"baseUrl":"https://example.test/v1","model":"test"}}"#,
+        )
+        .unwrap();
+
+        let public = provider(&settings_path).unwrap();
+        assert_eq!(public["base_url"], "https://example.test/v1");
+        assert_eq!(public["api_key_configured"], false);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn settings_with_an_api_key_are_owner_readable_only() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let state = tempfile::tempdir().unwrap();
+        let settings_path = state.path().join("settings.json");
+        save_provider(
+            &settings_path,
+            &json!({"base_url":"https://example.test/v1","api_key":"test-only-key"}),
+        )
+        .unwrap();
+
+        assert_eq!(
+            fs::metadata(settings_path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
     }
 }

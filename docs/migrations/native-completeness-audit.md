@@ -64,7 +64,8 @@ no tracked Python file.
 PASS at the source and build-policy level. macOS produces a verified `.app`. The base Tauri bundle
 configuration enables all platform targets, with a macOS override that avoids Finder-dependent DMG
 layout automation. CI installs and checks React, Rust, command tests, and an unbundled Tauri build on
-macOS, Windows, and Linux. Paths use platform directory APIs; secrets use native keyring support;
+macOS, Windows, and Linux. Paths use platform directory APIs; provider keys use the owner-restricted
+local settings file and are omitted from public responses;
 overwrite semantics have an explicit Windows implementation.
 
 ## 8. UX flow

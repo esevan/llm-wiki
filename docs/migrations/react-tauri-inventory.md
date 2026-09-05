@@ -20,7 +20,8 @@ supersedes this baseline after implementation begins.
   reusable `ApplicationRuntime`; workflow, retrieval, localization, jobs, filesystem, provider, and
   archive behavior already live below the HTTP boundary.
 - SQLite stores workflow, indexes, jobs, notifications, and localization metadata. Non-secret app
-  settings live in `~/.llm-workbench/settings.json`; provider secrets use the OS keyring. The
+  settings, including the API key, live in `~/.llm-workbench/settings.json`; public responses omit
+  the key. The
   Markdown vault adapter is the only Vault filesystem boundary.
 - A CLI supervises the loopback web process, one ephemeral Fast Queue worker, and configurable
   durable workers. SSE announces index/job changes; streamed chat responses retain cancellation.
@@ -37,7 +38,7 @@ supersedes this baseline after implementation begins.
 | Knowledge | retrieval + vault translation cache | English canonical source, request-driven Korean reading, paragraph progress, durable cancellation |
 | Search | retrieval + SSE | lexical availability, optional semantic rerank, pagination, changed-file indexing |
 | Compass | workflow | goals, immutable milestone contribution events, no worker scoring |
-| AI Setup | provider settings + keyring | loopback/default endpoint, model routing, bounded worker count, secret not returned |
+| AI Setup | provider settings | loopback/default endpoint, model routing, bounded worker count, API key not returned |
 | Queue and notifications | job repository + browser poll/SSE | safe payloads, retry/cancel, result destinations, unread/dismiss persistence |
 | Localization | packaged JSON + localized store | instant locale switch, authored text preserved, explicit locale persistence |
 | Lifecycle | CLI/runtime | loopback-only web, startup composition, worker supervision, termination on shutdown |
@@ -72,7 +73,7 @@ Status values are `PASS`, `PARTIAL`, `MISSING`, `NOT_APPLICABLE`, and `BLOCKED`.
 | UI-018 | Queue cancel/retry/result | Safe status and progress render; cancellation prevents late publish; retry creates valid attempt | jobs repository | `test_ai_jobs.py`, `test_jobs_api.py`, CB-011/014 | `features/jobs` | high / high | PASS | PASS | PASS | PASS |
 | UI-019 | Notifications | Completion Review creates one alert; read/dismiss persists | notifications table | `test_jobs_api.py`, CB-013 | `features/jobs` | medium / high | PASS | PASS | PASS | PASS |
 | UI-020 | Compass goals/progress | Goal creates; milestone evidence allocates 10/20/70; no person score | SQLite ledger | `test_completion_dashboard.py`, CB-017 | `features/compass` | medium / high | PASS | PASS | PASS | PASS |
-| UI-021 | Provider setup/test | Config saves without exposing key; failed test is readable; routing and worker bounds persist | keyring + settings + provider | `test_api.py`, `test_worker_processes.py` | `features/settings` | high / high | PASS | PASS | PASS | PASS |
+| UI-021 | Provider setup/test | Config saves without exposing key; failed test is readable; routing and worker bounds persist | settings + provider | `test_api.py`, `test_worker_processes.py` | `features/settings` | high / high | PASS | PASS | PASS | PASS |
 | UI-022 | Delete/restore/follow-up | Destructive action confirms; soft delete preserves history; completed Solution can create follow-up Problem | SQLite transitions | `test_api.py`, `test_workflow.py` | `features/workbench` | medium / high | PASS | PASS | PASS | PASS |
 | UI-023 | Completed lineage | Deterministic lineage remains on inference failure; corrections preserve revisions | SQLite + optional AI | `test_api.py`, `test_workflow.py`, CB-016 | `features/lineage` | high / high | PASS | PASS | PASS | PASS |
 | UI-024 | Startup/shutdown/relaunch | Runtime initializes index/settings/jobs; workers terminate with shell; persisted state reloads | filesystem, SQLite, processes | `test_cli.py`, `test_worker_processes.py` | `app/lifecycle` | high / medium | PASS | PASS | PASS | PASS |

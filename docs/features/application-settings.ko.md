@@ -2,7 +2,7 @@
 
 [English](application-settings.md) | **한국어**
 
-LLM Wiki는 비밀정보가 아닌 애플리케이션 설정을 사용자 소유 JSON 파일 하나에 저장합니다.
+LLM Wiki는 API key를 포함한 애플리케이션 설정을 사용자 소유 JSON 파일 하나에 저장합니다.
 
 ```text
 ~/.llm-workbench/settings.json
@@ -10,11 +10,9 @@ LLM Wiki는 비밀정보가 아닌 애플리케이션 설정을 사용자 소유
 
 Windows에서 `~`는 현재 사용자 프로필이므로 실제 위치는
 `%USERPROFILE%\.llm-workbench\settings.json`입니다. 선택한 Vault 경로, 최초 실행 상태, 명시적으로
-선택한 언어, provider endpoint와 model routing, report 언어, background worker 수가 이 파일에
-들어갑니다. API key는 이 파일에 기록하지 않으며 계속 macOS Keychain 또는 Windows Credential
-Manager가 관리합니다.
-AI 설정은 저장된 키 없이 provider 요청을 시도하지 않고 자격 증명 저장소 접근 및 저장 실패를
-직접 표시합니다.
+선택한 언어, provider endpoint와 model routing, report 언어, background worker 수, API key가 이
+파일에 들어갑니다. API key는 UI나 MCP로 반환하지 않으며 Vault나 애플리케이션 DB에 저장하지 않습니다.
+다른 provider 설정을 바꿀 때 API-key 필드를 비워 두면 저장된 키를 유지합니다.
 
 현재 설정 문서 version은 2입니다. `introCompleted`는 완전히 새로운 설치에서만 `false`로 기록하고,
 소개를 건너뛰거나 완료하면 `true`가 됩니다. 이 필드가 없으면 소개 기능 이전의 기존 설치로 판단하므로

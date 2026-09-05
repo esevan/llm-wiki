@@ -83,8 +83,8 @@ Related guide: [Compass](direction-dashboard.md).
 
 ![Native AI settings with endpoint, model routing, worker count, and masked credential state](../images/native-app/ai-settings.jpg)
 
-AI Settings separates endpoint and model routing from the credential itself. The saved key is kept
-in native secret storage and its value is never returned to the UI.
+AI Settings separates endpoint and model routing from the API key. The saved key is retained in the
+local settings file and its value is never returned to the UI.
 
 Related guide: [Background AI Queue](background-ai-queue.md).
 

@@ -44,16 +44,9 @@ npm run review:ui
 ```
 
 이 명령은 일반 signed macOS bundle을 build한 뒤, 새로운 임시 Vault, SQLite database, settings
-directory, in-memory test credential과 함께 실행합니다. 검토 process는 사용자의 Keychain credential,
-선택한 Vault, 일반 application data를 읽거나 쓰지 않습니다. 검토자가 닫을 때까지 열려 있으며 임시
+directory와 함께 실행합니다. 검토 process는 사용자의 선택한 Vault나 일반 application data를 읽거나
+쓰지 않습니다. 검토자가 닫을 때까지 열려 있으며 임시
 state 경로는 terminal에 표시됩니다.
-
-## Credential prompt
-
-Provider 상태는 앱 process 하나에서 Keychain을 최대 한 번 읽습니다. 접근이 거부된 결과도 그 process
-동안 유지하므로 동시에 발생한 상태 요청이 prompt를 반복해서 띄우지 않습니다. API key를 저장하면
-process 안의 값이 갱신됩니다. Key를 저장하지 않고 Keychain 권한만 바꿨다면 앱을 다시 시작해 접근을
-재시도하세요.
 
 ## 검증된 교체본 설치
 
@@ -64,8 +57,8 @@ node scripts/install_macos_app.mjs --replace
 ```
 
 이 도구는 `/Applications/LLM Wiki.app`을 변경하기 전에 후보 앱을 검증하고, 설치된 앱의 designated
-requirement와 비교한 뒤 일치할 때만 복사합니다. `~/.llm-workbench`, 앱 database, Keychain 항목,
-TCC 개인정보 권한을 삭제하거나 재설정하지 않습니다. 이후 교체가 복구본을 덮어쓰지 않도록 이전 app
+requirement와 비교한 뒤 일치할 때만 복사합니다. `~/.llm-workbench`, 앱 database, TCC 개인정보
+권한을 삭제하거나 재설정하지 않습니다. 이후 교체가 복구본을 덮어쓰지 않도록 이전 app
 bundle은 고유한 `/Applications/LLM Wiki.app.previous-<timestamp>-<process-id>` 경로에 보관합니다.
 
 기존 ad-hoc build를 처음 교체하면 designated requirement가 반드시 바뀝니다. 표시된 signature를
@@ -75,9 +68,8 @@ bundle은 고유한 `/Applications/LLM Wiki.app.previous-<timestamp>-<process-id
 node scripts/install_macos_app.mjs --replace --accept-designated-requirement-change
 ```
 
-이전 app bundle은 복구용으로 남습니다. 이전 ad-hoc 앱이 만든 provider key는 old build의 cdhash를
-Keychain access rule에 사용했을 수 있으므로 migration 후 한 번 다시 입력해야 할 수 있습니다. 이후에는
-같은 signing identity를 유지해야 새 Keychain과 TCC identity가 교체 후에도 유지됩니다. 이 절차만으로
+이전 app bundle은 복구용으로 남습니다. 이후에는 같은 signing identity를 유지해야 TCC identity가
+교체 후에도 유지됩니다. 이 절차만으로
 특정 폴더 권한의 유지가 증명되지는 않습니다. 한 번 권한을 부여하고 두 번째 signed build를 설치한 뒤
 같은 폴더를 열어 확인하세요.
 

@@ -160,6 +160,7 @@ const run = async (providerUrl: string) => {
       base_url: providerUrl,
       model: 'deterministic-test-model',
       async_worker_count: 1,
+      api_key: 'desktop-e2e-key',
     });
 
     const searchNavigation = document.querySelector<HTMLButtonElement>('[data-view="search"]');

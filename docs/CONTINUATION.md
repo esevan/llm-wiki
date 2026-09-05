@@ -11,8 +11,8 @@ retired after parity verification and is available only in Git history at `caef2
   through the centralized Tauri application client; none contains an HTTP fallback.
 - Thin domain commands delegate to Rust workflow, jobs, completion, Lineage, localization, Vault,
   semantic, settings, and provider modules.
-- SQLite stores workflow, indexes, and jobs. Non-secret application settings live in the atomic
-  `~/.llm-workbench/settings.json`; provider secrets remain in the OS credential store.
+- SQLite stores workflow, indexes, and jobs. Application settings, including the API key, live in
+  the atomic `~/.llm-workbench/settings.json`; the key is omitted from UI and MCP responses.
   Markdown Vault writes use source hashes and atomic replace.
 - SQLite schema changes are ordered in `native/migrations.rs`, recorded with `PRAGMA user_version`,
   and committed atomically per version. Version-zero Python/native databases migrate on startup;

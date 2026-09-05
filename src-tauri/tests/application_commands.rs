@@ -2,7 +2,6 @@ use llm_wiki_desktop::{NativeApplication, NativeOperation, NativeResponse};
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
-use std::sync::Once;
 use std::thread;
 use std::time::Duration;
 use tempfile::TempDir;
@@ -14,17 +13,24 @@ struct Harness {
 
 impl Harness {
     fn new() -> Self {
-        static TEST_PROVIDER: Once = Once::new();
-        TEST_PROVIDER.call_once(|| {
-            std::env::set_var("LLM_WIKI_TEST_MODE", "1");
-            std::env::set_var("LLM_WIKI_TEST_API_KEY", "application-command-test-key");
-        });
         let root = tempfile::tempdir().unwrap();
         let app = NativeApplication::isolated(
             &root.path().join("vault"),
             &root.path().join("state.sqlite3"),
         )
         .unwrap();
+        let provider = app.execute_domain(
+            "settings",
+            NativeOperation {
+                name: "provider.save".into(),
+                input: json!({
+                    "base_url": "https://api.example.test/v1",
+                    "model": "application-command-test-model",
+                    "api_key": "application-command-test-key"
+                }),
+            },
+        );
+        assert_eq!(provider.status, 200, "{}", provider.body);
         Self { _root: root, app }
     }
     fn call(&self, domain: &str, name: &str, input: Value) -> NativeResponse {

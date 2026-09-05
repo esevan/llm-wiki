@@ -61,9 +61,8 @@ powershell -ExecutionPolicy Bypass -File .\scripts\package_windows.ps1 -Install
    나타나지 않고 시작 animation도 다시 재생되지 않는지 확인합니다.
 5. 선택한 Vault에 Markdown 파일을 넣고 **Vault 검색**에서 의미 기반을
    켠 뒤 background indexing 이후 노트가 반환되는지 확인합니다.
-6. AI 설정에서 API key가 설정 여부로만 표시되는지 확인합니다. Key는 Windows Credential Manager에
-   저장되며 React로 값이 반환되지 않습니다.
-7. `%USERPROFILE%\.llm-workbench\settings.json`에 Vault와 비밀정보가 아닌 UI/provider 설정이 있고,
+6. AI 설정에서 API key가 설정 여부로만 표시되고 값은 React로 반환되지 않는지 확인합니다.
+7. `%USERPROFILE%\.llm-workbench\settings.json`에 Vault와 API key를 포함한 provider 설정이 있고,
    앱 데이터 SQLite DB에는 Workflow와 색인 데이터만 있는지 확인합니다.
 
 Installer는 upgrade 중 home 설정 파일을 덮어쓰거나 제거하지 않습니다. SQLite에 설정을 저장하던 기존

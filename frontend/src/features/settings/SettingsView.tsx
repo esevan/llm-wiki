@@ -24,7 +24,7 @@ export function SettingsView({ active }: { active: boolean }) {
         <div><div className="eyebrow">Intelligence that organizes with you</div><h1>AI setup</h1></div>
       </header>
       <section className="result">
-        <p>Your API key is stored in macOS Keychain or Windows Credential Manager, never in the vault or app database.</p>
+        <p>Your API key is stored in this device’s local settings file, never in the vault or app database.</p>
         <form className="modal" id="provider-form">
           <fieldset className="settings-group">
             <legend data-i18n="ai_setup.connection_group">Connection</legend>

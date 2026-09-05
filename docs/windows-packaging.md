@@ -63,10 +63,10 @@ an unsuccessful exit code, and reports MSI code 3010 as a successful install tha
    picker and welcome animation do not reopen.
 5. Put a Markdown file in the selected Vault, select **Vault Search**, enable
    semantic search, and confirm that the note is returned after background indexing.
-6. Open AI Setup and confirm that an API key is reported only as configured/not configured. The key
-   is stored through Windows Credential Manager and is never returned to React.
-7. Confirm `%USERPROFILE%\.llm-workbench\settings.json` contains the Vault and non-secret UI/provider
-   settings, while the application-data SQLite database contains workflow and index data only.
+6. Open AI Setup and confirm that an API key is reported only as configured/not configured; its value
+   is never returned to React.
+7. Confirm `%USERPROFILE%\.llm-workbench\settings.json` contains the Vault and provider settings,
+   including the API key, while the application-data SQLite database contains workflow and index data only.
 
 The installer does not overwrite or remove the home settings file during upgrades. A previous
 SQLite-backed installation imports its settings once when the home file is absent. Build and E2E

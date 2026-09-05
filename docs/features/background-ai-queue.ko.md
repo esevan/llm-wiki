@@ -45,7 +45,7 @@ Coverage 0과 어휘 검색 Fallback 결과로 완료됩니다. AI 결과는 제
 상태, 승인, 완료, Knowledge 결정 권한은
 사용자에게 있습니다.
 
-![Endpoint와 model routing은 표시하면서 자격 증명 값은 native secret storage에 유지하는 AI 설정](images/07-ai-settings.png)
+![Endpoint와 model routing은 표시하면서 API key 값은 마스킹된 상태로 유지하는 AI 설정](images/07-ai-settings.png)
 
 [기능 명세](../../specs/009-background-ai-queue/spec.md)와
 [Worker 계약](../../specs/009-background-ai-queue/contracts/worker-contract.md)을 참고하세요. 모든 지속

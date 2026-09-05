@@ -76,8 +76,6 @@ const environment = {
   LLM_WORKBENCH_HOME: path.join(state, ".llm-workbench"),
   LLM_WIKI_E2E_RESULT: result,
   LLM_WIKI_E2E_PROVIDER_URL: `http://127.0.0.1:${providerPort}/v1`,
-  LLM_WIKI_TEST_MODE: "1",
-  LLM_WIKI_TEST_API_KEY: "desktop-e2e-key",
   LLM_WIKI_MCP_ENDPOINT: process.platform === 'win32' ? `\\\\.\\pipe\\llm-wiki-e2e-${path.basename(state)}` : path.join(path.relative(root,state),'ipc','mcp.sock'),
 };
 
@@ -101,10 +99,10 @@ try {
   if (settings.provider?.baseUrl !== environment.LLM_WIKI_E2E_PROVIDER_URL) {
     throw new Error("Desktop settings did not persist in the isolated home directory.");
   }
-  if (settingsText.includes(environment.LLM_WIKI_TEST_API_KEY)) {
-    throw new Error("Desktop settings exposed the provider API key.");
+  if (settings.provider?.apiKey !== "desktop-e2e-key") {
+    throw new Error("Desktop settings did not persist the provider API key in the isolated home directory.");
   }
-  payload.steps.push("non-secret settings persisted in the isolated home file without an API key");
+  payload.steps.push("provider settings persisted in the isolated home file while the API response remained secret-safe");
   console.log("desktop E2E passed");
   for (const step of payload.steps) console.log(`- ${step}`);
 } finally {
