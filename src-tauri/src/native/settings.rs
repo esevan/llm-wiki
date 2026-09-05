@@ -4,6 +4,8 @@ use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
+#[cfg(test)]
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 pub enum VaultStartup {
     Configured(PathBuf),
@@ -53,6 +55,11 @@ impl Default for SavedProvider {
 }
 
 static SETTINGS_WRITE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+type ApiKeyResult = Result<Option<String>, String>;
+static API_KEY_CACHE: OnceLock<Mutex<Option<ApiKeyResult>>> = OnceLock::new();
+static TEST_API_KEY: OnceLock<Mutex<Option<Option<String>>>> = OnceLock::new();
+#[cfg(test)]
+static KEYRING_OPERATION_COUNT: AtomicUsize = AtomicUsize::new(0);
 
 const TASKS: &[(&str, bool)] = &[
     ("capture_assistance", true),
@@ -72,23 +79,71 @@ const TASKS: &[(&str, bool)] = &[
 ];
 
 fn key_entry() -> Result<keyring::Entry, String> {
+    #[cfg(test)]
+    KEYRING_OPERATION_COUNT.fetch_add(1, Ordering::SeqCst);
     keyring::Entry::new("llm-wiki", "provider-api-key").map_err(|error| error.to_string())
 }
 
-fn api_key() -> Result<Option<String>, String> {
-    if std::env::var("LLM_WIKI_TEST_MODE").as_deref() == Ok("1") {
-        if let Some(secret) = std::env::var("LLM_WIKI_TEST_API_KEY")
-            .ok()
-            .filter(|secret| !secret.is_empty())
-        {
-            return Ok(Some(secret));
-        }
+fn test_mode() -> bool {
+    std::env::var("LLM_WIKI_TEST_MODE").as_deref() == Ok("1")
+}
+
+fn test_api_key() -> ApiKeyResult {
+    let cached = TEST_API_KEY
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .map_err(|_| "Test credential store is unavailable".to_string())?
+        .clone();
+    if let Some(secret) = cached {
+        return Ok(secret);
     }
+    Ok(std::env::var("LLM_WIKI_TEST_API_KEY")
+        .ok()
+        .filter(|secret| !secret.is_empty()))
+}
+
+fn set_test_api_key(secret: String) -> Result<(), String> {
+    *TEST_API_KEY
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .map_err(|_| "Test credential store is unavailable".to_string())? = Some(Some(secret));
+    Ok(())
+}
+
+fn read_keychain_api_key() -> ApiKeyResult {
     match key_entry()?.get_password() {
         Ok(secret) if !secret.is_empty() => Ok(Some(secret)),
         Ok(_) | Err(keyring::Error::NoEntry) => Ok(None),
         Err(error) => Err(format!("Could not access the OS credential store: {error}")),
     }
+}
+
+fn cached_api_key(read: impl FnOnce() -> ApiKeyResult) -> ApiKeyResult {
+    let mut cache = API_KEY_CACHE
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .map_err(|_| "Credential cache is unavailable".to_string())?;
+    if let Some(result) = cache.as_ref() {
+        return result.clone();
+    }
+    let result = read();
+    *cache = Some(result.clone());
+    result
+}
+
+fn cache_api_key(result: ApiKeyResult) -> Result<(), String> {
+    *API_KEY_CACHE
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .map_err(|_| "Credential cache is unavailable".to_string())? = Some(result);
+    Ok(())
+}
+
+fn api_key() -> ApiKeyResult {
+    if test_mode() {
+        return test_api_key();
+    }
+    cached_api_key(read_keychain_api_key)
 }
 
 fn read(path: &Path) -> Result<AppSettings, String> {
@@ -376,9 +431,14 @@ pub fn save_provider(settings_path: &Path, input: &Value) -> Result<Value, Strin
         .and_then(Value::as_str)
         .filter(|secret| !secret.is_empty())
     {
-        key_entry()?
-            .set_password(secret)
-            .map_err(|error| error.to_string())?;
+        if test_mode() {
+            set_test_api_key(secret.into())?;
+        } else {
+            key_entry()?
+                .set_password(secret)
+                .map_err(|error| error.to_string())?;
+            cache_api_key(Ok(Some(secret.into())))?;
+        }
     }
     provider(settings_path)
 }
@@ -410,7 +470,61 @@ pub fn provider_credentials_for(
 
 #[cfg(test)]
 mod tests {
-    use super::key_entry;
+    use super::*;
+    use serde_json::json;
+    use std::sync::Mutex;
+
+    static TEST_ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+    fn reset_test_credential_state() {
+        *TEST_API_KEY.get_or_init(|| Mutex::new(None)).lock().unwrap() = None;
+        *API_KEY_CACHE.get_or_init(|| Mutex::new(None)).lock().unwrap() = None;
+        KEYRING_OPERATION_COUNT.store(0, Ordering::SeqCst);
+    }
+
+    #[test]
+    fn test_mode_never_reads_or_writes_the_os_credential_store() {
+        let _guard = TEST_ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+        std::env::set_var("LLM_WIKI_TEST_MODE", "1");
+        std::env::remove_var("LLM_WIKI_TEST_API_KEY");
+        reset_test_credential_state();
+        let state = tempfile::tempdir().unwrap();
+        let settings_path = state.path().join("settings.json");
+
+        assert_eq!(api_key().unwrap(), None);
+        save_provider(
+            &settings_path,
+            &json!({"base_url":"https://example.test/v1","model":"test","api_key":"test-only-key"}),
+        )
+        .unwrap();
+        assert_eq!(api_key().unwrap().as_deref(), Some("test-only-key"));
+        assert_eq!(KEYRING_OPERATION_COUNT.load(Ordering::SeqCst), 0);
+        std::env::remove_var("LLM_WIKI_TEST_MODE");
+        reset_test_credential_state();
+    }
+
+    #[test]
+    fn cached_keychain_error_is_shared_by_concurrent_passive_reads() {
+        let _guard = TEST_ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+        std::env::remove_var("LLM_WIKI_TEST_MODE");
+        reset_test_credential_state();
+        let reads = std::sync::Arc::new(AtomicUsize::new(0));
+        let mut workers = Vec::new();
+        for _ in 0..8 {
+            let reads = reads.clone();
+            workers.push(std::thread::spawn(move || {
+                cached_api_key(|| {
+                    reads.fetch_add(1, Ordering::SeqCst);
+                    Err("credential access denied".into())
+                })
+            }));
+        }
+        for worker in workers {
+            assert_eq!(worker.join().unwrap(), Err("credential access denied".into()));
+        }
+        assert_eq!(reads.load(Ordering::SeqCst), 1);
+        reset_test_credential_state();
+    }
 
     #[test]
     #[cfg(target_os = "macos")]

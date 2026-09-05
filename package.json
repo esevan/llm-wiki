@@ -14,6 +14,7 @@
     "prepare:embedding": "node scripts/prepare_embedding_model.mjs",
     "prepare:fonts": "node scripts/prepare_fonts.mjs",
     "prepare:shell": "node scripts/prepare_ui_shell.mjs",
+    "review:ui": "node scripts/run_ui_review.mjs",
     "tauri": "tauri",
     "tauri:build": "node scripts/build_desktop.mjs",
     "test:macos-signing": "node --test tests/macos_signing.test.mjs",

@@ -35,6 +35,26 @@ certificate나 private key를 export하지 않습니다. 패키지 명령은 그
 override할 수 있습니다. `npm run tauri:build -- --no-bundle`은 unsigned compile-only CI 확인에 계속
 사용할 수 있습니다.
 
+## 격리된 UI 검토
+
+ad-hoc `.app`을 복사·재서명하거나 직접 실행하는 대신 review launcher를 사용하세요.
+
+```text
+npm run review:ui
+```
+
+이 명령은 일반 signed macOS bundle을 build한 뒤, 새로운 임시 Vault, SQLite database, settings
+directory, in-memory test credential과 함께 실행합니다. 검토 process는 사용자의 Keychain credential,
+선택한 Vault, 일반 application data를 읽거나 쓰지 않습니다. 검토자가 닫을 때까지 열려 있으며 임시
+state 경로는 terminal에 표시됩니다.
+
+## Credential prompt
+
+Provider 상태는 앱 process 하나에서 Keychain을 최대 한 번 읽습니다. 접근이 거부된 결과도 그 process
+동안 유지하므로 동시에 발생한 상태 요청이 prompt를 반복해서 띄우지 않습니다. API key를 저장하면
+process 안의 값이 갱신됩니다. Key를 저장하지 않고 Keychain 권한만 바꿨다면 앱을 다시 시작해 접근을
+재시도하세요.
+
 ## 검증된 교체본 설치
 
 서명된 build가 성공한 뒤에는 guarded installer로만 설치합니다.

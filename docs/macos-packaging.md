@@ -36,6 +36,26 @@ requirement, the wrong bundle identifier, or `Signature=adhoc`. An explicit
 `LLM_WIKI_CODESIGN_IDENTITY` environment value can temporarily override the registered fingerprint.
 `npm run tauri:build -- --no-bundle` remains available for unsigned compile-only CI checks.
 
+## Isolated UI review
+
+Use the review launcher instead of copying, re-signing, or directly launching an ad-hoc `.app`:
+
+```text
+npm run review:ui
+```
+
+It builds the normal signed macOS bundle, then starts it with a new temporary Vault, SQLite
+database, settings directory, and in-memory test credential. The review process does not read or
+write the user's Keychain credential, selected Vault, or normal application data. It remains open
+until the reviewer closes it; its temporary state path is printed to the terminal.
+
+## Credential prompts
+
+Provider status reads the Keychain at most once during an app process. A denied access result is
+also retained for that process, preventing concurrent status requests from repeatedly prompting.
+Saving an API key refreshes the in-process value; after changing a Keychain permission without
+saving a key, restart the app to retry access.
+
 ## Install a verified replacement
 
 After a successful signed build, install only with the guarded installer:
