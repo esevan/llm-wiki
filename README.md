@@ -68,6 +68,8 @@ Nunito, DM Mono, and variable Noto Sans KR are also copied into the application 
 production build. The packaged UI therefore renders Korean and English without a web-font request.
 macOS builds produce an `.app`; Windows builds produce MSI and NSIS installers. A reproducible
 Windows agent workflow is documented in [Windows packaging and installation](docs/windows-packaging.md).
+To retain macOS Keychain and privacy identity across replacements, use the stable-signing build and
+installation workflow in [macOS packaging and installation](docs/macos-packaging.md).
 
 The release `.app` contains no Python runtime, sidecar, or internal web server. A new installation
 shows one transparent, full-monitor welcome motion above the centered app, then opens a native

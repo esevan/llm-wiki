@@ -68,6 +68,8 @@ Nunito, DM Mono, variable Noto Sans KR도 모든 production build에서 앱 asse
 따라서 패키징 UI는 web font 요청 없이 한국어와 영어를 표시합니다. macOS build는 `.app`을 만들고,
 Windows build는 MSI와 NSIS installer를 만듭니다. Windows agent가 그대로 실행할 수 있는 절차는
 [Windows 패키징 및 설치](docs/windows-packaging.ko.md)에 정리되어 있습니다.
+macOS에서 교체 설치 뒤에도 Keychain과 개인정보 identity를 유지하는 stable-signing build·설치 절차는
+[macOS 패키징 및 설치](docs/macos-packaging.ko.md)를 참고하세요.
 
 Release `.app`에는 Python Runtime, Sidecar, 내부 Web Server가 없습니다.
 새 설치는 중앙 앱 위에 최초 한 번만 투명한 전체 모니터 시작 animation을 보여 준 뒤 네이티브 폴더
