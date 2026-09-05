@@ -123,6 +123,103 @@ async fn ipc_never_replaces_a_regular_file_or_symlink() {
         .is_symlink());
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn ipc_shutdown_removes_its_owned_socket() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = tempdir().unwrap();
+    std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    let app =
+        NativeApplication::isolated(&root.path().join("vault"), &root.path().join("db.sqlite"))
+            .unwrap();
+    let endpoint = ipc_endpoint(root.path());
+    let listener = start_gui_ipc(&app, &endpoint).await;
+    assert!(std::path::Path::new(&endpoint).exists());
+
+    listener.abort();
+    let _ = listener.await;
+
+    assert!(!std::path::Path::new(&endpoint).exists());
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn ipc_registered_shutdown_closes_and_removes_its_socket() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = tempdir().unwrap();
+    std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    let app =
+        NativeApplication::isolated(&root.path().join("vault"), &root.path().join("db.sqlite"))
+            .unwrap();
+    let endpoint = ipc_endpoint(root.path());
+    let lifecycle = llm_wiki_desktop::mcp_ipc::McpListenerShutdown::default();
+    let service = app.work_tracking_service();
+    let listener_endpoint = endpoint.clone();
+    let listener_lifecycle = lifecycle.clone();
+    let listener = tokio::spawn(async move {
+        llm_wiki_desktop::mcp_ipc::run_gui_listener_at_with_shutdown(
+            service,
+            listener_endpoint,
+            listener_lifecycle,
+        )
+        .await
+        .unwrap();
+    });
+    for _ in 0..100 {
+        if std::path::Path::new(&endpoint).exists() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert!(std::path::Path::new(&endpoint).exists());
+
+    lifecycle.shutdown();
+    tokio::time::timeout(std::time::Duration::from_secs(2), listener)
+        .await
+        .expect("registered shutdown must stop the listener")
+        .unwrap();
+
+    assert!(!std::path::Path::new(&endpoint).exists());
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn ipc_shutdown_preserves_replacement_file_and_symlink() {
+    use std::os::unix::fs::{symlink, PermissionsExt};
+
+    let root = tempdir().unwrap();
+    std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    let app =
+        NativeApplication::isolated(&root.path().join("vault"), &root.path().join("db.sqlite"))
+            .unwrap();
+    for replacement in ["file", "symlink"] {
+        let endpoint = ipc_endpoint(root.path());
+        let listener = start_gui_ipc(&app, &endpoint).await;
+        std::fs::remove_file(&endpoint).unwrap();
+        let replacement_path = root.path().join(format!("replacement-{replacement}"));
+        std::fs::write(&replacement_path, "preserve me").unwrap();
+        if replacement == "file" {
+            std::fs::rename(&replacement_path, &endpoint).unwrap();
+        } else {
+            symlink(&replacement_path, &endpoint).unwrap();
+        }
+
+        listener.abort();
+        let _ = listener.await;
+
+        let metadata = std::fs::symlink_metadata(&endpoint).unwrap();
+        if replacement == "file" {
+            assert!(metadata.file_type().is_file());
+        } else {
+            assert!(metadata.file_type().is_symlink());
+        }
+        assert_eq!(std::fs::read_to_string(&endpoint).unwrap(), "preserve me");
+        std::fs::remove_file(&endpoint).unwrap();
+    }
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn stdio_initializes_lists_closed_tools_and_opens_idempotently() {
     let root = tempdir().unwrap();

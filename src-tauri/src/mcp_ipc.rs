@@ -5,6 +5,155 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use sha2::{Digest, Sha256};
 #[cfg(unix)]
 use std::path::PathBuf;
+#[cfg(unix)]
+use std::sync::{Arc, Mutex};
+#[cfg(unix)]
+use tokio_util::sync::CancellationToken;
+
+#[derive(Clone, Default)]
+pub struct McpListenerShutdown {
+    #[cfg(unix)]
+    registration: Arc<Mutex<Option<OwnedSocketRegistration>>>,
+}
+
+#[cfg(unix)]
+#[derive(Clone, PartialEq)]
+struct SocketIdentity {
+    path: PathBuf,
+    device: u64,
+    inode: u64,
+}
+
+#[cfg(unix)]
+#[derive(Clone)]
+struct OwnedSocketRegistration {
+    identity: SocketIdentity,
+    shutdown: CancellationToken,
+}
+
+impl McpListenerShutdown {
+    #[cfg(unix)]
+    fn register(&self, identity: SocketIdentity) -> CancellationToken {
+        let shutdown = CancellationToken::new();
+        *self
+            .registration
+            .lock()
+            .expect("MCP socket registry is available") = Some(OwnedSocketRegistration {
+            identity,
+            shutdown: shutdown.clone(),
+        });
+        shutdown
+    }
+
+    #[cfg(unix)]
+    fn unregister(&self, identity: &SocketIdentity) {
+        let mut registration = self
+            .registration
+            .lock()
+            .expect("MCP socket registry is available");
+        if registration
+            .as_ref()
+            .is_some_and(|registered| registered.identity == *identity)
+        {
+            registration.take();
+        }
+    }
+
+    pub fn shutdown(&self) {
+        #[cfg(unix)]
+        if let Some(registration) = self
+            .registration
+            .lock()
+            .expect("MCP socket registry is available")
+            .take()
+        {
+            registration.shutdown.cancel();
+            remove_owned_socket(&registration.identity);
+        }
+    }
+}
+
+#[cfg(unix)]
+fn remove_owned_socket(identity: &SocketIdentity) {
+    use std::os::unix::fs::{FileTypeExt, MetadataExt};
+
+    let Ok(metadata) = std::fs::symlink_metadata(&identity.path) else {
+        return;
+    };
+    // Only unlink the exact socket this listener bound. This keeps a file,
+    // symlink, foreign endpoint, or a replacement socket intact.
+    // SAFETY: geteuid has no preconditions and does not mutate process state.
+    if metadata.file_type().is_socket()
+        && metadata.uid() == unsafe { libc::geteuid() }
+        && metadata.dev() == identity.device
+        && metadata.ino() == identity.inode
+    {
+        let _ = std::fs::remove_file(&identity.path);
+    }
+}
+
+#[cfg(unix)]
+struct OwnedUnixListener {
+    listener: Option<tokio::net::UnixListener>,
+    identity: SocketIdentity,
+    lifecycle: McpListenerShutdown,
+    shutdown: CancellationToken,
+}
+
+#[cfg(unix)]
+impl OwnedUnixListener {
+    fn bind(path: PathBuf, lifecycle: McpListenerShutdown) -> Result<Self, String> {
+        use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
+
+        let listener = tokio::net::UnixListener::bind(&path).map_err(|error| error.to_string())?;
+        let status = std::fs::symlink_metadata(&path).map_err(|error| error.to_string())?;
+        if !status.file_type().is_socket() {
+            return Err("MCP endpoint changed while creating the listener".into());
+        }
+        let identity = SocketIdentity {
+            path,
+            device: status.dev(),
+            inode: status.ino(),
+        };
+        let owner = Self {
+            listener: Some(listener),
+            shutdown: lifecycle.register(identity.clone()),
+            identity,
+            lifecycle,
+        };
+        // If setting the socket's private mode fails, `owner` drops and
+        // removes the exact socket it just created.
+        std::fs::set_permissions(&owner.identity.path, std::fs::Permissions::from_mode(0o600))
+            .map_err(|error| error.to_string())?;
+        Ok(owner)
+    }
+
+    async fn accept(
+        &self,
+    ) -> Result<(tokio::net::UnixStream, tokio::net::unix::SocketAddr), String> {
+        self.listener
+            .as_ref()
+            .expect("owned Unix listener is present until drop")
+            .accept()
+            .await
+            .map_err(|error| error.to_string())
+    }
+
+    async fn cancelled(&self) {
+        self.shutdown.cancelled().await;
+    }
+}
+
+#[cfg(unix)]
+impl Drop for OwnedUnixListener {
+    fn drop(&mut self) {
+        // Close the listener before releasing its pathname so a normal
+        // shutdown cannot leave a reachable listener without an owner.
+        drop(self.listener.take());
+        self.lifecycle.unregister(&self.identity);
+        remove_owned_socket(&self.identity);
+    }
+}
 
 const PREFACE_LIMIT: usize = 256;
 const MAX_CONNECTIONS: usize = 64;
@@ -119,14 +268,26 @@ pub async fn run_stdio_bridge(connection_id: String) -> Result<(), String> {
 }
 
 #[cfg(unix)]
-pub async fn run_gui_listener(service: WorkTrackingApplicationService) -> Result<(), String> {
-    run_gui_listener_at(service, default_endpoint()?).await
+pub async fn run_gui_listener(
+    service: WorkTrackingApplicationService,
+    lifecycle: McpListenerShutdown,
+) -> Result<(), String> {
+    run_gui_listener_at_with_shutdown(service, default_endpoint()?, lifecycle).await
 }
 
 #[cfg(unix)]
 pub async fn run_gui_listener_at(
     service: WorkTrackingApplicationService,
     endpoint: String,
+) -> Result<(), String> {
+    run_gui_listener_at_with_shutdown(service, endpoint, McpListenerShutdown::default()).await
+}
+
+#[cfg(unix)]
+pub async fn run_gui_listener_at_with_shutdown(
+    service: WorkTrackingApplicationService,
+    endpoint: String,
+    lifecycle: McpListenerShutdown,
 ) -> Result<(), String> {
     use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
     let path = PathBuf::from(&endpoint);
@@ -164,17 +325,21 @@ pub async fn run_gui_listener_at(
             Err(_) => return Err("MCP endpoint is unavailable; refusing to replace it".into()),
         }
     }
-    let listener = tokio::net::UnixListener::bind(&path).map_err(|error| error.to_string())?;
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
-        .map_err(|error| error.to_string())?;
+    let listener = OwnedUnixListener::bind(path, lifecycle)?;
     let mut sessions = tokio::task::JoinSet::new();
     loop {
         while sessions.try_join_next().is_some() {}
         if sessions.len() >= MAX_CONNECTIONS {
-            sessions.join_next().await;
+            tokio::select! {
+                _ = listener.cancelled() => return Ok(()),
+                _ = sessions.join_next() => {}
+            }
             continue;
         }
-        let (mut stream, _) = listener.accept().await.map_err(|error| error.to_string())?;
+        let (mut stream, _) = tokio::select! {
+            _ = listener.cancelled() => return Ok(()),
+            accepted = listener.accept() => accepted?,
+        };
         let service = service.clone();
         sessions.spawn(async move {
             let result = async {
@@ -205,7 +370,10 @@ pub async fn run_stdio_bridge(connection_id: String) -> Result<(), String> {
 }
 
 #[cfg(windows)]
-pub async fn run_gui_listener(service: WorkTrackingApplicationService) -> Result<(), String> {
+pub async fn run_gui_listener(
+    service: WorkTrackingApplicationService,
+    _lifecycle: McpListenerShutdown,
+) -> Result<(), String> {
     run_gui_listener_at(service, default_endpoint()?).await
 }
 

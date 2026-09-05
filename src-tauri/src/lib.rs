@@ -74,6 +74,13 @@ fn resolve_vault(
     }
 }
 
+fn mcp_listener_needs_shutdown(event: &tauri::RunEvent) -> bool {
+    matches!(
+        event,
+        tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
+    )
+}
+
 fn application_paths() -> Result<(VaultResolution, PathBuf, PathBuf), String> {
     let default_vault = dirs::document_dir()
         .map(|path| path.join("LLM Wiki Vault"))
@@ -257,11 +264,15 @@ pub fn run() {
             let background_index = application.clone();
             let background_projector = application.work_tracking_service();
             let mcp_service = application.work_tracking_service();
+            let mcp_listener_shutdown = mcp_ipc::McpListenerShutdown::default();
             let should_index = !setup_required;
             app.manage(application);
+            app.manage(mcp_listener_shutdown.clone());
             tauri::async_runtime::spawn(native::work_tracking_projector::run(background_projector));
             tauri::async_runtime::spawn(async move {
-                if let Err(error) = mcp_ipc::run_gui_listener(mcp_service).await {
+                if let Err(error) =
+                    mcp_ipc::run_gui_listener(mcp_service, mcp_listener_shutdown).await
+                {
                     eprintln!("MCP local IPC listener stopped: {error}");
                 }
             });
@@ -299,8 +310,13 @@ pub fn run() {
             desktop_e2e::desktop_e2e_mcp_probe,
             provider::provider_request
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running LLM Wiki desktop");
+        .build(tauri::generate_context!())
+        .expect("error while building LLM Wiki desktop")
+        .run(|app, event| {
+            if mcp_listener_needs_shutdown(&event) {
+                app.state::<mcp_ipc::McpListenerShutdown>().shutdown();
+            }
+        });
 }
 
 #[cfg(test)]
@@ -309,6 +325,11 @@ mod tests {
     use crate::native::settings::VaultStartup;
     use serde_json::json;
     use tempfile::tempdir;
+
+    #[test]
+    fn mcp_listener_shutdown_covers_all_tauri_exit_events() {
+        assert!(mcp_listener_needs_shutdown(&tauri::RunEvent::Exit));
+    }
 
     #[test]
     fn first_launch_requires_a_vault_and_restores_the_selected_folder() {
