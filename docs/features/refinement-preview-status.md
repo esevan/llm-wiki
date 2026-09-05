@@ -48,6 +48,12 @@ If Context cannot load, the empty Preview closes and an accessible warning remai
 conversation. Moving to another item discards stale requests so a late response cannot overwrite the
 new Preview.
 
+Clicking the Preview status control opens Context; in an error state it also retries
+loading the Preview. Closing Explore cancels its active refinement request and clears
+the warning. **Track this chat** remains a separate action and does not close Explore.
+If a failed Context load hides the Preview, the warning button beside the conversation
+also retries loading it.
+
 The Ready message is a completion signal, not the beginning of draft generation: it appears only
 after the generated draft is rendered in Preview for review.
 

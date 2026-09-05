@@ -30,6 +30,27 @@ const waitFor = async (condition: () => boolean, description: string) => {
   if (!condition()) throw new Error(`Did not observe ${description}`);
 };
 
+/**
+ * A packaged desktop check must prove both that a control can receive a pointer
+ * event at its rendered position and that its click handler changes observable
+ * application state.  `HTMLElement.click()` alone can mask a covered or
+ * zero-sized control, so check the centre point before dispatching it.
+ */
+const clickRenderedButton = (selector: string, description: string) => {
+  const button = document.querySelector<HTMLButtonElement>(selector);
+  if (!button) throw new Error(`Missing ${description} (${selector})`);
+  if (button.disabled) throw new Error(`${description} was unexpectedly disabled`);
+  button.scrollIntoView({ block: 'center', inline: 'center' });
+  const box = button.getBoundingClientRect();
+  if (box.width <= 0 || box.height <= 0) throw new Error(`${description} has no clickable area`);
+  const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+  if (!hit || (hit !== button && !button.contains(hit))) {
+    throw new Error(`${description} is covered at its click target`);
+  }
+  button.click();
+  return button;
+};
+
 interface CreatedRecord {
   id: string;
 }
@@ -148,6 +169,13 @@ const run = async (providerUrl: string) => {
     steps.push(message);
     await reportDesktopE2eProgress(steps);
   };
+  const selectLocale = async (locale: 'en' | 'ko') => {
+    const select = document.querySelector<HTMLSelectElement>('#locale-select');
+    if (!select) throw new Error('Locale selector was not rendered');
+    select.value = locale;
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+    await waitFor(() => document.documentElement.lang === locale, `${locale} locale selection`);
+  };
   try {
     await waitFor(() => document.documentElement.dataset.applicationReady === 'true', 'application initialization');
     await step('application launched and initialized through the native command path');
@@ -156,6 +184,7 @@ const run = async (providerUrl: string) => {
     await step('the configured Vault was restored without reopening first-run setup');
     await waitForSemanticStartupIndex();
     await step('startup indexing prepared the Vault with the bundled embedding model');
+    await selectLocale('en');
     await applicationJson('/provider/config', 'PUT', {
       base_url: providerUrl,
       model: 'deterministic-test-model',
@@ -163,15 +192,23 @@ const run = async (providerUrl: string) => {
       api_key: 'desktop-e2e-key',
     });
 
-    const searchNavigation = document.querySelector<HTMLButtonElement>('[data-view="search"]');
-    searchNavigation?.click();
+    clickRenderedButton('[data-view="ai-setup"]', 'AI setup navigation');
+    await waitFor(() => document.getElementById('ai-setup')?.classList.contains('active') ?? false, 'AI setup navigation');
+    clickRenderedButton('#provider-test', 'Test provider connection');
+    await waitFor(
+      () => document.getElementById('provider-status')?.textContent?.includes('deterministic-test-model') ?? false,
+      'provider test result',
+    );
+    await step('AI setup navigation and provider test passed rendered hit-testing with a deterministic local provider');
+
+    clickRenderedButton('[data-view="search"]', 'Search navigation');
     await waitFor(
       () => document.getElementById('search')?.classList.contains('active') ?? false,
       'React Search navigation',
     );
     await step('primary navigation changed the visible React screen');
 
-    document.querySelector<HTMLButtonElement>('[data-view="workbench"]')?.click();
+    clickRenderedButton('[data-view="workbench"]', 'Workbench navigation');
     await waitFor(
       () => document.getElementById('workbench')?.classList.contains('active') ?? false,
       'React Workbench navigation',
@@ -181,9 +218,27 @@ const run = async (providerUrl: string) => {
     if (!capture) throw new Error('Capture input was not rendered');
     capture.value = value;
     capture.dispatchEvent(new Event('input', { bubbles: true }));
-    (document.getElementById('capture') as HTMLFormElement | null)?.requestSubmit();
+    clickRenderedButton('#capture button[aria-label="Save Capture"]', 'Save Capture');
     await waitFor(() => document.getElementById('board')?.textContent?.includes(value) ?? false, 'persisted Capture');
     await step('Capture was created and rendered through React, Tauri, and the real application runtime');
+
+    clickRenderedButton('#flow-toggle', 'Workbench flow toggle');
+    await waitFor(() => !(document.getElementById('flow-view')?.hidden ?? true), 'opened Workbench flow');
+    clickRenderedButton('#flow-toggle', 'Workbench flow close toggle');
+    await waitFor(() => document.getElementById('flow-view')?.hidden ?? false, 'closed Workbench flow');
+    clickRenderedButton('#archive-more', 'Archive pagination toggle');
+    await waitFor(() => document.getElementById('archive-more')?.getAttribute('aria-label') === 'Show fewer archived documents', 'expanded archive pagination');
+    clickRenderedButton('#archive-more', 'Archive pagination reset');
+    await waitFor(() => document.getElementById('archive-more')?.getAttribute('aria-label') === 'Show more archived documents', 'reset archive pagination');
+    clickRenderedButton('#queue-toggle', 'AI Queue toggle');
+    await waitFor(() => !(document.getElementById('queue-panel')?.hidden ?? true), 'opened AI Queue');
+    clickRenderedButton('#queue-panel header button', 'AI Queue close');
+    await waitFor(() => document.getElementById('queue-panel')?.hidden ?? false, 'closed AI Queue');
+    clickRenderedButton('#alert-toggle', 'Notifications toggle');
+    await waitFor(() => !(document.getElementById('alert-panel')?.hidden ?? true), 'opened Notifications');
+    clickRenderedButton('#alert-panel header button', 'Notifications close');
+    await waitFor(() => document.getElementById('alert-panel')?.hidden ?? false, 'closed Notifications');
+    await step('rendered Workbench, archive, Queue, and notification controls passed hit-testing and click-state checks');
 
     const workflowCapture = await applicationJson<CreatedRecord>('/captures', 'POST', {
       text: 'Native desktop workflow Capture',
@@ -208,18 +263,22 @@ const run = async (providerUrl: string) => {
     if (refinement.title !== 'Refined problem') throw new Error('Native refinement result was not returned');
     await window.loadBoard();
     await waitFor(() => Boolean(document.querySelector(`[data-approve-problem="${problem.id}"]`)), 'Problem approval action');
-    document.querySelector<HTMLButtonElement>(`[data-approve-problem="${problem.id}"]`)?.click();
+    clickRenderedButton(`[data-approve-problem="${problem.id}"]`, 'Approve Problem');
     await waitFor(
       () => window.workbenchBoard?.problems?.some((item: { id: string; state: string }) => item.id === problem.id && item.state === 'approved') ?? false,
       'Problem approval from its Workbench action',
     );
     await step('Problem approval responded to the packaged Workbench click and refreshed its state');
-    document.querySelector<HTMLButtonElement>(`[data-next-chat-id="${problem.id}"]`)?.click();
+    clickRenderedButton(`[data-next-chat-id="${problem.id}"]`, 'Explore next Solution');
     await waitFor(
       () => document.querySelector<HTMLDialogElement>('#chat-modal')?.open ?? false,
       'next Solution exploration from its Workbench action',
     );
-    document.querySelector<HTMLDialogElement>('#chat-modal')?.close();
+    clickRenderedButton('#chat-close', 'Explore Chat close');
+    await waitFor(
+      () => !(document.querySelector<HTMLDialogElement>('#chat-modal')?.open ?? true),
+      'Explore Chat close action',
+    );
     const solution = await applicationJson<CreatedRecord>(`/problems/${problem.id}/features`, 'POST', {
       title: 'Native desktop Solution',
       outcome: 'The packaged command path preserves workflow behavior.',
@@ -230,10 +289,32 @@ const run = async (providerUrl: string) => {
     if (hiddenConflict.ok) throw new Error('Hidden conflict model job was allowed');
     await applicationJson('/work-tracking/vault/lexical','POST',{scope:'workbench',query:'startup',limit:4});
     await applicationJson('/work-tracking/vault/semantic','POST',{scope:'workbench',query:'startup',limit:4});
-    await applicationJson<void>(`/features/${solution.id}/conflict`, 'PUT', {
-      state: 'clear',
-      citation: 'Native desktop deterministic review',
+    await window.loadBoard();
+    await selectLocale('ko');
+    // The report is synthetic because hidden provider conflict jobs are forbidden;
+    // the decision button still uses the production renderer and persists through Tauri.
+    (window as any).showConflictReviewResult({
+      feature_id: solution.id,
+      run_id: 'desktop-zero-conflict',
+      conflicts: [],
+      recommended_state: 'clear',
+      summary: 'No deterministic conflicts.',
+      reviewed_count: 1,
+      retained_count: 1,
+      candidate_count: 1,
+      scope: { semantic_ready: 1, documents: 1, embedding_coverage: 1 },
     });
+    await waitFor(
+      () => document.querySelector<HTMLButtonElement>('[data-conflict-decision="clear"]')?.textContent?.includes('충돌 없음') ?? false,
+      'Korean no-conflict decision',
+    );
+    clickRenderedButton('[data-conflict-decision="clear"]', 'Korean no-conflict decision');
+    await waitFor(
+      () => (window.workbenchBoard?.features as Array<{ id: string; conflict_state: string }> | undefined)
+        ?.some(item => item.id === solution.id && item.conflict_state === 'clear') ?? false,
+      'native no-conflict decision persistence',
+    );
+    await selectLocale('en');
     await applicationJson<void>(`/features/${solution.id}/approve`, 'POST');
     const progress = await applicationJson<CreatedRecord>(`/features/${solution.id}/progress`, 'POST', {
       body: 'Native command evidence',
@@ -254,8 +335,35 @@ const run = async (providerUrl: string) => {
     if (!restoredProgress.checklist.some((item) => Boolean(item.checked))) {
       throw new Error('Native checklist persistence was not restored');
     }
+    await applicationJson<CreatedRecord>(`/features/${solution.id}/progress`, 'POST', {
+      body: 'Native image evidence',
+      image_data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+      image_media_type: 'image/png',
+    });
+    await window.loadBoard();
+    document.querySelector<HTMLElement>(`[data-progress-id="${solution.id}"]`)?.click();
+    await waitFor(
+      () => !(document.querySelector<HTMLButtonElement>('#preview-work-tab')?.hidden ?? true),
+      'visible Work tab',
+    );
+    clickRenderedButton('#preview-work-tab', 'Solution Work tab');
+    await waitFor(
+      () => !(document.getElementById('explore-preview-work')?.hidden ?? true),
+      'opened Solution Work tab',
+    );
+    await waitFor(
+      () => Boolean(document.querySelector('#explore-preview-work [data-summarize-entry]')),
+      'rendered Work-tab image summary action',
+    );
+    clickRenderedButton('#explore-preview-work [data-summarize-entry]', 'Summarize Work-tab image');
+    await waitFor(
+      () => document.getElementById('explore-preview-work')?.textContent?.includes('Deterministic image summary') ?? false,
+      'completed Work-tab image summary',
+    );
+    clickRenderedButton('#chat-close', 'Work workspace close');
+    await waitFor(() => !(document.querySelector<HTMLDialogElement>('#chat-modal')?.open ?? true), 'closed Work workspace');
     await waitForIdleJobs();
-    await step('refinement, conflict review, workflow, Work Log, comments, and checklist passed');
+    await step('refinement, conflict review, workflow, Work Log, comments, checklist, and image summary buttons passed');
 
     await window.loadBoard();
     document.querySelector<HTMLButtonElement>(`[data-solution-action="review"][data-solution-id="${solution.id}"]`)?.click();
@@ -319,11 +427,9 @@ const run = async (providerUrl: string) => {
     window.dispatchEvent(new CustomEvent('llm-wiki:tracked-resume',{detail:{sessionId:external.sessionId}}));
     await waitFor(()=>!!document.querySelector('#chat-modal[open]'),'external work resumed in Chat');
     await waitFor(()=>!!document.querySelector('#chat-column nav[aria-label] button'),'tracked continuation actions');
-    const propose=document.querySelector<HTMLButtonElement>('#chat-column nav[aria-label] button');
-    propose?.click();
+    clickRenderedButton('#chat-column nav[aria-label] button', 'tracked Chat proposal');
     await waitFor(()=>!!document.querySelector('#work-tracking-cards article'),'real Problem review card');
-    const accept=document.querySelector<HTMLButtonElement>('#work-tracking-cards article footer button:last-child');
-    accept?.click();
+    clickRenderedButton('#work-tracking-cards article footer button:last-child', 'tracked Chat acceptance');
     await waitFor(()=>!document.querySelector('#work-tracking-cards article'),'accepted Problem card');
     const adopted=await applicationJson<{linkedWorkflow:{problem:{id:string}}}>('/work-tracking/sessions/'+external.sessionId);
     if(!adopted.linkedWorkflow.problem?.id)throw Error('Real Chat acceptance did not adopt the Problem');

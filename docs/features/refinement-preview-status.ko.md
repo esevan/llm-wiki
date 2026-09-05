@@ -46,6 +46,11 @@ Explore 대화와 초안, Problem의 원본 Capture, Solution의 상위 Problem�
 Context를 불러오지 못하면 빈 Preview는 닫히고 사용 가능한 대화창에 접근 가능한 경고가 남습니다.
 다른 항목으로 이동하면 이전 요청을 폐기해 늦은 응답이 새 Preview를 덮어쓰지 못하게 합니다.
 
+Preview 상태 버튼을 누르면 Context가 열리고, 오류 상태에서는 Preview를 다시 불러옵니다.
+Explore를 닫으면 실행 중인 Refinement 요청을 취소하고 경고를 지웁니다.
+**이 채팅 추적**은 별도 동작이며 Explore를 닫지 않습니다.
+Context 로드 실패로 Preview가 숨겨진 경우에는 대화 옆 경고 버튼으로도 다시 불러올 수 있습니다.
+
 Ready 메시지는 초안 생성을 시작한다는 뜻이 아니라, 생성된 초안이 Preview에 반영되어 검토할 수
 있다는 완료 신호입니다.
 

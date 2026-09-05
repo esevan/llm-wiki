@@ -24,4 +24,27 @@ describe('Chat connection scopes',()=>{
     expect(create.topicIds).toEqual(['LLM Wiki','Release']);
     expect(create.scopes).toContain('knowledge:publish');
   });
+
+  it('revokes an active connection and saves an explicit topic membership', async () => {
+    const request=vi.fn().mockResolvedValue({ok:true,status:200,text:async()=>'',json:async()=>({connections:[{id:'active connection',name:'Scoped Chat',state:'active',scopes:['session:read'],topicIds:['LLM Wiki']}]})});
+    window.llmWikiApplication={request};
+    render(<SettingsView active/>);
+
+    await screen.findByRole('button',{name:'Revoke'});
+    fireEvent.click(screen.getByRole('button',{name:'Revoke'}));
+    await waitFor(()=>expect(request).toHaveBeenCalledWith({path:'/work-tracking/connections/active%20connection',method:'DELETE'}));
+
+    fireEvent.click(screen.getByText('Manage topic membership'));
+    fireEvent.change(screen.getByLabelText('Topic ID'),{target:{value:'release'}});
+    fireEvent.change(screen.getByLabelText('Member type'),{target:{value:'features'}});
+    fireEvent.change(screen.getByLabelText('Item ID or indexed Vault relative path'),{target:{value:'feature-42'}});
+    fireEvent.change(screen.getByLabelText('Membership change'),{target:{value:'no'}});
+    fireEvent.click(screen.getByRole('button',{name:'Apply membership'}));
+
+    await waitFor(()=>expect(request).toHaveBeenCalledWith({
+      path:'/work-tracking/topic-membership',method:'PUT',
+      body:JSON.stringify({topicId:'release',entityType:'features',entityId:'feature-42',included:false}),
+    }));
+    expect(screen.getByText('Topic membership updated.')).toHaveAttribute('role','status');
+  });
 });

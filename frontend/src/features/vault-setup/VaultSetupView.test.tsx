@@ -20,4 +20,14 @@ describe('first-run Vault setup', () => {
     expect(screen.getByRole('button')).toBeDisabled();
     expect(screen.getByRole('button')).toHaveAttribute('aria-busy', 'true');
   });
+
+  it('retries the folder selection after a picker failure', () => {
+    const onRetry = vi.fn();
+    render(<VaultSetupView phase="error" error="The picker closed unexpectedly." onChoose={vi.fn()} onRetry={onRetry} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+
+    expect(onRetry).toHaveBeenCalledOnce();
+    expect(screen.getByRole('alert')).toHaveTextContent('The picker closed unexpectedly.');
+  });
 });

@@ -55,6 +55,24 @@ describe('First-run introduction', () => {
     await waitFor(() => expect(finish).toHaveBeenCalledTimes(1));
   });
 
+  it('moves to an exact scene from each progress button and locks every navigation control while opening the picker', async () => {
+    let complete!: () => void;
+    const finish = vi.fn(() => new Promise<void>((resolve) => { complete = resolve; }));
+    render(<FirstRunIntro onFinish={finish} />);
+
+    fireEvent.click(screen.getByRole('button', { name: '2' }));
+    expect(screen.getByRole('heading', { name: 'Your knowledge stays yours.' })).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: '3' }));
+    expect(screen.getByRole('heading', { name: 'From question to working answer.' })).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'Skip intro' }));
+
+    expect(screen.getByRole('button', { name: 'Skip intro' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '1' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Opening Vault picker…' })).toBeDisabled();
+    complete();
+    await waitFor(() => expect(finish).toHaveBeenCalledOnce());
+  });
+
   it('Given the native handoff fails, when the user retries, then recovery remains available', async () => {
     const finish = vi.fn().mockRejectedValueOnce(new Error('picker failed')).mockResolvedValue(false);
     render(<FirstRunIntro onFinish={finish} />);

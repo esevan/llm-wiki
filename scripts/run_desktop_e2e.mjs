@@ -108,5 +108,6 @@ try {
 } finally {
   await terminate(application);
   await terminate(provider);
-  await rm(state, { recursive: true, force: true });
+  if (process.env.LLM_WIKI_E2E_KEEP_STATE === "1") console.error(`desktop E2E state retained at ${state}`);
+  else await rm(state, { recursive: true, force: true });
 }

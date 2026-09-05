@@ -1,5 +1,17 @@
 import http from "node:http";
 
+function messageText(content) {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return String(content ?? "");
+  return content
+    .map((part) => {
+      if (typeof part === "string") return part;
+      return part?.type === "text" ? String(part.text ?? "") : "";
+    })
+    .filter(Boolean)
+    .join("\n");
+}
+
 function deterministicResult(prompt) {
   if (prompt.includes("executive_summary_markdown")) {
     return {
@@ -94,7 +106,7 @@ const server = http.createServer((request, response) => {
         response.end("data: [DONE]\n\n");
         return;
       }
-      const prompt = (payload.messages ?? []).map((message) => String(message.content ?? "")).join("\n");
+      const prompt = (payload.messages ?? []).map((message) => messageText(message.content)).join("\n");
       sendJson(response, 200, { choices: [{ message: { content: JSON.stringify(deterministicResult(prompt)) } }] });
     };
     if (payload.model === "deterministic-timeout") setTimeout(reply, 600);

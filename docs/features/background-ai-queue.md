@@ -34,6 +34,12 @@ Summary attaches to the exact
 Work Log entry without changing scroll position. Completion Review also creates a temporary toast
 and a persisted unread bell alert because it requires a user decision.
 
+The **Summarize image** button works in both Solution details and the Explore Work tab.
+It stays disabled while the queued summary is running, then refreshes the originating
+view when the summary completes. If the request fails, a notice explains the error and
+the button becomes available again. Moving to another item prevents a late result from
+replacing that item's view.
+
 Knowledge translation resumes from paragraph checkpoints and publishes the completed translation
 to the Vault before deleting its SQLite working checkpoints. Capture and Work Log text enqueue
 derived translations immediately using the language active when the user saved them; authored source

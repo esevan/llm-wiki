@@ -42,4 +42,28 @@ describe('WorkTrackingCards',()=>{
     fireEvent.click(screen.getByRole('button',{name:'Publish exact draft'}));
     expect(publish).toHaveBeenCalledOnce();
   });
+
+  it('sends the reviewed card to reject, edit, and accept callbacks', () => {
+    const reject=vi.fn(), edit=vi.fn(), accept=vi.fn();
+    const card={id:'proposal',stage:'problem' as const,title:'Problem proposal',summary:'Review this',revision:3};
+    render(<WorkTrackingCards cards={[card]} onReject={reject} onEdit={edit} onAccept={accept}/>);
+
+    fireEvent.click(screen.getByRole('button',{name:'Reject'}));
+    fireEvent.click(screen.getByRole('button',{name:'Edit'}));
+    fireEvent.click(screen.getByRole('button',{name:'Accept'}));
+
+    expect(reject).toHaveBeenCalledWith(card);
+    expect(edit).toHaveBeenCalledWith(card);
+    expect(accept).toHaveBeenCalledWith(card);
+  });
+
+  it('lets the user edit a saved draft before publishing it', () => {
+    const edit=vi.fn();
+    const card={id:'draft',stage:'knowledge' as const,title:'Draft',summary:'Private',revision:9,publicationState:'draft_saved' as const,draftMarkdown:'# Draft'};
+    render(<WorkTrackingCards cards={[card]} onEdit={edit}/>);
+
+    fireEvent.click(screen.getByRole('button',{name:'Edit draft'}));
+
+    expect(edit).toHaveBeenCalledWith(card);
+  });
 });

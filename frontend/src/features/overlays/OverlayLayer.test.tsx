@@ -53,3 +53,22 @@ describe.each(['queue', 'alert'])('CB-031 %s FAB dismissal', name => {
     panel.remove();
   });
 });
+
+it.each([
+  ['feature-modal', 'feature-cancel'],
+  ['chat-modal', 'chat-close'],
+  ['draft-modal', 'draft-cancel'],
+  ['manual-modal', 'manual-cancel'],
+  ['transition-modal', 'transition-cancel'],
+])('closes only the %s dialog from its rendered cancel action', (dialogId, actionId) => {
+  render(<OverlayLayer />);
+  const dialog = document.getElementById(dialogId) as HTMLDialogElement;
+  const other = document.getElementById('notice-modal') as HTMLDialogElement;
+  Object.defineProperty(dialog, 'open', { configurable: true, writable: true, value: true });
+  Object.defineProperty(other, 'open', { configurable: true, writable: true, value: true });
+  dialog.close = function close() { this.open = false; };
+  other.close = function close() { this.open = false; };
+  fireEvent.click(document.getElementById(actionId)!);
+  expect(dialog.open).toBe(false);
+  expect(other.open).toBe(true);
+});
