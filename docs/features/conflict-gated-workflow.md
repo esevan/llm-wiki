@@ -15,7 +15,8 @@ explicit new request, not automatic approval. If there is no saved report, the r
 points to that menu instead of starting work. Queue also opens reports saved by earlier versions.
 When a completed report contains zero conflicts, **No conflict** remains an explicit user decision
 even when the AI reports insufficient evidence. Reports with conflicts still require item-by-item
-resolution and cannot use this shortcut.
+resolution and cannot use this shortcut. Selecting **No conflict** records the clear decision and
+returns to the Workbench.
 
 1. **Capture** a thought without classifying it.
 2. Use AI conversation and Refinement to understand and review a **Problem**.

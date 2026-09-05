@@ -230,8 +230,20 @@ const run = async (providerUrl: string) => {
     if (conflictReview.conflicts.length) throw new Error('Deterministic desktop conflict review was not clear');
     document.querySelector<HTMLButtonElement>(`[data-solution-action="conflict"][data-solution-id="${solution.id}"]`)?.click();
     await waitFor(() => !!document.querySelector('#conflict-review-saved-result') && !!document.querySelector<HTMLDialogElement>('#item-detail-modal')?.open, 'completed conflict result on second click');
+    document.querySelector<HTMLDialogElement>('#item-detail-modal')?.close();
+    await (window as Window & { setLocale: (locale: string, persist?: boolean) => Promise<void> }).setLocale('ko', false);
+    await waitFor(() => document.documentElement.lang === 'ko', 'Korean locale selection');
+    document.querySelector<HTMLButtonElement>(`[data-solution-action="conflict"][data-solution-id="${solution.id}"]`)?.click();
+    await waitFor(() => !!document.querySelector('#conflict-review-saved-result') && !!document.querySelector<HTMLDialogElement>('#item-detail-modal')?.open, 'Korean completed conflict result');
     const noConflict = document.querySelector<HTMLButtonElement>('#item-detail-notes button[data-conflict-decision="clear"]');
     if (!noConflict) throw new Error('Zero-conflict report did not offer the No conflict decision');
+    if (noConflict.textContent !== '충돌 없음') throw new Error('Zero-conflict action was not localized to Korean');
+    const noConflictRect = noConflict.getBoundingClientRect();
+    const hitTarget = document.elementFromPoint(
+      noConflictRect.left + noConflictRect.width / 2,
+      noConflictRect.top + noConflictRect.height / 2,
+    );
+    if (!hitTarget || !noConflict.contains(hitTarget)) throw new Error('Korean No conflict action is obscured at its click target');
     const decisionButtons = [...document.querySelectorAll<HTMLButtonElement>('.conflict-decision-actions button')];
     const noteRect = document.getElementById('conflict-decision-note')!.getBoundingClientRect();
     const decisionRects = decisionButtons.map(button => button.getBoundingClientRect());
@@ -239,7 +251,12 @@ const run = async (providerUrl: string) => {
     if (Math.abs(decisionRects[0].top - decisionRects[1].top) > 1 || Math.abs(decisionRects[0].height - decisionRects[1].height) > 1) throw new Error('Conflict decision buttons are misaligned');
     const repeated = await applicationJson<{ jobs: Array<JobResponse & { entity_id: string }> }>('/jobs');
     if (repeated.jobs.filter(job => job.task_kind === 'conflict_review' && job.entity_id === solution.id).length !== 1) throw new Error('Repeated conflict click created duplicate work');
-    document.querySelector<HTMLDialogElement>('#item-detail-modal')?.close();
+    noConflict.click();
+    await waitFor(
+      () => !(document.querySelector<HTMLDialogElement>('#item-detail-modal')?.open ?? false) && window.workbenchBoard?.features?.some((item: { id: string; conflict_state: string }) => item.id === solution.id && item.conflict_state === 'clear') === true,
+      'Korean No conflict click saved its native clear decision',
+    );
+    await (window as Window & { setLocale: (locale: string, persist?: boolean) => Promise<void> }).setLocale('en', false);
     document.querySelector<HTMLButtonElement>('#queue-toggle')?.click();
     await waitFor(() => !!document.querySelector(`[data-job-id="${conflictJob.id}"] [data-job-action="result"]:not([disabled])`), 'Queue conflict result action');
     for (const name of ['queue', 'alert']) {
@@ -255,10 +272,6 @@ const run = async (providerUrl: string) => {
     document.querySelector<HTMLButtonElement>(`[data-job-id="${conflictJob.id}"] [data-job-action="result"]`)?.click();
     await waitFor(() => !!document.querySelector<HTMLDialogElement>('#item-detail-modal')?.open, 'Queue opens saved conflict report');
     document.querySelector<HTMLDialogElement>('#item-detail-modal')?.close();
-    await applicationJson<void>(`/features/${solution.id}/conflict`, 'PUT', {
-      state: 'clear',
-      citation: 'Native desktop deterministic review',
-    });
     await applicationJson<void>(`/features/${solution.id}/approve`, 'POST');
     await window.loadBoard();
     document.querySelector<HTMLButtonElement>(`[data-solution-action="stage"][data-solution-state="proposed"][data-solution-id="${solution.id}"]`)?.click();

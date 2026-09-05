@@ -19,6 +19,8 @@ it.each(['clear', 'insufficient_evidence', 'unknown'])('CB-033 offers No conflic
   const clear = root.querySelector<HTMLButtonElement>('button[data-conflict-decision="clear"]');
   expect(clear?.textContent).toBe('No conflict');
   expect(clear?.getAttribute('aria-label')).toBe('No conflict');
+  expect(clear?.dataset.featureId).toBe('solution');
+  expect(root.querySelector<HTMLButtonElement>('button[data-conflict-decision="conflicted"]')?.dataset.featureId).toBe('solution');
 });
 
 it('CB-033 does not bypass per-conflict resolution when conflicts exist', () => {
