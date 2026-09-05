@@ -13,6 +13,9 @@ While a review is active, it opens Queue without duplicating work. **Run new rev
 the Solution card's **More actions** menu for changed Solution or Vault evidence; this is an
 explicit new request, not automatic approval. If there is no saved report, the result action
 points to that menu instead of starting work. Queue also opens reports saved by earlier versions.
+When a completed report contains zero conflicts, **No conflict** remains an explicit user decision
+even when the AI reports insufficient evidence. Reports with conflicts still require item-by-item
+resolution and cannot use this shortcut.
 
 1. **Capture** a thought without classifying it.
 2. Use AI conversation and Refinement to understand and review a **Problem**.

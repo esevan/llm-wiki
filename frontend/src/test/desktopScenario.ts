@@ -230,6 +230,8 @@ const run = async (providerUrl: string) => {
     if (conflictReview.conflicts.length) throw new Error('Deterministic desktop conflict review was not clear');
     document.querySelector<HTMLButtonElement>(`[data-solution-action="conflict"][data-solution-id="${solution.id}"]`)?.click();
     await waitFor(() => !!document.querySelector('#conflict-review-saved-result') && !!document.querySelector<HTMLDialogElement>('#item-detail-modal')?.open, 'completed conflict result on second click');
+    const noConflict = document.querySelector<HTMLButtonElement>('#item-detail-notes button[data-conflict-decision="clear"]');
+    if (!noConflict) throw new Error('Zero-conflict report did not offer the No conflict decision');
     const repeated = await applicationJson<{ jobs: Array<JobResponse & { entity_id: string }> }>('/jobs');
     if (repeated.jobs.filter(job => job.task_kind === 'conflict_review' && job.entity_id === solution.id).length !== 1) throw new Error('Repeated conflict click created duplicate work');
     document.querySelector<HTMLDialogElement>('#item-detail-modal')?.close();

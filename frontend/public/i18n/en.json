@@ -544,5 +544,6 @@
   "conflict_review.view_result": "View review result",
   "conflict_review.run_new": "Run new review",
   "conflict_review.no_saved_result_title": "No review result",
-  "conflict_review.no_saved_result": "No saved Conflict Review yet. Choose Run new review from More actions."
+  "conflict_review.no_saved_result": "No saved Conflict Review yet. Choose Run new review from More actions.",
+  "conflict_review.declare_clear": "No conflict"
 }

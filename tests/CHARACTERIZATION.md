@@ -318,6 +318,10 @@ is mapped in `docs/migrations/react-tauri-inventory.md` and `src-tauri/tests/`.
 
 ## Remaining decision-dependent cases
 
+- **CB-033 — Zero-conflict decision remains user-controlled**: Completed reports with no conflict
+  items expose **No conflict** for clear, insufficient-evidence, and legacy unknown recommendations.
+  Reports containing conflicts continue to require item-level resolutions.
+
 - **CB-032 — Conflict result and rerun are distinct actions**: Proposed Solution cards expose
   saved-result viewing as the primary action and fresh analysis only inside More actions. The
   result action never creates work when no reusable report exists; the explicit menu action does.
