@@ -378,6 +378,8 @@ page of non-archived items:
     "pendingDecisions":1
   },
   "attention":[{"entityRef":"opaque-ref","title":"...","reason":"conflict_review"}],
+  "attentionTotal":1,
+  "attentionTruncated":false,
   "items":[{
     "entityRef":"opaque-ref",
     "kind":"solution",
@@ -398,8 +400,9 @@ The client passes the same `snapshotRevision` with each cursor. Pages contain at
 the snapshot cursor expires after a bounded period. A changed/expired snapshot returns
 `snapshot_stale` rather than mixing revisions. Aggregate counts cover the complete snapshot, not
 only the current page. `attention` includes every blocker, conflict, stale item, and pending user
-decision in the snapshot, subject to a documented response-size ceiling; overflow is explicitly
-reported and paginated rather than omitted.
+decision in the snapshot, subject to a 50-item response-size ceiling. `attentionTotal` and
+`attentionTruncated` explicitly report overflow; following `nextCursor` pages the remaining
+attention entries as well as the remaining items rather than omitting them.
 
 The overview returns enough metadata to represent every visible non-archived item without reading
 full bodies. It excludes Chat messages, raw evidence, archived document contents, deleted records,

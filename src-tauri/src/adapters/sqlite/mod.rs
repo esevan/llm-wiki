@@ -22,8 +22,22 @@ fn now() -> String {
     Utc::now().to_rfc3339_opts(SecondsFormat::Nanos, true)
 }
 
+const OVERVIEW_TEXT_LIMIT: usize = 240;
+const OVERVIEW_PROGRESS_LIMIT: usize = 160;
+const OVERVIEW_ATTENTION_LIMIT: usize = 50;
+
 fn hash_text(value: &str) -> String {
     format!("{:x}", Sha256::digest(value.as_bytes()))
+}
+
+fn bounded_overview_text(value: &str, limit: usize) -> String {
+    value
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(limit)
+        .collect()
 }
 
 fn storage_error(error: impl std::fmt::Display) -> AppError {
@@ -1947,7 +1961,12 @@ impl WorkflowRepository for SqliteWorkTrackingStore {
         )
     }
 
-    fn overview(&self, limit: usize, offset: usize) -> Result<Value, AppError> {
+    fn overview(
+        &self,
+        limit: usize,
+        offset: usize,
+        attention_offset: usize,
+    ) -> Result<Value, AppError> {
         let connection = database::open(&self.path).map_err(storage_error)?;
         let connection = connection.unchecked_transaction().map_err(storage_error)?;
         let captures:i64=connection.query_row("SELECT count(*) FROM captures c WHERE NOT EXISTS (SELECT 1 FROM problems p WHERE p.capture_id=c.id)",[],|row|row.get(0)).map_err(storage_error)?;
@@ -1978,8 +1997,8 @@ impl WorkflowRepository for SqliteWorkTrackingStore {
                 |row| row.get(0),
             )
             .map_err(storage_error)?;
-        let mut statement=connection.prepare("SELECT id,kind,title,state,updated_at FROM (SELECT c.id,'capture' kind,substr(c.text,1,200) title,'captured' state,c.created_at updated_at FROM captures c WHERE NOT EXISTS (SELECT 1 FROM problems p WHERE p.capture_id=c.id) UNION ALL SELECT id,'problem',statement,state,created_at FROM problems WHERE state!='archived' UNION ALL SELECT id,'solution',title,state,created_at FROM features WHERE state!='archived') ORDER BY updated_at DESC,id LIMIT ? OFFSET ?").map_err(storage_error)?;
-        let mut items=statement.query_map(params![limit as i64,offset as i64],|row|Ok(json!({"entityRef":row.get::<_,String>(0)?,"kind":row.get::<_,String>(1)?,"title":row.get::<_,String>(2)?,"state":row.get::<_,String>(3)?,"updatedAt":row.get::<_,String>(4)?}))).map_err(storage_error)?.collect::<Result<Vec<_>,_>>().map_err(storage_error)?;
+        let mut statement=connection.prepare("SELECT id,kind,title,state,updated_at,outcome_or_context FROM (SELECT c.id,'capture' kind,substr(c.text,1,200) title,'captured' state,COALESCE(NULLIF((SELECT updated_at FROM work_tracking_entity_versions v WHERE v.entity_type='captures' AND v.entity_id=c.id),''),c.created_at) updated_at,substr(c.text,1,500) outcome_or_context FROM captures c WHERE NOT EXISTS (SELECT 1 FROM problems p WHERE p.capture_id=c.id) UNION ALL SELECT p.id,'problem',p.statement,p.state,COALESCE(NULLIF((SELECT updated_at FROM work_tracking_entity_versions v WHERE v.entity_type='problems' AND v.entity_id=p.id),''),p.created_at),substr(p.detail,1,500) FROM problems p WHERE p.state!='archived' UNION ALL SELECT f.id,'solution',f.title,f.state,COALESCE(NULLIF((SELECT updated_at FROM work_tracking_entity_versions v WHERE v.entity_type='features' AND v.entity_id=f.id),''),f.created_at),substr(f.outcome,1,500) FROM features f WHERE f.state!='archived') ORDER BY updated_at DESC,id LIMIT ? OFFSET ?").map_err(storage_error)?;
+        let mut items=statement.query_map(params![limit as i64,offset as i64],|row|Ok(json!({"entityRef":row.get::<_,String>(0)?,"kind":row.get::<_,String>(1)?,"title":bounded_overview_text(&row.get::<_,String>(2)?,OVERVIEW_TEXT_LIMIT),"category":Value::Null,"state":row.get::<_,String>(3)?,"updatedAt":row.get::<_,String>(4)?,"outcomeOrContext":bounded_overview_text(&row.get::<_,String>(5)?,OVERVIEW_TEXT_LIMIT)}))).map_err(storage_error)?.collect::<Result<Vec<_>,_>>().map_err(storage_error)?;
         for item in &mut items {
             let kind = match item["kind"].as_str() {
                 Some("problem") => "problems",
@@ -2009,21 +2028,28 @@ impl WorkflowRepository for SqliteWorkTrackingStore {
                     .filter(|event| event["kind"] == "work_log_checkpoint")
                     .take(2)
                     .collect::<Vec<_>>());
+                item["latestProgress"] = item["recentProgress"]
+                    .as_array()
+                    .and_then(|events| events.first())
+                    .and_then(|event| event["payload"]["summary"].as_str())
+                    .map(|summary| bounded_overview_text(summary, OVERVIEW_PROGRESS_LIMIT))
+                    .into();
+                item["nextAction"] = context["nextActions"]
+                    .as_array()
+                    .and_then(|actions| actions.first())
+                    .cloned()
+                    .unwrap_or(Value::Null);
             }
         }
-        let lifecycle=connection.query_row("SELECT COALESCE(sum(state='proposed'),0),COALESCE(sum(state='approved'),0),COALESCE(sum(conflict_state!='clear' AND state NOT IN ('completed','archived')),0),COALESCE(sum(state='completed'),0) FROM features",[],|row|Ok(json!({"proposedSolutions":row.get::<_,i64>(0)?,"inProgressSolutions":row.get::<_,i64>(1)?,"conflictedSolutions":row.get::<_,i64>(2)?,"completedSolutions":row.get::<_,i64>(3)?}))).map_err(storage_error)?;
-        let attention = items
-            .iter()
-            .filter(|item| {
-                (item["kind"] == "solution"
-                    && item["conflictState"] != "clear"
-                    && item["state"] != "completed")
-                    || item["state"] == "draft"
-            })
-            .cloned()
-            .collect::<Vec<_>>();
+        let lifecycle=connection.query_row("SELECT COALESCE(sum(state='proposed'),0),COALESCE(sum(state='approved'),0),COALESCE(sum(conflict_state!='clear' AND state NOT IN ('completed','archived')),0),COALESCE(sum(state='completed'),0) FROM features",[],|row|Ok((row.get::<_,i64>(0)?,row.get::<_,i64>(1)?,row.get::<_,i64>(2)?,row.get::<_,i64>(3)?))).map_err(storage_error)?;
+        let pending_decisions:i64=connection.query_row("SELECT (SELECT count(*) FROM problems WHERE state='draft')+(SELECT count(*) FROM features WHERE state='proposed')",[],|row|row.get(0)).map_err(storage_error)?;
+        let attention_total:i64=connection.query_row("SELECT count(*) FROM (SELECT p.id FROM problems p WHERE p.state='draft' UNION ALL SELECT f.id FROM features f WHERE f.state NOT IN ('completed','archived') AND (f.conflict_state!='clear' OR f.state='proposed'))",[],|row|row.get(0)).map_err(storage_error)?;
+        let mut attention_statement=connection.prepare("SELECT entity_ref,kind,title,reason FROM (SELECT p.id entity_ref,'problem' kind,p.statement title,'pending_decision' reason FROM problems p WHERE p.state='draft' UNION ALL SELECT f.id,'solution',f.title,CASE WHEN f.conflict_state!='clear' THEN 'conflict_review' ELSE 'pending_decision' END FROM features f WHERE f.state NOT IN ('completed','archived') AND (f.conflict_state!='clear' OR f.state='proposed')) ORDER BY kind,title,entity_ref LIMIT ? OFFSET ?").map_err(storage_error)?;
+        let attention=attention_statement.query_map(params![OVERVIEW_ATTENTION_LIMIT as i64,attention_offset as i64],|row|Ok(json!({"entityRef":row.get::<_,String>(0)?,"kind":row.get::<_,String>(1)?,"title":bounded_overview_text(&row.get::<_,String>(2)?,OVERVIEW_TEXT_LIMIT),"reason":row.get::<_,String>(3)?}))).map_err(storage_error)?.collect::<Result<Vec<_>,_>>().map_err(storage_error)?;
+        let mut completed_statement=connection.prepare("SELECT f.title,f.outcome,COALESCE(NULLIF((SELECT updated_at FROM work_tracking_entity_versions v WHERE v.entity_type='features' AND v.entity_id=f.id),''),f.created_at) completed_at FROM features f WHERE f.state='completed' ORDER BY completed_at DESC,f.id LIMIT 10").map_err(storage_error)?;
+        let recently_completed=completed_statement.query_map([],|row|Ok(json!({"title":bounded_overview_text(&row.get::<_,String>(0)?,OVERVIEW_TEXT_LIMIT),"outcome":bounded_overview_text(&row.get::<_,String>(1)?,OVERVIEW_TEXT_LIMIT),"completedAt":row.get::<_,String>(2)?}))).map_err(storage_error)?.collect::<Result<Vec<_>,_>>().map_err(storage_error)?;
         Ok(
-            json!({"snapshotRevision":revision,"summary":{"captures":captures,"problems":problems,"solutions":solutions,"trackedSessions":tracked,"total":total,"lifecycle":lifecycle},"attention":attention,"items":items,"recentCompletions":items.iter().filter(|item|item["state"]=="completed").collect::<Vec<_>>(),"nextOffset":if offset+items.len()<total as usize{Some(offset+items.len())}else{None},"ttlMs":15000,"cacheScope":"private"}),
+            json!({"snapshotRevision":revision,"summary":{"captures":captures,"problems":problems,"proposedSolutions":lifecycle.0,"inProgressSolutions":lifecycle.1,"blockedOrConflicted":lifecycle.2,"pendingDecisions":pending_decisions,"solutions":solutions,"trackedSessions":tracked,"total":total,"completedSolutions":lifecycle.3},"attention":attention,"attentionTotal":attention_total,"attentionTruncated":attention_offset+attention.len()<attention_total as usize,"items":items,"recentlyCompleted":recently_completed,"nextOffset":if offset+items.len()<total as usize{Some(offset+items.len())}else{None},"nextAttentionOffset":if attention_offset+attention.len()<attention_total as usize{Some(attention_offset+attention.len())}else{None},"ttlMs":15000,"cacheScope":"private"}),
         )
     }
 

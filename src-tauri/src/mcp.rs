@@ -8,9 +8,10 @@ use rmcp::{
     },
     model::{
         CacheScope, CallToolResponse, CallToolResult, ElicitRequest, ElicitRequestParams,
-        Implementation, InputRequest, InputRequiredResult, ListResourcesResult,
-        PaginatedRequestParams, ProtocolVersion, ReadResourceRequestParams, ReadResourceResponse,
-        ReadResourceResult, Resource, ResourceContents, ServerCapabilities, ServerInfo,
+        Implementation, InputRequest, InputRequiredResult, ListResourceTemplatesResult,
+        ListResourcesResult, PaginatedRequestParams, ProtocolVersion, ReadResourceRequestParams,
+        ReadResourceResponse, ReadResourceResult, Resource, ResourceContents, ResourceTemplate,
+        ServerCapabilities, ServerInfo,
     },
     service::{RequestContext, RoleServer},
     tool, tool_handler, tool_router,
@@ -21,6 +22,66 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
+
+const WORKBENCH_OVERVIEW_URI: &str = "llm-wiki://workbench/overview";
+const WORKBENCH_OVERVIEW_TEMPLATE: &str =
+    "llm-wiki://workbench/overview{?snapshotRevision,cursor,limit}";
+
+fn overview_resource_page(
+    uri: &str,
+) -> Result<Option<(usize, Option<&str>, Option<i64>)>, AppError> {
+    let Some(query) = uri.strip_prefix(WORKBENCH_OVERVIEW_URI) else {
+        return Ok(None);
+    };
+    if query.is_empty() {
+        return Ok(Some((50, None, None)));
+    }
+    let Some(query) = query.strip_prefix('?') else {
+        return Ok(None);
+    };
+    let mut limit = 50usize;
+    let mut cursor = None;
+    let mut snapshot_revision = None;
+    let mut has_limit = false;
+    for parameter in query.split('&') {
+        let Some((name, value)) = parameter.split_once('=') else {
+            return Err(AppError::new(
+                "invalid_input",
+                "Overview URI parameters are invalid",
+            ));
+        };
+        match name {
+            "limit" if !has_limit => {
+                limit = value.parse().map_err(|_| {
+                    AppError::new("invalid_input", "Overview limit must be a positive integer")
+                })?;
+                if limit == 0 {
+                    return Err(AppError::new(
+                        "invalid_input",
+                        "Overview limit must be a positive integer",
+                    ));
+                }
+                has_limit = true;
+            }
+            "cursor" if cursor.is_none() && !value.is_empty() => cursor = Some(value),
+            "snapshotRevision" if snapshot_revision.is_none() => {
+                snapshot_revision = Some(value.parse().map_err(|_| {
+                    AppError::new(
+                        "invalid_input",
+                        "Overview snapshotRevision must be an integer",
+                    )
+                })?);
+            }
+            _ => {
+                return Err(AppError::new(
+                    "invalid_input",
+                    "Overview URI parameters are invalid",
+                ));
+            }
+        }
+    }
+    Ok(Some((limit, cursor, snapshot_revision)))
+}
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -718,12 +779,38 @@ impl ServerHandler for WorkTrackingMcpServer {
             .any(|scope| scope == "workbench:overview:read")
         {
             resources.push(
-                Resource::new("llm-wiki://workbench/overview", "Workbench overview")
+                Resource::new(WORKBENCH_OVERVIEW_URI, "Workbench overview")
                     .with_description("Paginated whole-Workbench summary")
                     .with_mime_type("application/json"),
             );
         }
         Ok(ListResourcesResult::with_all_items(resources)
+            .with_ttl_ms(0)
+            .with_cache_scope(CacheScope::Private))
+    }
+
+    async fn list_resource_templates(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ListResourceTemplatesResult, rmcp::ErrorData> {
+        let scopes = self
+            .service
+            .scopes(&self.connection_id)
+            .map_err(error_data)?;
+        let templates = if scopes
+            .iter()
+            .any(|scope| scope == "workbench:overview:read")
+        {
+            vec![
+                ResourceTemplate::new(WORKBENCH_OVERVIEW_TEMPLATE, "Workbench overview pages")
+                    .with_description("A stable, paginated whole-Workbench summary")
+                    .with_mime_type("application/json"),
+            ]
+        } else {
+            Vec::new()
+        };
+        Ok(ListResourceTemplatesResult::with_all_items(templates)
             .with_ttl_ms(0)
             .with_cache_scope(CacheScope::Private))
     }
@@ -736,8 +823,11 @@ impl ServerHandler for WorkTrackingMcpServer {
         let uri = request.uri;
         let value = if uri == "llm-wiki://workbench/current" {
             self.service.current_workbench(&self.connection_id, 10)
-        } else if uri == "llm-wiki://workbench/overview" {
-            self.service.overview(&self.connection_id, 50, None, None)
+        } else if let Some((limit, cursor, snapshot_revision)) =
+            overview_resource_page(&uri).map_err(error_data)?
+        {
+            self.service
+                .overview(&self.connection_id, limit, cursor, snapshot_revision)
         } else if let Some(id) = uri.strip_prefix("llm-wiki://topic/") {
             self.service.topic(&self.connection_id, id, 50)
         } else if let Some(id) = uri

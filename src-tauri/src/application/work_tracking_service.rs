@@ -190,6 +190,7 @@ impl WorkTrackingApplicationService {
     ) -> Result<Value, AppError> {
         self.require_scope(connection_id, "workbench:overview:read")?;
         let mut offset = 0usize;
+        let mut attention_offset = 0usize;
         let mut cursor_snapshot = expected_snapshot;
         if let Some(cursor) = cursor {
             let decoded = URL_SAFE_NO_PAD
@@ -219,6 +220,10 @@ impl WorkTrackingApplicationService {
                 .get("offset")
                 .and_then(Value::as_u64)
                 .unwrap_or_default() as usize;
+            attention_offset = decoded
+                .get("attentionOffset")
+                .and_then(Value::as_u64)
+                .unwrap_or_default() as usize;
             let embedded = decoded
                 .get("snapshot")
                 .and_then(Value::as_i64)
@@ -236,7 +241,9 @@ impl WorkTrackingApplicationService {
             }
             cursor_snapshot = Some(embedded);
         }
-        let mut result = self.store.overview(limit.clamp(1, 50), offset)?;
+        let mut result = self
+            .store
+            .overview(limit.clamp(1, 50), offset, attention_offset)?;
         let current = result
             .get("snapshotRevision")
             .and_then(Value::as_i64)
@@ -248,11 +255,31 @@ impl WorkTrackingApplicationService {
             ));
         }
         let next_offset = result.get("nextOffset").and_then(Value::as_u64);
+        let next_attention_offset = result.get("nextAttentionOffset").and_then(Value::as_u64);
         result
             .as_object_mut()
             .expect("overview object")
             .remove("nextOffset");
-        result["nextCursor"]=next_offset.map(|next|URL_SAFE_NO_PAD.encode(serde_json::to_vec(&json!({"offset":next,"snapshot":current,"owner":format!("{:x}",Sha256::digest(connection_id.as_bytes())),"expires":chrono::Utc::now().timestamp()+300})).expect("cursor serialization"))).map(Value::String).unwrap_or(Value::Null);
+        result
+            .as_object_mut()
+            .expect("overview object")
+            .remove("nextAttentionOffset");
+        result["nextCursor"] = if next_offset.is_some() || next_attention_offset.is_some() {
+            Value::String(
+                URL_SAFE_NO_PAD.encode(
+                    serde_json::to_vec(&json!({
+                        "offset":next_offset.unwrap_or(offset as u64),
+                        "attentionOffset":next_attention_offset.unwrap_or(attention_offset as u64),
+                        "snapshot":current,
+                        "owner":format!("{:x}",Sha256::digest(connection_id.as_bytes())),
+                        "expires":chrono::Utc::now().timestamp()+300
+                    }))
+                    .expect("cursor serialization"),
+                ),
+            )
+        } else {
+            Value::Null
+        };
         Ok(result)
     }
 

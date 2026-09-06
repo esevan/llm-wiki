@@ -245,7 +245,17 @@ async fn stdio_initializes_lists_closed_tools_and_opens_idempotently() {
     );
     assert_eq!(indexed.status, 200, "{}", indexed.body);
     app.work_tracking_service().set_topic_membership(&json!({"topicId":"LLM Wiki","entityType":"vault","entityId":"allowed.md","included":true})).unwrap();
-    let created=app.execute_work_tracking(NativeOperation{name:"work_tracking.connection.create".into(),input:json!({"name":"Contract test","scopes":["session:read","session:write","topic:read","workbench:current:read","vault:search:lexical","vault:evidence:read","knowledge:draft:write","knowledge:publish"],"topicIds":["LLM Wiki"],"checkpointPolicy":"confirm_each"})});
+    for index in 0..51 {
+        let response = app.execute_domain(
+            "workflow",
+            NativeOperation {
+                name: "capture.create".into(),
+                input: json!({"text":format!("overview capture {index}")}),
+            },
+        );
+        assert_eq!(response.status, 201, "{}", response.body);
+    }
+    let created=app.execute_work_tracking(NativeOperation{name:"work_tracking.connection.create".into(),input:json!({"name":"Contract test","scopes":["session:read","session:write","topic:read","workbench:current:read","workbench:overview:read","vault:search:lexical","vault:evidence:read","knowledge:draft:write","knowledge:publish"],"topicIds":["LLM Wiki"],"checkpointPolicy":"confirm_each"})});
     assert_eq!(created.status, 201, "{}", created.body);
     let id = created.body["id"].as_str().unwrap();
     let endpoint = ipc_endpoint(root.path());
@@ -330,7 +340,7 @@ async fn stdio_initializes_lists_closed_tools_and_opens_idempotently() {
         .unwrap()
         .query_row("SELECT count(*) FROM captures", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(capture_count, 0);
+    assert_eq!(capture_count, 51);
     send(
         &mut stdin,
         json!({"jsonrpc":"2.0","id":30,"method":"tools/call","params":{"name":"inbound_work_open","arguments":arguments,"requestState":preview["result"]["requestState"],"inputResponses":{"decision":{"action":"accept","content":{"decision":"accept"}}},"_meta":meta.clone()}}),
@@ -391,7 +401,56 @@ async fn stdio_initializes_lists_closed_tools_and_opens_idempotently() {
         .iter()
         .any(|uri| uri.starts_with("llm-wiki://work-session/")));
     assert!(uris.contains(&"llm-wiki://workbench/current"));
-    assert!(!uris.contains(&"llm-wiki://workbench/overview"));
+    assert!(uris.contains(&"llm-wiki://workbench/overview"));
+    send(
+        &mut stdin,
+        json!({"jsonrpc":"2.0","id":91,"method":"resources/templates/list","params":{"_meta":meta.clone()}}),
+    );
+    let templates = receive(&mut reader);
+    assert!(templates["result"]["resourceTemplates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|template| template["uriTemplate"]
+            == "llm-wiki://workbench/overview{?snapshotRevision,cursor,limit}"));
+    send(
+        &mut stdin,
+        json!({"jsonrpc":"2.0","id":92,"method":"resources/read","params":{"uri":"llm-wiki://workbench/overview?limit=50","_meta":meta.clone()}}),
+    );
+    let first_overview = receive(&mut reader);
+    let first_overview: Value = serde_json::from_str(
+        first_overview["result"]["contents"][0]["text"]
+            .as_str()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(first_overview["items"].as_array().unwrap().len(), 50);
+    for field in [
+        "captures",
+        "problems",
+        "proposedSolutions",
+        "inProgressSolutions",
+        "blockedOrConflicted",
+        "pendingDecisions",
+    ] {
+        assert!(first_overview["summary"].get(field).is_some(), "{field}");
+    }
+    assert!(first_overview["recentlyCompleted"].is_array());
+    let cursor = first_overview["nextCursor"].as_str().unwrap();
+    let snapshot_revision = first_overview["snapshotRevision"].as_i64().unwrap();
+    send(
+        &mut stdin,
+        json!({"jsonrpc":"2.0","id":93,"method":"resources/read","params":{"uri":format!("llm-wiki://workbench/overview?snapshotRevision={snapshot_revision}&cursor={cursor}&limit=50"),"_meta":meta.clone()}}),
+    );
+    let second_overview = receive(&mut reader);
+    let second_overview: Value = serde_json::from_str(
+        second_overview["result"]["contents"][0]["text"]
+            .as_str()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(second_overview["items"].as_array().unwrap().len(), 2);
+    assert!(second_overview["nextCursor"].is_null());
     rusqlite::Connection::open(&db).unwrap().execute("UPDATE work_tracking_sessions SET state='completed',publication_state='offered',publication_offer_revision=head_revision WHERE id=?",[session.as_str().unwrap()]).unwrap();
     // This protocol-only fixture supplies a completion decision; canonical
     // completion and Lineage are exercised by work_tracking_release_acceptance.

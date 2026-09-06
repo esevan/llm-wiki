@@ -1,7 +1,7 @@
 use rusqlite::{params, Connection, Transaction, TransactionBehavior};
 use serde_json::Value;
 
-pub const CURRENT_SCHEMA_VERSION: i64 = 5;
+pub const CURRENT_SCHEMA_VERSION: i64 = 7;
 
 type MigrationFunction = for<'connection> fn(&Transaction<'connection>) -> Result<(), String>;
 type LegacyLocalizationRow = (String, String, String, String, String, String, String);
@@ -38,7 +38,97 @@ const MIGRATIONS: &[Migration] = &[
         name: "add bound work reviews",
         run: add_bound_reviews,
     },
+    Migration {
+        version: 6,
+        name: "track workbench entity update timestamps",
+        run: add_workbench_entity_update_timestamps,
+    },
+    Migration {
+        version: 7,
+        name: "propagate solution child updates to overview timestamps",
+        run: propagate_solution_child_update_timestamps,
+    },
 ];
+
+fn propagate_solution_child_update_timestamps(tx: &Transaction<'_>) -> Result<(), String> {
+    for (table, feature_id) in [
+        ("solution_progress_entries", "{row}.feature_id"),
+        ("solution_checklist_items", "{row}.feature_id"),
+        ("completions", "{row}.feature_id"),
+        (
+            "solution_progress_comments",
+            "(SELECT feature_id FROM solution_progress_entries WHERE id={row}.entry_id)",
+        ),
+    ] {
+        if !table_exists(tx, table)? {
+            continue;
+        }
+        for (action, row) in [("INSERT", "NEW"), ("UPDATE", "NEW"), ("DELETE", "OLD")] {
+            tx.execute_batch(&format!(
+                "CREATE TRIGGER overview_feature_timestamp_{table}_{action} AFTER {action} ON {table} BEGIN
+                   UPDATE work_tracking_entity_versions
+                   SET revision=revision+1
+                   WHERE entity_type='features' AND entity_id={};
+                 END;",
+                feature_id.replace("{row}", row),
+            ))
+            .map_err(|error| error.to_string())?;
+        }
+    }
+    Ok(())
+}
+
+fn add_workbench_entity_update_timestamps(tx: &Transaction<'_>) -> Result<(), String> {
+    add_missing_column(
+        tx,
+        "work_tracking_entity_versions",
+        "updated_at",
+        "TEXT NOT NULL DEFAULT ''",
+    )?;
+    tx.execute_batch(
+        "CREATE TRIGGER tracked_entity_version_inserted AFTER INSERT ON work_tracking_entity_versions BEGIN
+           UPDATE work_tracking_entity_versions
+           SET updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now')
+           WHERE entity_type=NEW.entity_type AND entity_id=NEW.entity_id;
+         END;
+         CREATE TRIGGER tracked_entity_version_changed AFTER UPDATE OF revision ON work_tracking_entity_versions BEGIN
+           UPDATE work_tracking_entity_versions
+           SET updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now')
+           WHERE entity_type=NEW.entity_type AND entity_id=NEW.entity_id;
+         END;",
+    )
+    .map_err(|error| error.to_string())?;
+    for table in [
+        "captures",
+        "problems",
+        "features",
+        "solution_progress_entries",
+        "completions",
+        "work_tracking_sessions",
+    ] {
+        let exists: bool = tx
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=?)",
+                [table],
+                |row| row.get(0),
+            )
+            .map_err(|error| error.to_string())?;
+        if !exists {
+            continue;
+        }
+        for (action, row) in [("INSERT", "NEW"), ("UPDATE", "NEW"), ("DELETE", "OLD")] {
+            tx.execute_batch(&format!(
+                "CREATE TRIGGER tracked_updated_at_{table}_{action} AFTER {action} ON {table} BEGIN
+                   UPDATE work_tracking_entity_versions
+                   SET updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now')
+                   WHERE entity_type='{table}' AND entity_id={row}.id;
+                 END;"
+            ))
+            .map_err(|error| error.to_string())?;
+        }
+    }
+    Ok(())
+}
 
 fn add_bound_reviews(tx: &Transaction<'_>) -> Result<(), String> {
     tx.execute_batch("CREATE TABLE work_tracking_reviews (
