@@ -27,3 +27,7 @@ Use this guide after every completed task to keep repository documentation align
 - Preserve the human-control boundary: AI can propose and organize, while people review and decide.
 - Link to the relevant feature spec where it helps readers trace the implementation.
 - Use repository-relative links and meaningful image alt text.
+- Keep each user document in its stated locale. English guides use English headings, prose, and UI
+  screenshots; Korean counterparts use Korean headings, prose, and UI screenshots. Preserve product
+  names (for example, Task, Workbench, and Knowledge), technical identifiers, and deliberate quotations
+  when translating them would make the document less accurate.

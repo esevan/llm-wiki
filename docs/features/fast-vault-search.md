@@ -4,7 +4,7 @@
 
 > **Resume where you left off.** Search brings prior Knowledge back into the current decision.
 
-![Search results show vault-relative paths and matching note context](images/vault-search.png)
+![Search results show vault-relative paths and matching note context](images/vault-search.en.png)
 
 Search indexes Obsidian-compatible Markdown structure: paths, frontmatter, aliases, headings, nested
 tags, wikilinks, references, embeds, and body text. Filesystem changes update the local SQLite FTS

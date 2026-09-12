@@ -17,7 +17,7 @@ Capture remains deliberately small. The Workbench keeps current Tasks visible an
 work a dedicated highlight. Detail, validation, and completion controls
 appear only when the current decision needs them.
 
-![The Workbench keeps Capture light and makes current Tasks easy to resume](features/images/workbench-tasks.png)
+![The Workbench keeps Capture light and makes current Tasks easy to resume](features/images/workbench-tasks.en.png)
 
 ## 3. Resume where you left off.
 
@@ -29,15 +29,15 @@ workflow lineage. Generated text is requested in the active language; authored W
 and legacy content remain readable in their original form. Managed Knowledge has a separate,
 explicit Korean reading flow and does not change its English canonical Markdown.
 
-![A Task detail preserves the latest Work Log and validation context](features/images/task-detail.png)
+![A Task detail preserves the latest Work Log and validation context](features/images/task-detail.en.png)
 
-![Refinement keeps prior context beside the active conversation](features/images/refinement.png)
+![Refinement keeps prior context beside the active conversation](features/images/refinement.en.png)
 
 ## 4. Organize around chosen work.
 
 Capture preserves the solution already found. A simple Task may begin immediately, while optional
 Refinement can produce a reviewable Problem and multiple revisioned Tasks. Tasks have independent
-proposed, in-progress, and completed states. Work Logs hold authored text, images, files, comments,
+`task`, `in_progress`, and `completed` states. Work Logs hold authored text, images, files, comments,
 checklists, and decisions; completing a Task does not silently resolve a Problem.
 
 ## 5. Private process, portable knowledge.
@@ -50,7 +50,7 @@ App-managed Knowledge uses English Markdown as its canonical portable source. A 
 version is derived on request and can be reused only for the exact current source; it never replaces
 or rewrites the canonical file.
 
-![Completion and Knowledge publication remain separate decisions](features/images/completion-knowledge.png)
+![Completion and Knowledge publication remain separate decisions](features/images/completion-knowledge.en.png)
 
 ## 6. Understand the work, never score the worker.
 

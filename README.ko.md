@@ -9,18 +9,18 @@ LLM Wiki는 대화를 구조화된 일로 바꾸고, 언제든 이어갈 수 있
 
 ![가벼운 Capture·Task 입력과 저장된 작업을 보여 주는 최신 Workbench](docs/features/images/workbench-tasks.png)
 
-## Product Spirit
+## 제품 원칙
 
 LLM Wiki는 여섯 가지 타협할 수 없는 원칙에서 출발합니다.
 
-1. **You talk. The work organizes itself.** 대화와 Refinement가 구조화를 담당합니다.
-2. **Reduce cognitive load.** Capture는 가볍게 유지하고, 지금 진행 중인 일을 가장 선명하게 보여줍니다.
-3. **Resume where you left off.** Work Log 스크린샷, Refinement 맥락, Knowledge 기반 충돌 검토로 바로 이어갑니다.
-4. **사람이 선택한 작업을 중심으로 정리합니다.** Capture에서 이미 찾은 해결 방향을 다시 찾게 하지 않습니다. Task를 바로 만들거나 선택적인 Refinement로 Problem과 하나 이상의 Task를 구성합니다. 각 작업은 독립적으로 이어갈 수 있습니다.
-5. **Private process, portable knowledge.** 초안과 작업 맥락은 로컬에 두고, 사람이 승인한 완료 결과만 Markdown Knowledge가 됩니다.
-6. **Understand the work, never score the worker.** 근거·위험·방향은 이해하되 사람의 생산성을 점수화하지 않습니다.
+1. **말하면, 일이 스스로 정리됩니다.** 대화와 Refinement가 구조화를 담당합니다.
+2. **인지 부담을 줄입니다.** Capture는 가볍게 유지하고, 지금 진행 중인 일을 가장 선명하게 보여줍니다.
+3. **멈춘 곳에서 다시 이어갑니다.** Work Log 스크린샷, Refinement 맥락, Knowledge 기반 충돌 검토로 바로 이어갑니다.
+4. **사용자가 선택한 작업을 중심으로 정리합니다.** Capture에서 이미 찾은 해결 방향을 다시 찾게 하지 않습니다. Task를 바로 만들거나 선택적인 Refinement로 Problem과 하나 이상의 Task를 구성합니다. 각 작업은 독립적으로 이어갈 수 있습니다.
+5. **과정은 비공개로 유지하고, Knowledge는 자유롭게 옮깁니다.** 초안과 작업 맥락은 로컬에 두고, 사용자가 승인한 완료 결과만 Markdown Knowledge가 됩니다.
+6. **작업을 이해하되, 사용자를 점수화하지 않습니다.** 근거·위험·방향은 이해하되 사용자의 생산성을 점수화하지 않습니다.
 
-각 원칙이 실제 제품에 어떻게 반영됐는지는 [제품에 녹아든 Product Spirit](docs/product-spirit.ko.md)에서 확인할 수 있습니다.
+각 원칙이 실제 제품에 어떻게 반영됐는지는 [LLM Wiki의 제품 원칙](docs/product-spirit.ko.md)에서 확인할 수 있습니다.
 
 ## 제품이 하는 일
 
@@ -35,7 +35,7 @@ LLM Wiki는 여섯 가지 타협할 수 없는 원칙에서 출발합니다.
 | 결과 재사용하기 | 완료된 결과만 Obsidian 호환 Playbook과 검색 가능한 Knowledge가 됩니다. |
 | AI 작업 중에도 빠르게 반응하기 | 숨겨진 Fast Queue는 상호작용 요청을 제한하고 지속 작업은 백그라운드 Queue에서 조회·복구합니다. |
 
-Task는 독립적인 일급 작업 기록입니다. 간단한 Task는 즉시 시작할 수 있고, Refinement한 Problem에서 여러 버전의 Problem과 Task를 만들 수 있습니다. 한 Task를 완료해도 다른 Problem이 자동으로 해결되지는 않습니다. 기존 Capture와 그 출처는 workflow 전체에서 보존됩니다.
+Task는 독립적인 일급 작업 기록입니다. 간단한 Task는 즉시 시작할 수 있고, Refinement한 Problem에서 여러 버전의 Problem과 Task를 만들 수 있습니다. 한 Task를 완료해도 다른 Problem이 자동으로 해결되지는 않습니다. 기존 Capture와 그 출처는 작업 흐름 전체에서 보존됩니다.
 
 ## 빠른 시작
 

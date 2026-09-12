@@ -4,7 +4,7 @@
 
 > **Understand the work, never score the worker.**
 
-![Compass records direction without turning activity into a worker score](images/compass.png)
+![Compass records direction without turning activity into a worker score](images/compass.en.png)
 
 Compass stores goals, evidence-backed Problem importance, immutable milestone events, and aggregate
 direction signals. These signals describe how work relates to goals; they are not productivity

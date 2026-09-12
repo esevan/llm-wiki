@@ -1,0 +1,95 @@
+{
+  "captureDate": "2026-09-12",
+  "documentationBase": "d15de902dbdc7c8fecd4ea2b42708ee23226c1cf",
+  "documentationBranch": "fix/docs-language-consistency",
+  "appBundleCDHash": "9b2b81082a43de0637bedd33a8cc670709ff2b21",
+  "appSignedTime": "2026-09-12 11:44:31 AM",
+  "authority": "LLM Wiki Local Signing",
+  "appSourceChanges": "none; reused the previously verified package",
+  "context": "Actual English native screenshots using isolated disposable data and English authored examples. Refinement and cited review findings used a deterministic local provider. Queue shows a real missing-key Content translation failure. Completion shows an unpublished local fallback Knowledge draft.",
+  "englishCaptures": {
+    "ai-settings.en.png": {
+      "sha256": "0dd0bfd90367504636a2ef2344146ca812de3789edcab97202bd9b57fdaf4ea2",
+      "imageSizeIncludingNativeTitleBar": [
+        1198,
+        768
+      ],
+      "locale": "en",
+      "theme": "light"
+    },
+    "compass.en.png": {
+      "sha256": "5bc1cba75404973c8ef190a23bb866df01a117274fe81ff8804f7098cf61d20b",
+      "imageSizeIncludingNativeTitleBar": [
+        1198,
+        768
+      ],
+      "locale": "en",
+      "theme": "light"
+    },
+    "completion-knowledge.en.png": {
+      "sha256": "fd488a45beecbe84979f03ebac1cacaade01a3edd95abbd24d76b3142364e73b",
+      "imageSizeIncludingNativeTitleBar": [
+        1198,
+        768
+      ],
+      "locale": "en",
+      "theme": "light"
+    },
+    "queue-recovery.en.png": {
+      "sha256": "a32ffb89cb272238667d0690cc8b983e73f8720fc6fd7edd8ceb58ca7881cf8f",
+      "imageSizeIncludingNativeTitleBar": [
+        1198,
+        768
+      ],
+      "locale": "en",
+      "theme": "light"
+    },
+    "refinement.en.png": {
+      "sha256": "30167467727a596ac4ccf50f3ad56c626bfffa4026569f0a3bd290537f1574c6",
+      "imageSizeIncludingNativeTitleBar": [
+        1198,
+        768
+      ],
+      "locale": "en",
+      "theme": "light"
+    },
+    "task-detail.en.png": {
+      "sha256": "666dc332c2e073c3afa681639bfdf244127b550576f54aad2897aacdc0c50027",
+      "imageSizeIncludingNativeTitleBar": [
+        1198,
+        768
+      ],
+      "locale": "en",
+      "theme": "light"
+    },
+    "task-review.en.png": {
+      "sha256": "d0186cc6b6874ae573ce645f03f5c62a0fb2906a7bd1f4e14956698cf48c3b96",
+      "imageSizeIncludingNativeTitleBar": [
+        1198,
+        768
+      ],
+      "locale": "en",
+      "theme": "light"
+    },
+    "vault-search.en.png": {
+      "sha256": "ab99ddb6358ee99871a02d4be3b88867d7432b0e4c39dfbce4022a81a149cb0e",
+      "imageSizeIncludingNativeTitleBar": [
+        1198,
+        768
+      ],
+      "locale": "en",
+      "theme": "light"
+    },
+    "workbench-tasks.en.png": {
+      "sha256": "cae89c406ef6cb1dd7cee0b9ad47e43ec3cd9a42535873e4bd23133094c5407e",
+      "imageSizeIncludingNativeTitleBar": [
+        1198,
+        768
+      ],
+      "locale": "en",
+      "theme": "light"
+    }
+  },
+  "koreanCaptures": "Nine existing Korean captures retained unchanged; their hashes and prior package gate are recorded in ui-ux-improvements.json.",
+  "validation": "All nine English captures visually inspected; locale-specific document references and links checked separately. These captures do not establish external AI quality or accessibility compliance."
+}

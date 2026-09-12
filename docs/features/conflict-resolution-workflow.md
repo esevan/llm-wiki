@@ -4,7 +4,7 @@
 
 Conflict review is advisory, revision-bound evidence for a Task. Run a review from Task detail; the panel shows the latest result, citations, status, and earlier attempts. A Task can continue while the review is queued, running, failed, cancelled, or reports findings. The review never approves, blocks, completes, or publishes the Task.
 
-![Task conflict review with insufficient evidence, retry, and attempt history](images/task-review.png)
+![Task conflict review with cited findings, a Retry review action, and attempt history](images/task-review.en.png)
 
 ## Read and retry a review
 

@@ -14,7 +14,7 @@ results; use **Run fresh review** to request new evidence analysis.
 LLM Wiki separates AI execution into two process-level paths so interaction stays responsive
 without losing recoverable work.
 
-![Background Queue shows durable work by readable purpose, target, status, and recovery action](images/queue-recovery.png)
+![Background Queue shows durable work by readable purpose, target, status, and recovery action](images/queue-recovery.en.png)
 
 - The **Fast Queue** has exactly one FIFO worker. Chat and other immediate interactions use it as
   a global request throttle. It has no database state, Queue UI entry, retry history, or
@@ -54,7 +54,7 @@ semantic runtime is absent, embedding work completes with lexical fallback and z
 coverage. AI output remains a proposal or derived representation: workflow
 state, approval, completion, and Knowledge decisions remain under user control.
 
-![AI Settings keeps endpoint and model routing visible while the API key value remains masked](images/ai-settings.png)
+![AI Settings keeps endpoint and model routing visible while the API key value remains masked](images/ai-settings.en.png)
 
 See [feature specification](../../specs/009-background-ai-queue/spec.md) and
 [worker contract](../../specs/009-background-ai-queue/contracts/worker-contract.md). The

@@ -4,9 +4,9 @@
 
 Task conflict review uses saved Task context and selected Vault evidence to produce a cited, asynchronous report. The Queue preserves attempts and their status, so the Workbench remains usable while a review runs.
 
-![Task conflict review with insufficient evidence, retry, and attempt history](images/task-review.png)
+![Task conflict review with cited findings, a Retry review action, and attempt history](images/task-review.en.png)
 
-![Queue shows a background job failure and recovery action](images/queue-recovery.png)
+![Queue shows a background job failure and recovery action](images/queue-recovery.en.png)
 
 Treat a report as evidence, not a workflow gate. Read its citations and decide what to change in the Task yourself; no report marks a Task clear, advances its state, or replaces completion evidence. A changed Task revision or relevant Vault context makes the old report stale.
 

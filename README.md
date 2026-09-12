@@ -7,7 +7,7 @@
 LLM Wiki is an AI-centered, local-first workbench that turns conversation into organized work,
 keeps enough context to resume, and publishes only completed outcomes as portable knowledge.
 
-![The current Workbench shows lightweight Capture and Task entry with saved work](docs/features/images/workbench-tasks.png)
+![The current Workbench shows lightweight Capture and Task entry with saved work](docs/features/images/workbench-tasks.en.png)
 
 ## Product Spirit
 
