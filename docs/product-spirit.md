@@ -33,8 +33,9 @@ explicit Korean reading flow and does not change its English canonical Markdown.
 
 ![Refinement keeps prior context beside the active conversation](features/images/refinement.en.png)
 
-## 4. Organize around chosen work.
+## 4. Organize work around the problem to solve.
 
+Preserve the context of what problem each piece of work solves and why it matters.
 Capture preserves the solution already found. A simple Task may begin immediately, while optional
 Refinement can produce a reviewable Problem and multiple revisioned Tasks. Tasks have independent
 `task`, `in_progress`, and `completed` states. Work Logs hold authored text, images, files, comments,

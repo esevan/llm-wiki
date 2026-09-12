@@ -31,8 +31,9 @@ Task Work Log는 텍스트·스크린샷·댓글·검증 체크를 지원합니�
 
 ![현재 대화 옆에 이전 맥락을 유지하는 Refinement](features/images/refinement.png)
 
-## 4. 사용자가 선택한 작업을 중심으로 정리합니다.
+## 4. 해결하려는 문제를 중심으로 일을 정리합니다.
 
+각 작업이 어떤 문제를 해결하는지, 왜 필요한지 맥락을 보존합니다.
 Capture에서 이미 찾은 해결 방향은 보존합니다. 간단한 Task는 즉시 시작할 수 있고, 선택적인
 Refinement는 검토 가능한 Problem과 여러 버전의 Task를 만들 수 있습니다. Task는 `task`(Task),
 `in_progress`(진행 중), `completed`(완료) 상태를 독립적으로 가집니다. Work Log에는 텍스트·이미지·파일·댓글·체크리스트·
