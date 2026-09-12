@@ -7,7 +7,7 @@
 LLM Wiki is an AI-centered, local-first workbench that turns conversation into organized work,
 keeps enough context to resume, and publishes only completed outcomes as portable knowledge.
 
-![The current LLM Wiki Workbench highlights a lightweight Capture entry and Solutions already in progress](docs/features/images/02-workbench.png)
+![The current Workbench shows lightweight Capture and Task entry with saved work](docs/features/images/workbench-tasks.png)
 
 ## Product Spirit
 
@@ -98,8 +98,7 @@ Use the global language control to switch the interface between Korean and Engli
 reloading or losing the current view and input. The explicit choice is retained for later sessions;
 before a choice is saved, a Korean environment uses Korean and other environments use English.
 
-New, reviewed AI-generated Problems and Solutions keep Korean and English stored versions, while
-existing records and Vault files remain unchanged and fall back to their stored original. Live AI
+Existing records and Vault files remain unchanged and fall back to their stored original. Live AI
 content uses the language active when its request begins. App-managed Knowledge remains
 English-canonical Markdown; Korean reading is generated on request without replacing that portable
 source. See [Korean and English localization](docs/features/bilingual-localization.md).
@@ -111,9 +110,9 @@ quality-sensitive work. Expand **Advanced options** to choose the model tier for
 Unchecked tasks use the Default model; enabled tasks use the Advanced model, and safely fall back
 to the Default model when no Advanced model is configured.
 
-The initial routing uses the Advanced model for discussions and refinement, drafting Problems and
-Solutions, conflict review, image summaries, completion review, and completion reports. Workbench
-organization, completed-Solution discussion, and Problem enrichment use the Default model by
+The initial routing uses the Advanced model for discussions and refinement, Task-context drafting,
+conflict review, image summaries, completion review, and completion reports. Workbench
+organization, completed-Task discussion, and optional Problem enrichment use the Default model by
 default. Every choice remains user-configurable in Advanced options.
 
 ## Feature guides

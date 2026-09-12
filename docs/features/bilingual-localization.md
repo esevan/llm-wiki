@@ -5,39 +5,35 @@
 > **Resume where you left off.** Language changes preserve the current surface, input, and workflow
 > lineage instead of making the user start over.
 
-![The Korean Workbench preserves English-authored records and marks them as source-language content](images/02-workbench.png)
+![The Workbench uses the selected system language while preserving authored content](images/workbench-tasks.png)
 
 LLM Wiki supports Korean and English throughout the application. The language control is available
 from every primary surface. A change updates interface text immediately, keeps the current view and
 unsaved input in place, and is remembered for later sessions. Before the user makes an explicit
 choice, a Korean environment selects Korean; other and unsupported environments use English.
-An explicit choice is stored in the local application database. On the next connection, LLM Wiki
-restores that choice before loading locale-sensitive stored content, so the first rendered workbench
-does not briefly use a different language. The startup preference read bypasses browser caches so
-the database remains authoritative. Packaged language resources are refreshed on each app
-load so newly deployed interface text does not appear as an untranslated resource key.
+An explicit choice is stored in local application settings and restored for later sessions.
 
 ## How each kind of content behaves
 
 | Content | Korean and English behavior |
 | --- | --- |
 | Menus, controls, guidance, and status text | Switch immediately from the packaged language resources. Missing Korean text falls back to English. |
-| New AI-generated Problems and Solutions | The reviewed item stores Korean and English versions together. Later switching reads those stored versions without another AI request. |
-| New AI Image Summaries | One explicit AI request creates and stores Korean and English descriptions of the same Work Log image. Later switching reads the matching stored summary without another AI request. |
+| Task and Problem records | Keep their authored or generated stored content. A language change does not rewrite a record or make a new AI request. |
+| AI Image Summaries | Keep the stored summary. A language change does not rewrite authored evidence or automatically request another summary. |
 | Existing records and Vault files | Remain unchanged. If the selected-language version is missing, LLM Wiki shows the stored original and does not translate it automatically. |
 | Live AI conversation and reviews | Use only the language that was active when the request started. Existing responses are not regenerated after a switch. |
-| App-managed Knowledge | Keeps English Markdown as the canonical portable record. Korean reading is produced on request and may be reused only while that exact English source is current. |
+| Eligible managed Knowledge | A Korean reading is available only for an English Markdown note marked `llm_wiki_managed: true` and `canonical_locale: en`. It may be reused only while that exact English source is current. |
 
 Raw Capture text, manual entries, Work Log bodies, comments, checklist items, file names, code,
-identifiers, citations, and quoted source material remain as authored. Only the explicitly requested
-AI description of a Work Log image is bilingual. A user can add or revise a missing stored language
-version without changing the item's identity or lineage.
+identifiers, citations, and quoted source material remain as authored. The interface language does
+not change an item's identity or lineage.
 
 ## Knowledge and failure safety
 
 Korean Knowledge is a reading aid, not a replacement for the English canonical Markdown. Changing
-the canonical source invalidates reuse of its earlier Korean translation. Legacy or unmarked Vault
-files are displayed unchanged in either application language.
+an eligible canonical source invalidates reuse of its earlier Korean translation. Legacy or unmarked
+Vault files, including Task-published Markdown that does not carry both managed-English markers,
+are displayed in their original form.
 
 Completed Korean readings are atomically stored at `Translations/ko/<canonical-path>`. Their
 frontmatter links back to the canonical note and records the exact source path and hash, locale,

@@ -29,6 +29,10 @@ Capture나 Task의 **Refine**을 열거나 Workbench의 저장된 정제 바로�
   다른 항목을 덮어쓰지 않으며, 원래 항목을 다시 열어 저장된 결과를 확인할 수 있습니다.
 - 저장에 성공한 정제 작업은 앱을 다시 실행한 뒤에도 저장된 작업 공간에서 이어갈 수 있습니다.
 
+## 키보드 동작
+
+Refinement와 Task 상세는 비모달 패널입니다. 열 때 heading 또는 compose control로 포커스를 옮기지만 Tab 이동을 가두지 않습니다. `Escape`는 패널을 닫고 trigger가 남아 있으면 그곳으로 포커스를 돌립니다. `Cmd+Enter`, `Ctrl+Enter`는 IME 조합 중에는 보내지 않습니다. 자동 검사는 synthetic composition과 포커스 계약을 다루며, 실제 한국어 IME와 VoiceOver 검증은 수동으로 남아 있습니다.
+
 ## 이전 Problem 기록 이어가기
 
 이전 흐름에서 만들어진 Problem 전용 기록도 **Refine**으로 열 수 있습니다. 이 대화에는 기존

@@ -9,7 +9,7 @@ npm run test:desktop -- --full
 npm run test:desktop -- --scenario task-refinement --scenario task-refinement-provider-recovery
 ```
 
-`--full`은 릴리스 수락 명령입니다. 등록된 32개 시나리오를 모두 실행하고 169개 컨트롤의 전체 커버리지를 확인합니다. 집중 실행은 부분 실행으로 표시되며 이 게이트를 통과시키지 않습니다. 존재하지 않는 시나리오는 `--list` 안내와 함께 실패합니다.
+`--full`은 릴리스 수락 명령입니다. 현재 checkout의 runner에 등록한 모든 시나리오를 실행하고 결과 커버리지가 완전하지 않으면 실패합니다. 집중 실행은 부분 실행으로 표시되며 이 게이트를 통과시키지 않습니다. 최종 시나리오·컨트롤 수는 생성한 `results.json`과 `interactive-coverage.json`에서 확인하세요.
 
 기본 실행 파일은 `src-tauri/target/release`의 릴리스 파일입니다. 전체 실행 전에 릴리스 번들을 빌드하세요. 이미 서명된 빌드를 의도적으로 재사용하려면 `LLM_WIKI_E2E_EXECUTABLE=/absolute/path/to/executable`을 설정합니다. 결정적인 로컬 제공자는 자동으로 시작되며 외부 제공자 인증 정보는 필요하지 않습니다.
 
@@ -32,6 +32,6 @@ npm run test:desktop -- --full
 npm run test:desktop -- --scenario task-refinement --artifact-dir .tmp/refinement-check-01 --keep-state
 ```
 
-시나리오 등록은 [러너 레지스트리](../../scripts/desktop_e2e_helpers.mjs)와 [앱 시나리오 디스패처](../../frontend/src/test/desktopScenario.ts) 양쪽에 반영합니다. 커버리지 확장 기준은 [상호작용 검증 문서](interactive-coverage.md)를 참고하세요. 현재 32개·169개 수치는 이번 검증 기준이며 새 기능이 추가되면 함께 갱신합니다.
+시나리오 등록은 [러너 레지스트리](../../scripts/desktop_e2e_helpers.mjs)와 [앱 시나리오 디스패처](../../frontend/src/test/desktopScenario.ts) 양쪽에 반영합니다. 커버리지 확장 기준은 [상호작용 검증 문서](interactive-coverage.md)를 참고하세요. 역사 수치를 릴리스 보고서에 복사하지 말고, 최종 registry와 생성한 coverage artifact를 사용하세요.
 
 이 검증은 가짜 제공자를 사용하므로 실제 AI 응답의 품질·속도를 보장하지 않습니다. 이번 패키징 실행 증거는 macOS에서 확보했으며 Windows/Linux 실기기 검증은 별도입니다.

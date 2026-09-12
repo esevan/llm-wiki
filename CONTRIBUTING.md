@@ -4,8 +4,8 @@ Leave a clear chain of evidence: domain model, user-visible behavior, persisted 
 
 ## Model the workflow first
 
-- Map actual domain relationships, independent lifecycles, and source evidence before turning a Capture into a Problem and Solution. Do not force a one-to-one chain the product does not have.
-- Reuse an already derived Solution instead of re-discovering it or treating mechanical approval as quality evidence.
+- Map actual domain relationships, independent lifecycles, and source evidence before choosing direct Task creation or optional Problem context. Do not force a one-to-one chain the product does not have.
+- Reuse an already recorded Capture, Task context, or proposed approach instead of rediscovering it or treating mechanical approval as quality evidence.
 - Trace each UI action through its API or IPC contract, service boundary, and persisted state. Assign ownership before editing; keep unrelated restructuring separate.
 
 ## Verify behavior across boundaries

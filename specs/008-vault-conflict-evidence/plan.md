@@ -1,5 +1,7 @@
 # Implementation Plan: Evidence-Rich Vault Conflict Review
 
+> **Historical plan for schema 8+**: Evidence and human-review facts remain relevant; its Solution gate wording does not describe current Task work. See [012](../012-task-centered-workbench/spec.md).
+
 **Branch**: `feat/vault-conflict-evidence` | **Date**: 2026-09-01 | **Spec**: [spec.md](spec.md)
 
 ## Summary

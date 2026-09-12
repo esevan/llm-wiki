@@ -1,21 +1,27 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useImperativeHandle, useRef, useState, type Ref } from "react";
 import { taskClient } from "../../services/taskClient";
 import type { LineageSnapshot, TaskAggregate } from "../../types/taskWorkbench";
 import { ConflictReviewPanel } from "./ConflictReviewPanel";
 import { RefinementPanel } from "./RefinementPanel";
 import { useTaskWorkbenchText } from "./taskWorkbenchText";
 
+import { acknowledgeSave, baseline, definitionOf, editDraft, keepEdits, mergeSnapshot, type DefinitionField, type DetailState } from "./taskDraft";
+
+export type TaskDetailHandle = { requestLeave: (proceed: () => void) => void };
+
 export function TaskDetail({
   taskId,
   onClose,
   onChanged,
+  ref,
 }: {
   taskId: string;
   onClose: () => void;
   onChanged: () => void;
+  ref?: Ref<TaskDetailHandle>;
 }) {
   const text = useTaskWorkbenchText();
-  const [task, setTask] = useState<TaskAggregate>();
+  const [detailState, setDetailState] = useState<DetailState>();
   const [error, setError] = useState("");
   const [entry, setEntry] = useState("");
   const [check, setCheck] = useState("");
@@ -44,6 +50,10 @@ export function TaskDetail({
   const [knowledgeBusy, setKnowledgeBusy] = useState(false);
   const [mutationBusy, setMutationBusy] = useState(false);
   const [lineage, setLineage] = useState<LineageSnapshot>();
+  const [closePrompt, setClosePrompt] = useState(false);
+  const pendingLeave = useRef<(() => void) | undefined>(undefined);
+  const panelRef = useRef<HTMLElement>(null);
+  const headingRef = useRef<HTMLHeadingElement>(null);
   const loadSequence = useRef(0);
   const mutationQueue = useRef<Promise<void>>(Promise.resolve());
   const mutationBusyRef = useRef(false);
@@ -51,14 +61,18 @@ export function TaskDetail({
     const sequence = ++loadSequence.current;
     try {
       const next = await taskClient.task(taskId);
-      if (sequence === loadSequence.current) setTask(next);
+      if (sequence === loadSequence.current) {
+        setDetailState((current) => current ? mergeSnapshot(current, next) : baseline(next));
+      }
     } catch (e) {
       if (sequence === loadSequence.current)
         setError(String(e instanceof Error ? e.message : e));
     }
   }, [taskId]);
   useEffect(() => {
+    const sequences = loadSequence;
     void load();
+    return () => { ++sequences.current; };
   }, [load]);
   const update = (operation: () => Promise<TaskAggregate>) => {
     if (mutationBusyRef.current) return Promise.resolve();
@@ -80,6 +94,31 @@ export function TaskDetail({
       .catch(() => undefined);
     return pending;
   };
+  const editDefinition = (field: DefinitionField, value: string) => {
+    if (mutationBusyRef.current) return;
+    setDetailState((current) => current && editDraft(current, field, value));
+  };
+  const requestLeave = useCallback((proceed: () => void) => {
+    if (mutationBusyRef.current) return;
+    if (detailState?.dirty.size) {
+      pendingLeave.current = proceed;
+      setClosePrompt(true);
+    } else proceed();
+  }, [detailState]);
+  useImperativeHandle(ref, () => ({ requestLeave }), [requestLeave]);
+  const finishLeave = () => {
+    const proceed = pendingLeave.current;
+    pendingLeave.current = undefined;
+    setClosePrompt(false);
+    proceed?.();
+  };
+  useEffect(() => {
+    if (closePrompt) panelRef.current?.querySelector<HTMLButtonElement>("[data-control='task-draft-guard-save']")?.focus();
+  }, [closePrompt]);
+  const loaded = Boolean(detailState);
+  useEffect(() => {
+    if (loaded && !panelRef.current?.closest(".view:not(.active)")) headingRef.current?.focus();
+  }, [loaded]);
   const encodeAttachment = async () => {
     if (!attachment) return undefined;
     const bytes = new Uint8Array(await attachment.arrayBuffer());
@@ -128,13 +167,47 @@ export function TaskDetail({
       setKnowledgeBusy(false);
     }
   };
+  const task = detailState && { ...detailState.persisted, ...detailState.draft };
+  const saveDraft = async () => {
+    if (!detailState || !detailState.dirty.size || detailState.conflicts.length || mutationBusyRef.current) return false;
+    mutationBusyRef.current = true;
+    setMutationBusy(true);
+    setError("");
+    try {
+      const patch = Object.fromEntries([...detailState.dirty].map((field) => [field, detailState.draft[field]]));
+      const partial = await taskClient.revise(detailState.persisted.id, detailState.baseRevision, patch);
+      acknowledgeSave(detailState, partial); // Validate before treating the write as acknowledged.
+      setDetailState((current) => acknowledgeSave(detailState, partial, current?.persisted));
+      // Invalidate pre-save GETs before performing the ordered refresh.
+      const sequence = ++loadSequence.current;
+      try {
+        const refreshed = await taskClient.task(detailState.persisted.id);
+        if (sequence === loadSequence.current) {
+          setDetailState((current) => current && mergeSnapshot(current, refreshed));
+        }
+      } catch (refreshError) {
+        setError(`${text.savedRefreshFailed} ${String(refreshError instanceof Error ? refreshError.message : refreshError)}`);
+      }
+      onChanged();
+      return true;
+    } catch (saveError) {
+      setError(String(saveError instanceof Error ? saveError.message : saveError));
+      // Fetch a comparison after stale revision failure; merge keeps dirty input
+      // and the original base whenever a server edit overlaps it.
+      if (String(saveError).includes("head_conflict")) await load();
+      return false;
+    } finally {
+      mutationBusyRef.current = false;
+      setMutationBusy(false);
+    }
+  };
   if (!task)
     return (
       <aside className="task-detail" aria-live="polite">
         {error || text.loading}
       </aside>
     );
-  const revision = task.taskRevision;
+  const revision = detailState.persisted.taskRevision;
   const latestProblemRevisions = new Map<string, number>();
   for (const link of task.problemLinks ?? []) {
     latestProblemRevisions.set(
@@ -144,6 +217,15 @@ export function TaskDetail({
   }
   return (
     <aside
+      ref={panelRef}
+      onKeyDown={(event) => {
+        if (event.key === "Escape" && !event.nativeEvent.isComposing && !event.defaultPrevented && !refining) {
+          event.preventDefault();
+          event.stopPropagation();
+          if (closePrompt) { pendingLeave.current = undefined; setClosePrompt(false); }
+          else requestLeave(onClose);
+        }
+      }}
       className="task-detail"
       aria-label={task.title}
       data-task-state={task.state}
@@ -160,13 +242,38 @@ export function TaskDetail({
                 ? text.inProgress
                 : text.ready}
           </small>
-          <h2>{task.title}</h2>
+          <h2 ref={headingRef} tabIndex={-1}>{task.title}</h2>
         </div>
-        <button type="button" data-control="task-detail-close" aria-label={text.closeTaskDetail} onClick={onClose}>
+        <button type="button" data-control="task-detail-close" aria-label={text.closeTaskDetail} onClick={() => requestLeave(onClose)}>
           ×
         </button>
       </header>
       {error && <p role="alert">{error}</p>}
+      {detailState.conflicts.length > 0 && (
+        <section className="task-draft-conflict" role="alert">
+          <p>{text.draftConflict}</p>
+          {detailState.conflicts.map((field) => (
+            <div key={field}>
+              <strong>{{ title: text.title, detail: text.detail, outcome: text.outcome, scope: text.scope, nonGoals: text.nonGoals, validationCriteria: text.criteria }[field]}</strong>
+              <p>{text.latestValue}: <span>{definitionOf(detailState.persisted)[field]}</span></p>
+              <p>{text.editedValue}: <span>{detailState.draft[field]}</span></p>
+            </div>
+          ))}
+          <button type="button" data-control="task-draft-keep-mine" onClick={() => setDetailState((current) => current && keepEdits(current))}>{text.keepMyEdits}</button>
+          <button type="button" data-control="task-draft-use-latest" onClick={() => setDetailState((current) => current && baseline(current.persisted))}>{text.useLatestVersion}</button>
+        </section>
+      )}
+      {closePrompt && (
+        <section className="task-draft-guard" role="alertdialog" aria-label={text.unsavedTaskChanges}>
+          <p>{text.saveBeforeClosing}</p>
+          <button type="button" data-control="task-draft-guard-save" disabled={mutationBusy || detailState.conflicts.length > 0} onClick={() => {
+            if (!detailState.dirty.size) finishLeave();
+            else void saveDraft().then((saved) => { if (saved) finishLeave(); });
+          }}>{text.guardSave}</button>
+          <button type="button" data-control="task-draft-guard-discard" disabled={mutationBusy} onClick={() => { setDetailState((current) => current && baseline(current.persisted)); finishLeave(); }}>{text.discard}</button>
+          <button type="button" data-control="task-draft-guard-keep-editing" disabled={mutationBusy} onClick={() => { pendingLeave.current = undefined; setClosePrompt(false); headingRef.current?.focus(); }}>{text.keepEditing}</button>
+        </section>
+      )}
       <section className="task-actions">
         <button type="button" data-control="task-detail-refine" onClick={() => setRefining(true)}>
           {text.refine}
@@ -188,12 +295,12 @@ export function TaskDetail({
           <button
             type="button"
             data-control="task-transition-complete-focus"
-            aria-label="Add completion evidence"
+            aria-label={text.addCompletionEvidence}
             onClick={() =>
               document.getElementById("task-completion-evidence")?.focus()
             }
           >
-            {text.complete}
+          {text.addCompletionEvidence}
           </button>
         )}
         {task.state === "completed" && (
@@ -224,9 +331,7 @@ export function TaskDetail({
           <input
             data-control="task-revision-title"
             value={task.title}
-            onChange={(event) =>
-              setTask({ ...task, title: event.target.value })
-            }
+            onChange={(event) => editDefinition("title", event.target.value)}
           />
         </label>
         <label>
@@ -234,9 +339,7 @@ export function TaskDetail({
           <textarea
             data-control="task-revision-detail"
             value={task.detail ?? ""}
-            onChange={(event) =>
-              setTask({ ...task, detail: event.target.value })
-            }
+            onChange={(event) => editDefinition("detail", event.target.value)}
           />
         </label>
         <label>
@@ -244,9 +347,7 @@ export function TaskDetail({
           <textarea
             data-control="task-revision-outcome"
             value={task.outcome ?? ""}
-            onChange={(event) =>
-              setTask({ ...task, outcome: event.target.value })
-            }
+            onChange={(event) => editDefinition("outcome", event.target.value)}
           />
         </label>
         <label>
@@ -254,9 +355,7 @@ export function TaskDetail({
           <textarea
             data-control="task-revision-scope"
             value={task.scope ?? ""}
-            onChange={(event) =>
-              setTask({ ...task, scope: event.target.value })
-            }
+            onChange={(event) => editDefinition("scope", event.target.value)}
           />
         </label>
         <label>
@@ -264,9 +363,7 @@ export function TaskDetail({
           <textarea
             data-control="task-revision-non-goals"
             value={task.nonGoals ?? ""}
-            onChange={(event) =>
-              setTask({ ...task, nonGoals: event.target.value })
-            }
+            onChange={(event) => editDefinition("nonGoals", event.target.value)}
           />
         </label>
         <label>
@@ -274,26 +371,14 @@ export function TaskDetail({
           <textarea
             data-control="task-revision-criteria"
             value={task.validationCriteria ?? ""}
-            onChange={(event) =>
-              setTask({ ...task, validationCriteria: event.target.value })
-            }
+            onChange={(event) => editDefinition("validationCriteria", event.target.value)}
           />
         </label>
         <button
           type="button"
           data-control="task-revision-save"
-          onClick={() =>
-            void update(() =>
-              taskClient.revise(task.id, revision, {
-                title: task.title,
-                detail: task.detail ?? "",
-                outcome: task.outcome ?? "",
-                scope: task.scope ?? "",
-                nonGoals: task.nonGoals ?? "",
-                validationCriteria: task.validationCriteria ?? "",
-              }),
-            )
-          }
+          disabled={!detailState.dirty.size || detailState.conflicts.length > 0 || mutationBusy}
+          onClick={() => void saveDraft()}
         >
           {text.saveChanges}
         </button>
@@ -477,13 +562,13 @@ export function TaskDetail({
                 not_applicable: text.statusNotApplicable,
               }[item.status]}
             </span>
-            {item.reason && <p>{item.reason}</p>}
+            {item.reason && <p>{item.key === "prerequisites" && item.status === "resolved" && item.reason === "No explicit prerequisite" ? text.noExplicitPrerequisite : item.reason}</p>}
             {item.status === "missing" && (
               <div className="inline-form">
                 <input
                   data-control="task-readiness-reason"
                   data-record-id={item.key}
-                  aria-label={`Reason ${item.key}`}
+                  aria-label={`${{ outcome: text.readinessOutcome, scope: text.readinessScope, validationCriteria: text.readinessCriteria, prerequisites: text.readinessPrerequisites }[item.key] ?? item.key} ${text.readinessReason}`}
                   value={readinessReasons[item.key] ?? ""}
                   onChange={(event) =>
                     setReadinessReasons({

@@ -4,7 +4,11 @@
 
 **Created**: 2026-09-05
 
-**Status**: Ready for implementation
+**Status**: Implemented Task-centered baseline and UI/UX follow-up. The signed follow-up package
+passed all 32 desktop scenarios and 175 registered controls; nine current documentation captures
+were visually reviewed. Real Korean IME, VoiceOver, and OS reduced-motion remain unverified.
+See [acceptance verification](acceptance-verification.md) and the
+[UI/UX improvement plan](../../docs/plans/ui-ux-improvements.md).
 
 **Input**: Replace the required Problem-to-Solution approval flow with a Task-centered Workbench
 where Capture and Task are canonical records, refinement and conflict review are optional, existing
@@ -12,6 +16,12 @@ records migrate without loss, and completion, Problem resolution, and Knowledge 
 separate user decisions.
 
 ## User Scenarios & Testing *(mandatory)*
+
+> **Implemented and package-verified UI/UX follow-up:** The linked UI/UX plan provides explicit
+> save-only protection for the six editable Task-definition fields during independent mutations,
+> guarded close and Task switching with Save/Discard/Keep editing, responsive shortcut and title-input
+> geometry, selected-locale system copy, nonmodal focus/Escape/IME handling, and Queue setup recovery.
+> It does not claim app-quit/crash draft durability or autosave.
 
 ### User Story 1 - Capture a Thought or Register a Task (Priority: P1)
 

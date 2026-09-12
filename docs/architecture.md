@@ -42,7 +42,7 @@ application client; only `tauriApplicationClient.ts` imports Tauri `invoke` and 
 | Boundary | Location | Responsibility |
 | --- | --- | --- |
 | Tauri entry | `src-tauri/src/lib.rs` | Validate domain allowlists and delegate commands |
-| Workflow | `src-tauri/src/native/workflow.rs` | Capture, Problem, Solution, transitions, evidence, and Compass |
+| Workflow | `src-tauri/src/native/workflow.rs` | Capture, Task, optional Problem context, completion, Knowledge, evidence, and Compass |
 | Jobs | `src-tauri/src/native/jobs.rs` | Durable lifecycle, retry, timeout, and cancellation |
 | Result handlers | `src-tauri/src/native/job_results.rs` | Validate and persist task-specific results |
 | Completion/Lineage | `completion.rs`, `lineage.rs` | Completion records and auditable lineage |

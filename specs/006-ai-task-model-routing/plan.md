@@ -1,5 +1,7 @@
 # Implementation Plan: Task-Level AI Model Routing
 
+> **Historical plan for schema 8+**: Routing behavior may remain useful, but its former workflow-stage labels do not define current Task-centered behavior. See [012](../012-task-centered-workbench/spec.md).
+
 **Branch**: `006-ai-task-model-routing` | **Date**: 2026-08-21 | **Spec**: [spec.md](spec.md)
 
 ## Summary

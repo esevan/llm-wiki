@@ -1,5 +1,7 @@
 # Implementation Plan: Lineage Knowledge Layer
 
+> **Historical plan for schema 8+**: Lineage and portable Knowledge facts remain relevant; former Problem/Solution workflow wording is superseded by [012](../012-task-centered-workbench/spec.md).
+
 **Branch**: `feature/lineage-knowledge-layer` | **Date**: 2026-08-21 | **Spec**: [spec.md](spec.md)
 
 **Input**: Feature specification from `specs/010-lineage-knowledge-layer/spec.md`

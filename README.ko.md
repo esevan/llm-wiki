@@ -7,7 +7,7 @@
 LLM Wiki는 대화를 구조화된 일로 바꾸고, 언제든 이어갈 수 있도록 맥락을 보존하며, 완료된
 결과만 휴대 가능한 Knowledge로 만드는 AI 중심·로컬 우선 Workbench입니다.
 
-![가벼운 Capture 입력과 현재 진행 중인 Solution을 강조하는 최신 LLM Wiki Workbench](docs/features/images/02-workbench.png)
+![가벼운 Capture·Task 입력과 저장된 작업을 보여 주는 최신 Workbench](docs/features/images/workbench-tasks.png)
 
 ## Product Spirit
 
@@ -16,7 +16,7 @@ LLM Wiki는 여섯 가지 타협할 수 없는 원칙에서 출발합니다.
 1. **You talk. The work organizes itself.** 대화와 Refinement가 구조화를 담당합니다.
 2. **Reduce cognitive load.** Capture는 가볍게 유지하고, 지금 진행 중인 일을 가장 선명하게 보여줍니다.
 3. **Resume where you left off.** Work Log 스크린샷, Refinement 맥락, Knowledge 기반 충돌 검토로 바로 이어갑니다.
-4. **사람이 선택한 작업을 중심으로 정리합니다.** Capture에서 이미 찾은 Solution을 다시 찾게 하지 않습니다. Task를 바로 만들거나 선택적인 Refinement로 Problem과 하나 이상의 Task를 구성합니다. 각 작업은 독립적으로 이어갈 수 있습니다.
+4. **사람이 선택한 작업을 중심으로 정리합니다.** Capture에서 이미 찾은 해결 방향을 다시 찾게 하지 않습니다. Task를 바로 만들거나 선택적인 Refinement로 Problem과 하나 이상의 Task를 구성합니다. 각 작업은 독립적으로 이어갈 수 있습니다.
 5. **Private process, portable knowledge.** 초안과 작업 맥락은 로컬에 두고, 사람이 승인한 완료 결과만 Markdown Knowledge가 됩니다.
 6. **Understand the work, never score the worker.** 근거·위험·방향은 이해하되 사람의 생산성을 점수화하지 않습니다.
 
@@ -98,8 +98,7 @@ Worker 역할, 복구, 작업별 결과, 알림 동작은
 않으며, 명시적으로 선택한 언어는 다음 실행에도 유지됩니다. 저장된 선택이 없으면 한국어 환경은
 한국어를, 그 밖의 환경은 영어를 사용합니다.
 
-새로 생성하고 검토한 AI Problem·Solution은 한국어·영어 저장본을 함께 유지합니다. 기존 기록과
-Vault 파일은 변경하지 않으며 대상 언어 버전이 없으면 저장된 원문을 표시합니다. 실시간 AI
+기존 기록과 Vault 파일은 변경하지 않으며 대상 언어 버전이 없으면 저장된 원문을 표시합니다. 실시간 AI
 콘텐츠는 요청 시작 시점의 언어 하나로 생성됩니다. 앱이 관리하는 Knowledge는 영문 canonical
 Markdown으로 유지하고, 한국어 열람본은 휴대 가능한 원본을 바꾸지 않은 채 요청 시 생성합니다.
 자세한 내용은 [한국어·영어 전환](docs/features/bilingual-localization.ko.md)을 참고하세요.

@@ -1,5 +1,7 @@
 # Implementation Plan: Background AI Queue
 
+> **Historical plan for schema 8+**: Durable queue behavior remains relevant, but former Problem/Solution workflow terms are historical. See [012](../012-task-centered-workbench/spec.md).
+
 **Branch**: `feat/background-ai-queue` | **Date**: 2026-09-01 | **Spec**: [spec.md](spec.md)
 
 **Input**: Feature specification from `specs/009-background-ai-queue/spec.md`

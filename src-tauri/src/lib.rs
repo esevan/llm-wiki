@@ -397,6 +397,7 @@ pub fn run() {
             desktop_e2e::desktop_e2e_seed_completed_tracking,
             desktop_e2e::desktop_e2e_seed_queue_notifications,
             desktop_e2e::desktop_e2e_provider_requests,
+            desktop_e2e::desktop_e2e_resize_window,
             provider::provider_request
         ])
         .build(tauri::generate_context!())

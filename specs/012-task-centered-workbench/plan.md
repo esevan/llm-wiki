@@ -191,3 +191,24 @@ blocked without inserting fallback output into quality results.
 
 No constitution violation requires an exception. Additional revision, migration, and decision tables
 encode required provenance; no new dependency or application boundary is introduced.
+
+## Verified UI/UX follow-up (2026-09-12)
+
+The follow-up on `fix/ui-ux-improvements` keeps the existing Task API, native persistence,
+Task-centered information architecture, and shared visual tokens. Six editable definition
+fields use a local draft/base snapshot with verified disjoint rebase and explicit overlapping
+conflict choices. Detail close and Task selection use Save/Discard/Keep editing; no autosave
+or native quit/crash draft durability is claimed. Independent mutations merge complete Task
+snapshots without replacing dirty fields.
+
+Content-driven shortcut height and wrapping preserve long titles at supported desktop sizes.
+Refinement separates role/body text and guards composition shortcuts. Selected-locale copy,
+completion-evidence labels, status metadata, and same-job Queue setup/retry recovery were updated.
+The bounded native resize helper is gated to the E2E result environment and is unavailable in
+normal application execution.
+
+The signed macOS follow-up package passed 32/32 scenarios and all 175 registered controls.
+Nine actual Korean-light documentation captures replace retired assets. See
+[acceptance verification](acceptance-verification.md) and the
+[portable evidence record](../../docs/testing/evidence/ui-ux-improvements.json) for source,
+package, geometry, coverage, screenshot provenance, and manual limitations.

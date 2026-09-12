@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { taskClient } from "../../services/taskClient";
 import type {
   CaptureCard,
@@ -7,7 +7,7 @@ import type {
   WorkbenchSnapshot,
 } from "../../types/taskWorkbench";
 import { RefinementPanel } from "./RefinementPanel";
-import { TaskDetail } from "./TaskDetail";
+import { TaskDetail, type TaskDetailHandle } from "./TaskDetail";
 import { useTaskWorkbenchText } from "./taskWorkbenchText";
 import "./task-workbench.css";
 const itemTitle = (item: WorkbenchItem) =>
@@ -24,6 +24,21 @@ export function WorkbenchView({ active }: { active: boolean }) {
       kind: "capture" | "task";
       id: string;
     }>();
+  const detailRef = useRef<TaskDetailHandle>(null);
+  const detailTrigger = useRef<HTMLElement | null>(null);
+  const selectDetail = (id: string | undefined, trigger?: HTMLElement) => {
+    if (id === detail) return;
+    const proceed = () => {
+      setDetail(id);
+      if (id) detailTrigger.current = trigger ?? null;
+      else {
+        const target = detailTrigger.current?.isConnected && !detailTrigger.current.closest(".view:not(.active), [hidden]") ? detailTrigger.current : document.querySelector<HTMLElement>("#workbench.active h1");
+        target?.focus();
+      }
+    };
+    if (detailRef.current) detailRef.current.requestLeave(proceed);
+    else proceed();
+  };
   const load = useCallback(async () => {
     try {
       setError("");
@@ -95,7 +110,7 @@ export function WorkbenchView({ active }: { active: boolean }) {
       <header className="top">
         <div>
           <div className="eyebrow">{text.workspace}</div>
-          <h1>{text.heading}</h1>
+          <h1 tabIndex={-1}>{text.heading}</h1>
         </div>
         <div className="status">{text.vaultStatus}</div>
       </header>
@@ -172,7 +187,7 @@ export function WorkbenchView({ active }: { active: boolean }) {
                       type="button"
                       className="shortcut-card"
                       key={shortcut.id}
-                      onClick={() => setDetail(shortcut.id)}
+                      onClick={(event) => selectDetail(shortcut.id, event.currentTarget)}
                     >
                       <small>{text.inProgress} · r{shortcut.taskRevision}</small>
                       <strong>{task?.title ?? shortcut.id}</strong>
@@ -269,7 +284,7 @@ export function WorkbenchView({ active }: { active: boolean }) {
                                 data-control="task-card-open"
                                 data-entity-id={item.id}
                                 type="button"
-                                onClick={() => setDetail(item.id)}
+                                onClick={(event) => selectDetail(item.id, event.currentTarget)}
                               >
                                 {text.open}
                               </button>
@@ -334,8 +349,14 @@ export function WorkbenchView({ active }: { active: boolean }) {
       )}{" "}
       {detail && (
         <TaskDetail
+          key={detail}
+          ref={detailRef}
           taskId={detail}
-          onClose={() => setDetail(undefined)}
+          onClose={() => {
+            setDetail(undefined);
+            const target = detailTrigger.current?.isConnected && !detailTrigger.current.closest(".view:not(.active), [hidden]") ? detailTrigger.current : document.querySelector<HTMLElement>("#workbench.active h1");
+            target?.focus();
+          }}
           onChanged={() => void load()}
         />
       )}

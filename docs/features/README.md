@@ -25,8 +25,8 @@ Start with [Product Spirit](../product-spirit.md), or use the
 - [Fast vault search](fast-vault-search.md) resumes work from existing Knowledge and evidence.
 - [Evidence-rich Vault conflict review](vault-conflict-evidence.md) explains search coverage,
   citations, progress, and cautious result meanings.
-- [Conflict Resolution Workflow](conflict-resolution-workflow.md) turns each disagreement into an
-  explicit, durable human decision.
+- [Task conflict review](conflict-resolution-workflow.md) shows revision-bound advisory evidence,
+  citations, and attempts without turning a finding into a Task gate.
 
 ## Execute and retain knowledge
 

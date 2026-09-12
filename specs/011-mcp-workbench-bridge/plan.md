@@ -1,5 +1,7 @@
 # Implementation Plan: Dual-Chat Work Tracking
 
+> **Historical plan for schema 8+**: The bridge remains a valid integration boundary, while its former Problem/Solution progression is superseded by [012](../012-task-centered-workbench/spec.md).
+
 **Branch**: `feat/mcp-support` | **Date**: 2026-09-04 | **Spec**: [spec.md](spec.md)
 
 **Input**: Feature specification from `specs/011-mcp-workbench-bridge/spec.md`

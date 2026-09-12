@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { taskClient } from "../../services/taskClient";
 import type {
   RefinementProposal,
@@ -41,7 +41,13 @@ export function RefinementPanel({
     scrollAnchor: "top",
   });
   const scrollRef = useRef<HTMLDivElement>(null);
+  const headingRef = useRef<HTMLHeadingElement>(null);
+  const openerRef = useRef<HTMLElement | null>(null);
   useEffect(() => {
+    if (!openerRef.current)
+      openerRef.current = document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
     latest.current.session = session;
     latest.current.draft = draft;
     latest.current.message = message;
@@ -158,7 +164,15 @@ export function RefinementPanel({
     setActiveTab(tab);
     scheduleSave();
   };
-  const close = async () => {
+  const restoreFocus = useCallback(() => {
+    const opener = openerRef.current;
+    if (opener?.isConnected) {
+      opener.focus();
+      return;
+    }
+    document.querySelector<HTMLElement>("#workbench h1")?.focus();
+  }, []);
+  const close = useCallback(async () => {
     const current = latest.current;
     if (!current.session) {
       onClose();
@@ -168,11 +182,25 @@ export function RefinementPanel({
     try {
       await persistCurrent();
       skipCleanupFlush.current = true;
+      restoreFocus();
       onClose();
     } catch (e) {
       setError(String(e instanceof Error ? e.message : e));
     }
-  };
+  }, [onClose, restoreFocus]);
+  useEffect(() => {
+    headingRef.current?.focus();
+  }, []);
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        void close();
+      }
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [close]);
   const decide = async (
     proposal: RefinementProposal,
     decision: "accept" | "reject",
@@ -221,7 +249,7 @@ export function RefinementPanel({
       <header>
         <div>
           <small>{text.optionalAssistance}</small>
-          <h3>{text.refining}</h3>
+          <h3 ref={headingRef} tabIndex={-1}>{text.refining}</h3>
         </div>
         <button type="button" data-control="refinement-close" onClick={() => void close()}>
           ×
@@ -257,10 +285,10 @@ export function RefinementPanel({
             }}
           >
             {session?.messages?.map((item) => (
-              <p key={item.id} className={`message message-${item.role}`}>
+              <article key={item.id} className={`message message-${item.role}`}>
                 <strong>{item.role === "user" ? text.you : text.assistant}</strong>
-                {item.body}
-              </p>
+                <p>{item.body}</p>
+              </article>
             ))}
           </div>
           <textarea
@@ -269,7 +297,11 @@ export function RefinementPanel({
             value={message}
             onChange={(event) => setMessage(event.target.value)}
             onKeyDown={(event) => {
-              if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+              if (
+                event.key === "Enter" &&
+                (event.metaKey || event.ctrlKey) &&
+                !event.nativeEvent.isComposing
+              ) {
                 event.preventDefault();
                 void send();
               }

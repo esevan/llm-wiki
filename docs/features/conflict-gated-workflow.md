@@ -26,12 +26,21 @@ resume work and does not create another mandatory approval gate.
 
 ## Keep the work record
 
-Task detail keeps editable scope and validation criteria together with Work Log entries, attachments,
-comments, checklists, and decisions. While a mutation and its refreshed revision are loading,
-dependent controls are unavailable so a later action cannot silently use an outdated Task revision.
-Errors remain visible and successful changes are reflected in the same record.
+Task detail keeps six editable definition fields—title, detail, outcome, scope, non-goals, and
+validation criteria—beside Work Log entries, attachments, comments, checklists, and decisions.
+Edits stay local until **Save changes**. An independent saved mutation or refresh preserves a dirty
+definition draft; it does not silently replace those six fields. Saving sends the draft's expected
+Task revision. If the same field changed elsewhere, compare the latest record with the user's draft
+and deliberately keep the draft or use the latest value. A failed save keeps the input and its
+error visible for retry.
 
-Completing a Task does not automatically resolve its linked Problems or complete related Tasks.
+Closing Task detail or selecting another Task with a dirty definition asks the user to **Save**,
+**Discard**, or **Keep editing**. The shell keeps an open detail mounted while its route is hidden,
+so normal navigation does not discard that draft. This is explicit-save protection for Task
+definition fields, not Task autosave: it does not promise durability on app quit/crash or cover
+every auxiliary form.
+
+Use **Add completion evidence** to begin completion. Completing a Task does not automatically resolve its linked Problems or complete related Tasks.
 Resolve a Problem separately against its current revision and evidence. An older linked revision
 cannot be resolved as though it were the current one. Creating a private Knowledge draft and
 publishing it are also separate explicit decisions; see [Completion and Knowledge](completion-writeback-archive.md).

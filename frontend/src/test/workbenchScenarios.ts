@@ -46,7 +46,11 @@ async function clickControl(h: WorkbenchScenarioHarness, name: string, label: st
   h.coverage.interact(name, () => h.click(control(name, recordId), label));
 }
 
-function enterControl(h: WorkbenchScenarioHarness, name: string, value: string, recordId?: string) {
+async function enterControl(h: WorkbenchScenarioHarness, name: string, value: string, recordId?: string) {
+  await h.waitFor(
+    () => document.querySelector(".task-detail")?.getAttribute("aria-busy") !== "true",
+    `idle Task detail before editing ${name}`,
+  );
   const element = control<HTMLInputElement | HTMLTextAreaElement>(name, recordId);
   h.coverage.interact(name, () => h.enter(element, value));
   h.coverage.assertEffect(name, () => element.value === value);
@@ -88,7 +92,7 @@ export async function runTaskControlMatrixScenario(h: WorkbenchScenarioHarness) 
   effect(h, ["task-entry-capture-mode"], () => control<HTMLInputElement>("task-entry-capture-mode").checked);
   await clickControl(h, "task-entry-task-mode", "Select Task entry mode");
   effect(h, ["task-entry-task-mode"], () => control<HTMLInputElement>("task-entry-task-mode").checked);
-  enterControl(h, "task-entry-text", title);
+  await enterControl(h, "task-entry-text", title);
   assertDisabled("task-entry-save", false);
   const form = control("task-entry-save").closest("form");
   if (!form) throw new Error("Task entry form missing");
@@ -118,10 +122,79 @@ export async function runTaskControlMatrixScenario(h: WorkbenchScenarioHarness) 
   await h.waitFor(() => document.querySelector(".task-detail")?.textContent?.includes(title) ?? false, "Task detail");
   effect(h, ["task-card-open"], () => document.querySelector(".task-detail")?.textContent?.includes(title) ?? false);
   observe(h, "Task detail");
+  await enterControl(h, "task-revision-detail", "Keep this draft while comparing another Task");
+  await enterControl(h, "task-worklog-text", "Independent Work Log while Task draft is dirty");
+  await clickControl(h, "task-worklog-add", "Add Work Log without losing Task draft");
+  await h.waitForAsync(async () => Boolean((await h.task(title)).workLog?.some(item => item.body === "Independent Work Log while Task draft is dirty")), "independent Work Log readback beside dirty Task draft");
+  // Native persistence can finish before the component's queued aggregate GET.
+  // Switching while that GET is pending is deliberately ignored by the guard.
+  await h.waitFor(() => document.querySelector(".task-detail")?.getAttribute("aria-busy") === "false" &&
+    Boolean(document.querySelector(".task-detail .log-entry")?.textContent?.includes("Independent Work Log while Task draft is dirty")),
+  "rendered independent Work Log and idle Task detail");
+  effect(h, ["task-worklog-add"], () => document.querySelector(".task-detail")?.getAttribute("aria-busy") === "false" &&
+    document.querySelector(".task-detail .log-entry")?.textContent?.includes("Independent Work Log while Task draft is dirty") === true);
+  if (control<HTMLTextAreaElement>("task-revision-detail").value !== "Keep this draft while comparing another Task")
+    throw new Error("Work Log refresh lost the dirty Task definition");
+  const targetCard = [...document.querySelectorAll<HTMLElement>(".canonical-card")].find(
+    card => card.querySelector("h3")?.textContent === targetTitle,
+  );
+  const targetOpen = targetCard?.querySelector<HTMLElement>('[data-control="task-card-open"]');
+  if (!targetOpen) throw new Error("Second Task open control missing");
+  h.click(targetOpen, "Compare another Task while the first draft is dirty");
+  await h.waitFor(() => Boolean(document.querySelector(".task-draft-guard")), "Task switch leave guard");
+  observe(h, "Task switch leave guard");
+  await clickControl(h, "task-draft-guard-keep-editing", "Keep the current Task draft while comparing");
+  effect(h, ["task-draft-guard-keep-editing"], () => document.querySelector(".task-detail")?.textContent?.includes(title) === true && !document.querySelector(".task-draft-guard"));
+  await clickControl(h, "task-detail-close", "Request close for dirty Task");
+  await h.waitFor(() => Boolean(document.querySelector(".task-draft-guard")), "Task close leave guard");
+  observe(h, "Task close leave guard");
+  await clickControl(h, "task-draft-guard-discard", "Discard draft and close Task");
+  await h.waitFor(() => !document.querySelector(".task-detail"), "discarded Task draft close");
+  effect(h, ["task-draft-guard-discard", "task-detail-close"], () => !document.querySelector(".task-detail"));
+  h.coverage.interact("task-card-open", () => h.click(taskOpen, `Reopen ${title} after discard`));
+  await h.waitFor(() => document.querySelector(".task-detail")?.textContent?.includes(title) ?? false, "reopened Task after discard");
+  h.coverage.assertEffect("task-card-open", () => document.querySelector(".task-detail")?.textContent?.includes(title) ?? false);
+  await enterControl(h, "task-revision-detail", "Save this draft while leaving");
+  await clickControl(h, "task-detail-close", "Request save close for dirty Task");
+  await h.waitFor(() => Boolean(document.querySelector(".task-draft-guard")), "Task save leave guard");
+  observe(h, "Task save leave guard");
+  await clickControl(h, "task-draft-guard-save", "Save draft and close Task");
+  await h.waitFor(() => !document.querySelector(".task-detail"), "saved Task draft close");
+  await h.waitForAsync(async () => (await h.task(title)).detail === "Save this draft while leaving", "saved leave draft readback");
+  effect(h, ["task-draft-guard-save"], () => !document.querySelector(".task-detail"));
+  h.coverage.interact("task-card-open", () => h.click(taskOpen, `Reopen ${title} after guarded save`));
+  await h.waitFor(() => document.querySelector(".task-detail")?.textContent?.includes(title) ?? false, "reopened Task after guarded save");
+  h.coverage.assertEffect("task-card-open", () => document.querySelector(".task-detail")?.textContent?.includes(title) ?? false);
+  await enterControl(h, "task-revision-detail", "Keep this local conflict edit");
+  const firstConflictBase = await h.task(title);
+  await h.api(`/tasks/${encodeURIComponent(firstConflictBase.id)}/revisions`, "POST", {
+    expectedTaskRevision: firstConflictBase.taskRevision,
+    patch: { detail: "External latest detail" },
+  });
+  await clickControl(h, "task-revision-save", "Save stale local Task edit");
+  await h.waitFor(() => Boolean(document.querySelector(".task-draft-conflict")), "Task conflict comparison");
+  observe(h, "Task conflict comparison");
+  if (!document.querySelector(".task-draft-conflict")?.textContent?.includes("External latest detail") || !document.querySelector(".task-draft-conflict")?.textContent?.includes("Keep this local conflict edit"))
+    throw new Error("Task conflict comparison omitted the latest or edited value");
+  await clickControl(h, "task-draft-keep-mine", "Keep local Task edit after conflict");
+  effect(h, ["task-draft-keep-mine"], () => control<HTMLTextAreaElement>("task-revision-detail").value === "Keep this local conflict edit");
+  await clickControl(h, "task-revision-save", "Save rebased local Task edit");
+  await h.waitForAsync(async () => (await h.task(title)).detail === "Keep this local conflict edit", "rebased Task edit readback");
+  await enterControl(h, "task-revision-detail", "Edit that will use the latest value");
+  const secondConflictBase = await h.task(title);
+  await h.api(`/tasks/${encodeURIComponent(secondConflictBase.id)}/revisions`, "POST", {
+    expectedTaskRevision: secondConflictBase.taskRevision,
+    patch: { detail: "Second external latest detail" },
+  });
+  await clickControl(h, "task-revision-save", "Create latest-value Task conflict");
+  await h.waitFor(() => Boolean(document.querySelector(".task-draft-conflict")), "latest-value Task conflict");
+  observe(h, "Task latest-value conflict");
+  await clickControl(h, "task-draft-use-latest", "Use latest Task value after conflict");
+  effect(h, ["task-draft-use-latest"], () => control<HTMLTextAreaElement>("task-revision-detail").value === "Second external latest detail" && !document.querySelector(".task-draft-conflict"));
   const before = await h.task(title);
   const initialReadiness = before.readinessEntries?.find(item => item.status === "missing");
   if (!initialReadiness) throw new Error("New Task did not expose a missing readiness field");
-  enterControl(h, "task-readiness-reason", "Not needed for this bounded Task", initialReadiness.key);
+  await enterControl(h, "task-readiness-reason", "Not needed for this bounded Task", initialReadiness.key);
   await clickControl(h, "task-readiness-not-applicable", "Mark readiness field not applicable", initialReadiness.key);
   await h.waitForAsync(async () => (await h.task(title)).readinessEntries?.find(item => item.key === initialReadiness.key)?.status === "not_applicable", "initial readiness decision readback");
   const readinessDecision = (await h.task(title)).readinessEntries?.find(item => item.key === initialReadiness.key);
@@ -134,7 +207,7 @@ export async function runTaskControlMatrixScenario(h: WorkbenchScenarioHarness) 
     ["task-revision-non-goals", "Architecture refactor"],
     ["task-revision-criteria", "Native readback matches"],
   ];
-  for (const [name, value] of revisions) enterControl(h, name, value);
+  for (const [name, value] of revisions) await enterControl(h, name, value);
   await clickControl(h, "task-revision-save", "Save every Task revision field");
   await waitForTaskRevision(h, `${title} revised`, before.taskRevision);
   const revisedTitle = `${title} revised`;
@@ -156,7 +229,7 @@ export async function runTaskControlMatrixScenario(h: WorkbenchScenarioHarness) 
   effect(h, ["conflict-review-retry"], () => Boolean(document.querySelector(".review-current")));
 
   assertDisabled("task-worklog-add", true);
-  enterControl(h, "task-worklog-text", "Matrix work evidence");
+  await enterControl(h, "task-worklog-text", "Matrix work evidence");
   const file = control<HTMLInputElement>("task-worklog-file");
   const transfer = new DataTransfer();
   transfer.items.add(new File(["matrix"], "matrix.txt", { type: "text/plain" }));
@@ -170,14 +243,14 @@ export async function runTaskControlMatrixScenario(h: WorkbenchScenarioHarness) 
   if (!log) throw new Error("Work Log entry missing");
   effect(h, ["task-worklog-add"], () => Boolean(log));
   observe(h, "Work Log row");
-  enterControl(h, "task-comment-text", "Matrix comment", log.id);
+  await enterControl(h, "task-comment-text", "Matrix comment", log.id);
   await clickControl(h, "task-comment-add", "Add Work Log comment", log.id);
   await h.waitForAsync(async () => Boolean((await h.task(revisedTitle)).workLog?.find(item => item.id === log.id)?.comments?.some(item => item.body === "Matrix comment")), "comment readback");
   await h.waitFor(() => document.body.textContent?.includes("Matrix comment") === true, "rendered Work Log comment");
   effect(h, ["task-comment-add"], () => document.body.textContent?.includes("Matrix comment") === true);
 
   assertDisabled("task-checklist-add", true);
-  enterControl(h, "task-checklist-text", "Matrix checklist");
+  await enterControl(h, "task-checklist-text", "Matrix checklist");
   await clickControl(h, "task-checklist-add", "Add checklist item");
   await h.waitForAsync(async () => Boolean((await h.task(revisedTitle)).checklist?.some(item => item.body === "Matrix checklist")), "checklist readback");
   const checklist = (await h.task(revisedTitle)).checklist?.find(item => item.body === "Matrix checklist");
@@ -190,7 +263,7 @@ export async function runTaskControlMatrixScenario(h: WorkbenchScenarioHarness) 
   effect(h, ["task-checklist-toggle"], () => control<HTMLInputElement>("task-checklist-toggle", checklist.id).checked);
 
   assertDisabled("task-decision-add", true);
-  enterControl(h, "task-decision-text", "Matrix decision");
+  await enterControl(h, "task-decision-text", "Matrix decision");
   await clickControl(h, "task-decision-add", "Add decision");
   await h.waitForAsync(async () => Boolean((await h.task(revisedTitle)).decisions?.some(item => item.body === "Matrix decision")), "decision readback");
   await h.waitFor(() => document.body.textContent?.includes("Matrix decision") === true, "rendered decision row");
@@ -199,7 +272,7 @@ export async function runTaskControlMatrixScenario(h: WorkbenchScenarioHarness) 
   const readiness = (await h.task(revisedTitle)).readinessEntries?.find(item => item.status === "missing");
   if (readiness) {
     observe(h, "missing readiness field");
-    enterControl(h, "task-readiness-reason", "Not needed for this bounded Task", readiness.key);
+    await enterControl(h, "task-readiness-reason", "Not needed for this bounded Task", readiness.key);
     await clickControl(h, "task-readiness-not-applicable", "Mark readiness field not applicable", readiness.key);
     await h.waitForAsync(async () => (await h.task(revisedTitle)).readinessEntries?.find(item => item.key === readiness.key)?.status === "not_applicable", "readiness decision readback");
     await h.waitFor(() => document.body.textContent?.includes("Not needed for this bounded Task") === true, "rendered readiness decision");
@@ -213,26 +286,26 @@ export async function runTaskControlMatrixScenario(h: WorkbenchScenarioHarness) 
   await h.waitFor(() => connections.open, "open Task connection details");
   effect(h, ["task-connection-details"], () => connections.open);
   observe(h, "connection editors");
-  enterControl(h, "task-problem-create-text", "Matrix linked Problem");
+  await enterControl(h, "task-problem-create-text", "Matrix linked Problem");
   await clickControl(h, "task-problem-create", "Create and link Problem");
   await h.waitForAsync(async () => Boolean((await h.task(revisedTitle)).problemLinks?.length), "Problem link readback");
   const problemOne = (await h.task(revisedTitle)).problemLinks?.[0];
   if (!problemOne) throw new Error("Created Problem link missing");
   effect(h, ["task-problem-create"], () => Boolean(problemOne));
   observe(h, "linked Problem row");
-  enterControl(h, "task-problem-revision-text", "Matrix linked Problem revision two");
+  await enterControl(h, "task-problem-revision-text", "Matrix linked Problem revision two");
   await clickControl(h, "task-problem-revise", "Revise linked Problem");
   await h.waitFor(() => control<HTMLInputElement>("task-problem-link-revision").value === "2", "Problem revision editor update");
   effect(h, ["task-problem-revise"], () => control<HTMLInputElement>("task-problem-link-revision").value === "2");
-  enterControl(h, "task-problem-link-id", problemOne.problemId);
-  enterControl(h, "task-problem-link-revision", "2");
+  await enterControl(h, "task-problem-link-id", problemOne.problemId);
+  await enterControl(h, "task-problem-link-revision", "2");
   await clickControl(h, "task-problem-link", "Link exact Problem revision two");
   await h.waitForAsync(async () => Boolean((await h.task(revisedTitle)).problemLinks?.some(link => link.problemRevision === 2)), "Problem r2 link readback");
   await h.waitFor(() => document.body.textContent?.includes("revision 2") === true, "rendered Problem r2 link");
   effect(h, ["task-problem-link"], () => document.body.textContent?.includes("revision 2") === true);
 
   const target = await h.task(targetTitle);
-  enterControl(h, "task-relationship-target", target.id);
+  await enterControl(h, "task-relationship-target", target.id);
   const kind = control<HTMLSelectElement>("task-relationship-kind");
   for (const relationship of ["related", "prerequisite", "split_from"]) {
     if (relationship === "related") {
@@ -295,7 +368,7 @@ export async function runTaskControlMatrixScenario(h: WorkbenchScenarioHarness) 
   if (document.activeElement !== control("task-completion-evidence")) throw new Error("Complete shortcut did not focus evidence");
   effect(h, ["task-transition-complete-focus"], () => document.activeElement === control("task-completion-evidence"));
   assertDisabled("task-completion-complete", true);
-  enterControl(h, "task-completion-evidence", "Matrix completion evidence");
+  await enterControl(h, "task-completion-evidence", "Matrix completion evidence");
   assertDisabled("task-completion-complete", false);
   await clickControl(h, "task-completion-complete", "Complete Task with evidence");
   await h.waitForAsync(async () => (await h.task(revisedTitle)).state === "completed", "Task completion readback");

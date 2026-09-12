@@ -1,9 +1,11 @@
 # React and Tauri migration inventory
 
 **Audit date:** 2026-09-02
-**Baseline:** `187 passed`, no skipped tests in the baseline run
+**Baseline:** Historical pre-schema-8 snapshot; `187 passed`, no skipped tests in the baseline run
 
-This is the live behavior and coverage ledger for the compatibility-first desktop migration. The
+> **Historical migration inventory:** The table preserves compatibility migration facts from its audit date. Schema-8 Task behavior is authoritative in [specification 012](../../specs/012-task-centered-workbench/spec.md); do not read pre-Task Problem/Solution rows as current product behavior.
+
+This was the behavior and coverage ledger for the compatibility-first desktop migration. The
 existing implementation, specifications, characterization catalog, tests, and documentation were
 treated as mutually supporting evidence. Product behavior is unchanged unless a row explicitly
 says otherwise.

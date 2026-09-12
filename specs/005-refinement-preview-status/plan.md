@@ -1,5 +1,7 @@
 # Implementation Plan: Refinement Preview Status
 
+> **Historical plan for schema 8+**: This describes retired Problem/Solution preview routes. Current Refinement is optional Task-centered work; see [012](../012-task-centered-workbench/spec.md).
+
 **Branch**: `codex/refinement-preview-status` | **Date**: 2026-08-21 | **Spec**: [spec.md](spec.md)
 
 **Input**: Feature specification from `/specs/005-refinement-preview-status/spec.md`

@@ -2,9 +2,34 @@
 
 **Verified:** 2026-09-12
 
+> **Historical Task-centered acceptance record:** The artifact identities, nine-case records, and
+> 32/32/169 figures below predate the UI/UX follow-up. The follow-up package passed 32/32 scenarios;
+> nine current captures were reviewed; real IME/VoiceOver/OS reduced-motion remain unverified;
+> do not treat this file's earlier totals as its release result.
+
+**Current UI/UX artifact:** CDHash `9b2b81082a43de0637bedd33a8cc670709ff2b21`, signed 2026-09-12 11:44:31 AM by `LLM Wiki Local Signing`, from dirty `fix/ui-ux-improvements` state based on `de01ff47398871902a765d43b5a4060161316f92`. Focused native geometry passed: requested native 900×640, 904×768, and 1280×820 yielded WebKit viewports 900×608, 904×736, and 1280×788; long-URL Task header/close and title-input geometry passed. The requested native sizes are not viewport claims. Full E2E passed 32/32, with 188 scanned source controls and 175 rendered/exercised/asserted controls; nine current captures were reviewed; real IME/VoiceOver/OS reduced-motion remain unverified.
+
 ## Release artifact
 
-The final macOS artifact is `src-tauri/target/release/bundle/macos/LLM Wiki.app`. Its code-directory
+### UI/UX follow-up final package result
+
+Nine final native 1198×768 Korean-light captures from isolated `Dlnhjg` state were visually reviewed: Workbench, Task detail, Refinement, Task review, completion/Knowledge, Queue recovery, Vault search, Compass, and AI setup. Manual Task Escape returned focus to its original trigger. These captures establish the represented visible states; real Korean IME, VoiceOver, and OS reduced-motion remain unverified.
+
+The signed UI/UX package with CDHash `9b2b81082a43de0637bedd33a8cc670709ff2b21` passed the full suite: 32/32 scenarios. Its inventory recorded 188 scanned source controls and 175 rendered, exercised, and asserted controls; `unknownEnabled`, `missingSourceEvidence`, `undocumentedDisabled`, `unexercised`, `effectMissing`, and `notRendered` were all empty. Manual Korean IME, VoiceOver, OS reduced-motion, Windows, zoom, and native quit/crash draft durability remain unverified or out of scope.
+
+Current checks: `npm test` passed 34 Vitest files / 176 tests, six desktop-helper tests,
+two local-provider tests, four signing tests, and runtime/native-only/application-boundary checks.
+`cargo test --manifest-path src-tauri/Cargo.toml` passed all 106 tests. Typecheck, changed-code
+ESLint, and whitespace checks pass. Full lint retains 23 pre-existing `no-explicit-any` findings
+in untouched `completedButtonsRuntime.test.ts` and `remainingButtonsRuntime.test.ts`.
+The portable [evidence record](../../docs/testing/evidence/ui-ux-improvements.json) records the
+signed package, source snapshot, per-scenario results, geometry, coverage, and image hashes.
+Local raw artifacts are `.tmp/ui-ux-improvements/e2e-complete/` and
+`.tmp/ui-ux-improvements/geometry-intrinsic/`.
+
+## Historical baseline artifact and verification (before the UI/UX follow-up)
+
+The historical baseline macOS artifact was `src-tauri/target/release/bundle/macos/LLM Wiki.app`. Its code-directory
 hash is `1988d962cfc113ca58786875eb7553c0cad5630b` and the complete recorded artifact identity is
 `1988d962cfc113ca58786875eb7553c0cad5630bcf1dc3ac5fd955d0f2fff6c3`.
 

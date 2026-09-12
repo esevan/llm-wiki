@@ -1,28 +1,15 @@
-# 근거 중심 Vault 충돌 검토
+# Task 충돌 검토를 위한 Vault 근거
 
 [English](vault-conflict-evidence.md) | **한국어**
 
-충돌 검토는 실행 중 무엇을 확인하는지 보여줍니다. 검토 화면에서 인덱싱된 Vault 문서 수, 임베딩 coverage, 통합 후보 수, 유지·검토된 후보 진행률, 현재 단계, 검색·선별·정밀 검토 시간을 각각 확인할 수 있습니다.
+Task 충돌 검토는 저장한 Task 맥락과 선택한 Vault 근거로 인용 가능한 비동기 보고서를 만듭니다. Queue는 시도와 상태를 보존하므로 검토가 실행되는 동안에도 Workbench를 사용할 수 있습니다.
 
-![미해결 Solution과 명시적인 충돌 검토 동작을 함께 보여주는 Workbench](images/02-workbench-board.png)
+![근거 부족·재시도·시도 이력을 보여 주는 Task 충돌 검토](images/task-review.png)
 
-![Workbench를 막지 않고 충돌 검토를 Queue에 등록한 화면](images/09-background-job-queued.png)
+![백그라운드 작업 실패와 복구 동작을 보여 주는 Queue](images/queue-recovery.png)
 
-서비스는 Vault 전체에서 lexical 근거와 semantic 근거를 서로 독립적으로 검색합니다. Solution을 검토 가능한 주장으로 나누고 후보 문단을 합친 뒤 Raw/완성본 중복을 제거하며, 정확한 경로·줄 구간·원본 해시·원문을 보존합니다. 검증된 잠재 충돌은 나머지 후보 검토가 끝나기 전에도 점진적으로 나타납니다.
+보고서는 워크플로 Gate가 아니라 근거입니다. 출처를 읽고 Task에서 무엇을 바꿀지 사용자가 결정합니다. 보고서가 Task를 clear로 표시하거나 상태를 진행시키거나 완료 근거를 대신하지 않습니다. Task 리비전이나 관련 Vault 맥락이 바뀌면 이전 보고서는 오래된 상태가 됩니다.
 
-Semantic 인덱싱과 검토 검색은 한 번 로드한 임베딩 모델을 공유합니다. 한 번의 검토에서 모든 Solution 주장을 배치로 임베딩하고, 이후 검색에서도 기존 모델 세션을 재사용합니다. 따라서 큰 Solution도 반복적인 모델 시작이나 주장별 추론 지연 없이 검색 단계를 완료할 수 있습니다. 검색 도중 Vault watcher가 문서를 제거하면 오래된 후보만 건너뛰고 전체 검토는 계속합니다.
+예전 브라우저 취소, 일괄 Solution 주장 선별, clear/conflicted Gate는 레거시 구현 기록입니다. 이전한 기록에서 읽을 수 있어도 현재 Task 인터페이스가 제공한다고 약속하는 제어가 아닙니다.
 
-## 결과의 의미
-
-- **검토 중**: 남은 후보가 있으므로 clear를 선택할 수 없습니다.
-- **잠재 충돌**: 정확히 인용된 문단이 Solution 주장과 모순될 수 있습니다.
-- **아직 충돌을 찾지 못함**: 현재까지 finding은 없지만 충돌이 없다고 단정할 수 없습니다.
-- **Clear**: 임베딩 coverage가 완전하고 근거 후보가 있으며 유지된 모든 후보를 끝까지 검토했습니다.
-- **근거 부족**: coverage, 후보, 모델 응답 또는 citation이 clear를 뒷받침하지 못합니다.
-- **취소/실패**: 신뢰할 수 있는 권고 없이 검토가 중단되었습니다.
-
-빠른 선별 단계는 완전하고 명시적인 비충돌 응답만 제외할 수 있습니다. 누락되거나 모호한 응답은 정밀 검토 대상으로 남습니다. 브라우저 취소는 서버에도 전달되어 그 run의 후속 모델 호출을 막습니다. Solution과 Vault 해시가 같으면 완료 결과를 재사용하고, 변경되면 캐시를 무효화합니다.
-
-AI 결과는 근거이지 결정 권한이 아닙니다. Solution을 clear 또는 conflicted로 선언하고 workflow 상태를 진행시키는 주체는 사람입니다.
-
-[기능 명세](../../specs/008-vault-conflict-evidence/spec.md)와 [API 계약](../../specs/008-vault-conflict-evidence/contracts/conflict-review-api.md)을 참고하세요.
+[Task 충돌 검토](conflict-resolution-workflow.ko.md)와 역사 기록인 [명세 008](../../specs/008-vault-conflict-evidence/spec.md)을 참고하세요.

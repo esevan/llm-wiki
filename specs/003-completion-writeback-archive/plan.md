@@ -1,5 +1,7 @@
 # Implementation Plan: Completion, Writeback, and Archive
 
+> **Historical plan for schema 8+**: Keep its evidence and external-change facts, but use [012](../012-task-centered-workbench/spec.md) for current Task completion and Knowledge publication.
+
 **Status**: Implemented; this is the as-built design summary.
 
 ## Current design

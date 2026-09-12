@@ -3,11 +3,11 @@ import type { ControlSpec } from './interactionCoverage';
 // One entry is one user action or editable control. Repeated cards use the
 // same action id plus data-entity-id/data-record-id; they are not silently
 // collapsed into a family-wide "covered" checkbox.
-const task = (id: string, family: `F${number}`, source: string, effect: string): ControlSpec => ({
+const task = (id: string, family: `F${number}`, source: string, effect: string, disabledReason?: string): ControlSpec => ({
   id, family, kind: 'button', selector: `[data-control="${id}"]`, source,
-  sourceEvidence: `data-control="${id}"`, scenario: 'designated-interactive-suite', effect,
+  sourceEvidence: `data-control="${id}"`, scenario: 'designated-interactive-suite', effect, disabledReason,
 });
-const existing = (id: string, family: `F${number}`, selector: string, source: string, evidence: string, effect: string): ControlSpec => ({ id, family, kind: 'button', selector, source, sourceEvidence: evidence, scenario: 'designated-interactive-suite', effect });
+const existing = (id: string, family: `F${number}`, selector: string, source: string, evidence: string, effect: string, disabledReason?: string): ControlSpec => ({ id, family, kind: 'button', selector, source, sourceEvidence: evidence, scenario: 'designated-interactive-suite', effect, disabledReason });
 
 const manifest: readonly ControlSpec[] = [
   ...['workbench', 'search', 'compass', 'ai-setup'].map(view => existing(`sidebar-view-${view}`, 'F1', `[data-control="sidebar-view-${view}"]`, 'frontend/src/app/Sidebar.tsx', 'sidebar-view-${view}', `${view} view is active`)),
@@ -37,7 +37,8 @@ const manifest: readonly ControlSpec[] = [
   existing('notice-confirm', 'F50', '#notice-confirm', 'frontend/src/features/overlays/OverlayLayer.tsx', 'notice-confirm', 'confirmation resolves true'),
   existing('queue-toggle', 'F52', '#queue-toggle', 'frontend/src/features/overlays/OverlayLayer.tsx', 'queue-toggle', 'queue panel visibility changes'),
   existing('queue-cancel', 'F53', '#queue-list [data-job-action="cancel"]', 'frontend/public/runtime/jobs.js', 'data-job-action', 'queued job cancels'),
-  existing('queue-retry', 'F53', '#queue-list [data-job-action="retry"]', 'frontend/public/runtime/jobs.js', 'data-job-action', 'failed job retries'),
+  existing('queue-retry', 'F53', '#queue-list [data-job-action="retry"]', 'frontend/public/runtime/jobs.js', 'data-job-action', 'failed job retries', 'The same job retry request is still pending.'),
+  existing('queue-open-ai-setup', 'F53', '#queue-list [data-job-action="setup"]', 'frontend/public/runtime/jobs.js', 'data-job-action', 'missing-provider failure opens existing AI setup'),
   existing('queue-open-result', 'F53', '#queue-list [data-job-action="result"]', 'frontend/public/runtime/jobs.js', 'data-job-action', 'completed result opens'),
   existing('notification-toggle', 'F54', '#alert-toggle', 'frontend/src/features/overlays/OverlayLayer.tsx', 'alert-toggle', 'notification panel visibility changes'),
   existing('notification-open', 'F54', '#alert-list [data-notification-action="open"]', 'frontend/public/runtime/jobs.js', 'data-notification-action', 'notification opens result'),
@@ -58,11 +59,13 @@ const manifest: readonly ControlSpec[] = [
   task('task-card-open', 'F8', 'frontend/src/features/workbench/WorkbenchView.tsx', 'canonical task detail opens'),
   task('task-card-refine', 'F8', 'frontend/src/features/workbench/WorkbenchView.tsx', 'canonical refinement opens'),
   task('task-detail-close', 'F9', 'frontend/src/features/workbench/TaskDetail.tsx', 'detail closes without mutation'),
+  ...['keep-mine', 'use-latest', 'guard-save', 'guard-discard', 'guard-keep-editing'].map(name => task(`task-draft-${name}`, 'F9', 'frontend/src/features/workbench/TaskDetail.tsx', 'dirty Task draft conflict or leave choice has an explicit effect')),
   task('task-detail-refine', 'F10', 'frontend/src/features/workbench/TaskDetail.tsx', 'task refinement opens'),
   task('task-transition-start', 'F11', 'frontend/src/features/workbench/TaskDetail.tsx', 'task state persists as in progress'),
   task('task-transition-complete-focus', 'F11', 'frontend/src/features/workbench/TaskDetail.tsx', 'completion evidence receives focus'),
   task('task-transition-reopen', 'F11', 'frontend/src/features/workbench/TaskDetail.tsx', 'task state persists as reopened'),
-  ...['title','detail','outcome','scope','non-goals','criteria','save'].map(name => task(`task-revision-${name}`, 'F12', 'frontend/src/features/workbench/TaskDetail.tsx', 'immutable task revision reflects the edit')),
+  ...['title','detail','outcome','scope','non-goals','criteria'].map(name => task(`task-revision-${name}`, 'F12', 'frontend/src/features/workbench/TaskDetail.tsx', 'immutable task revision reflects the edit')),
+  task('task-revision-save', 'F12', 'frontend/src/features/workbench/TaskDetail.tsx', 'immutable task revision reflects the edit', 'No definition changes, overlapping revision conflicts awaiting a choice, or a save is in progress.'),
   ...['text','file','add'].map(name => task(`task-worklog-${name}`, 'F13', 'frontend/src/features/workbench/TaskDetail.tsx', 'work-log entry persists')),
   ...['text','add'].map(name => task(`task-comment-${name}`, 'F14', 'frontend/src/features/workbench/TaskDetail.tsx', 'comment persists')),
   ...['text','add','toggle'].map(name => task(`task-checklist-${name}`, 'F15', 'frontend/src/features/workbench/TaskDetail.tsx', 'checklist state persists')),

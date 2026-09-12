@@ -24,8 +24,8 @@
 - [빠른 Vault 검색](fast-vault-search.ko.md)은 기존 Knowledge와 근거에서 바로 이어가게 합니다.
 - [근거 중심 Vault 충돌 검토](vault-conflict-evidence.ko.md)는 검색 coverage, 인용, 진행률,
   보수적인 판정 의미를 설명합니다.
-- [충돌 해결 워크플로](conflict-resolution-workflow.ko.md)는 발견한 불일치를 명시적이고 지속 가능한
-  사용자 결정으로 바꿉니다.
+- [Task 충돌 검토](conflict-resolution-workflow.ko.md)는 발견 사항을 Task Gate로 바꾸지 않고
+  리비전 기준 조언용 근거·출처·시도를 보여 줍니다.
 
 ## 실행하고 Knowledge로 남기기
 

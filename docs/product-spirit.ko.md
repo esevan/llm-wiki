@@ -15,25 +15,25 @@ Capture는 자연스러운 생각을 그대로 받습니다. AI 대화와 Refine
 Capture는 의도적으로 작고 가볍습니다. Workbench는 현재 Task를 보여주고 진행 중인 작업을 별도
 강조합니다. 상세·검증·완료 제어는 현재 결정에 필요할 때만 나타납니다.
 
-![Capture는 가볍게 유지하고 현재 Solution을 우선 표시하는 Workbench](features/images/02-workbench.png)
+![Capture는 가볍게 유지하고 현재 Task를 바로 이어서 할 수 있게 하는 Workbench](features/images/workbench-tasks.png)
 
 ## 3. Resume where you left off.
 
-Solution Work Log는 텍스트·스크린샷·댓글·검증 체크를 지원합니다. Refinement Preview는 이전 결정,
-근거, 제약, trade-off를 계속 보여줍니다. 충돌 검토는 현재 Solution을 검색 가능한 Knowledge와
+Task Work Log는 텍스트·스크린샷·댓글·검증 체크를 지원합니다. Refinement는 이전 결정,
+근거, 제약, trade-off를 계속 보여줍니다. 충돌 검토는 현재 Task를 검색 가능한 Knowledge와
 비교해 사용자가 맥락을 다시 조립하지 않게 합니다.
-전역 한국어·영어 설정은 현재 화면, 저장하지 않은 입력, workflow 계보를 버리지 않고 언어를
-바꿉니다. 새로 생성하고 승인한 AI Problem·Solution은 두 언어 저장본을 유지하고, 기존 콘텐츠는
-원문 그대로 계속 읽을 수 있습니다. 명시적으로 요청한 AI 이미지 요약도 기존 한 번의 요청에서 두
-언어를 함께 저장하며, 사용자가 작성한 Work Log 근거는 원문을 유지합니다.
+전역 한국어·영어 설정은 현재 화면과 workflow 계보를 버리지 않고 시스템 언어를 바꿉니다. 생성
+텍스트는 요청을 시작할 때의 언어로 만들며, 사용자가 작성한 Work Log 근거와 기존 콘텐츠는 원문을
+유지합니다. 앱이 관리하는 Knowledge의 한국어 열람은 별도 명시 동작이며 영문 canonical Markdown을
+바꾸지 않습니다.
 
-![최신 시각 상태와 검증 맥락을 보존하는 Solution Work Log](features/images/06-work-log.png)
+![최신 Work Log와 검증 맥락을 보존하는 Task 상세](features/images/task-detail.png)
 
-![현재 대화 옆에 이전 맥락을 유지하는 Refinement Preview](features/images/05-refinement-preview.png)
+![현재 대화 옆에 이전 맥락을 유지하는 Refinement](features/images/refinement.png)
 
 ## 4. 선택한 작업을 중심으로 정리합니다.
 
-Capture에서 이미 찾은 Solution은 보존합니다. 간단한 Task는 즉시 시작할 수 있고, 선택적인
+Capture에서 이미 찾은 해결 방향은 보존합니다. 간단한 Task는 즉시 시작할 수 있고, 선택적인
 Refinement는 검토 가능한 Problem과 여러 버전의 Task를 만들 수 있습니다. Task는 proposed,
 in-progress, completed 상태를 독립적으로 가집니다. Work Log에는 텍스트·이미지·파일·댓글·체크리스트·
 결정을 남기며, Task를 완료해도 Problem이 자동으로 해결되지는 않습니다.
@@ -48,7 +48,7 @@ Knowledge로 검색할 수 있습니다.
 열람본은 요청할 때 파생하며, 정확히 같은 현재 원본에 대해서만 재사용합니다. 한국어 열람본이
 canonical 파일을 대체하거나 다시 쓰는 일은 없습니다.
 
-![개인 근거 검토와 사람의 Knowledge 발행 결정을 분리하는 완료 화면](features/images/03-completion-archive.png)
+![개인 근거 검토와 Knowledge 발행 결정을 분리하는 완료 화면](features/images/completion-knowledge.png)
 
 ## 6. Understand the work, never score the worker.
 

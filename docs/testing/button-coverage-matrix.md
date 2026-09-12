@@ -1,5 +1,7 @@
 # Button interaction evidence
 
+> **Scope note:** This matrix combines current Task controls with loaded legacy runtime bindings. Rows naming board, Problem, Solution, Explore, manual transition, or completed-workspace actions are technical compatibility evidence only unless the current Task interface renders that control.
+
 This audit follows action contracts rather than counting raw `<button>` strings.
 A card renderer can emit many copies of one action, while translated React
 actions can have several labels. Each row names the production render/event

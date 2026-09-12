@@ -1,5 +1,7 @@
 # Implementation Plan: Conflict Resolution Workflow
 
+> **Historical plan for schema 8+**: Preserve its conflict-decision evidence, but do not treat its Solution gate as current. Conflict review is nonblocking Task context; see [012](../012-task-centered-workbench/spec.md).
+
 **Branch**: `feat/conflict-resolution-workflow` | **Date**: 2026-09-02 | **Spec**: [spec.md](spec.md)
 
 **Input**: Feature specification from `specs/010-conflict-resolution-workflow/spec.md`

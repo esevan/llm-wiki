@@ -1,40 +1,15 @@
-# Conflict Resolution Workflow
+# Task conflict review
 
 **English** | [한국어](conflict-resolution-workflow.ko.md)
 
-The review dialog sizes to its content and scrolls on smaller screens. Decision notes sit above
-aligned text buttons, with a separate close control in the top corner. Korean and English use
-the same layout; conflict choices have larger clickable rows and a visible selected state.
+Conflict review is advisory, revision-bound evidence for a Task. Run a review from Task detail; the panel shows the latest result, citations, status, and earlier attempts. A Task can continue while the review is queued, running, failed, cancelled, or reports findings. The review never approves, blocks, completes, or publishes the Task.
 
-![An unresolved Solution remains visibly gated until conflict review and a human decision are complete](images/02-workbench-board.png)
+![Task conflict review with insufficient evidence, retry, and attempt history](images/task-review.png)
 
-Conflict Review is a decision workflow inside a proposed Solution, not a raw AI report. When Vault evidence disagrees with the current Solution, the completed Queue result opens one card per conflict.
+## Read and retry a review
 
-Each card puts the core comparison first:
+Each result identifies the Task revision and Vault context it examined. Changing relevant Task or Vault evidence makes a prior result stale, so run a fresh review before relying on it. A failed or cancelled attempt stays visible with its status and can be retried. Citations are evidence for the user's judgment; the AI cannot decide the outcome or invent a source.
 
-- severity and a short category;
-- the current Solution claim;
-- the existing document or decision and its competing claim;
-- expected impact and the recommended resolution; and
-- expandable source citation and excerpt.
+Current Task detail does not provide per-conflict accept/apply controls or a clear-conflict gate. Those controls belong only to retained legacy Queue/report records and do not define the current Task workflow.
 
-Severity is always written as High, Medium, or Low and also receives a distinct visual treatment, so color is not the only signal. Evidence stays collapsed until it is needed, and the dialog body scrolls while the review summary and final action remain available.
-
-## Resolve every conflict
-
-Every card requires exactly one human choice:
-
-- **Apply recommendation** records that the Solution needs revision. An optional comment can explain the intended change. The Solution remains conflicted until it is revised and a fresh current review supports continuation.
-- **Ignore conflict** intentionally preserves the Solution direction. A rationale is required so the exception can be understood and reused later. The durable internal action remains `accept_conflict` for compatibility with existing decisions.
-
-The footer reports total, resolved, and unresolved counts. **Continue** remains unavailable until every card has a valid action and every accepted conflict has rationale. If saving fails, the dialog stays open and keeps the entered decisions.
-
-When every conflict is intentionally accepted, LLM Wiki records the explicit human address and lets the existing clear conflict gate continue normally. AI can describe a conflict and recommend a response, but it cannot select a resolution, change workflow state, or invent a citation.
-
-## Durable history and compatibility
-
-LLM Wiki stores the structured conflict, its source evidence, the selected action, rationale, and resolution time in local SQLite. Reopening the review restores that `Conflict → Resolution → Rationale` history. This local review history remains private process and is not automatically published as Knowledge.
-
-Earlier findings-only Queue results remain readable through card fallbacks. Because those reports predate item-level persistence, LLM Wiki asks for a fresh review before saving resolutions from them. A conflict-free result keeps the concise existing clear/conflicted decision path and does not add empty cards.
-
-See the [feature specification](../../specs/010-conflict-resolution-workflow/spec.md), [data model](../../specs/010-conflict-resolution-workflow/data-model.md), and [API contract](../../specs/010-conflict-resolution-workflow/contracts/conflict-review-api.md).
+See [Task-centered Workbench](conflict-gated-workflow.md) and the historical [conflict-resolution record](../../specs/010-conflict-resolution-workflow/spec.md).

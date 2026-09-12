@@ -4,7 +4,7 @@
 
 > **Resume where you left off.** 검색은 이전 Knowledge를 현재 결정으로 다시 가져옵니다.
 
-![Vault 상대 경로와 일치한 노트 맥락을 보여주는 검색 결과](images/01-search-vault.png)
+![Vault 상대 경로와 일치한 노트 맥락을 보여주는 검색 결과](images/vault-search.png)
 
 Obsidian 호환 Markdown의 경로, frontmatter, 별칭, 제목, 중첩 태그, wikilink, 참조, embed, 본문을
 인덱싱합니다. 파일 변경은 로컬 SQLite FTS 인덱스에 반영되고 결과는 페이지 단위로 이어집니다.

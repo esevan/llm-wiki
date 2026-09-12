@@ -1,5 +1,6 @@
 import { IconButton } from '../../components/IconButton';
 import { McpConnections } from './McpConnections';
+import { useSyncExternalStore } from 'react';
 
 const advancedTasks = [
   ['capture_assistance', 'Capture discussion and refinement'],
@@ -18,13 +19,24 @@ const advancedTasks = [
 ] as const;
 
 export function SettingsView({ active }: { active: boolean }) {
+  const securityNote = useSyncExternalStore(
+    (changed) => {
+      const observer = new MutationObserver(changed);
+      observer.observe(document.documentElement, { attributes: true, attributeFilter: ['lang'] });
+      return () => observer.disconnect();
+    },
+    () => document.documentElement.lang.startsWith('ko')
+      ? 'API 키는 이 기기의 로컬 설정 파일에만 저장됩니다. Vault나 앱 데이터베이스에는 저장되지 않습니다.'
+      : 'Your API key is stored in this device’s local settings file, never in the vault or app database.',
+    () => 'Your API key is stored in this device’s local settings file, never in the vault or app database.',
+  );
   return (
     <section id="ai-setup" className={`view${active ? ' active' : ''}`}>
       <header className="top">
         <div><div className="eyebrow">Intelligence that organizes with you</div><h1>AI setup</h1></div>
       </header>
       <section className="result">
-        <p>Your API key is stored in this device’s local settings file, never in the vault or app database.</p>
+        <p>{securityNote}</p>
         <form className="modal" id="provider-form" data-control="provider-form">
           <fieldset className="settings-group">
             <legend data-i18n="ai_setup.connection_group">Connection</legend>

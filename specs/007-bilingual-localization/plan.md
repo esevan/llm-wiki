@@ -1,5 +1,7 @@
 # Implementation Plan: Korean-English Localization
 
+> **Historical plan for schema 8+**: Locale persistence and canonical Knowledge behavior remain relevant; former Problem/Solution workflow wording is superseded by [012](../012-task-centered-workbench/spec.md).
+
 **Branch**: `feat/bilingual-localization` | **Date**: 2026-08-21 | **Spec**: [spec.md](spec.md)
 
 **Input**: Feature specification from `specs/007-bilingual-localization/spec.md`

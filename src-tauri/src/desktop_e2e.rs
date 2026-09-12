@@ -1,7 +1,44 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::path::PathBuf;
+use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+#[tauri::command]
+pub(crate) async fn desktop_e2e_resize_window(
+    window: tauri::WebviewWindow,
+    width: f64,
+    height: f64,
+) -> Result<Value, String> {
+    if std::env::var_os("LLM_WIKI_E2E_RESULT").is_none() {
+        return Err("Desktop E2E mode is disabled".into());
+    }
+    if !(900.0..=1600.0).contains(&width) || !(640.0..=1200.0).contains(&height) {
+        return Err("Desktop E2E window size is outside the supported fixture bounds".into());
+    }
+    window
+        .set_size(tauri::LogicalSize::new(width, height))
+        .map_err(|error| error.to_string())?;
+    for _ in 0..120 {
+        tokio::time::sleep(Duration::from_millis(16)).await;
+        let scale = window.scale_factor().map_err(|error| error.to_string())?;
+        let size = window.inner_size().map_err(|error| error.to_string())?;
+        let window_width = size.width as f64 / scale;
+        let window_height = size.height as f64 / scale;
+        if (window_width - width).abs() <= 2.0 && (window_height - height).abs() <= 2.0 {
+            return Ok(
+                json!({"windowWidth":window_width,"windowHeight":window_height,"requestedWidth":width,"requestedHeight":height}),
+            );
+        }
+    }
+    let scale = window.scale_factor().map_err(|error| error.to_string())?;
+    let size = window.inner_size().map_err(|error| error.to_string())?;
+    Err(format!(
+        "Desktop E2E window did not reach requested inner size {width}×{height}; native window inner size was {}×{}",
+        size.width as f64 / scale,
+        size.height as f64 / scale
+    ))
+}
 
 #[tauri::command]
 pub(crate) async fn desktop_e2e_provider_requests(base_url: String) -> Result<Value, String> {
@@ -196,9 +233,15 @@ pub(crate) fn desktop_e2e_seed_queue_notifications(
     let queued = uuid::Uuid::new_v4().to_string();
     let running = uuid::Uuid::new_v4().to_string();
     let failed = uuid::Uuid::new_v4().to_string();
+    let missing_key = uuid::Uuid::new_v4().to_string();
     let completed = uuid::Uuid::new_v4().to_string();
     let notification_open = uuid::Uuid::new_v4().to_string();
     let notification_dismiss = uuid::Uuid::new_v4().to_string();
+    crate::native::vault::atomic_write(
+        &application.vault_path(),
+        "queue-recovery.md",
+        "---\nllm_wiki_managed: true\ncanonical_locale: en\n---\n# Queue recovery evidence\n\nA reusable local result.",
+    )?;
     let mut connection = crate::native::database::open(&application.db_path())?;
     let transaction = connection
         .transaction()
@@ -206,6 +249,10 @@ pub(crate) fn desktop_e2e_seed_queue_notifications(
     transaction.execute(
         "INSERT INTO captures(id,text,created_at) VALUES('fixture-capture','Queue conflict-review source',CURRENT_TIMESTAMP)",
         [],
+    ).map_err(|error| error.to_string())?;
+    transaction.execute(
+        "INSERT INTO ai_jobs_v2(id,task_kind,entity_type,entity_id,status,input_json,idempotency_key,error_code,error_message,finished_at,created_at) VALUES(?,'knowledge_translation','knowledge','queue-recovery.md','failed',?,?,'provider_error','Configure an API key in AI setup before using AI',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)",
+        rusqlite::params![missing_key, json!({"path":"queue-recovery.md","locale":"ko"}).to_string(), format!("desktop-e2e-{missing_key}")],
     ).map_err(|error| error.to_string())?;
     transaction.execute(
         "INSERT INTO problems(id,capture_id,statement,detail,state,created_at,current_revision) VALUES('fixture-problem','fixture-capture','Queue conflict-review Problem','Fixture for persisted review decisions','open',CURRENT_TIMESTAMP,1)",
@@ -255,7 +302,7 @@ pub(crate) fn desktop_e2e_seed_queue_notifications(
     }
     transaction.commit().map_err(|error| error.to_string())?;
     Ok(
-        json!({"queued":queued,"running":running,"failed":failed,"completed":completed,"notificationOpen":notification_open,"notificationDismiss":notification_dismiss}),
+        json!({"queued":queued,"running":running,"failed":failed,"missingKey":missing_key,"completed":completed,"notificationOpen":notification_open,"notificationDismiss":notification_dismiss}),
     )
 }
 

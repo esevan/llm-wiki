@@ -195,7 +195,7 @@ const coverageFailures = !requireCompleteCoverage ? [] : !coverage ? ["no scenar
 ].filter(Boolean);
 if (outcomes.every((outcome) => outcome.status === "passed") && coverageFailures.length === 0) {
   console.log("desktop E2E passed");
-  console.log(requireCompleteCoverage ? "- mode: full acceptance (complete 169-control coverage enforced)" : "- mode: focused subset (full coverage not evaluated)");
+  console.log(requireCompleteCoverage ? `- mode: full acceptance (complete ${coverage.inventoryCount}-control coverage enforced)` : "- mode: focused subset (full coverage not evaluated)");
   console.log(`- results: ${path.join(artifactRoot, "results.json")}`);
   if (coverage) console.log(`- coverage: ${path.join(artifactRoot, "interactive-coverage.json")}`);
   for (const outcome of outcomes) console.log(`- ${outcome.name}: ${outcome.status}`);

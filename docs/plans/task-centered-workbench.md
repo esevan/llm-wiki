@@ -1,12 +1,10 @@
 # Task 중심 Workbench 전환 계획
 
-상태: 구현 전 계획
+상태: 역사적 전환 계획 — Task 기준선 구현 완료 (`de01ff4`)
 작성일: 2026-09-05
 범위: 데이터 모델, 네이티브 API와 MCP, Workbench/Refinement/Conflict/Completion/Knowledge UX, 마이그레이션, 자동화 검증
 
 이 문서는 현재 `Capture → Problem → Solution` 흐름을 `Capture → Task → in_progress → completed` 흐름으로 전환하는 구현 계획이다. Capture는 아직 실행 단위로 정하지 않은 생각을 보존하는 1급 canonical 항목이고, Task는 실행과 재개의 중심이 되는 독립 레코드다. 명확한 Task 입력의 초기 상태 값은 `task`, 시작하면 `in_progress`, 끝내면 `completed`다. Refinement, Problem 연결, Conflict Review, Readiness는 Capture 또는 Task를 더 잘 이해하기 위한 보조 기능이며 Task 생성이나 시작을 막는 승인 게이트가 아니다.
-
-이 변경은 LLM Wiki Problem `7e1bd5c7-7801-42d3-a143-11d0ee18ef71`(Capture에 이미 도출된 Solution을 다시 탐색하는 중복)과 `dc1c8b22-367e-4662-a9db-305e6fac1f85`(단일 사용자 환경의 기계적인 Problem 승인), 기존 Solution `39575c74-9a31-4325-97de-d8e3da61fcb2`를 근거로 한다. 통합 추적 레코드를 새로 열려는 호출은 현재 호스트가 처리할 수 없는 `elicitation_required`를 반환했으므로 새 레코드는 저장되지 않았다. 구현에서는 기존 ID를 provenance로 유지하며, Solution이 이미 적힌 Capture를 refinement할 때 해당 내용을 Task 초안의 시작점으로 보존하고 실제로 빠진 실행 정보만 묻는다.
 
 이 계획은 의도적으로 기존 모델과 API의 호환 shim을 만들지 않는다. 다만 기존 사용자 기록, 특히 Solution Work Log의 텍스트·이미지·댓글·체크리스트와 결정·완료·Lineage 근거는 일회성 마이그레이션과 사전 백업으로 보존한다. 구현 작업은 별도 worktree에서 수행하며, 이 계획 문서 자체는 코드 변경이 아니므로 현재 checkout에 작성한다.
 

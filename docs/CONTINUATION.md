@@ -34,22 +34,24 @@ The Python/FastAPI browser delivery remains retired in Git history at `caef236`.
 
 ## Task-centered verification record
 
-- React/adapter/runtime: 29 Vitest files and 117 tests, plus desktop helpers, provider fake, signing,
-  runtime, native-only, and application-boundary checks passed.
-- Rust: all ordinary unit, command, stdio MCP, review, concurrency, search, parity, acceptance, and
-  projector tests pass. Release application-boundary acceptance is 9/9 and includes 10,000
-  reordered events and projection latency budgets.
-- macOS: the rebuilt signed release artifact (`CDHash 3be85b685e04f76596c914fafa4bf9639081958d`)
-  passed all 32 Task-centered packaged scenarios, including independent completion and explicit
-  exact/stale Problem resolution, plus English/Korean wide/narrow review. Real-provider corpus QA
-  remains blocked because provider readiness is false; the plugin attempt required elicitation and
-  saved no live record.
+**UI/UX follow-up final package:** the signed `9b2b81082a43de0637bedd33a8cc670709ff2b21` bundle passed 32/32 scenarios. The generated inventory recorded 188 scanned source controls and 175 rendered/exercised/asserted controls; all six coverage-gap arrays were empty. Manual Korean IME, VoiceOver, OS reduced motion, Windows, zoom, and native quit/crash draft durability remain unverified or out of scope.
+
+Nine final native 1198×768 Korean-light captures from isolated `Dlnhjg` state were visually reviewed, including the Workbench, Task detail, Refinement, Task review, completion/Knowledge, Queue recovery, Vault search, Compass, and AI setup. Task Escape returned focus to its original trigger. This does not verify real Korean IME, VoiceOver, or OS reduced motion.
+
+- React/adapter/runtime: 34 Vitest files and 176 tests passed, with six desktop-helper, two fake-provider,
+  and four signing/runtime/native-only/application-boundary checks. Typecheck and scoped changed-code
+  ESLint pass. Full lint retains 23 pre-existing `no-explicit-any` findings in untouched completed- and remaining-runtime tests.
+- Rust: `cargo test --manifest-path src-tauri/Cargo.toml` passed 106 tests.
+- macOS: the signed release bundle built 2026-09-12 11:44:31 AM by `LLM Wiki Local Signing` has CDHash
+  `9b2b81082a43de0637bedd33a8cc670709ff2b21`. It was built from dirty `fix/ui-ux-improvements` worktree
+  state based on `de01ff47398871902a765d43b5a4060161316f92`; its full packaged E2E passed 32/32.
+  Manual visual/accessibility claims remain limited as stated above.
 - Windows/Linux/macOS lint, typecheck, Rust tests, and unbundled Tauri builds remain configured in
   CI. Windows MSI/NSIS packaging is automated by `scripts/package_windows.ps1`; installed Windows
   named-pipe and Unicode-path acceptance remains an external gate on this macOS host.
 - Exact Task-centered evidence is retained in
   [acceptance-verification.md](../specs/012-task-centered-workbench/acceptance-verification.md).
-- Interactive coverage recorded 169 rendered/exercised/asserted controls across 177 source controls; all evidence-gap counters were zero. OS reduced-motion review, real-provider quality/latency, and Windows/Linux installed testing remain unverified.
+- Current interactive coverage recorded 175 rendered/exercised/asserted controls across 188 scanned source controls; all six evidence-gap arrays were empty. OS reduced-motion review, real-provider quality/latency, and Windows/Linux installed testing remain unverified.
 
 ## MCP Workbench Bridge convergence
 

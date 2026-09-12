@@ -17,21 +17,21 @@ Capture remains deliberately small. The Workbench keeps current Tasks visible an
 work a dedicated highlight. Detail, validation, and completion controls
 appear only when the current decision needs them.
 
-![The Workbench keeps Capture light and gives current Solutions visual priority](features/images/02-workbench.png)
+![The Workbench keeps Capture light and makes current Tasks easy to resume](features/images/workbench-tasks.png)
 
 ## 3. Resume where you left off.
 
-Solution Work Log accepts text, screenshots, comments, and validation checks. Refinement Preview
-keeps prior decisions, evidence, constraints, and trade-offs visible. Conflict review compares the
-current Solution with searchable Knowledge, so the user does not reconstruct context manually.
-The global Korean/English setting changes the language without discarding the active view, unsaved
-input, or workflow lineage. Newly approved, AI-generated Problems and Solutions keep both stored
-versions. Explicit AI Image Summaries also store both languages in their existing request, while
-the Work Log's authored evidence and legacy content remain readable in their original form.
+Task Work Log accepts text, screenshots, comments, and validation checks. Refinement keeps prior
+decisions, evidence, constraints, and trade-offs visible. Conflict review compares the current Task
+with searchable Knowledge, so the user does not reconstruct context manually.
+The global Korean/English setting changes system language without discarding the active view or
+workflow lineage. Generated text is requested in the active language; authored Work Log evidence
+and legacy content remain readable in their original form. Managed Knowledge has a separate,
+explicit Korean reading flow and does not change its English canonical Markdown.
 
-![A Solution Work Log preserves the latest visual state and validation context](features/images/06-work-log.png)
+![A Task detail preserves the latest Work Log and validation context](features/images/task-detail.png)
 
-![Refinement Preview keeps prior context beside the active conversation](features/images/05-refinement-preview.png)
+![Refinement keeps prior context beside the active conversation](features/images/refinement.png)
 
 ## 4. Organize around chosen work.
 
@@ -50,7 +50,7 @@ App-managed Knowledge uses English Markdown as its canonical portable source. A 
 version is derived on request and can be reused only for the exact current source; it never replaces
 or rewrites the canonical file.
 
-![Completion review separates private evidence assessment from the human publication decision](features/images/03-completion-archive.png)
+![Completion and Knowledge publication remain separate decisions](features/images/completion-knowledge.png)
 
 ## 6. Understand the work, never score the worker.
 

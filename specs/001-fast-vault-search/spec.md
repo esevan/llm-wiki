@@ -3,7 +3,7 @@
 **Feature Branch**: `001-fast-vault-search`
 **Created**: 2026-08-18
 **Last Reconciled**: 2026-09-02
-**Status**: Current behavior reconciled — confirmed search and font changes pending
+**Status**: Historical delivery record. Search remains current, but this specification is not the authoritative Workbench workflow.
 
 ## User Scenarios & Testing
 

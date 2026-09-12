@@ -40,7 +40,7 @@ FastAPI server, 내부 TCP listener, Python process, sidecar, HTTP application a
 | 경계 | 위치 | 책임 |
 | --- | --- | --- |
 | Tauri 진입점 | `src-tauri/src/lib.rs` | 도메인 allowlist 검증과 command 위임 |
-| Workflow | `src-tauri/src/native/workflow.rs` | Capture, Problem, Solution, 전이, 근거, Compass |
+| Workflow | `src-tauri/src/native/workflow.rs` | Capture, Task, 선택적인 Problem 맥락, 완료, Knowledge, 근거, Compass |
 | Job | `src-tauri/src/native/jobs.rs` | 지속 lifecycle, retry, timeout, cancellation |
 | 결과 handler | `src-tauri/src/native/job_results.rs` | 작업별 결과 검증과 저장 |
 | Completion/Lineage | `completion.rs`, `lineage.rs` | 완료 기록과 감사 가능한 lineage |

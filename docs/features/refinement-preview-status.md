@@ -29,6 +29,10 @@ resulting proposals; a delayed proposal read must not silently discard the resul
   overwrite a different open item; reopening the original item can recover the saved result.
 - Returning after a successful save, including an app restart, restores the saved refinement workspace.
 
+## Keyboard behavior
+
+Refinement and Task detail are nonmodal panels: opening one moves focus to its heading or compose control without trapping Tab navigation. `Escape` closes the panel and restores focus to its trigger when it remains available. `Cmd+Enter` and `Ctrl+Enter` send only outside an active IME composition. Automated checks cover the synthetic composition and focus contract; real Korean IME and VoiceOver verification remain manual work.
+
 ## Continue a migrated Problem
 
 Problem-only records from the previous workflow remain discoverable through **Refine**. Their

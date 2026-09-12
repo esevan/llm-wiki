@@ -1,26 +1,35 @@
 # Shipping interactive coverage inventory
 
+> **Current UI/UX release:** The generated 32-scenario packaged suite passed 32/32. Its final
+> artifact inventory records 188 scanned source controls and 175 rendered/exercised/asserted controls,
+> with all six gap arrays empty. This document's detailed
+> ledger below is the **historical 2026-09-08 audit baseline**, including its source scans, family
+> counts, package journeys, and coverage gaps; it is not current UI/UX release evidence.
+
+Current signed-package results and capture hashes: [portable evidence](evidence/ui-ux-improvements.json).
+
 **Inventory date:** 2026-09-12
 **Scope:** shipping React shell, Task Workbench, legacy runtime loaded by `frontend/index.html`, and conditional overlays
 **Evidence rule:** a control is marked packaged only when the signed application was driven through that control and its observable result was asserted. A component test, delegated DOM click, native route test, visual capture, or API-only mutation is not packaged interaction evidence.
 
 ## Artifact and runtime boundary
 
-Final verification used CDHash `3be85b685e04f76596c914fafa4bf9639081958d`; the 32-case packaged run passed with exit 0. Earlier values are historical baseline evidence.
-
-The current recorded release artifact is `src-tauri/target/release/bundle/macos/LLM Wiki.app`, code-directory hash `1988d962cfc113ca58786875eb7553c0cad5630b` (full recorded identity `1988d962cfc113ca58786875eb7553c0cad5630bcf1dc3ac5fd955d0f2fff6c3`). Its nine recorded packaged scenarios are `task-capture`, `task-worklog`, `task-refinement`, `task-relationships`, `task-review`, `task-publication`, `task-problem-resolution`, `task-persistence`, and `task-localization` in `.tmp/desktop-e2e-artifacts-cJf2wU/results.json`.
+The artifact identities and counts below belong to the historical Task-centered audit baseline. They
+are retained for provenance only and must not be used for the current verified UI/UX release.
 
 The application observed running from `/Applications/LLM Wiki.app` is a different installation: its executable is signed 2026-09-05 22:10:05, while the worktree bundle is signed 2026-09-08 20:38:34. An observation in the installed application therefore cannot confirm or refute the final Task artifact without first launching the recorded artifact identity. A separate isolated run of that installed executable completed its legacy packaged scenario in 12.5 seconds and recorded that Problem approval and refinement responded to their rendered clicks in `.tmp/desktop-e2e-artifacts-E0hxMm/results.json`. The reported inert click is therefore not reproduced by the deterministic happy path; the installation mismatch proves different UI versions, but does not establish the cause of the report.
 
-`frontend/index.html` loads React and all eleven legacy runtime files: `foundation.js`, `jobs.js`, `workbench.js`, `conflicts.js`, `explore.js`, `work-tracking.js`, `manual.js`, `search-settings.js`, `solution-work.js`, `archive.js`, `transitions.js`, and `completed-workspace.js`. The Task React Workbench owns `#workbench`; legacy `loadBoard()` detects the absence of `#board` and dispatches `llm-wiki:task-workbench-refresh`. Legacy Search, Compass, Settings, chat, queue, notifications, detail readers, and modal markup still execute and ship. They remain in this inventory even when their old board-only trigger is unreachable from the Task Workbench.
+`frontend/index.html` loads React and all twelve bounded runtime files: `foundation.js`, `jobs.js`, `workbench.js`, `conflicts.js`, `explore.js`, `work-tracking.js`, `manual.js`, `search-settings.js`, `solution-work.js`, `archive.js`, `transitions.js`, and `completed-workspace.js`. The Task React Workbench owns `#workbench`; legacy `loadBoard()` detects the absence of `#board` and dispatches `llm-wiki:task-workbench-refresh`. Legacy Search, Compass, Settings, chat, queue, notifications, detail readers, and modal markup still execute and ship. They remain in this inventory even when their old board-only trigger is unreachable from the Task Workbench.
 
-## Refine Problem trace
+## Historical 2026-09-08 audit ledger
+
+### Refine Problem trace
 
 The exact literal **Refine Problem** does not occur in the current React or legacy source. The current React Workbench has `Refine` only for canonical Capture and Task cards (`WorkbenchView.tsx`) and `RefinementPanel` accepts only `kind: "capture" | "task"`; Problem records are managed inside Task detail and are not React Workbench cards.
 
 The legacy Problem card is still present in loaded source. In `frontend/public/runtime/workbench.js`, an unapproved Problem renders `Approve Problem`; an approved Problem renders `Explore next solution` through `draftButton(... data-next-chat-type="problems" ...)`. `frontend/public/runtime/conflicts.js` delegates that selector to `openNextChat("problems", id)`, and `frontend/public/runtime/explore.js` opens the modal, sets `chatTarget={type:"problems",mode:"next"}`, loads `/problems/{id}/refinement-context`, and after a successful chat queues `/problems/{id}/draft`. Thus the checked-in legacy action has a handler and an observable modal/job path.
 
-The reproducible root cause of the reported mismatch is artifact identity: the click was observed in the older `/Applications` installation, while the final Task artifact has a different signature and UI ownership. The evidence does **not** yet prove why the older build's click looked inert; diagnosing that would require driving that old artifact or reproducing against an isolated copy. For the final artifact, the comparable gap is different: there is no first-class Problem refinement control in the React Task Workbench. A product decision and minimum behavior fix may be needed if Problem refinement is still required in the Task UI; this inventory does not make that code change.
+A confirmed version difference accompanied the reported mismatch: the click was observed in the older `/Applications` installation, while the Task audit artifact had a different signature and UI ownership. The evidence does **not** yet prove why the older build's click looked inert; diagnosing that would require driving that old artifact or reproducing against an isolated copy. For the final artifact, the comparable gap is different: there is no first-class Problem refinement control in the React Task Workbench. This historical concern did not establish a requirement for first-class Problem refinement; the current Task-centered design keeps Problem context optional. This ledger does not identify a current defect from that absence.
 
 ## Control-family ledger
 

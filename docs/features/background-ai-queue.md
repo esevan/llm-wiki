@@ -14,7 +14,7 @@ results; use **Run fresh review** to request new evidence analysis.
 LLM Wiki separates AI execution into two process-level paths so interaction stays responsive
 without losing recoverable work.
 
-![Background Queue shows durable work by readable purpose, target, status, and result destination](images/08-background-queue.png)
+![Background Queue shows durable work by readable purpose, target, status, and recovery action](images/queue-recovery.png)
 
 - The **Fast Queue** has exactly one FIFO worker. Chat and other immediate interactions use it as
   a global request throttle. It has no database state, Queue UI entry, retry history, or
@@ -22,7 +22,6 @@ without losing recoverable work.
 - The **Asynchronous Queue** stores durable AI, translation, and embedding Jobs in SQLite. Its
   worker count is configurable in AI Setup and workers claim jobs with leases and heartbeats.
 
-![Starting conflict review acknowledges that the durable job continues in the background](images/09-background-job-queued.png)
 
 The bottom-right Queue names the target item and explains what each durable task is doing. Its cards
 show readable status, step progress, system-timezone time, safe failures, cancellation, retry, and only the result
@@ -34,7 +33,7 @@ Summary attaches to the exact
 Work Log entry without changing scroll position. Completion Review also creates a temporary toast
 and a persisted unread bell alert because it requires a user decision.
 
-The **Summarize image** button works in both Solution details and the Explore Work tab.
+Image-summary behavior on retained Solution and Explore surfaces is legacy compatibility. The current Task guide does not promise an image-summary control unless it is visible for that Task.
 It stays disabled while the queued summary is running, then refreshes the originating
 view when the summary completes. If the request fails, a notice explains the error and
 the button becomes available again. Moving to another item prevents a late result from
@@ -55,7 +54,7 @@ semantic runtime is absent, embedding work completes with lexical fallback and z
 coverage. AI output remains a proposal or derived representation: workflow
 state, approval, completion, and Knowledge decisions remain under user control.
 
-![AI Settings keeps endpoint and model routing visible while the API key value remains masked](images/07-ai-settings.png)
+![AI Settings keeps endpoint and model routing visible while the API key value remains masked](images/ai-settings.png)
 
 See [feature specification](../../specs/009-background-ai-queue/spec.md) and
 [worker contract](../../specs/009-background-ai-queue/contracts/worker-contract.md). The

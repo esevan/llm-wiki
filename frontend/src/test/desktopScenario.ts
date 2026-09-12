@@ -157,7 +157,10 @@ async function workbench() {
 }
 async function taskDetailIdle(label: string) {
   await waitFor(
-    () => document.querySelector(".task-detail")?.getAttribute("aria-busy") !== "true",
+    () => {
+      const detail = document.querySelector(".task-detail");
+      return detail !== null && detail.hasAttribute("data-task-state") && detail.getAttribute("aria-busy") === "false";
+    },
     `idle Task detail before ${label}`,
   );
 }
@@ -888,19 +891,80 @@ async function restoredRefinement(token: string, steps: string[]) {
 async function localization(step: Step) {
   const locale = document.querySelector<HTMLSelectElement>("#locale-select");
   if (!locale) throw new Error("Missing locale selector");
+  const longTitle = `A long localized Workbench title that must preserve the shortcut action at every supported desktop size https://example.test/${"a".repeat(120)}-${Date.now()}`;
+  await create(longTitle, "task");
+  const created = [...document.querySelectorAll<HTMLElement>(".canonical-card")].find((card) => card.textContent?.includes(longTitle));
+  const open = created?.querySelector<HTMLElement>('[data-control="task-card-open"]');
+  if (!open) throw new Error("Missing long-title Task card");
+  clickElement(open, "Open long-title Task");
+  await taskDetailIdle("starting long-title Task");
+  click('[data-control="task-transition-start"]', "Start long-title Task");
+  await waitFor(() => document.querySelector(".task-detail")?.getAttribute("data-task-state") === "in_progress", "started long-title Task");
+  const titleInput = document.querySelector<HTMLInputElement>('[data-control="task-revision-title"]');
+  const detail = document.querySelector<HTMLElement>(".task-detail");
+  if (!titleInput || !detail || titleInput.getBoundingClientRect().width < detail.getBoundingClientRect().width * 0.7)
+    throw new Error("Task title input did not use the available detail width");
+  const detailRect = detail.getBoundingClientRect();
+  const detailHeading = detail.querySelector<HTMLElement>("h2")?.getBoundingClientRect();
+  const detailClose = detail.querySelector<HTMLElement>('[data-control="task-detail-close"]')?.getBoundingClientRect();
+  if (!detailHeading || !detailClose || detailHeading.left < detailRect.left || detailHeading.right > detailRect.right || detailClose.left < detailRect.left || detailClose.right > detailRect.right || document.documentElement.scrollWidth > document.documentElement.clientWidth + 1)
+    throw new Error("Long unbroken Task title overflowed the detail heading or displaced its close control");
+  click('[data-control="task-detail-close"]', "Close long-title Task detail");
+  await waitFor(() => !document.querySelector(".task-detail"), "closed long-title Task detail");
+  const assertGeometry = async (width: number, height: number) => {
+    const nativeSize = await invoke<{ windowWidth: number; windowHeight: number; requestedWidth: number; requestedHeight: number }>("desktop_e2e_resize_window", { width, height });
+    let measured = { innerWidth: window.innerWidth, innerHeight: window.innerHeight, outerWidth: window.outerWidth, outerHeight: window.outerHeight, clientWidth: document.documentElement.clientWidth, clientHeight: document.documentElement.clientHeight };
+    let previous = "";
+    let stableReads = 0;
+    for (let attempt = 0; attempt < 200; attempt += 1) {
+      measured = { innerWidth: window.innerWidth, innerHeight: window.innerHeight, outerWidth: window.outerWidth, outerHeight: window.outerHeight, clientWidth: document.documentElement.clientWidth, clientHeight: document.documentElement.clientHeight };
+      const fingerprint = Object.values(measured).join("×");
+      stableReads = fingerprint === previous ? stableReads + 1 : 0;
+      previous = fingerprint;
+      if (Math.abs(measured.innerWidth - nativeSize.windowWidth) <= 2 && Math.abs(measured.clientWidth - measured.innerWidth) <= 2 && Math.abs(measured.clientHeight - measured.innerHeight) <= 2 && measured.innerHeight > 0 && measured.innerHeight <= nativeSize.windowHeight + 2 && stableReads >= 1) break;
+      await pause(50);
+    }
+    if (Math.abs(measured.innerWidth - nativeSize.windowWidth) > 2 || Math.abs(measured.clientWidth - measured.innerWidth) > 2 || Math.abs(measured.clientHeight - measured.innerHeight) > 2 || measured.innerHeight <= 0 || measured.innerHeight > nativeSize.windowHeight + 2 || stableReads < 1)
+      throw new Error(`Browser metrics did not settle after native window resize: requested native window ${nativeSize.requestedWidth}×${nativeSize.requestedHeight}, native window ${nativeSize.windowWidth}×${nativeSize.windowHeight}, WebKit inner ${measured.innerWidth}×${measured.innerHeight}, outer ${measured.outerWidth}×${measured.outerHeight}, document client ${measured.clientWidth}×${measured.clientHeight}`);
+    const shortcut = [...document.querySelectorAll<HTMLElement>(".shortcut-card")].find((card) => card.textContent?.includes(longTitle));
+    const canonical = [...document.querySelectorAll<HTMLElement>(".canonical-card")].find((card) => card.textContent?.includes(longTitle));
+    const action = shortcut?.querySelector<HTMLElement>("span");
+    const allWork = [...document.querySelectorAll<HTMLElement>(".canonical-work h2")].find((heading) => heading.textContent === (document.documentElement.lang === "ko" ? "모든 작업" : "All work"));
+    if (!shortcut || !canonical || !action || !allWork) throw new Error(`Missing long-title shortcut geometry at ${width}×${height}`);
+    const cardRect = shortcut.getBoundingClientRect(), actionRect = action.getBoundingClientRect(), headingRect = allWork.getBoundingClientRect();
+    const titleRect = shortcut.querySelector<HTMLElement>("strong")?.getBoundingClientRect();
+    const canonicalRect = canonical.getBoundingClientRect(), canonicalTitle = canonical.querySelector<HTMLElement>("h3")?.getBoundingClientRect();
+    const viewportWidth = document.documentElement.clientWidth;
+    const rectangle = (name: string, rect: DOMRect | undefined) => rect ? `${name}=${Math.round(rect.left)},${Math.round(rect.top)},${Math.round(rect.width)}×${Math.round(rect.height)}` : `${name}=missing`;
+    const computed = (name: string, element: Element | null, fields: string[]) => {
+      if (!element) return `${name}=missing`;
+      const style = getComputedStyle(element);
+      return `${name}=${fields.map((field) => `${field}:${style.getPropertyValue(field)}`).join(",")}`;
+    };
+    const layout = (name: string, element: HTMLElement | null) => element ? `${name}=client:${element.clientWidth}×${element.clientHeight},scroll:${element.scrollWidth}×${element.scrollHeight}` : `${name}=missing`;
+    if (!titleRect || !canonicalTitle || cardRect.width < 1 || actionRect.width < 1 || titleRect.left < cardRect.left || titleRect.right > cardRect.right || actionRect.left < cardRect.left || actionRect.right > cardRect.right || actionRect.bottom > cardRect.bottom + 1 || actionRect.bottom > headingRect.top || canonicalTitle.left < canonicalRect.left || canonicalTitle.right > canonicalRect.right || document.documentElement.scrollWidth > viewportWidth + 1)
+      throw new Error(`Shortcut geometry failed at requested native window ${width}×${height}: ${rectangle("shortcut", cardRect)}, ${rectangle("shortcut title", titleRect)}, ${rectangle("shortcut action", actionRect)}, ${rectangle("All work", headingRect)}, ${rectangle("canonical", canonicalRect)}, ${rectangle("canonical title", canonicalTitle)}, scroll=${document.documentElement.scrollWidth}×${document.documentElement.clientWidth}, WebKit=${measured.innerWidth}×${measured.innerHeight}; ${layout("shortcut", shortcut)}, ${layout("title", shortcut.querySelector("strong"))}, ${layout("action", action)}, ${computed("shortcut style", shortcut, ["display", "height", "min-height", "max-height", "flex-shrink", "flex-basis", "align-self", "overflow", "box-sizing"])}, ${computed("title style", shortcut.querySelector("strong"), ["display", "height", "min-height", "flex-shrink", "flex-basis", "margin-block-start", "margin-block-end"])}, ${computed("action style", action, ["display", "height", "min-height", "flex-shrink", "flex-basis", "margin-top"])}, ${computed("grid style", shortcut.parentElement, ["display", "grid-template-rows", "grid-auto-rows", "align-items", "align-content"])}`);
+    return { nativeSize, measured };
+  };
+  const englishCompact = await assertGeometry(900, 640);
+  await step(`Geometry requested native window ${englishCompact.nativeSize.windowWidth}×${englishCompact.nativeSize.windowHeight}; WebKit viewport ${englishCompact.measured.innerWidth}×${englishCompact.measured.innerHeight}, browser outer ${englishCompact.measured.outerWidth}×${englishCompact.measured.outerHeight}.`);
   locale.value = "ko";
   locale.dispatchEvent(new Event("change", { bubbles: true }));
   await waitFor(() => document.documentElement.lang === "ko", "Korean");
-  const view = document.getElementById("workbench")!;
-  view.style.width = "340px";
-  if (view.getBoundingClientRect().width < 1)
-    throw new Error("Narrow Workbench failed to render");
+  const koreanCompact = await assertGeometry(904, 768);
+  await step(`Geometry requested native window ${koreanCompact.nativeSize.windowWidth}×${koreanCompact.nativeSize.windowHeight}; WebKit viewport ${koreanCompact.measured.innerWidth}×${koreanCompact.measured.innerHeight}, browser outer ${koreanCompact.measured.outerWidth}×${koreanCompact.measured.outerHeight}.`);
+  const settings = document.querySelector<HTMLElement>('[data-view="ai-setup"]');
+  if (!settings) throw new Error("Missing AI setup navigation");
+  clickElement(settings, "Open Korean AI setup");
+  await waitFor(() => document.body.textContent?.includes("API 키는 이 기기의 로컬 설정 파일에만 저장됩니다. Vault나 앱 데이터베이스에는 저장되지 않습니다.") === true, "Korean privacy copy");
   locale.value = "en";
   locale.dispatchEvent(new Event("change", { bubbles: true }));
   await waitFor(() => document.documentElement.lang === "en", "English");
-  view.style.width = "";
+  click('[data-view="workbench"]', "Return to Workbench");
+  const englishWide = await assertGeometry(1280, 820);
+  await step(`Geometry requested native window ${englishWide.nativeSize.windowWidth}×${englishWide.nativeSize.windowHeight}; WebKit viewport ${englishWide.measured.innerWidth}×${englishWide.measured.innerHeight}, browser outer ${englishWide.measured.outerWidth}×${englishWide.measured.outerHeight}.`);
   await step(
-    "English/Korean locale and narrow rendered Workbench controls were exercised.",
+    "Korean and English long-title Workbench shortcuts kept their action inside the card and above All work at the recorded native-window and WebKit viewport sizes; the Task title editor used the panel width and Korean AI privacy copy was exact.",
   );
 }
 
@@ -1014,7 +1078,7 @@ export function installDesktopScenario() {
         },
         "global-queue-notifications": () =>
           runQueueNotificationActionsScenario(scenarioHarness, () =>
-            invoke("desktop_e2e_seed_queue_notifications"),
+            invoke("desktop_e2e_seed_queue_notifications"), e2eProviderUrl,
           ),
         "global-notice": () => runNoticeScenario(scenarioHarness),
         "global-intro-navigation": () => runFirstRunIntroNavigationScenario(scenarioHarness),

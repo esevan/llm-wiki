@@ -3,6 +3,15 @@ import { describe, expect, it, vi } from 'vitest';
 import { SettingsView } from './SettingsView';
 
 describe('Chat connection scopes',()=>{
+  it('uses the selected locale for the API key privacy note', async () => {
+    const request = vi.fn().mockResolvedValue({ok:true,status:200,text:async()=>'',json:async()=>({connections:[]})});
+    window.llmWikiApplication = { request };
+    document.documentElement.lang = 'ko';
+    render(<SettingsView active/>);
+    expect(await screen.findByText('API 키는 이 기기의 로컬 설정 파일에만 저장됩니다. Vault나 앱 데이터베이스에는 저장되지 않습니다.')).toBeInTheDocument();
+    document.documentElement.lang = 'en';
+  });
+
   it('keeps whole-Workbench, topic, and publication grants explicit',async()=>{
     const request=vi.fn().mockResolvedValue({ok:true,status:200,text:async()=>'',json:async()=>({connections:[]})});
     window.llmWikiApplication={request};

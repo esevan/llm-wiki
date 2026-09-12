@@ -248,6 +248,35 @@ describe("Refinement panel", () => {
     expect(request.mock.calls.filter(([input]) => input.path.endsWith("/messages"))).toHaveLength(2);
   });
 
+  it("does not send control Enter while a Korean IME composition is active", async () => {
+    const request = vi.fn().mockImplementation(({ path }: { path: string }) =>
+      Promise.resolve({ ok: true, status: 200, json: async () => path.endsWith('/refinement') ? { id: 'ime', messages: [] } : [], text: async () => '', body: null }),
+    );
+    window.llmWikiApplication = { request };
+    render(<RefinementPanel kind="task" subjectId="ime-task" onClose={vi.fn()} />);
+    const message = await screen.findByLabelText('Refinement message');
+    fireEvent.change(message, { target: { value: '조합 중' } });
+    fireEvent.keyDown(message, { key: 'Enter', ctrlKey: true, isComposing: true });
+    expect(request.mock.calls.some(([input]) => input.path.endsWith('/messages'))).toBe(false);
+  });
+
+  it("moves focus to the non-modal heading and restores the opener on Escape after saving", async () => {
+    const onClose = vi.fn();
+    const request = vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({ id: 'focus', messages: [] }), text: async () => '', body: null });
+    window.llmWikiApplication = { request };
+    const opener = document.createElement('button');
+    opener.textContent = 'Open refinement';
+    document.body.append(opener);
+    opener.focus();
+    render(<RefinementPanel kind="task" subjectId="focus-task" onClose={onClose} />);
+    const heading = await screen.findByRole('heading', { name: 'Refining' });
+    expect(document.activeElement).toBe(heading);
+    fireEvent.keyDown(document, { key: 'Escape' });
+    await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
+    await waitFor(() => expect(document.activeElement).toBe(opener));
+    opener.remove();
+  });
+
   it("ignores a late response from a closed subject after switching to another refinement", async () => {
     let resolveFirst!: (value: unknown) => void;
     const first = new Promise<unknown>((resolve) => { resolveFirst = resolve; });

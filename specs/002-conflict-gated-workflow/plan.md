@@ -1,5 +1,7 @@
 # Implementation Plan: Conflict-Gated Workflow
 
+> **Historical plan for schema 8+**: Its retired Problem → Solution gate does not define current work. Use [012](../012-task-centered-workbench/spec.md) for Capture-or-Task entry and optional Problem context.
+
 **Status**: Implemented; this is the as-built design summary.
 
 ## Current design

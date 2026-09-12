@@ -224,6 +224,11 @@ and exercise external-change protection and graph navigation.
 - [x] T087 Add manifest completeness validation that fails when a shipping button, form, input, select, disclosure, dialog action, delegated `data-*` action, or keyboard handler lacks an F01–F68 scenario/effect mapping in `frontend/src/test/interactionCoverage.test.ts` and `frontend/src/test/productionInteractiveSources.test.ts`
 - [ ] T088 Build once, record the executable path/code hash/signing time, run the complete interaction manifest plus wide/narrow English/Korean reduced-motion review against that exact artifact, and record per-family pass/fail/block evidence in `specs/012-task-centered-workbench/acceptance-verification.md`
 
+- [x] T089 Implement six-field Task draft merge, expected-revision conflict comparison, and guarded detail close/Task switch in `frontend/src/features/workbench/TaskDetail.tsx` with focused tests.
+- [x] T090 Implement responsive shortcut/title-input fixes, selected-locale completion/privacy/readiness copy, nonmodal focus/Escape/IME behavior, and Queue Open AI setup recovery in their owning frontend/runtime modules with focused tests.
+- [x] T091 Record final signed-package geometry and complete packaged E2E results against one artifact. Native quit/crash draft durability remains out of scope.
+- [ ] T092 Record manual real Korean IME, VoiceOver, and OS reduced-motion results; automated package success does not replace these checks.
+
 - T088 status: signed artifact and full functional/coverage gates passed; final EN/KO wide/narrow manual review passed. Only actual OS reduced-motion execution remains unverified. See the final acceptance record.
 
 **Independent validation**: Every F01–F68 family has a manifest entry and an observable-effect result. Passing component/native tests or dispatching a click without state/readback assertions does not satisfy packaged coverage. The launched executable identity must equal the recorded final artifact.
@@ -257,5 +262,5 @@ migration or retain legacy write gates as an interim compatibility path.
 
 ## Format Validation
 
-All 88 tasks use checkbox, sequential ID, appropriate `[P]` and `[US#]` markers, and concrete file
+All 92 tasks use checkbox, sequential ID, appropriate `[P]` and `[US#]` markers, and concrete file
 paths. Story tasks are independently testable and required tests precede implementation.

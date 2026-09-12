@@ -1,105 +1,47 @@
-# Visual feature tour
+# Current interface guide
 
 **English** | [한국어](visual-guide.ko.md)
 
-The four primary screenshots below were recaptured from the packaged native application after the
-React/Tauri cutover reached `main`. They use an isolated documentation Vault and database; no
-personal Vault content or credential value appears. Each image represents a product capability,
-while the later detailed images document deeper workflow states.
+This guide shows nine actual captures from the signed macOS package on 2026-09-12, in Korean light mode. Each PNG is 1198×768 including the native title bar; this is an image size, not a WebKit viewport claim. The app used isolated disposable data, example Tasks, Work Log, and completion evidence. Refinement and conflict review used a deterministic local provider; these captures do not establish external AI quality. Queue shows a real missing-key failure, and the completion capture shows an unpublished private draft.
 
-The screenshots below preserve the workflow examples that were captured for this guide. The current
-application uses the calmer cream-and-pale-rail appearance described in the next section, so its
-surface styling may differ from these historical images.
+Capture source: base `de01ff47398871902a765d43b5a4060161316f92`, branch `fix/ui-ux-improvements`, dirty source build signed at 11:44:31 AM with CDHash `9b2b81082a43de0637bedd33a8cc670709ff2b21` by `LLM Wiki Local Signing`. The same package passed all 32 desktop scenarios and all 175 registered controls. See [release verification](../../specs/012-task-centered-workbench/acceptance-verification.md) for evidence and limits.
 
-## Reading the workspace
+## Workbench and Task detail
 
-LLM Wiki uses a warm cream workspace with a calm pale navigation rail and restrained pink accents.
-The current view names the primary task first; Capture stays compact, while active Solutions,
-workflow lanes, and reusable context receive the strongest visual weight. Cards, drawers, dialogs,
-Queue, and notifications share the same readable surface, focus, and status treatment. Search
-starts with an explicit local-Vault prompt and shows loading, empty, or failure feedback in place.
-At narrow desktop widths navigation wraps and the workbench actions remain available rather than
-overflowing. These presentation changes do not change approval boundaries: AI may prepare or
-organize work, and people still choose every workflow transition.
+The Workbench starts with a lightweight entry: save the text as a Capture or create a Task directly. Saved work and resumable refinement shortcuts remain available below it. A Problem is optional context that may be linked to a Task; it is not a required stage.
 
-![Packaged native Tauri Workbench with a Capture persisted through commands](../images/native-app/workbench.jpg)
+![Workbench with Capture and Task entry plus saved work](images/workbench-tasks.png)
 
-## 1. Capture, Problem, and Solution
+Open a Task to edit its definition, keep Work Log evidence, comments, checklists, decisions, relationships, completion evidence, and Knowledge actions together. Completing the Task, resolving a linked Problem, and publishing Knowledge are separate explicit decisions.
 
-The current Workbench capture shows a Korean user-visible locale rendered with the bundled Noto
-Sans KR font. Saving the sample Capture writes through the typed application client and Tauri
-workflow command; it does not call a loopback web server.
+![Task detail with work evidence and decisions](images/task-detail.png)
 
-![Workbench with Capture, Problem, Solution, active work, and conflict status](images/02-workbench.png)
+## Refinement and completion
 
-![Workbench board with Capture, Problem, Solution, and unresolved conflict columns](images/02-workbench-board.png)
+Refinement keeps original context, conversation, notes, and reviewable proposals together. A saved workspace supports returning to unfinished refinement; a provider or save error remains visible for retry rather than representing a completed result.
 
-The Workbench keeps the primary workflow visible in one place. Cards retain their current state,
-and actions that change approval or workflow state remain explicit user decisions.
+![Refinement workspace with context and conversation](images/refinement.png)
 
-Related guides: [Workbench](conflict-gated-workflow.md),
-[localization](bilingual-localization.md), and
-[conflict review](vault-conflict-evidence.md).
+Conflict review is advisory and retains attempt history. The example below reports insufficient evidence; it is not a cited finding or permission to complete or publish.
 
-## 2. Explore without losing context
+![Task conflict review with insufficient evidence, retry, and attempt history](images/task-review.png)
 
-![Solution Explore workspace with current detail beside the conversation](images/05-refinement-preview.png)
+After a Task has completion evidence, create and review a private Knowledge draft. Publication is a separate human action that writes the reviewed Markdown to the Vault.
 
-Explore opens the stored Detail, lineage context, and conversation in one workspace. AI can prepare
-a refinement, but the proposal is not applied until the user chooses to apply it.
+![Completion evidence and separate Knowledge publication](images/completion-knowledge.png)
 
-Related guide: [Refinement Preview](refinement-preview-status.md).
+## Queue, search, Compass, and AI setup
 
-## 3. Execute with a durable work record
+The background Queue identifies durable jobs and their recovery actions. It does not turn a failed or pending AI request into a completed Task decision.
 
-![Solution Work tab with checklist, Work Log, and review comment](images/06-work-log.png)
+![Queue failure with a recovery path](images/queue-recovery.png)
 
-The Work tab keeps validation criteria, checked state, progress notes, and review comments together.
-This evidence remains available to completion and lineage generation.
+Search reads the selected Vault, while Compass records direction without scoring people. AI setup shows connection and model-routing settings while keeping credential values masked.
 
-Related guides: [Completion and Knowledge](completion-writeback-archive.md) and
-[Lineage Knowledge Layer](lineage-knowledge-layer.md).
+![Vault search results with path and matching context](images/vault-search.png)
 
-## 4. Recover existing Knowledge
+![Compass records direction and evidence](images/compass.png)
 
-![Native semantic Vault search using the bundled multilingual model](../images/native-app/vault-search.jpg)
+![AI setup shows connection and routing configuration](images/ai-settings.png)
 
-Vault Search returns local Markdown context. The selected semantic result shown here was produced
-by the multilingual embedding model bundled in the `.app`; no embedding service or startup
-download is involved. Lexical search remains available if local inference fails.
-
-Related guide: [Fast vault search](fast-vault-search.md).
-
-## 5. Keep direction visible
-
-![Native Compass with a direction goal persisted through a Tauri command](../images/native-app/compass.jpg)
-
-Compass records an active direction without converting individual activity into a performance
-score.
-
-Related guide: [Compass](direction-dashboard.md).
-
-## 6. Configure AI without exposing secrets
-
-![Native AI settings with endpoint, model routing, worker count, and masked credential state](../images/native-app/ai-settings.jpg)
-
-AI Settings separates endpoint and model routing from the API key. The saved key is retained in the
-local settings file and its value is never returned to the UI.
-
-Related guide: [Background AI Queue](background-ai-queue.md).
-
-## 7. Observe background work
-
-![Background Queue with readable targets, statuses, result destinations, and cancellation actions](images/08-background-queue.png)
-
-Durable work stays visible by purpose and target. The Queue exposes cancellation, retry, progress,
-and result destinations without presenting internal job JSON as the user experience.
-
-![Conflict review queued confirmation](images/09-background-job-queued.png)
-
-Starting a durable review acknowledges that work continues in the background and directs the user
-to the Queue instead of blocking the Workbench.
-
-Related guides: [Background AI Queue](background-ai-queue.md),
-[Vault conflict evidence](vault-conflict-evidence.md), and
-[Conflict Resolution Workflow](conflict-resolution-workflow.md).
+See the [Task-centered Workbench](conflict-gated-workflow.md), [Completion and Knowledge](completion-writeback-archive.md), and [Background AI Queue](background-ai-queue.md) for behavior and verification boundaries.

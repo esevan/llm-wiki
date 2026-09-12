@@ -65,7 +65,7 @@ export const taskClient = {
     expectedTaskRevision: number,
     patch: Record<string, string>,
   ) =>
-    request<TaskAggregate>(
+    request<Required<Pick<TaskAggregate, "id" | "taskRevision" | "title" | "detail" | "outcome" | "scope" | "nonGoals" | "validationCriteria">>>(
       `/tasks/${encodeURIComponent(id)}/revisions`,
       "POST",
       { expectedTaskRevision, patch },

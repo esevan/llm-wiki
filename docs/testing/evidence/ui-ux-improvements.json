@@ -1,0 +1,280 @@
+{
+  "verifiedDate": "2026-09-12",
+  "base": "de01ff47398871902a765d43b5a4060161316f92",
+  "branch": "fix/ui-ux-improvements",
+  "bundleCDHash": "9b2b81082a43de0637bedd33a8cc670709ff2b21",
+  "signedTime": "2026-09-12 11:44:31 AM",
+  "authority": "LLM Wiki Local Signing",
+  "sourceSnapshot": {
+    "fileCount": 385,
+    "algorithm": "SHA-256 of sorted path + NUL + per-file SHA-256 + newline entries",
+    "sha256": "f0a2751f8cb046def8623f9b5baa2f212200db088f3231dc7d36cd628c1925c0"
+  },
+  "checks": {
+    "vitestFiles": 34,
+    "vitestTests": 176,
+    "cargoTests": 106,
+    "desktopHelpers": 6,
+    "providerFakeTests": 2,
+    "signingTests": 4,
+    "typecheck": "passed",
+    "changedScopeESLint": "passed",
+    "fullLint": "23 pre-existing no-explicit-any findings in two untouched runtime test files",
+    "whitespace": "passed"
+  },
+  "scenarios": [
+    {
+      "name": "task-capture",
+      "status": "passed",
+      "durationMs": 885
+    },
+    {
+      "name": "task-worklog",
+      "status": "passed",
+      "durationMs": 985
+    },
+    {
+      "name": "task-refinement",
+      "status": "passed",
+      "durationMs": 1803
+    },
+    {
+      "name": "task-relationships",
+      "status": "passed",
+      "durationMs": 1094
+    },
+    {
+      "name": "task-review",
+      "status": "passed",
+      "durationMs": 2612
+    },
+    {
+      "name": "task-publication",
+      "status": "passed",
+      "durationMs": 1603
+    },
+    {
+      "name": "task-problem-resolution",
+      "status": "passed",
+      "durationMs": 1093
+    },
+    {
+      "name": "task-persistence",
+      "status": "passed",
+      "durationMs": 1206
+    },
+    {
+      "name": "task-localization",
+      "status": "passed",
+      "durationMs": 1087
+    },
+    {
+      "name": "task-controls",
+      "status": "passed",
+      "durationMs": 3316
+    },
+    {
+      "name": "task-workbench-retry",
+      "status": "passed",
+      "durationMs": 680
+    },
+    {
+      "name": "task-legacy-refinement",
+      "status": "passed",
+      "durationMs": 679
+    },
+    {
+      "name": "task-legacy-chat-controls",
+      "status": "passed",
+      "durationMs": 2707
+    },
+    {
+      "name": "task-legacy-preview-retry",
+      "status": "passed",
+      "durationMs": 684
+    },
+    {
+      "name": "task-chat-controls",
+      "status": "passed",
+      "durationMs": 5050
+    },
+    {
+      "name": "task-refinement-provider-recovery",
+      "status": "passed",
+      "durationMs": 2304
+    },
+    {
+      "name": "task-refinement-close-retry",
+      "status": "passed",
+      "durationMs": 894
+    },
+    {
+      "name": "task-refinement-close-pending",
+      "status": "passed",
+      "durationMs": 1492
+    },
+    {
+      "name": "task-refinement-relaunch",
+      "status": "passed",
+      "durationMs": 2311
+    },
+    {
+      "name": "global-shell",
+      "status": "passed",
+      "durationMs": 783
+    },
+    {
+      "name": "global-search",
+      "status": "passed",
+      "durationMs": 1089
+    },
+    {
+      "name": "global-compass",
+      "status": "passed",
+      "durationMs": 680
+    },
+    {
+      "name": "global-provider",
+      "status": "passed",
+      "durationMs": 783
+    },
+    {
+      "name": "global-mcp",
+      "status": "passed",
+      "durationMs": 786
+    },
+    {
+      "name": "global-queue-notifications",
+      "status": "passed",
+      "durationMs": 1186
+    },
+    {
+      "name": "global-notice",
+      "status": "passed",
+      "durationMs": 595
+    },
+    {
+      "name": "global-intro-navigation",
+      "status": "passed",
+      "durationMs": 583
+    },
+    {
+      "name": "global-intro-retry",
+      "status": "passed",
+      "durationMs": 598
+    },
+    {
+      "name": "global-vault-choose",
+      "status": "passed",
+      "durationMs": 1186
+    },
+    {
+      "name": "global-vault-retry",
+      "status": "passed",
+      "durationMs": 604
+    },
+    {
+      "name": "global-migration-restore",
+      "status": "passed",
+      "durationMs": 580
+    },
+    {
+      "name": "global-migration-retry",
+      "status": "passed",
+      "durationMs": 589
+    }
+  ],
+  "coverage": {
+    "inventoryCount": 175,
+    "scannedSourceControls": 188,
+    "rendered": 175,
+    "exercised": 175,
+    "asserted": 175,
+    "unknownEnabled": [],
+    "missingSourceEvidence": [],
+    "undocumentedDisabled": [],
+    "unexercised": [],
+    "effectMissing": [],
+    "notRendered": []
+  },
+  "geometrySteps": [
+    "Geometry requested native window 900×640; WebKit viewport 900×608, browser outer 0×0.",
+    "Geometry requested native window 904×768; WebKit viewport 904×736, browser outer 0×0.",
+    "Geometry requested native window 1280×820; WebKit viewport 1280×788, browser outer 0×0.",
+    "Korean and English long-title Workbench shortcuts kept their action inside the card and above All work at the recorded native-window and WebKit viewport sizes; the Task title editor used the panel width and Korean AI privacy copy was exact."
+  ],
+  "captures": {
+    "task-review.png": {
+      "sha256": "1e32d701d390eb540a47f0c1e14e4fbcbc72bd96532b5467bd020e27d9928106",
+      "imageSize": [
+        1198,
+        768
+      ]
+    },
+    "vault-search.png": {
+      "sha256": "a28551781d7421b3c26cdc5de3d70e936a709aed21c6af8c31cacda54deb023f",
+      "imageSize": [
+        1198,
+        768
+      ]
+    },
+    "workbench-tasks.png": {
+      "sha256": "fa5a3b60d54c8aac54a1426947a9e61c2a34e02b46534c592488854cec7b4f81",
+      "imageSize": [
+        1198,
+        768
+      ]
+    },
+    "task-detail.png": {
+      "sha256": "16485e7a3d07a6e26a4a6aaff6803a470351ec8510e7e13dad8abb8dc68e1969",
+      "imageSize": [
+        1198,
+        768
+      ]
+    },
+    "refinement.png": {
+      "sha256": "89a2fe3a3b23d7e58ae31ed63d4428be1bcb23d0ac247a9f3d5f31e4d78b79b3",
+      "imageSize": [
+        1198,
+        768
+      ]
+    },
+    "completion-knowledge.png": {
+      "sha256": "865ecea9c224cddb33317cf6e7c860302710981b9c366a85bbe6d77281f91fe5",
+      "imageSize": [
+        1198,
+        768
+      ]
+    },
+    "ai-settings.png": {
+      "sha256": "6e456ff60ef9b969c3229d03b1ec14aa4ead5dde4c6c008c526f78f553c2bf31",
+      "imageSize": [
+        1198,
+        768
+      ]
+    },
+    "compass.png": {
+      "sha256": "84508017c2915e03fd5f42edec74f10721545563038a66180932fac04882f62d",
+      "imageSize": [
+        1198,
+        768
+      ]
+    },
+    "queue-recovery.png": {
+      "sha256": "da0493e6801c61f85063a575c5e168757ddd7334ebf421c3c0b7291fdcd0792b",
+      "imageSize": [
+        1198,
+        768
+      ]
+    }
+  },
+  "captureContext": "Actual native screenshots including title bar; Korean light theme; isolated disposable example data; local deterministic Refinement/review provider; unpublished private completion draft; review insufficient evidence; real missing-key Queue failure.",
+  "unverified": [
+    "Real Korean IME",
+    "VoiceOver",
+    "OS reduced motion",
+    "Windows",
+    "Zoom",
+    "Native quit/crash Task draft durability"
+  ]
+}

@@ -214,9 +214,10 @@ export async function runNoticeScenario(harness: GlobalScenarioHarness) {
 }
 
 /** F53–F55. `seed` is E2E-only native fixture setup; every operation below is a UI click. */
-export type QueueNotificationFixture = { queued: string; running: string; failed: string; completed: string; notificationOpen: string; notificationDismiss: string };
-export async function runQueueNotificationActionsScenario(harness: GlobalScenarioHarness, seed: () => Promise<QueueNotificationFixture>) {
+export type QueueNotificationFixture = { queued: string; running: string; failed: string; missingKey: string; completed: string; notificationOpen: string; notificationDismiss: string };
+export async function runQueueNotificationActionsScenario(harness: GlobalScenarioHarness, seed: () => Promise<QueueNotificationFixture>, providerUrl?: string) {
   type Job = { id: string; status: string; error?: { code?: string } | null };
+  type JobResult = { job_id: string; status: string; result: { path?: string; source_hash?: string; translated?: boolean } };
   type Notifications = { notifications: Array<{ id: string; read_at: string | null }> };
   harness.coverage.observe(document, 'queue-notification-shell');
   const alert = required<HTMLButtonElement>('#alert-toggle', 'notifications toggle');
@@ -243,6 +244,46 @@ export async function runQueueNotificationActionsScenario(harness: GlobalScenari
   await harness.waitFor(() => Boolean(document.querySelector(`#queue-list [data-job-id="${ids.queued}"]`)), 'seeded queued job');
   harness.coverage.assertEffect('queue-toggle', () => required<HTMLElement>('#queue-panel', 'queue panel').hidden === false && queue.getAttribute('aria-expanded') === 'true');
   harness.coverage.observe(document, 'queue-actions');
+  const setup = required<HTMLButtonElement>(`#queue-list [data-job-id="${ids.missingKey}"] [data-job-action="setup"]`, 'missing API key setup action');
+  harness.coverage.interact('queue-open-ai-setup', () => harness.click(setup, 'open AI setup for missing key job'));
+  await harness.waitFor(() => document.getElementById('ai-setup')?.classList.contains('active') === true, 'AI setup from Queue');
+  harness.coverage.assertEffect('queue-open-ai-setup', () => document.getElementById('ai-setup')?.classList.contains('active') === true && Boolean(document.querySelector(`#queue-list [data-job-id="${ids.missingKey}"]`)));
+  if (providerUrl) {
+    const set = (id: string, value: string) => harness.enter(required<HTMLInputElement>(`#${id}`, id), value);
+    set('provider-url', providerUrl);
+    set('provider-model', 'deterministic-test-model');
+    set('provider-key', 'desktop-e2e-key');
+    harness.click(required<HTMLElement>('[data-control="provider-save"]', 'save AI setup'), 'save AI setup for retry');
+    await harness.waitFor(() => document.getElementById('provider-status')?.textContent?.includes('Saved') === true, 'saved AI setup before retry');
+  }
+  harness.click(required<HTMLElement>('[data-view="workbench"]', 'Workbench navigation'), 'return to Workbench before retry');
+  await harness.waitFor(() => document.getElementById('workbench')?.classList.contains('active') === true, 'Workbench after saving AI setup');
+  const queuePanel = required<HTMLElement>('#queue-panel', 'queue panel after AI setup');
+  if (queuePanel.hidden) harness.click(queue, 'reopen Queue after saving AI setup');
+  await harness.waitFor(() => queuePanel.hidden === false, 'visible Queue after saving AI setup');
+  const missingRetry = required<HTMLButtonElement>(`#queue-list [data-job-id="${ids.missingKey}"] [data-job-action="retry"]`, 'missing API key retry action');
+  harness.coverage.interact('queue-retry', () => harness.click(missingRetry, 'retry the same missing-key job'));
+  let recovered: Job | undefined;
+  await harness.waitForAsync(async () => {
+    recovered = await harness.request<Job>(`/jobs/${ids.missingKey}`);
+    return recovered.status === 'completed';
+  }, 'missing-key knowledge translation completes after saving AI setup');
+  const completedResult = await harness.request<JobResult>(`/jobs/${ids.missingKey}/result`);
+  const translation = await harness.request<{ path?: string; translated?: boolean; served_locale?: string; cache_status?: string; source_hash?: string; markdown?: string }>('/knowledge?path=queue-recovery.md&locale=ko');
+  harness.coverage.assertEffect('queue-retry', () =>
+    recovered?.id === ids.missingKey &&
+    recovered.status === 'completed' &&
+    completedResult.job_id === ids.missingKey &&
+    completedResult.status === 'completed' &&
+    completedResult.result.path === 'queue-recovery.md' &&
+    completedResult.result.translated === true &&
+    translation.path === 'queue-recovery.md' &&
+    translation.translated === true &&
+    translation.served_locale === 'ko' &&
+    translation.cache_status === 'hit' &&
+    translation.source_hash === completedResult.result.source_hash &&
+    translation.markdown?.includes('# 기존 맥락') === true,
+  );
   for (const [id, action, job] of [['queue-cancel', 'cancel', ids.queued], ['queue-retry', 'retry', ids.failed]] as const) {
     const button = required<HTMLButtonElement>(`#queue-list [data-job-id="${job}"] [data-job-action="${action}"]`, `${action} job action`);
     harness.coverage.interact(id, () => harness.click(button, id));

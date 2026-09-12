@@ -156,3 +156,90 @@ describe("Task Workbench", () => {
     delete window.openChat;
   });
 });
+
+const draftControl = (id: string) => document.querySelector<HTMLElement>(`[data-control="${id}"]`)!;
+const openTask = (title: string) => fireEvent.click(screen.getAllByText(title).find((node) => node.closest("article"))!.closest("article")!.querySelector("button")!);
+describe("guarded Task selection", () => {
+  it.each(["keep", "discard", "save", "failure"])("handles %s when switching tasks", async (choice) => {
+    let active = { id: "active", kind: "task", taskRevision: 3, state: "in_progress", title: "Ship workbench", detail: "Original", outcome: "", scope: "", nonGoals: "", validationCriteria: "" };
+    const request = vi.fn().mockImplementation(({ path, method, body }: { path: string; method?: string; body?: string }) => {
+      if (path === "/workbench") return Promise.resolve(response(snapshot));
+      if (path.endsWith("/revisions") && method === "POST") {
+        if (choice === "failure") return Promise.resolve(response({ detail: "Offline" }, false));
+        active = { ...active, ...JSON.parse(body!).patch, taskRevision: 4 };
+        return Promise.resolve(response(active));
+      }
+      return Promise.resolve(response(path === "/tasks/active" ? active : { ...active, id: "ready", title: "Plan release", taskRevision: 1 }));
+    });
+    window.llmWikiApplication = { request };
+    render(<WorkbenchView active />);
+    await screen.findByText("Plan release");
+    openTask("Ship workbench");
+    await waitFor(() => expect(draftControl("task-revision-detail")).toBeInTheDocument());
+    fireEvent.change(draftControl("task-revision-detail"), { target: { value: "Local draft" } });
+    openTask("Plan release");
+    expect(draftControl("task-revision-detail")).toHaveValue("Local draft");
+    expect(request.mock.calls.some(([arg]) => arg.path === "/tasks/ready")).toBe(false);
+    fireEvent.click(draftControl(choice === "keep" ? "task-draft-guard-keep-editing" : choice === "discard" ? "task-draft-guard-discard" : "task-draft-guard-save"));
+    if (choice === "keep" || choice === "failure") {
+      if (choice === "failure") await screen.findByText("Offline");
+      expect(draftControl("task-revision-detail")).toHaveValue("Local draft");
+      expect(request.mock.calls.some(([arg]) => arg.path === "/tasks/ready")).toBe(false);
+    } else {
+      await waitFor(() => expect(document.querySelector(".task-detail h2")).toHaveTextContent("Plan release"));
+      expect(draftControl("task-revision-detail")).toHaveValue(choice === "save" ? "Local draft" : "Original");
+    }
+    expect(request.mock.calls.filter(([arg]) => arg.path.endsWith("/revisions"))).toHaveLength(choice === "save" || choice === "failure" ? 1 : 0);
+  });
+
+  it("blocks switches during a mutation and keeps drafts while the route is hidden", async () => {
+    let finish!: (value: ReturnType<typeof response>) => void;
+    const pending = new Promise<ReturnType<typeof response>>((resolve) => { finish = resolve; });
+    const active = { id: "active", taskRevision: 3, state: "in_progress", title: "Ship workbench" };
+    const request = vi.fn().mockImplementation(({ path, method }: { path: string; method?: string }) => {
+      if (path === "/workbench") return Promise.resolve(response(snapshot));
+      if (method === "POST") return pending;
+      return Promise.resolve(response(active));
+    });
+    window.llmWikiApplication = { request };
+    const view = render(<WorkbenchView active />);
+    await screen.findByText("Plan release");
+    openTask("Ship workbench");
+    await waitFor(() => expect(draftControl("task-revision-detail")).toBeInTheDocument());
+    fireEvent.change(draftControl("task-revision-detail"), { target: { value: "Draft" } });
+    view.rerender(<WorkbenchView active={false} />);
+    view.rerender(<WorkbenchView active />);
+    expect(draftControl("task-revision-detail")).toHaveValue("Draft");
+    fireEvent.change(draftControl("task-worklog-text"), { target: { value: "Evidence" } });
+    fireEvent.click(draftControl("task-worklog-add"));
+    await waitFor(() => expect(document.querySelector(".task-detail")).toHaveAttribute("aria-busy", "true"));
+    openTask("Plan release");
+    expect(document.querySelector(".task-draft-guard")).not.toBeInTheDocument();
+    expect(request.mock.calls.some(([arg]) => arg.path === "/tasks/ready")).toBe(false);
+    finish(response({ id: "entry" }));
+    await waitFor(() => expect(document.querySelector(".task-detail")).toHaveAttribute("aria-busy", "false"));
+    expect(draftControl("task-revision-detail")).toHaveValue("Draft");
+  });
+
+  it("ignores an old Task GET after selection changes and restores focus after Escape", async () => {
+    let finish!: (value: ReturnType<typeof response>) => void;
+    const pending = new Promise<ReturnType<typeof response>>((resolve) => { finish = resolve; });
+    window.llmWikiApplication = { request: vi.fn().mockImplementation(({ path }: { path: string }) => {
+      if (path === "/workbench") return Promise.resolve(response(snapshot));
+      if (path === "/tasks/active") return pending;
+      return Promise.resolve(response({ id: "ready", taskRevision: 1, state: "task", title: "Plan release", detail: "Ready detail" }));
+    }) };
+    render(<WorkbenchView active />);
+    await screen.findByText("Plan release");
+    openTask("Ship workbench");
+    openTask("Plan release");
+    await waitFor(() => expect(draftControl("task-revision-detail")).toHaveValue("Ready detail"));
+    finish(response({ id: "active", taskRevision: 3, state: "in_progress", title: "Old task", detail: "Wrong" }));
+    await waitFor(() => expect(document.querySelector(".task-detail h2")).toHaveFocus());
+    expect(draftControl("task-revision-detail")).toHaveValue("Ready detail");
+    const trigger = screen.getAllByText("Plan release").find((node) => node.closest("article"))!.closest("article")!.querySelector("button")!;
+    fireEvent.keyDown(draftControl("task-revision-detail"), { key: "Escape" });
+    expect(document.querySelector(".task-detail")).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+  });
+});

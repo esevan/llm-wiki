@@ -1,67 +1,23 @@
-# Codex·ChatGPT 데스크톱에서 작업 추적하기
+# Codex·ChatGPT 데스크톱에서 Task 작업 이어가기
 
-**한국어** | [English](mcp-workbench-bridge.md)
+[English](mcp-workbench-bridge.md) | **한국어**
 
-LLM Wiki는 Workbench 화면을 열지 않아도 인앱 Chat이나 로컬 MCP Chat에서 작업을 추적합니다.
-1차 릴리스는 Codex와 ChatGPT 데스크톱을 지원하며, ChatGPT 웹과 원격 MCP 전송은 지원하지
-않습니다.
+승인한 로컬 MCP 연결은 데스크톱 Workbench와 같은 Task 중심 작업 기록을 읽고 변경을 제안할 수 있습니다. 연결 범위와 topic 멤버십을 명시적으로 적용하며, Vault·앱 데이터베이스·자격 증명을 제한 없는 파일로 노출하지 않습니다.
 
-## 하나의 workflow와 두 Chat 입력
+## Task 제안과 검토
 
-두 입력은 같은 애플리케이션 서비스, 내구성 이벤트 로그, workflow 레코드, Vault, 백그라운드
-projector를 사용합니다. Chat에서 추적을 시작하면 먼저 서버가 검토용 미리보기를 만들고, 사용자가
-그 정확한 내용을 승인해야 비공개 Capture와 추적 세션이 생깁니다. 사용자가
-검토한 Problem·Solution 제안은 기존 Workbench 레코드에 반영되므로, 나중에 Workbench를 열어도
-같은 진행 상태가 보이고 Workbench에서 바꾼 내용도 다음 Chat 조회에서 최신 상태로 읽힙니다.
+Chat은 생각을 Capture로 남기거나 Task 동작, checkpoint, 완료 또는 Knowledge 동작을 제안할 수 있습니다. 제안에는 Task와 기대 리비전이 들어갑니다. Problem 맥락이 필요하면 정확한 Problem 리비전을 선택적인 출처로 포함하며, Task에 Problem 부모가 필수는 아닙니다.
 
-의미 있는 체크포인트는 Chat에 확인을 반환하기 전에 이벤트 로그에 커밋됩니다. Workbench 반영은
-백그라운드에서 진행되어 잠시 대기 상태로 보일 수 있습니다. 스트림별 watermark는 애플리케이션
-시각과 결정적 순서를 사용합니다. 늦게 도착한 이벤트는 감사 기록에는 남지만 현재 상태를 되돌리지
-않습니다.
+host는 정확한 제안을 검토 대상으로 보여 줍니다. 가능한 동작에 따라 사용자가 수락·거절·편집·보류하거나 다시 검토를 요청합니다. AI가 제안을 만들었다는 이유만으로 Task가 바뀌지는 않습니다. 오래됨·취소·만료·거절 상태의 제안도 현재 상태를 덮지 않고 감사 기록으로 남습니다.
 
-## 데스크톱 Chat 연결
+## 한계와 연속성
 
-**AI setup → Chat 연결**에서 이름을 지정해 연결을 만들고 권한 범위를 확인한 뒤, 표시된 연결 ID로
-로컬 호스트를 설정합니다.
+Workbench, 인앱 Chat, 로컬 MCP는 같은 애플리케이션 경계를 사용하므로, 수락한 동작에는 같은 리비전 검사와 저장 규칙이 적용됩니다. 추적 중인 Chat 작업을 완료해도 Knowledge를 발행하지 않습니다. Knowledge 초안·발행은 각각 별도의 명시적 결정입니다.
 
-```text
-llm-wiki-desktop --mcp --connection <connection-id>
-```
+현재 bridge는 지원하는 데스크톱 host를 위한 로컬 stdio 연동입니다. ChatGPT 웹, 원격 MCP, 자동 Task 선택, topic을 넘는 제한 없는 접근, AI 제안의 자동 승인은 약속하지 않습니다.
 
-번들 플러그인은 `LLM_WIKI_CONNECTION_ID` 환경 변수도 읽습니다. 데스크톱 호스트는 얇은 bridge와
-stdio로 MCP를 주고받습니다. bridge는 macOS/Linux의 사용자 전용 Unix domain socket 또는 Windows의
-named pipe를 통해 실행 중인 LLM Wiki GUI 프로세스로 전달합니다. GUI 프로세스만 애플리케이션
-서비스, SQLite, Vault adapter, projector를 소유합니다. MCP를 사용하기 전에 LLM Wiki를 실행해야
-합니다. 설정에서 연결을 즉시 폐기할 수 있으며, 세션 ID 자체는 자격 증명이 아닙니다.
+## 로컬 연결 설정하기
 
-권한은 세션 읽기·쓰기, topic, 현재/전체 Workbench 요약, lexical 검색, semantic 검색, 근거 읽기,
-Knowledge 초안, Knowledge 발행으로 분리됩니다. topic 접근은 연결을 만들 때 선택한 topic ID로 한 번
-더 제한됩니다.
-토픽 소속은 AI setup에서 명시적으로 관리합니다. 제목이나 문서에 같은 단어가 있다는 이유만으로
-자동 포함하지 않으며, 소속을 제거하면 해당 항목에 발급했던 근거 접근 권한도 해제됩니다.
-일반적인 이어하기는 현재 세션만 읽고, 사용자가
-명시적으로 요청할 때만 전체 Workbench를 가져옵니다.
+**AI 설정**의 **채팅 연결**에서 연결 이름을 입력하고 필요한 grant만 선택한 뒤, 필요하면 허용할 topic ID를 입력해 연결을 만듭니다. **허용된 접근 범위**을 펼치면 정확한 grant와 `llm-wiki-desktop --mcp --connection <id>` 형식의 로컬 명령을 확인할 수 있습니다. 지원하는 로컬 데스크톱 host의 stdio MCP 설정에 이 명령을 넣으세요. 실행 파일이 PATH에 없으면 설치한 앱의 실행 파일 전체 경로를 지정하세요. stdio bridge는 실행 중인 GUI로 요청을 전달하므로 앱을 열어 두어야 합니다. 앱이 없으면 요청을 차단합니다. 같은 화면에서 topic 멤버십을 관리하고, **연결 해제**로 연결을 즉시 비활성화할 수 있습니다.
 
-## 사용자 검토와 충돌 확인
-
-Problem, Solution, 충돌, 완료, 발행 전환은 정확한 사용자 검토가 필요합니다. 최신 MCP host에서는
-연결·세션·원본 이벤트·payload·revision·만료·일회용 challenge에 결합된 다중 왕복 Elicitation을
-사용합니다. 호출자가 보낸 `confirmed` 같은 필드는 권한이 될 수 없습니다.
-
-충돌 판단은 현재 Chat을 담당하는 AI가 수행합니다. LLM Wiki는 범위가 제한된 lexical/semantic
-검색과 revision을 검증한 근거 구절만 제공합니다. MCP server는 숨은 모델을 실행하지 않습니다.
-semantic coverage가 준비되지 않았더라도 lexical 검색은 계속 사용할 수 있고, AI는 근거가 충분하지
-않음을 밝혀야 합니다. 검색 결과의 불투명 evidence handle은 연결·scope에 묶여 10분 뒤 만료되며,
-근거를 읽을 때 소유권과 원본 revision을 다시 확인합니다.
-
-## 완료와 발행은 별도 단계
-
-추적 세션을 완료하면 비공개 Completed Work만 생기며 Knowledge 파일은 만들어지지 않습니다.
-workflow 스킬은 이어서 한 번만 “Knowledge로 발행할까요?”라고 묻습니다. 동의하면 먼저 버전이
-있는 비공개 초안을 만듭니다. 발행은 검토한 초안 ID, revision, content hash만 받는 두 번째 명시적
-작업입니다. 외부에서 Markdown 파일이 바뀌었다면 충돌로 중단하고 덮어쓰지 않습니다.
-발행 철회도 정확한 검토를 거칩니다. 파일은 색인되지 않는 로컬 복구 사본으로 이동하고 Completed
-Work와 결정 이력은 그대로 유지됩니다.
-
-정확한 프로토콜은 [기능 명세](../../specs/011-mcp-workbench-bridge/spec.md)와
-[MCP 계약](../../specs/011-mcp-workbench-bridge/contracts/mcp-server.md)을 참고하세요.
+[Task 중심 Workbench](conflict-gated-workflow.ko.md)와 현재 계약의 역사 맥락인 [명세 012](../../specs/012-task-centered-workbench/spec.md)를 참고하세요.
