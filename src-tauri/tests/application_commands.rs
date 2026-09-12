@@ -302,7 +302,7 @@ async fn explicit_knowledge_publish_and_external_edit_guard_work() {
         .app
         .execute_workflow(NativeOperation {
             name: "task-knowledge.correction".into(),
-            input: json!({"operationId":"correct","taskId":x,"draftRevision":d.body["draftRevision"],"expectedContentHash":d.body["contentHash"],"bodyMarkdown":"# Corrected Knowledge"}),
+            input: json!({"operationId":"correct","taskId":x,"draftRevision":d.body["draftRevision"],"expectedContentHash":d.body["contentHash"],"expectedSourceHash":d.body["sourceHash"],"bodyMarkdown":"# Corrected Knowledge"}),
         })
         .await;
     ok(&corrected);
@@ -310,11 +310,11 @@ async fn explicit_knowledge_publish_and_external_edit_guard_work() {
         .app
         .execute_workflow(NativeOperation {
             name: "task-knowledge.correction".into(),
-            input: json!({"operationId":"stale-correct","taskId":x,"draftRevision":d.body["draftRevision"],"expectedContentHash":d.body["contentHash"],"bodyMarkdown":"# Stale"}),
+            input: json!({"operationId":"stale-correct","taskId":x,"draftRevision":d.body["draftRevision"],"expectedContentHash":d.body["contentHash"],"expectedSourceHash":d.body["sourceHash"],"bodyMarkdown":"# Stale"}),
         })
         .await;
     assert_eq!(stale.status, 409);
-    let published=h.app.execute_workflow(NativeOperation{name:"task-knowledge.publish".into(),input:json!({"operationId":"publish","taskId":x,"draftRevision":d.body["draftRevision"],"expectedContentHash":corrected.body["contentHash"]})}).await;
+    let published=h.app.execute_workflow(NativeOperation{name:"task-knowledge.publish".into(),input:json!({"operationId":"publish","taskId":x,"draftRevision":d.body["draftRevision"],"expectedContentHash":corrected.body["contentHash"],"expectedSourceHash":corrected.body["sourceHash"]})}).await;
     ok(&published);
     let aggregate = h.call("workflow", "task.get", json!({"taskId":x}));
     assert_eq!(aggregate.body["publication"]["state"], "published");
@@ -324,9 +324,9 @@ async fn explicit_knowledge_publish_and_external_edit_guard_work() {
     );
     let regenerated=h.app.execute_workflow(NativeOperation{name:"task-knowledge.regenerate".into(),input:json!({"operationId":"regenerate","taskId":x,"draftRevision":d.body["draftRevision"],"expectedTaskRevision":1})}).await;
     ok(&regenerated);
-    let republished=h.app.execute_workflow(NativeOperation{name:"task-knowledge.publish".into(),input:json!({"operationId":"republish","taskId":x,"draftRevision":regenerated.body["draftRevision"],"expectedContentHash":regenerated.body["contentHash"]})}).await;
+    let republished=h.app.execute_workflow(NativeOperation{name:"task-knowledge.publish".into(),input:json!({"operationId":"republish","taskId":x,"draftRevision":regenerated.body["draftRevision"],"expectedContentHash":regenerated.body["contentHash"],"expectedSourceHash":regenerated.body["sourceHash"]})}).await;
     ok(&republished);
-    let withdrawn_regenerated=h.app.execute_workflow(NativeOperation{name:"task-knowledge.withdraw".into(),input:json!({"operationId":"withdraw-regenerated","taskId":x,"draftRevision":regenerated.body["draftRevision"]})}).await;
+    let withdrawn_regenerated=h.app.execute_workflow(NativeOperation{name:"task-knowledge.withdraw".into(),input:json!({"operationId":"withdraw-regenerated","taskId":x,"draftRevision":regenerated.body["draftRevision"],"expectedContentHash":regenerated.body["contentHash"],"expectedSourceHash":regenerated.body["sourceHash"]})}).await;
     ok(&withdrawn_regenerated);
     assert_eq!(withdrawn_regenerated.body["state"], "withdrawn");
     let path = h
@@ -335,7 +335,7 @@ async fn explicit_knowledge_publish_and_external_edit_guard_work() {
         .join("vault")
         .join(republished.body["path"].as_str().unwrap());
     std::fs::write(path, "external").unwrap();
-    let withdrawn=h.app.execute_workflow(NativeOperation{name:"task-knowledge.withdraw".into(),input:json!({"operationId":"withdraw","taskId":x,"draftRevision":d.body["draftRevision"]})}).await;
+    let withdrawn=h.app.execute_workflow(NativeOperation{name:"task-knowledge.withdraw".into(),input:json!({"operationId":"withdraw","taskId":x,"draftRevision":d.body["draftRevision"],"expectedContentHash":corrected.body["contentHash"],"expectedSourceHash":corrected.body["sourceHash"]})}).await;
     assert_eq!(withdrawn.status, 409);
 }
 #[test]

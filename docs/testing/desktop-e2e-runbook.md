@@ -11,6 +11,8 @@ npm run test:desktop -- --scenario task-refinement --scenario task-refinement-pr
 
 `--full` is the release acceptance command. It runs every scenario registered by the checked-out runner and fails unless the resulting coverage report is complete; a focused run is explicitly partial and never satisfies that gate. Read the generated `results.json` and `interactive-coverage.json` for the final scenario and control totals.
 
+The `task-mcp-continuation` scenario creates a Task, exact Problem link, and Task relationship through rendered Workbench controls. A real stdio MCP child reads current/overview projections, rejects one continuation without creating a session, accepts a captureless continuation, reads its binding event and exact relationships, reviews and applies a Task revision, verifies the edit renders in desktop detail, and checks revoked access fails closed.
+
 The runner uses the release executable at `src-tauri/target/release` by default. Build the release bundle before a full run. To deliberately reuse an existing signed build, set `LLM_WIKI_E2E_EXECUTABLE=/absolute/path/to/executable`; the runner reports the missing path and build/reuse choice clearly. The deterministic local provider is started automatically. No external provider credentials are needed.
 
 Each scenario receives a fresh temporary Vault, SQLite database, workbench home, IPC endpoint, and local fake provider. Results are written to `.tmp/desktop-e2e-artifacts-*/results.json` (or `--artifact-dir PATH`), with coverage in `interactive-coverage.json`; failed cases retain logs, isolated state, and `failure.txt`. Add `--keep-state` when inspecting the temporary state after a run.

@@ -4,7 +4,7 @@ use rusqlite::{
 use serde_json::{json, Map, Value};
 use std::collections::BTreeMap;
 
-pub const CURRENT_SCHEMA_VERSION: i64 = 8;
+pub const CURRENT_SCHEMA_VERSION: i64 = 9;
 
 type MigrationFunction = for<'connection> fn(&Transaction<'connection>) -> Result<(), String>;
 type LegacyLocalizationRow = (String, String, String, String, String, String, String);
@@ -56,7 +56,166 @@ const MIGRATIONS: &[Migration] = &[
         name: "migrate legacy work into task aggregates",
         run: migrate_task_centered_workbench,
     },
+    Migration {
+        version: 9,
+        name: "allow captureless task work sessions",
+        run: allow_captureless_task_sessions,
+    },
 ];
+
+/// Version 9 has exactly one durable purpose: an explicitly reviewed continuation of an
+/// existing Task does not invent a Capture.  Keep this rebuild deliberately narrow.  In
+/// particular, do not add mutation triggers here: Task writes are recorded by application
+/// services and historical event bytes must remain untouched.
+fn allow_captureless_task_sessions(tx: &Transaction<'_>) -> Result<(), String> {
+    if !table_exists(tx, "work_tracking_sessions")? {
+        return Ok(());
+    }
+    let capture_not_null: i64 = tx
+        .query_row(
+            "SELECT \"notnull\" FROM pragma_table_info('work_tracking_sessions') WHERE name='capture_id'",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|error| error.to_string())?;
+    if capture_not_null == 0 {
+        return Ok(());
+    }
+
+    let before: i64 = tx
+        .query_row("SELECT count(*) FROM work_tracking_sessions", [], |row| {
+            row.get(0)
+        })
+        .map_err(|error| error.to_string())?;
+    // SQLite validates schema objects while dropping the referenced table. A view or trigger
+    // can depend indirectly on the session table through another view, so preserve the complete
+    // view/trigger schema and restore its exact SQL once the canonical table name is back.
+    let triggers = {
+        let mut statement = tx
+            .prepare(
+                "SELECT name,sql FROM sqlite_master \
+                 WHERE type='trigger' AND sql IS NOT NULL ORDER BY rowid",
+            )
+            .map_err(|error| error.to_string())?;
+        let values = statement
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(|error| error.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| error.to_string())?;
+        values
+    };
+    let indexes = {
+        let mut statement = tx
+            .prepare("SELECT sql FROM sqlite_master WHERE type='index' AND tbl_name='work_tracking_sessions' AND sql IS NOT NULL")
+            .map_err(|error| error.to_string())?;
+        let values = statement
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|error| error.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| error.to_string())?;
+        values
+    };
+    // Retain every view, including views which depend on a direct session view rather than
+    // naming the table themselves. `sqlite_master.rowid` is creation order, which preserves
+    // ordinary view-to-view dependencies on recreation.
+    let views = {
+        let mut statement = tx
+            .prepare(
+                "SELECT name,sql FROM sqlite_master \
+                 WHERE type='view' AND sql IS NOT NULL \
+                 ORDER BY rowid",
+            )
+            .map_err(|error| error.to_string())?;
+        let values = statement
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(|error| error.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| error.to_string())?;
+        values
+    };
+    // Drop views before their dependencies. SQLite permits a view definition to reference a
+    // later-created view, so reverse creation order also covers chains among saved views.
+    for (name, _) in views.iter().rev() {
+        tx.execute_batch(&format!(
+            "DROP VIEW IF EXISTS \"{}\"",
+            name.replace('\"', "\"\"")
+        ))
+        .map_err(|error| error.to_string())?;
+    }
+    for (name, _) in &triggers {
+        tx.execute_batch(&format!(
+            "DROP TRIGGER IF EXISTS \"{}\"",
+            name.replace('"', "\"\"")
+        ))
+        .map_err(|error| error.to_string())?;
+    }
+    // Foreign-key enforcement is disabled by apply_plan before this transaction, following
+    // SQLite's documented generalized ALTER procedure. No child table is rebuilt or pointed at
+    // the replacement table.
+    tx.execute_batch(
+        "CREATE TABLE work_tracking_sessions_v9 (
+           id TEXT PRIMARY KEY,
+           connection_id TEXT,
+           source_interface TEXT NOT NULL,
+           conversation_ref_hash TEXT NOT NULL,
+           capture_id TEXT UNIQUE,
+           head_event_id TEXT NOT NULL,
+           head_revision INTEGER NOT NULL,
+           state TEXT NOT NULL DEFAULT 'active',
+           publication_state TEXT NOT NULL DEFAULT 'not_requested',
+           publication_offer_revision INTEGER,
+           parent_session_id TEXT,
+           created_at TEXT NOT NULL,
+           updated_at TEXT NOT NULL,
+           UNIQUE(connection_id, conversation_ref_hash),
+           FOREIGN KEY(connection_id) REFERENCES mcp_connections(id),
+           FOREIGN KEY(capture_id) REFERENCES captures(id),
+           FOREIGN KEY(parent_session_id) REFERENCES work_tracking_sessions(id)
+         );
+         INSERT INTO work_tracking_sessions_v9(
+           id,connection_id,source_interface,conversation_ref_hash,capture_id,head_event_id,
+           head_revision,state,publication_state,publication_offer_revision,parent_session_id,
+           created_at,updated_at
+         ) SELECT
+           id,connection_id,source_interface,conversation_ref_hash,capture_id,head_event_id,
+           head_revision,state,publication_state,publication_offer_revision,parent_session_id,
+           created_at,updated_at
+         FROM work_tracking_sessions;
+         DROP TABLE work_tracking_sessions;
+         ALTER TABLE work_tracking_sessions_v9 RENAME TO work_tracking_sessions;",
+    )
+    .map_err(|error| error.to_string())?;
+    for (_, sql) in views {
+        tx.execute_batch(&sql).map_err(|error| error.to_string())?;
+    }
+    for sql in indexes {
+        tx.execute_batch(&sql).map_err(|error| error.to_string())?;
+    }
+    for (_, sql) in triggers {
+        tx.execute_batch(&sql).map_err(|error| error.to_string())?;
+    }
+    let after: i64 = tx
+        .query_row("SELECT count(*) FROM work_tracking_sessions", [], |row| {
+            row.get(0)
+        })
+        .map_err(|error| error.to_string())?;
+    if before != after {
+        return Err("work tracking session row count changed during v9 migration".into());
+    }
+    let broken: i64 = tx
+        .query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |row| {
+            row.get(0)
+        })
+        .map_err(|error| error.to_string())?;
+    if broken != 0 {
+        return Err("foreign key validation failed after v9 session migration".into());
+    }
+    Ok(())
+}
 
 fn migrate_task_centered_workbench(tx: &Transaction<'_>) -> Result<(), String> {
     if !table_exists(tx, "problems")? || !table_exists(tx, "captures")? {
@@ -635,22 +794,72 @@ fn apply_plan(
         if migration.version <= current_version {
             continue;
         }
-        let transaction = connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(|error| migration_error(migration, error))?;
-        let observed_version = schema_version(&transaction)?;
-        if observed_version != current_version {
-            return Err(format!(
-                "Database schema version changed during migration: expected {current_version}, found {observed_version}"
-            ));
+        // SQLite's documented generalized ALTER procedure requires FK enforcement to be
+        // disabled *before* the replacement transaction.  A PRAGMA issued inside the
+        // transaction is a no-op.  v9 validates the database first, validates the rebuilt
+        // graph before commit, then restores and verifies enforcement before returning.
+        let rebuild_session_parent = migration.version == 9;
+        if rebuild_session_parent {
+            let invalid: i64 = connection
+                .query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |row| {
+                    row.get(0)
+                })
+                .map_err(|error| migration_error(migration, error))?;
+            if invalid != 0 {
+                return Err(format!(
+                    "Database migration {} cannot start with foreign key violations",
+                    migration.version
+                ));
+            }
+            connection
+                .pragma_update(None, "foreign_keys", "OFF")
+                .map_err(|error| migration_error(migration, error))?;
         }
-        (migration.run)(&transaction).map_err(|error| migration_error(migration, error))?;
-        transaction
-            .pragma_update(None, "user_version", migration.version)
-            .map_err(|error| migration_error(migration, error))?;
-        transaction
-            .commit()
-            .map_err(|error| migration_error(migration, error))?;
+        let outcome = (|| -> Result<(), String> {
+            let transaction = connection
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .map_err(|error| migration_error(migration, error))?;
+            let observed_version = schema_version(&transaction)?;
+            if observed_version != current_version {
+                return Err(format!(
+                    "Database schema version changed during migration: expected {current_version}, found {observed_version}"
+                ));
+            }
+            (migration.run)(&transaction).map_err(|error| migration_error(migration, error))?;
+            transaction
+                .pragma_update(None, "user_version", migration.version)
+                .map_err(|error| migration_error(migration, error))?;
+            transaction
+                .commit()
+                .map_err(|error| migration_error(migration, error))?;
+            Ok(())
+        })();
+        if rebuild_session_parent {
+            connection
+                .pragma_update(None, "foreign_keys", "ON")
+                .map_err(|error| migration_error(migration, error))?;
+            let enabled: i64 = connection
+                .pragma_query_value(None, "foreign_keys", |row| row.get(0))
+                .map_err(|error| migration_error(migration, error))?;
+            if enabled != 1 {
+                return Err(format!(
+                    "Database migration {} did not restore foreign key enforcement",
+                    migration.version
+                ));
+            }
+            let invalid: i64 = connection
+                .query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |row| {
+                    row.get(0)
+                })
+                .map_err(|error| migration_error(migration, error))?;
+            if invalid != 0 {
+                return Err(format!(
+                    "Database migration {} left foreign key violations",
+                    migration.version
+                ));
+            }
+        }
+        outcome?;
         current_version = migration.version;
     }
 
@@ -1037,7 +1246,7 @@ mod tests {
         apply(&mut connection).unwrap();
         apply(&mut connection).unwrap();
 
-        assert_eq!(schema_version(&connection).unwrap(), 8);
+        assert_eq!(schema_version(&connection).unwrap(), CURRENT_SCHEMA_VERSION);
         let task: (String, String, Option<String>) = connection
             .query_row(
                 "SELECT state,category,archived_at FROM tasks WHERE id='f1'",

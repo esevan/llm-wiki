@@ -45,3 +45,20 @@ describe("Task client Problem resolution contract", () => {
     );
   });
 });
+
+describe("Task Knowledge hash contract", () => {
+  it("sends exact content and source hashes for correction, publication, and withdrawal", async () => {
+    const request = vi.fn().mockResolvedValue(response({ state: "queued" }));
+    window.llmWikiApplication = { request };
+
+    await taskClient.correctKnowledge("task-1", 2, "body-old", "source-2", "# Corrected");
+    await taskClient.publish("task-1", 2, "body-old", "source-2");
+    await taskClient.withdrawKnowledge("task-1", 2, "body-old", "source-2");
+
+    expect(request.mock.calls.map(([input]) => JSON.parse(input.body))).toEqual([
+      expect.objectContaining({ expectedContentHash: "body-old", expectedSourceHash: "source-2", bodyMarkdown: "# Corrected" }),
+      expect.objectContaining({ expectedContentHash: "body-old", expectedSourceHash: "source-2" }),
+      expect.objectContaining({ expectedContentHash: "body-old", expectedSourceHash: "source-2" }),
+    ]);
+  });
+});

@@ -237,20 +237,27 @@ export const taskClient = {
       draftRevision: number;
       bodyMarkdown: string;
       contentHash: string;
+      sourceHash?: string;
       state: string;
     }>(`/tasks/${encodeURIComponent(id)}/knowledge/drafts`, "POST", {
       expectedTaskRevision,
     }),
-  publish: (id: string, draftRevision: number, expectedContentHash: string) =>
+  publish: (
+    id: string,
+    draftRevision: number,
+    expectedContentHash: string,
+    expectedSourceHash: string,
+  ) =>
     request(
       `/tasks/${encodeURIComponent(id)}/knowledge/drafts/${draftRevision}/publish`,
       "POST",
-      { expectedContentHash },
+      { expectedContentHash, expectedSourceHash },
     ),
   correctKnowledge: (
     id: string,
     draftRevision: number,
     expectedContentHash: string,
+    expectedSourceHash: string,
     bodyMarkdown: string,
   ) =>
     request<{
@@ -261,7 +268,7 @@ export const taskClient = {
     }>(
       `/tasks/${encodeURIComponent(id)}/knowledge/drafts/${draftRevision}/correction`,
       "POST",
-      { expectedContentHash, bodyMarkdown },
+      { expectedContentHash, expectedSourceHash, bodyMarkdown },
     ),
   regenerateKnowledge: (
     id: string,
@@ -273,11 +280,16 @@ export const taskClient = {
       "POST",
       { expectedTaskRevision },
     ),
-  withdrawKnowledge: (id: string, draftRevision: number) =>
+  withdrawKnowledge: (
+    id: string,
+    draftRevision: number,
+    expectedContentHash: string,
+    expectedSourceHash: string,
+  ) =>
     request(
       `/tasks/${encodeURIComponent(id)}/knowledge/drafts/${draftRevision}/withdraw`,
       "POST",
-      {},
+      { expectedContentHash, expectedSourceHash },
     ),
   lineage: (id: string) =>
     request<import("../types/taskWorkbench").LineageSnapshot>(

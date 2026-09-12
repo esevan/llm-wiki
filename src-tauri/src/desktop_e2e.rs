@@ -155,6 +155,11 @@ pub(crate) fn desktop_e2e_seed_completed_tracking(
                 .as_object_mut()
                 .ok_or("Invalid fixture proposal")?
                 .remove("decision");
+            proposal
+                .as_object_mut()
+                .ok_or("Invalid fixture proposal")?
+                .entry("operationId")
+                .or_insert_with(|| Value::String(uuid::Uuid::new_v4().to_string()));
             let preview = call(
                 application,
                 "work_tracking.advance.preview",
@@ -203,7 +208,7 @@ pub(crate) fn desktop_e2e_seed_completed_tracking(
     let transition = call(
         &application,
         "work_tracking.append",
-        json!({"operationId":uuid::Uuid::new_v4().to_string(),"sessionId":session_id,"expectedHeadRevision":task["headRevision"],"event":{"kind":"task_transition_proposed","to":"in_progress"}}),
+        json!({"operationId":uuid::Uuid::new_v4().to_string(),"sessionId":session_id,"expectedHeadRevision":task["headRevision"],"event":{"kind":"task_transition_proposed","taskId":task["resultEntityId"],"expectedTaskRevision":1,"to":"in_progress"}}),
     )?;
     let started = call(
         &application,
@@ -312,6 +317,7 @@ pub(crate) fn desktop_e2e_seed_queue_notifications(
 pub(crate) async fn desktop_e2e_mcp_probe(
     connection_id: String,
     revoked: bool,
+    task_id: Option<String>,
 ) -> Result<Value, String> {
     if std::env::var_os("LLM_WIKI_E2E_RESULT").is_none() {
         return Err("Desktop E2E mode is disabled".into());
@@ -372,6 +378,220 @@ pub(crate) async fn desktop_e2e_mcp_probe(
         .is_some_and(|tools| tools.iter().any(|t| t["name"] == "inbound_work_open"))
     {
         return Err("Packaged MCP tools missing".into());
+    }
+    if let Some(task_id) = task_id {
+        fn task_snapshot(value: &Value, task_id: &str) -> Option<Value> {
+            if let Some(object) = value.as_object() {
+                let matches = ["id", "taskId", "entityRef"]
+                    .iter()
+                    .any(|key| object.get(*key).and_then(Value::as_str) == Some(task_id));
+                if matches
+                    && object.get("problemLinks").is_some_and(Value::is_array)
+                    && object.get("relationships").is_some_and(Value::is_array)
+                {
+                    return Some(value.clone());
+                }
+                return object
+                    .values()
+                    .find_map(|item| task_snapshot(item, task_id));
+            }
+            value
+                .as_array()?
+                .iter()
+                .find_map(|item| task_snapshot(item, task_id))
+        }
+        fn exact_problem_links(task: &Value) -> Result<Vec<(String, i64)>, String> {
+            let mut links = task["problemLinks"]
+                .as_array()
+                .ok_or("MCP Task has no Problem links")?
+                .iter()
+                .map(|link| {
+                    Ok((
+                        link["problemId"]
+                            .as_str()
+                            .ok_or("MCP Problem link has no identity")?
+                            .to_owned(),
+                        link["problemRevision"]
+                            .as_i64()
+                            .ok_or("MCP Problem link has no exact revision")?,
+                    ))
+                })
+                .collect::<Result<Vec<_>, String>>()?;
+            links.sort();
+            if links.is_empty() {
+                return Err("MCP Task lost the desktop Problem link".into());
+            }
+            Ok(links)
+        }
+        fn exact_relationships(
+            task: &Value,
+        ) -> Result<Vec<(String, String, String, String)>, String> {
+            let mut relationships = task["relationships"]
+                .as_array()
+                .ok_or("MCP Task has no relationship array")?
+                .iter()
+                .map(|link| {
+                    Ok((
+                        link["id"]
+                            .as_str()
+                            .ok_or("MCP relationship has no identity")?
+                            .to_owned(),
+                        link["sourceTaskId"]
+                            .as_str()
+                            .ok_or("MCP relationship has no source")?
+                            .to_owned(),
+                        link["targetTaskId"]
+                            .as_str()
+                            .ok_or("MCP relationship has no target")?
+                            .to_owned(),
+                        link["kind"]
+                            .as_str()
+                            .ok_or("MCP relationship has no kind")?
+                            .to_owned(),
+                    ))
+                })
+                .collect::<Result<Vec<_>, String>>()?;
+            relationships.sort();
+            if relationships.is_empty() {
+                return Err("MCP Task lost the desktop relationship".into());
+            }
+            Ok(relationships)
+        }
+        let current = exchange(&mut input, &mut output,
+            json!({"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"workbench_current","arguments":{},"_meta":meta}})).await?;
+        let current_task = task_snapshot(&current["result"]["structuredContent"], &task_id)
+            .ok_or("Direct desktop Task missing from scoped current MCP projection")?;
+        let overview = exchange(&mut input, &mut output,
+            json!({"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"workbench_overview","arguments":{"limit":50},"_meta":meta}})).await?;
+        let overview_task = task_snapshot(&overview["result"]["structuredContent"], &task_id)
+            .ok_or("Direct desktop Task missing from MCP overview")?;
+        let links = exact_problem_links(&current_task)?;
+        let relationships = exact_relationships(&current_task)?;
+        if links != exact_problem_links(&overview_task)? {
+            return Err("MCP current and overview disagree on exact Problem revisions".into());
+        }
+        if relationships != exact_relationships(&overview_task)? {
+            return Err("MCP current and overview disagree on exact Task relationships".into());
+        }
+        let rejected_args = json!({"operationId":"packaged-task-cancel","lineageKey":"packaged-task","mode":"continue_task","taskId":task_id});
+        let rejected_preview = exchange(&mut input, &mut output,
+            json!({"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"inbound_work_open","arguments":rejected_args,"_meta":meta}})).await?;
+        if rejected_preview["result"]["resultType"] != "input_required" {
+            return Err("Direct Task continuation bypassed exact review".into());
+        }
+        let rejected = exchange(&mut input, &mut output,
+            json!({"jsonrpc":"2.0","id":13,"method":"tools/call","params":{"name":"inbound_work_open","arguments":rejected_args,"requestState":rejected_preview["result"]["requestState"],"inputResponses":{"decision":{"action":"accept","content":{"decision":"reject"}}},"_meta":meta}})).await?;
+        let rejected = &rejected["result"]["structuredContent"];
+        if rejected["decision"] != "reject"
+            || rejected["sessionId"].as_str().is_some()
+            || rejected["created"] == true
+        {
+            return Err("Rejected Task continuation created durable work".into());
+        }
+        let args = json!({"operationId":"packaged-task-accept","lineageKey":"packaged-task","mode":"continue_task","taskId":task_id});
+        let preview = exchange(&mut input, &mut output,
+            json!({"jsonrpc":"2.0","id":14,"method":"tools/call","params":{"name":"inbound_work_open","arguments":args,"_meta":meta}})).await?;
+        if preview["result"]["resultType"] != "input_required" {
+            return Err("Accepted Task continuation had no exact review".into());
+        }
+        let accepted = exchange(&mut input, &mut output,
+            json!({"jsonrpc":"2.0","id":15,"method":"tools/call","params":{"name":"inbound_work_open","arguments":args,"requestState":preview["result"]["requestState"],"inputResponses":{"decision":{"action":"accept","content":{"decision":"accept"}}},"_meta":meta}})).await?;
+        let accepted = &accepted["result"]["structuredContent"];
+        let session_id = accepted["sessionId"]
+            .as_str()
+            .ok_or("Reviewed Task continuation failed")?;
+        if accepted["created"] != true || accepted["headRevision"] != 1 {
+            return Err(
+                "Cancelled continuation had already created a session or work event".into(),
+            );
+        }
+        if !accepted["captureId"].is_null() {
+            return Err("Direct Task continuation fabricated a Capture".into());
+        }
+        let session = exchange(&mut input, &mut output,
+            json!({"jsonrpc":"2.0","id":16,"method":"tools/call","params":{"name":"inbound_work_session_read","arguments":{"sessionId":session_id},"_meta":meta}})).await?;
+        let session = &session["result"]["structuredContent"];
+        if !session["capture"].is_null() {
+            return Err("Captureless session was projected as a Capture".into());
+        }
+        if !session["recentEvents"]
+            .as_array()
+            .is_some_and(|events| events.len() == 1 && events[0]["kind"] == "task_binding")
+        {
+            return Err(
+                "Task continuation created events other than the existing-Task binding".into(),
+            );
+        }
+        let bound_task = task_snapshot(session, &task_id)
+            .ok_or("Continued MCP session lost its canonical Task")?;
+        if links != exact_problem_links(&bound_task)?
+            || relationships != exact_relationships(&bound_task)?
+        {
+            return Err("Continued MCP session lost exact desktop relationships".into());
+        }
+        let task_revision = bound_task["taskRevision"]
+            .as_i64()
+            .ok_or("Continued Task has no exact revision")?;
+        let detail = "Edited through the packaged stdio MCP child after captureless continuation";
+        let append_args = json!({"operationId":"packaged-task-revision-proposal","sessionId":session_id,"expectedHeadRevision":session["headRevision"],"event":{"kind":"task_revision_proposed","taskId":task_id,"expectedTaskRevision":task_revision,"patch":{"detail":detail}}});
+        let appended = exchange(&mut input, &mut output,
+            json!({"jsonrpc":"2.0","id":17,"method":"tools/call","params":{"name":"inbound_work_append","arguments":append_args,"_meta":meta}})).await?;
+        let appended = &appended["result"]["structuredContent"];
+        let source_event = appended["eventId"]
+            .as_str()
+            .ok_or("Task revision proposal was not durably appended")?;
+        let advance_args = json!({"operationId":"packaged-task-revision-accept","sessionId":session_id,"sourceEventId":source_event,"expectedHeadRevision":appended["headRevision"],"action":"task.revision","proposedPayload":{"taskId":task_id,"expectedTaskRevision":task_revision,"patch":{"detail":detail}}});
+        let advance_preview = exchange(&mut input, &mut output,
+            json!({"jsonrpc":"2.0","id":19,"method":"tools/call","params":{"name":"inbound_work_advance","arguments":advance_args,"_meta":meta}})).await?;
+        if advance_preview["result"]["resultType"] != "input_required" {
+            return Err("Canonical Task revision bypassed exact action review".into());
+        }
+        let advanced = exchange(&mut input, &mut output,
+            json!({"jsonrpc":"2.0","id":20,"method":"tools/call","params":{"name":"inbound_work_advance","arguments":advance_args,"requestState":advance_preview["result"]["requestState"],"inputResponses":{"decision":{"action":"accept","content":{"decision":"accept"}}},"_meta":meta}})).await?;
+        if advanced["result"]["structuredContent"]["decision"] != "accept" {
+            return Err("Reviewed canonical Task revision failed through MCP".into());
+        }
+        let context = exchange(&mut input, &mut output,
+            json!({"jsonrpc":"2.0","id":21,"method":"tools/call","params":{"name":"task_context_read","arguments":{"taskId":task_id},"_meta":meta}})).await?;
+        let context = &context["result"]["structuredContent"];
+        if context["task"]["detail"] != detail
+            || context["task"]["taskRevision"] != task_revision + 1
+            || context["readiness"]["entries"].as_array().is_none()
+        {
+            return Err("Scoped Task context did not reflect the exact MCP mutation".into());
+        }
+        let session_before_replay = exchange(&mut input, &mut output,
+            json!({"jsonrpc":"2.0","id":211,"method":"tools/call","params":{"name":"inbound_work_session_read","arguments":{"sessionId":session_id},"_meta":meta}})).await?;
+        let head_before_replay = session_before_replay["result"]["structuredContent"]
+            ["headRevision"]
+            .as_i64()
+            .ok_or("Task session has no head revision before replay")?;
+        let lineage = exchange(&mut input, &mut output,
+            json!({"jsonrpc":"2.0","id":23,"method":"tools/call","params":{"name":"task_lineage_read","arguments":{"taskId":task_id},"_meta":meta}})).await?;
+        if lineage["result"]["structuredContent"]["taskId"] != task_id
+            || lineage["result"]["structuredContent"]["nodes"]
+                .as_array()
+                .is_none()
+        {
+            return Err("Active Task lineage could not be read through MCP".into());
+        }
+        let replay = exchange(&mut input, &mut output,
+            json!({"jsonrpc":"2.0","id":22,"method":"tools/call","params":{"name":"inbound_work_advance","arguments":advance_args,"_meta":meta}})).await?;
+        if replay["result"]["resultType"] == "input_required"
+            || replay["result"]["structuredContent"]["decision"] != "accept"
+        {
+            return Err("Completed Task operation did not replay without a second approval".into());
+        }
+        let session_after_replay = exchange(&mut input, &mut output,
+            json!({"jsonrpc":"2.0","id":212,"method":"tools/call","params":{"name":"inbound_work_session_read","arguments":{"sessionId":session_id},"_meta":meta}})).await?;
+        if session_after_replay["result"]["structuredContent"]["headRevision"] != head_before_replay
+        {
+            return Err("Task operation replay appended a duplicate session event".into());
+        }
+        child.kill().await.map_err(|e| e.to_string())?;
+        return Ok(
+            json!({"captureless":true,"taskId":task_id,"problemLinksVerified":true,"relationshipsVerified":true,"cancelledWithoutSession":true,"changedDetail":detail,"expectedTaskRevision":task_revision+1}),
+        );
     }
     let args = json!({"operationId":"packaged-open","lineageKey":"packaged-external","mode":"create","capture":{"title":"Packaged MCP Capture","summary":"Created through a real stdio child and the GUI owner"}});
     let preview=exchange(&mut input,&mut output,json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"inbound_work_open","arguments":args,"_meta":meta}})).await?;

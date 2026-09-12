@@ -255,6 +255,31 @@ async fn stdio_initializes_lists_closed_tools_and_opens_idempotently() {
         );
         assert_eq!(response.status, 201, "{}", response.body);
     }
+    let task = app.execute_domain(
+        "workflow",
+        NativeOperation {
+            name: "task.create".into(),
+            input: json!({"operationId":"stdio-knowledge-task","inputText":"Review canonical MCP Knowledge","title":"Canonical MCP Knowledge","outcome":"Publish only after exact review"}),
+        },
+    );
+    assert_eq!(task.status, 200, "{}", task.body);
+    let task_id = task.body["id"].as_str().unwrap().to_owned();
+    let started = app.execute_domain(
+        "workflow",
+        NativeOperation {
+            name: "task.transition".into(),
+            input: json!({"operationId":"stdio-knowledge-start","taskId":task_id,"expectedTaskRevision":1,"to":"in_progress"}),
+        },
+    );
+    assert_eq!(started.status, 200, "{}", started.body);
+    let completed = app.execute_domain(
+        "workflow",
+        NativeOperation {
+            name: "task.completion.create".into(),
+            input: json!({"operationId":"stdio-knowledge-complete","taskId":task_id,"expectedTaskRevision":1,"evidence":"Canonical MCP review passed"}),
+        },
+    );
+    assert_eq!(completed.status, 200, "{}", completed.body);
     let created=app.execute_work_tracking(NativeOperation{name:"work_tracking.connection.create".into(),input:json!({"name":"Contract test","scopes":["session:read","session:write","topic:read","workbench:current:read","workbench:overview:read","vault:search:lexical","vault:evidence:read","knowledge:draft:write","knowledge:publish"],"topicIds":["LLM Wiki"],"checkpointPolicy":"confirm_each"})});
     assert_eq!(created.status, 201, "{}", created.body);
     let id = created.body["id"].as_str().unwrap();
@@ -305,7 +330,7 @@ async fn stdio_initializes_lists_closed_tools_and_opens_idempotently() {
         .filter_map(|v| v["name"].as_str())
         .collect::<Vec<_>>();
     assert!(names.contains(&"inbound_work_open"));
-    assert!(names.contains(&"knowledge_publish"));
+    assert!(names.contains(&"task_knowledge_publish"));
     assert!(!names.iter().any(|name| name.contains("sql")));
     for tool in tools["result"]["tools"].as_array().unwrap() {
         assert_eq!(
@@ -340,7 +365,7 @@ async fn stdio_initializes_lists_closed_tools_and_opens_idempotently() {
         .unwrap()
         .query_row("SELECT count(*) FROM captures", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(capture_count, 51);
+    assert_eq!(capture_count, 52);
     send(
         &mut stdin,
         json!({"jsonrpc":"2.0","id":30,"method":"tools/call","params":{"name":"inbound_work_open","arguments":arguments,"requestState":preview["result"]["requestState"],"inputResponses":{"decision":{"action":"accept","content":{"decision":"accept"}}},"_meta":meta.clone()}}),
@@ -425,60 +450,173 @@ async fn stdio_initializes_lists_closed_tools_and_opens_idempotently() {
             .unwrap(),
     )
     .unwrap();
-    assert_eq!(second_overview["items"].as_array().unwrap().len(), 2);
+    assert_eq!(second_overview["items"].as_array().unwrap().len(), 3);
     assert!(second_overview["nextCursor"].is_null());
-    rusqlite::Connection::open(&db).unwrap().execute("UPDATE work_tracking_sessions SET state='completed',publication_state='offered',publication_offer_revision=head_revision WHERE id=?",[session.as_str().unwrap()]).unwrap();
-    // This protocol-only fixture supplies a completion decision; canonical
-    // completion and Lineage are exercised by work_tracking_release_acceptance.
-    rusqlite::Connection::open(&db).unwrap().execute("INSERT INTO work_tracking_decisions(id,session_id,event_id,decision,accepted_payload_hash,result_entity_type,result_entity_id,decision_channel,created_at) SELECT 'protocol-completion',session_id,id,'accepted',payload_hash,'completions','protocol-completion','test_fixture',ingested_at FROM work_tracking_events WHERE id=?",[event["eventId"].as_str().unwrap()]).unwrap();
-    let draft_args = json!({"operationId":"draft","sessionId":session,"completionEventId":event["eventId"],"draftId":"draft-contract","expectedDraftRevision":0,"title":"Contract knowledge","summary":"Reviewed summary","bodyMarkdown":"# Contract knowledge\n\nExact reviewed body","evidenceRefs":[]});
+    let draft_args = json!({"operationId":"task-draft-reject","taskId":task_id,"expectedTaskRevision":1,"bodyMarkdown":"# Canonical MCP Knowledge\n\nExact reviewed body"});
     send(
         &mut stdin,
-        json!({"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"knowledge_draft_save","arguments":draft_args,"_meta":meta.clone()}}),
+        json!({"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"task_knowledge_draft","arguments":draft_args,"_meta":meta.clone()}}),
     );
     let preview = receive(&mut reader);
     assert_eq!(preview["result"]["resultType"], "input_required");
     send(
         &mut stdin,
-        json!({"jsonrpc":"2.0","id":100,"method":"tools/call","params":{"name":"knowledge_draft_save","arguments":draft_args,"requestState":preview["result"]["requestState"],"inputResponses":{"decision":{"action":"accept","content":{"decision":"accept"}}},"_meta":meta.clone()}}),
+        json!({"jsonrpc":"2.0","id":100,"method":"tools/call","params":{"name":"task_knowledge_draft","arguments":draft_args,"requestState":preview["result"]["requestState"],"inputResponses":{"decision":{"action":"reject","content":{"decision":"reject"}}},"_meta":meta.clone()}}),
+    );
+    let rejected = receive(&mut reader);
+    assert_eq!(
+        rejected["result"]["structuredContent"]["decision"],
+        "reject"
+    );
+    assert!(!vault.join("Knowledge").exists());
+    let draft_args = json!({"operationId":"task-draft-accept","taskId":task_id,"expectedTaskRevision":1,"bodyMarkdown":"# Canonical MCP Knowledge\n\nExact reviewed body"});
+    send(
+        &mut stdin,
+        json!({"jsonrpc":"2.0","id":101,"method":"tools/call","params":{"name":"task_knowledge_draft","arguments":draft_args,"_meta":meta.clone()}}),
+    );
+    let preview = receive(&mut reader);
+    assert_eq!(preview["result"]["resultType"], "input_required");
+    send(
+        &mut stdin,
+        json!({"jsonrpc":"2.0","id":102,"method":"tools/call","params":{"name":"task_knowledge_draft","arguments":draft_args,"requestState":preview["result"]["requestState"],"inputResponses":{"decision":{"action":"accept","content":{"decision":"accept"}}},"_meta":meta.clone()}}),
     );
     let draft = receive(&mut reader);
     let saved = &draft["result"]["structuredContent"];
     assert_eq!(saved["draftRevision"], 1);
-    std::fs::create_dir_all(vault.join("Knowledge")).unwrap();
-    let target = vault.join("Knowledge/contract-knowledge-draft-co.md");
-    std::fs::write(&target, "external edit").unwrap();
-    let publish_args = json!({"operationId":"publish","draftId":"draft-contract","expectedDraftRevision":1,"expectedContentHash":saved["contentHash"]});
+    assert_eq!(saved["taskId"], task_id);
+    assert!(!saved["sourceHash"].as_str().unwrap_or_default().is_empty());
+    assert!(!vault.join("Knowledge").exists());
+    let publish_args = json!({"operationId":"task-publish","taskId":task_id,"draftRevision":saved["draftRevision"],"expectedContentHash":saved["contentHash"],"expectedSourceHash":saved["sourceHash"]});
     send(
         &mut stdin,
-        json!({"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"knowledge_publish","arguments":publish_args,"_meta":meta.clone()}}),
+        json!({"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"task_knowledge_publish","arguments":publish_args,"_meta":meta.clone()}}),
     );
     let preview = receive(&mut reader);
     assert_eq!(preview["result"]["resultType"], "input_required");
     let publish_state = preview["result"]["requestState"].clone();
     send(
         &mut stdin,
-        json!({"jsonrpc":"2.0","id":110,"method":"tools/call","params":{"name":"knowledge_publish","arguments":publish_args,"requestState":publish_state,"inputResponses":{"decision":{"action":"accept","content":{"decision":"accept"}}},"_meta":meta.clone()}}),
-    );
-    let conflict = receive(&mut reader);
-    assert!(
-        conflict.get("error").is_some() || conflict["result"]["isError"] == true,
-        "{conflict}"
-    );
-    assert_eq!(std::fs::read_to_string(&target).unwrap(), "external edit");
-    std::fs::remove_file(&target).unwrap();
-    send(
-        &mut stdin,
-        json!({"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"knowledge_publish","arguments":publish_args,"requestState":publish_state,"inputResponses":{"decision":{"action":"accept","content":{"decision":"accept"}}},"_meta":meta.clone()}}),
+        json!({"jsonrpc":"2.0","id":110,"method":"tools/call","params":{"name":"task_knowledge_publish","arguments":publish_args,"requestState":publish_state,"inputResponses":{"decision":{"action":"accept","content":{"decision":"accept"}}},"_meta":meta.clone()}}),
     );
     let published = receive(&mut reader);
+    let published_content = &published["result"]["structuredContent"];
     assert_eq!(
-        published["result"]["structuredContent"]["status"],
-        "published"
+        published_content["publicationStatus"], "queued",
+        "{published}"
     );
+    let drained = app.work_tracking_service().drain(10).unwrap();
+    assert!(drained >= 1);
+    app.work_tracking_service().drain(10).unwrap();
+    let (state, path): (String, Option<String>) = rusqlite::Connection::open(&db)
+        .unwrap()
+        .query_row(
+            "SELECT state,path FROM task_knowledge_drafts WHERE task_id=? AND revision=1",
+            [&task_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    let job: (String, Option<String>) = rusqlite::Connection::open(&db)
+        .unwrap()
+        .query_row("SELECT state,safe_error_code FROM work_tracking_publication_jobs ORDER BY rowid DESC LIMIT 1", [], |row| Ok((row.get(0)?, row.get(1)?)))
+        .unwrap();
+    assert_eq!(
+        state, "published",
+        "publication state={state}, path={path:?}, job={job:?}"
+    );
+    let target = vault.join(path.unwrap());
     assert!(std::fs::read_to_string(&target)
         .unwrap()
         .contains("Exact reviewed body"));
+    let withdraw_args = json!({"operationId":"task-withdraw","taskId":task_id,"draftRevision":saved["draftRevision"],"expectedContentHash":saved["contentHash"],"expectedSourceHash":saved["sourceHash"]});
+    send(
+        &mut stdin,
+        json!({"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"task_knowledge_withdraw","arguments":withdraw_args,"_meta":meta.clone()}}),
+    );
+    let preview = receive(&mut reader);
+    assert_eq!(preview["result"]["resultType"], "input_required");
+    send(
+        &mut stdin,
+        json!({"jsonrpc":"2.0","id":120,"method":"tools/call","params":{"name":"task_knowledge_withdraw","arguments":withdraw_args,"requestState":preview["result"]["requestState"],"inputResponses":{"decision":{"action":"accept","content":{"decision":"accept"}}},"_meta":meta.clone()}}),
+    );
+    let withdrawn = receive(&mut reader);
+    assert_eq!(
+        withdrawn["result"]["structuredContent"]["publicationStatus"],
+        "queued"
+    );
+    app.work_tracking_service().drain(10).unwrap();
+    assert!(!target.exists());
+    // Typed optional Capture must stay absent for direct Task continuation, including JSON null.
+    let db_connection = rusqlite::Connection::open(&db).unwrap();
+    let before_captures: i64 = db_connection
+        .query_row("SELECT count(*) FROM captures", [], |row| row.get(0))
+        .unwrap();
+    let before_tasks: i64 = db_connection
+        .query_row("SELECT count(*) FROM tasks", [], |row| row.get(0))
+        .unwrap();
+    let before_sessions: i64 = db_connection
+        .query_row("SELECT count(*) FROM work_tracking_sessions", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    for (index, decision) in ["reject", "accept"].iter().enumerate() {
+        let mut arguments = json!({"operationId":format!("typed-task-continuation-{index}"),"lineageKey":"typed-task-continuation","mode":"continue_task","taskId":task_id});
+        if *decision == "accept" {
+            arguments["capture"] = Value::Null;
+        }
+        send(
+            &mut stdin,
+            json!({"jsonrpc":"2.0","id":700+index*2,"method":"tools/call","params":{"name":"inbound_work_open","arguments":arguments,"_meta":meta}}),
+        );
+        let preview = receive(&mut reader);
+        assert_eq!(
+            preview["result"]["resultType"], "input_required",
+            "{preview}"
+        );
+        send(
+            &mut stdin,
+            json!({"jsonrpc":"2.0","id":701+index*2,"method":"tools/call","params":{"name":"inbound_work_open","arguments":arguments,"requestState":preview["result"]["requestState"],"inputResponses":{"decision":{"action":"accept","content":{"decision":decision}}},"_meta":meta}}),
+        );
+        let finished = receive(&mut reader);
+        let outcome = &finished["result"]["structuredContent"];
+        let sessions: i64 = db_connection
+            .query_row("SELECT count(*) FROM work_tracking_sessions", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        if *decision == "reject" {
+            assert_eq!(outcome["decision"], "reject", "{finished}");
+            assert!(outcome["sessionId"].is_null());
+            assert_eq!(sessions, before_sessions);
+        } else {
+            assert_eq!(outcome["created"], true, "{finished}");
+            assert_eq!(sessions, before_sessions + 1);
+            assert_eq!(outcome["headRevision"], 1);
+            assert!(outcome["captureId"].is_null());
+            let session_id = outcome["sessionId"].as_str().unwrap();
+            let capture: Option<String> = db_connection
+                .query_row(
+                    "SELECT capture_id FROM work_tracking_sessions WHERE id=?",
+                    [session_id],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert!(capture.is_none());
+            let linked_task: String = db_connection.query_row("SELECT entity_id FROM work_tracking_links WHERE session_id=? AND entity_type='tasks'", [session_id], |row| row.get(0)).unwrap();
+            assert_eq!(linked_task, task_id);
+            let events: i64 = db_connection.query_row("SELECT count(*) FROM work_tracking_events WHERE session_id=? AND kind='task_binding'", [session_id], |row| row.get(0)).unwrap();
+            assert_eq!(events, 1);
+        }
+    }
+    let after_captures: i64 = db_connection
+        .query_row("SELECT count(*) FROM captures", [], |row| row.get(0))
+        .unwrap();
+    let after_tasks: i64 = db_connection
+        .query_row("SELECT count(*) FROM tasks", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(after_captures, before_captures);
+    assert_eq!(after_tasks, before_tasks);
+    drop(db_connection);
+
     let revoked = app.execute_work_tracking(NativeOperation {
         name: "work_tracking.connection.revoke".into(),
         input: json!({"connectionId":id}),
@@ -552,11 +690,9 @@ async fn legacy_client_cannot_bypass_governed_elicitation() {
         json!({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"inbound_work_advance","arguments":{"operationId":"legacy-advance","sessionId":session,"expectedHeadRevision":2,"sourceEventId":event,"action":"adopt_problem","proposedPayload":{"statement":"Review me"}}}}),
     );
     let denied = receive(&mut reader);
-    assert_eq!(denied["result"]["isError"], true);
-    assert_eq!(
-        denied["result"]["structuredContent"]["error"]["code"],
-        "elicitation_required"
-    );
+    // Retired workflow actions are rejected by the closed action schema before
+    // elicitation; neither a review nor a decision may be manufactured.
+    assert!(denied.get("error").is_some() || denied["result"]["isError"] == true);
     let connection = rusqlite::Connection::open(&db).unwrap();
     let decisions: i64 = connection
         .query_row("SELECT count(*) FROM work_tracking_decisions", [], |row| {

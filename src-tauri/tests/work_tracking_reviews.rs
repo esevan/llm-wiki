@@ -135,8 +135,8 @@ fn stale_governed_review_can_be_cancelled_but_not_accepted_or_replayed() {
             "accept",
         )
         .unwrap();
-    let event=service.append(owner,&json!({"operationId":"p","sessionId":opened["sessionId"],"expectedHeadRevision":1,"event":{"kind":"problem_draft","statement":"Pending review","detail":"Do not adopt on cancel"}})).unwrap();
-    let proposal = json!({"sessionId":opened["sessionId"],"expectedHeadRevision":event["headRevision"],"sourceEventId":event["eventId"],"action":"adopt_problem","proposedPayload":{"statement":"Pending review","detail":"Do not adopt on cancel"}});
+    let event=service.append(owner,&json!({"operationId":"p","sessionId":opened["sessionId"],"expectedHeadRevision":1,"event":{"kind":"task_created","title":"Pending Task","outcome":"Do not create on cancel"}})).unwrap();
+    let proposal = json!({"operationId":"pending-task-create","sessionId":opened["sessionId"],"expectedHeadRevision":event["headRevision"],"sourceEventId":event["eventId"],"action":"create_task","proposedPayload":{"title":"Pending Task","outcome":"Do not create on cancel"}});
     let review = service.begin_advance(owner, &proposal).unwrap();
     service.append(owner,&json!({"operationId":"newer","sessionId":opened["sessionId"],"expectedHeadRevision":event["headRevision"],"event":{"kind":"work_log_checkpoint","summary":"A newer change"}})).unwrap();
     let state = review.as_str();
@@ -149,14 +149,30 @@ fn stale_governed_review_can_be_cancelled_but_not_accepted_or_replayed() {
             .unwrap()["decision"],
         "cancel"
     );
-    assert!(service
+    // Once the cancellation has consumed this review, any decision replay returns
+    // the stored terminal cancellation. It must never revive the stale proposal.
+    let replay = service
         .finish_advance(owner, state, &proposal, "accept")
-        .is_err());
+        .unwrap();
+    assert_eq!(replay["decision"], "cancel");
     let session = app.execute_work_tracking(NativeOperation {
         name: "work_tracking.session".into(),
         input: json!({"sessionId":opened["sessionId"]}),
     });
-    assert!(session.body["linkedWorkflow"]["problem"].is_null());
+    assert!(session.body["linkedWorkflow"]["task"].is_null());
+    let connection = rusqlite::Connection::open(root.path().join("state.sqlite")).unwrap();
+    let tasks: i64 = connection
+        .query_row("SELECT count(*) FROM tasks", [], |row| row.get(0))
+        .unwrap();
+    let accepted_decisions: i64 = connection
+        .query_row(
+            "SELECT count(*) FROM work_tracking_decisions WHERE event_id=? AND decision LIKE 'accepted%'",
+            [event["eventId"].as_str().unwrap()],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(tasks, 0);
+    assert_eq!(accepted_decisions, 0);
 }
 
 #[test]

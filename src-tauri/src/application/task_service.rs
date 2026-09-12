@@ -26,236 +26,523 @@ impl TaskApplicationService {
     pub(crate) fn execute(&self, name: &str, input: &Value) -> Result<Value, String> {
         match name {
             "capture.create" => self.capture(input),
-            "task.create" => self.create(input),
             "task.get" => self.get(req(input, "taskId")?),
             "workbench.get" => self.workbench(),
-            "task.revision" => self.revise(req(input, "taskId")?, input),
-            "task.transition" => self.transition(req(input, "taskId")?, input),
-            "task.problem-link.create" => self.problem_link(req(input, "taskId")?, input),
-            "task.problem-link.delete" => {
-                self.unlink("task_problem_links", req(input, "linkId")?, input)
-            }
-            "task.relationship.create" => self.relationship(req(input, "taskId")?, input),
-            "task.relationship.delete" => {
-                self.unlink("task_relationships", req(input, "relationshipId")?, input)
-            }
             "task.readiness.get" => self.readiness(req(input, "taskId")?),
-            "task.readiness.decision" => self.readiness_decision(req(input, "taskId")?, input),
             "task.work-log.get" => self.work_log(req(input, "taskId")?),
-            "task.work-log.create" => self.work_log_create(req(input, "taskId")?, input),
-            "work-log.comment.create" => self.comment(req(input, "entryId")?, input),
-            "task.checklist.create" => self.checklist(req(input, "taskId")?, input),
-            "task.checklist.update" => {
-                self.checklist_update(req(input, "taskId")?, req(input, "itemId")?, input)
-            }
-            "task.decision.create" => self.decision(req(input, "taskId")?, input),
-            "task.completion.create" => self.complete(req(input, "taskId")?, input),
-            "problem.create" => self.problem(input, None),
-            "problem.revision" => self.problem(input, Some(req(input, "problemId")?)),
-            "problem.resolution.create" => self.resolve_problem(req(input, "problemId")?, input),
+            "task.create"
+            | "task.revision"
+            | "task.transition"
+            | "task.reopen"
+            | "task.problem-link.create"
+            | "task.problem-link.delete"
+            | "task.relationship.create"
+            | "task.relationship.delete"
+            | "task.readiness.decision"
+            | "task.work-log.create"
+            | "work-log.comment.create"
+            | "task.checklist.create"
+            | "task.checklist.update"
+            | "task.decision.create"
+            | "task.completion.create"
+            | "problem.create"
+            | "problem.revision"
+            | "problem.resolution.create" => self
+                .repo
+                .transaction(|tx| self.execute_tx_for_tracking(tx, name, input, None)),
             _ => Err(format!("Native operation is not implemented: {name}")),
         }
     }
-    /// Transaction-scoped entry point for MCP/work-tracking proposal adoption.  Callers own
-    /// the outer transaction so creating a Task and appending its event cannot partially commit.
-    pub(crate) fn execute_tx(
+    /// Transaction-scoped Task mutation with a trusted tracking origin. Only the SQLite
+    /// tracking adapter may supply `origin_session_id`; external payloads cannot suppress their
+    /// own linked-session event.
+    pub(crate) fn execute_tx_for_tracking(
         &self,
         tx: &Transaction<'_>,
         name: &str,
         input: &Value,
+        origin_session_id: Option<&str>,
     ) -> Result<Value, String> {
+        if let Some(result) = self.op(tx, input, name)? {
+            return Ok(result);
+        }
         let at = task_repository::now();
+        let result = self.mutation_tx(tx, name, input, &at)?;
+        self.finish(tx, input, name, &result)?;
+        task_repository::sync_linked_sessions_tx(
+            tx,
+            req(input, "operationId")?,
+            name,
+            origin_session_id,
+            &at,
+        )?;
+        Ok(result)
+    }
+
+    fn mutation_tx(
+        &self,
+        tx: &Transaction<'_>,
+        name: &str,
+        input: &Value,
+        at: &str,
+    ) -> Result<Value, String> {
         match name {
-            "task.create" => {
-                if let Some(result) = self.op(tx, input, name)? {
-                    return Ok(result);
-                }
-                let task = self.create_task_tx(
-                    tx,
-                    input,
-                    input.get("originCaptureId").and_then(Value::as_str),
-                    None,
-                    &at,
-                )?;
-                task_repository::record_activity_tx(
-                    tx,
-                    "task",
-                    task["id"].as_str().unwrap_or_default(),
-                    "created",
-                    req(input, "operationId")?,
-                    &at,
-                )?;
-                self.finish(tx, input, name, &task)?;
-                Ok(task)
-            }
-            "problem.create" => {
-                if let Some(result) = self.op(tx, input, name)? {
-                    return Ok(result);
-                }
-                let problem = self.create_problem_revision_tx(tx, input, None, &at)?;
-                self.finish(tx, input, name, &problem)?;
-                Ok(problem)
-            }
-            "problem.revision" => {
-                if let Some(result) = self.op(tx, input, name)? {
-                    return Ok(result);
-                }
-                let problem = self.create_problem_revision_tx(
-                    tx,
-                    input,
-                    Some(req(input, "problemId")?),
-                    &at,
-                )?;
-                self.finish(tx, input, name, &problem)?;
-                Ok(problem)
-            }
+            "task.create" => self.task_create_mutation_tx(tx, input, at),
+            "task.revision" => self.task_revision_tx(tx, req(input, "taskId")?, input, at),
             "task.transition" => {
-                if let Some(result) = self.op(tx, input, name)? {
-                    return Ok(result);
-                }
-                let id = req(input, "taskId")?;
-                let revision = self.expected(tx, id, input)?;
-                let from: String = tx
-                    .query_row("SELECT state FROM tasks WHERE id=?", [id], |r| r.get(0))
-                    .map_err(|e| e.to_string())?;
-                let state = validate_state_transition(&from, req(input, "to")?)?;
-                tx.execute("UPDATE tasks SET state=?,started_at=CASE WHEN ?='in_progress' AND started_at IS NULL THEN ? ELSE started_at END,reopened_at=CASE WHEN ?='in_progress' AND ?='completed' THEN ? ELSE reopened_at END WHERE id=?",params![state,state,at,state,from,at,id]).map_err(|e|e.to_string())?;
-                task_repository::record_activity_tx(
-                    tx,
-                    "task",
-                    id,
-                    "transition",
-                    req(input, "operationId")?,
-                    &at,
-                )?;
-                let result = json!({"id":id,"taskRevision":revision,"state":state});
-                self.finish(tx, input, name, &result)?;
-                Ok(result)
+                self.task_transition_tx(tx, req(input, "taskId")?, input, None, at)
             }
-            "task.revision" => {
-                if let Some(result) = self.op(tx, input, name)? {
-                    return Ok(result);
-                }
-                let id = req(input, "taskId")?;
-                let rev = self.expected(tx, id, input)?;
-                let patch = input
-                    .get("patch")
-                    .and_then(Value::as_object)
-                    .ok_or("invalid_input: patch is required")?;
-                let prior:(String,String,String,String,String,String)=tx.query_row("SELECT title,detail,outcome,scope,non_goals,validation_criteria FROM task_revisions WHERE task_id=? AND revision=?",params![id,rev],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?))).map_err(|e|e.to_string())?;
-                let field = |key: &str, old: String| {
-                    patch
-                        .get(key)
-                        .and_then(Value::as_str)
-                        .unwrap_or(&old)
-                        .trim()
-                        .to_owned()
-                };
-                let values = [
-                    field("title", prior.0),
-                    field("detail", prior.1),
-                    field("outcome", prior.2),
-                    field("scope", prior.3),
-                    field("nonGoals", prior.4),
-                    field("validationCriteria", prior.5),
-                ];
-                if values[0].is_empty() {
-                    return Err("invalid_input: title is required".into());
-                }
-                tx.execute("INSERT INTO task_revisions(task_id,revision,title,detail,outcome,scope,non_goals,validation_criteria,content_hash,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)",params![id,rev+1,values[0],values[1],values[2],values[3],values[4],values[5],content_hash(&values.iter().map(String::as_str).collect::<Vec<_>>()),at]).map_err(|e|e.to_string())?;
-                tx.execute(
-                    "UPDATE tasks SET current_revision=? WHERE id=?",
-                    params![rev + 1, id],
-                )
-                .map_err(|e| e.to_string())?;
-                task_repository::record_activity_tx(
-                    tx,
-                    "task",
-                    id,
-                    "revised",
-                    req(input, "operationId")?,
-                    &at,
-                )?;
-                let result = json!({"id":id,"taskRevision":rev+1,"title":values[0],"detail":values[1],"outcome":values[2],"scope":values[3],"nonGoals":values[4],"validationCriteria":values[5]});
-                self.finish(tx, input, name, &result)?;
-                Ok(result)
+            "task.reopen" => {
+                self.task_transition_tx(tx, req(input, "taskId")?, input, Some("reopen"), at)
             }
-            "task.work-log.create" => {
-                if let Some(result) = self.op(tx, input, name)? {
-                    return Ok(result);
-                }
-                let task = req(input, "taskId")?;
-                self.expected(tx, task, input)?;
-                let id = task_repository::new_id();
-                tx.execute("INSERT INTO task_work_log_entries(id,task_id,body,image_data,image_media_type,image_summary,created_at) VALUES(?,?,?,?,?,?,?)",params![id,task,input.get("body").and_then(Value::as_str).unwrap_or(""),input.get("imageData").and_then(Value::as_str).unwrap_or(""),input.get("imageMediaType").and_then(Value::as_str).unwrap_or(""),input.get("imageSummary").and_then(Value::as_str).unwrap_or(""),at]).map_err(|e|e.to_string())?;
-                task_repository::record_activity_tx(
-                    tx,
-                    "task",
-                    task,
-                    "work_log",
-                    req(input, "operationId")?,
-                    &at,
-                )?;
-                let result = json!({"id":id,"taskId":task,"createdAt":at});
-                self.finish(tx, input, name, &result)?;
-                Ok(result)
-            }
-            "task.completion.create" => {
-                if let Some(result) = self.op(tx, input, name)? {
-                    return Ok(result);
-                }
-                let task = req(input, "taskId")?;
-                let revision = self.expected(tx, task, input)?;
-                let state: String = tx
-                    .query_row("SELECT state FROM tasks WHERE id=?", [task], |r| r.get(0))
-                    .map_err(|e| e.to_string())?;
-                if state != "in_progress" {
-                    return Err(
-                        "transition_invalid: task must be in_progress before completion".into(),
-                    );
-                }
-                let id = task_repository::new_id();
-                tx.execute("INSERT INTO task_completions(id,task_id,task_revision,evidence,report,operation_id,created_at) VALUES(?,?,?,?,?,?,?)",params![id,task,revision,req(input,"evidence")?,input.get("report").and_then(Value::as_str).unwrap_or(""),req(input,"operationId")?,at]).map_err(|e|e.to_string())?;
-                tx.execute(
-                    "UPDATE tasks SET state='completed',completed_at=? WHERE id=?",
-                    params![at, task],
-                )
-                .map_err(|e| e.to_string())?;
-                let result =
-                    json!({"id":id,"taskId":task,"taskRevision":revision,"state":"completed"});
-                self.finish(tx, input, name, &result)?;
-                Ok(result)
-            }
+            "problem.create" => self.problem_tx(tx, input, None, at),
+            "problem.revision" => self.problem_tx(tx, input, Some(req(input, "problemId")?), at),
             "problem.resolution.create" => {
-                if let Some(result) = self.op(tx, input, name)? {
-                    return Ok(result);
-                }
-                let problem = req(input, "problemId")?;
-                let expected = input
-                    .get("expectedProblemRevision")
-                    .and_then(Value::as_i64)
-                    .ok_or("invalid_input: expectedProblemRevision is required")?;
-                let current: i64 = tx
-                    .query_row(
-                        "SELECT current_revision FROM problems WHERE id=?",
-                        [problem],
-                        |r| r.get(0),
-                    )
-                    .map_err(|e| e.to_string())?;
-                if expected != current {
-                    return Err(format!("head_conflict: currentRevision={current}"));
-                };
-                let id = task_repository::new_id();
-                tx.execute("INSERT INTO problem_resolution_decisions(id,problem_id,problem_revision,rationale,evidence_refs_json,operation_id,created_at) VALUES(?,?,?,?,?,?,?)",params![id,problem,current,req(input,"rationale")?,input.get("evidenceRefs").cloned().unwrap_or(json!([])).to_string(),req(input,"operationId")?,at]).map_err(|e|e.to_string())?;
-                tx.execute("UPDATE problems SET state='resolved' WHERE id=?", [problem])
-                    .map_err(|e| e.to_string())?;
-                let result = json!({"id":id,"problemId":problem,"problemRevision":current,"state":"resolved"});
-                self.finish(tx, input, name, &result)?;
-                Ok(result)
+                self.resolve_problem_tx(tx, req(input, "problemId")?, input, at)
             }
+            "task.problem-link.create" => {
+                self.problem_link_tx(tx, req(input, "taskId")?, input, at)
+            }
+            "task.problem-link.delete" => self.problem_link_delete_tx(
+                tx,
+                req(input, "taskId")?,
+                req(input, "linkId")?,
+                input,
+                at,
+            ),
+            "task.relationship.create" => {
+                self.relationship_tx(tx, req(input, "taskId")?, input, at)
+            }
+            "task.relationship.delete" => self.relationship_delete_tx(
+                tx,
+                req(input, "taskId")?,
+                req(input, "relationshipId")?,
+                input,
+                at,
+            ),
+            "task.readiness.decision" => {
+                self.readiness_decision_tx(tx, req(input, "taskId")?, input, at)
+            }
+            "task.work-log.create" => self.work_log_create_tx(tx, req(input, "taskId")?, input, at),
+            "work-log.comment.create" => self.comment_tx(tx, req(input, "entryId")?, input, at),
+            "task.checklist.create" => self.checklist_tx(tx, req(input, "taskId")?, input, at),
+            "task.checklist.update" => self.checklist_update_tx(
+                tx,
+                req(input, "taskId")?,
+                req(input, "itemId")?,
+                input,
+                at,
+            ),
+            "task.decision.create" => self.decision_tx(tx, req(input, "taskId")?, input, at),
+            "task.completion.create" => self.complete_tx(tx, req(input, "taskId")?, input, at),
             _ => Err(format!("operation is not transaction-scoped: {name}")),
         }
     }
+
+    fn task_create_mutation_tx(
+        &self,
+        tx: &Transaction<'_>,
+        input: &Value,
+        at: &str,
+    ) -> Result<Value, String> {
+        let origin = input.get("originCaptureId").and_then(Value::as_str);
+        let direct = input.get("inputText").and_then(Value::as_str);
+        if origin.is_some() == direct.is_some() {
+            return Err("invalid_input: supply exactly one originCaptureId or inputText".into());
+        }
+        let provenance = if let Some(text) = direct {
+            let capture_id = task_repository::new_id();
+            tx.execute("INSERT INTO captures(id,text,created_at,source_mode,last_user_activity_at) VALUES(?,?,?,'direct_task_provenance',?)", params![capture_id, text, at, at]).map_err(|e| e.to_string())?;
+            Some(capture_id)
+        } else {
+            origin.map(str::to_owned)
+        };
+        let result = self.create_task_tx(tx, input, provenance.as_deref(), None, at)?;
+        self.record_task_activity(
+            tx,
+            result["id"].as_str().unwrap_or_default(),
+            "created",
+            input,
+            at,
+        )?;
+        Ok(result)
+    }
+
+    fn problem_tx(
+        &self,
+        tx: &Transaction<'_>,
+        input: &Value,
+        id: Option<&str>,
+        at: &str,
+    ) -> Result<Value, String> {
+        let result = self.create_problem_revision_tx(tx, input, id, at)?;
+        self.record_problem_activity(
+            tx,
+            result["id"].as_str().unwrap_or_default(),
+            "revised",
+            input,
+            at,
+        )?;
+        Ok(result)
+    }
+
+    fn task_revision_tx(
+        &self,
+        tx: &Transaction<'_>,
+        id: &str,
+        input: &Value,
+        at: &str,
+    ) -> Result<Value, String> {
+        let revision = self.expected(tx, id, input)?;
+        let patch = input
+            .get("patch")
+            .and_then(Value::as_object)
+            .ok_or("invalid_input: patch is required")?;
+        let prior: (String, String, String, String, String, String) = tx.query_row(
+            "SELECT title,detail,outcome,scope,non_goals,validation_criteria FROM task_revisions WHERE task_id=? AND revision=?",
+            params![id, revision],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)),
+        ).map_err(|e| e.to_string())?;
+        let field = |key: &str, old: String| {
+            patch
+                .get(key)
+                .and_then(Value::as_str)
+                .unwrap_or(&old)
+                .trim()
+                .to_owned()
+        };
+        let fields = [
+            field("title", prior.0),
+            field("detail", prior.1),
+            field("outcome", prior.2),
+            field("scope", prior.3),
+            field("nonGoals", prior.4),
+            field("validationCriteria", prior.5),
+        ];
+        if fields[0].is_empty() {
+            return Err("invalid_input: title is required".into());
+        }
+        tx.execute("INSERT INTO task_revisions(task_id,revision,title,detail,outcome,scope,non_goals,validation_criteria,content_hash,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)", params![id, revision + 1, fields[0], fields[1], fields[2], fields[3], fields[4], fields[5], content_hash(&fields.iter().map(String::as_str).collect::<Vec<_>>()), at]).map_err(|e| e.to_string())?;
+        tx.execute(
+            "UPDATE tasks SET current_revision=? WHERE id=?",
+            params![revision + 1, id],
+        )
+        .map_err(|e| e.to_string())?;
+        self.record_task_activity(tx, id, "revised", input, at)?;
+        Ok(
+            json!({"id":id,"taskRevision":revision + 1,"title":fields[0],"detail":fields[1],"outcome":fields[2],"scope":fields[3],"nonGoals":fields[4],"validationCriteria":fields[5]}),
+        )
+    }
+
+    fn task_transition_tx(
+        &self,
+        tx: &Transaction<'_>,
+        id: &str,
+        input: &Value,
+        forced_to: Option<&str>,
+        at: &str,
+    ) -> Result<Value, String> {
+        let revision = self.expected(tx, id, input)?;
+        let from: String = tx
+            .query_row("SELECT state FROM tasks WHERE id=?", [id], |row| row.get(0))
+            .map_err(|e| e.to_string())?;
+        let requested_state = match forced_to {
+            Some(state) => state,
+            None => req(input, "to")?,
+        };
+        let state = validate_state_transition(&from, requested_state)?;
+        tx.execute("UPDATE tasks SET state=?,started_at=CASE WHEN ?='in_progress' AND started_at IS NULL THEN ? ELSE started_at END,reopened_at=CASE WHEN ?='in_progress' AND ?='completed' THEN ? ELSE reopened_at END WHERE id=?", params![state, state, at, state, from, at, id]).map_err(|e| e.to_string())?;
+        self.record_task_activity(tx, id, "transition", input, at)?;
+        Ok(json!({"id":id,"taskRevision":revision,"state":state}))
+    }
+
+    fn problem_link_tx(
+        &self,
+        tx: &Transaction<'_>,
+        task: &str,
+        input: &Value,
+        at: &str,
+    ) -> Result<Value, String> {
+        self.expected(tx, task, input)?;
+        let problem = req(input, "problemId")?;
+        let revision = input
+            .get("problemRevision")
+            .and_then(Value::as_i64)
+            .ok_or("invalid_input: problemRevision is required")?;
+        let exists: bool = tx
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM problem_revisions WHERE problem_id=? AND revision=?)",
+                params![problem, revision],
+                |row| row.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+        if !exists {
+            return Err("Problem revision not found".into());
+        }
+        let id = task_repository::new_id();
+        tx.execute("INSERT INTO task_problem_links(id,task_id,problem_id,problem_revision,relationship,note,created_at) VALUES(?,?,?,?,?,?,?)", params![id, task, problem, revision, input.get("relationship").and_then(Value::as_str).unwrap_or("context"), input.get("note").and_then(Value::as_str).unwrap_or(""), at]).map_err(|e| e.to_string())?;
+        self.record_task_activity(tx, task, "problem_link", input, at)?;
+        Ok(
+            json!({"id":id,"taskId":task,"problemId":problem,"problemRevision":revision,"createdAt":at}),
+        )
+    }
+
+    fn problem_link_delete_tx(
+        &self,
+        tx: &Transaction<'_>,
+        task: &str,
+        id: &str,
+        input: &Value,
+        at: &str,
+    ) -> Result<Value, String> {
+        if tx.execute("UPDATE task_problem_links SET unlinked_at=? WHERE id=? AND task_id=? AND unlinked_at IS NULL", params![at, id, task]).map_err(|e| e.to_string())? == 0 { return Err("Link not found".into()); }
+        self.record_task_activity(tx, task, "problem_link_deleted", input, at)?;
+        Ok(json!({"id":id,"taskId":task,"unlinkedAt":at}))
+    }
+
+    fn relationship_tx(
+        &self,
+        tx: &Transaction<'_>,
+        source: &str,
+        input: &Value,
+        at: &str,
+    ) -> Result<Value, String> {
+        self.expected(tx, source, input)?;
+        let result = task_repository::add_relationship_tx(tx, source, input, at)?;
+        let related_source = result["sourceTaskId"].as_str().unwrap_or(source);
+        self.record_task_activity(tx, related_source, "relationship", input, at)?;
+        let target = result["targetTaskId"].as_str().unwrap_or_default();
+        if target != related_source {
+            self.record_task_activity(tx, target, "relationship", input, at)?;
+        }
+        Ok(result)
+    }
+
+    fn relationship_delete_tx(
+        &self,
+        tx: &Transaction<'_>,
+        task: &str,
+        id: &str,
+        input: &Value,
+        at: &str,
+    ) -> Result<Value, String> {
+        let endpoints: Option<(String, String)> = tx.query_row("SELECT source_task_id,target_task_id FROM task_relationships WHERE id=? AND (source_task_id=? OR target_task_id=?) AND unlinked_at IS NULL", params![id, task, task], |row| Ok((row.get(0)?, row.get(1)?))).optional().map_err(|e| e.to_string())?;
+        let (source, target) = endpoints.ok_or("Link not found")?;
+        tx.execute(
+            "UPDATE task_relationships SET unlinked_at=? WHERE id=? AND unlinked_at IS NULL",
+            params![at, id],
+        )
+        .map_err(|e| e.to_string())?;
+        self.record_task_activity(tx, &source, "relationship_deleted", input, at)?;
+        if target != source {
+            self.record_task_activity(tx, &target, "relationship_deleted", input, at)?;
+        }
+        Ok(json!({"id":id,"taskId":task,"unlinkedAt":at}))
+    }
+
+    fn readiness_decision_tx(
+        &self,
+        tx: &Transaction<'_>,
+        task: &str,
+        input: &Value,
+        at: &str,
+    ) -> Result<Value, String> {
+        let revision = self.expected(tx, task, input)?;
+        let status = req(input, "status")?;
+        if !["not_applicable", "calculated"].contains(&status) {
+            return Err("invalid_input: status".into());
+        }
+        let id = task_repository::new_id();
+        tx.execute("INSERT INTO task_readiness_decisions(id,task_id,task_revision,field_key,status,reason,evidence_refs_json,operation_id,created_at) VALUES(?,?,?,?,?,?,?,?,?)", params![id, task, revision, req(input, "key")?, status, input.get("reason").and_then(Value::as_str).unwrap_or(""), input.get("evidenceRefs").cloned().unwrap_or(json!([])).to_string(), req(input, "operationId")?, at]).map_err(|e| e.to_string())?;
+        self.record_task_activity(tx, task, "readiness_decision", input, at)?;
+        Ok(json!({"id":id,"taskId":task,"taskRevision":revision,"createdAt":at}))
+    }
+
+    fn work_log_create_tx(
+        &self,
+        tx: &Transaction<'_>,
+        task: &str,
+        input: &Value,
+        at: &str,
+    ) -> Result<Value, String> {
+        self.expected(tx, task, input)?;
+        let id = task_repository::new_id();
+        tx.execute("INSERT INTO task_work_log_entries(id,task_id,body,image_data,image_media_type,image_summary,created_at) VALUES(?,?,?,?,?,?,?)", params![id, task, input.get("body").and_then(Value::as_str).unwrap_or(""), input.get("imageData").and_then(Value::as_str).unwrap_or(""), input.get("imageMediaType").and_then(Value::as_str).unwrap_or(""), input.get("imageSummary").and_then(Value::as_str).unwrap_or(""), at]).map_err(|e| e.to_string())?;
+        if let Some(attachment) = input.get("attachment") {
+            tx.execute("INSERT INTO task_attachments(id,task_id,entry_id,name,media_type,data,byte_hash,created_at) VALUES(?,?,?,?,?,?,?,?)", params![task_repository::new_id(), task, id, attachment.get("name").and_then(Value::as_str).unwrap_or(""), attachment.get("mediaType").and_then(Value::as_str).unwrap_or(""), attachment.get("data").and_then(Value::as_str).unwrap_or(""), content_hash(&[attachment.get("data").and_then(Value::as_str).unwrap_or("")]), at]).map_err(|e| e.to_string())?;
+        }
+        self.record_task_activity(tx, task, "work_log", input, at)?;
+        Ok(
+            json!({"id":id,"taskId":task,"body":input.get("body").cloned().unwrap_or(json!("")),"createdAt":at}),
+        )
+    }
+
+    fn comment_tx(
+        &self,
+        tx: &Transaction<'_>,
+        entry: &str,
+        input: &Value,
+        at: &str,
+    ) -> Result<Value, String> {
+        let task: String = tx
+            .query_row(
+                "SELECT task_id FROM task_work_log_entries WHERE id=?",
+                [entry],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?
+            .ok_or("Work log entry not found")?;
+        let id = task_repository::new_id();
+        tx.execute(
+            "INSERT INTO task_work_log_comments(id,entry_id,body,created_at) VALUES(?,?,?,?)",
+            params![id, entry, req(input, "body")?, at],
+        )
+        .map_err(|e| e.to_string())?;
+        self.record_task_activity(tx, &task, "work_log_comment", input, at)?;
+        Ok(json!({"id":id,"entryId":entry,"taskId":task,"createdAt":at}))
+    }
+
+    fn checklist_tx(
+        &self,
+        tx: &Transaction<'_>,
+        task: &str,
+        input: &Value,
+        at: &str,
+    ) -> Result<Value, String> {
+        self.expected(tx, task, input)?;
+        let id = task_repository::new_id();
+        tx.execute("INSERT INTO task_checklist_items(id,task_id,body,checked,created_at,updated_at) VALUES(?,?,?,0,?,?)", params![id, task, req(input, "body")?, at, at]).map_err(|e| e.to_string())?;
+        self.record_task_activity(tx, task, "checklist", input, at)?;
+        Ok(json!({"id":id,"taskId":task,"body":input["body"],"checked":false,"createdAt":at}))
+    }
+
+    fn checklist_update_tx(
+        &self,
+        tx: &Transaction<'_>,
+        task: &str,
+        item: &str,
+        input: &Value,
+        at: &str,
+    ) -> Result<Value, String> {
+        self.expected(tx, task, input)?;
+        if tx.execute("UPDATE task_checklist_items SET checked=COALESCE(?,checked),updated_at=? WHERE id=? AND task_id=?", params![input.get("checked").and_then(Value::as_bool).map(i64::from), at, item, task]).map_err(|e| e.to_string())? == 0 { return Err("Checklist item not found".into()); }
+        self.record_task_activity(tx, task, "checklist", input, at)?;
+        Ok(json!({"id":item,"taskId":task,"updatedAt":at}))
+    }
+
+    fn decision_tx(
+        &self,
+        tx: &Transaction<'_>,
+        task: &str,
+        input: &Value,
+        at: &str,
+    ) -> Result<Value, String> {
+        let revision = self.expected(tx, task, input)?;
+        let id = task_repository::new_id();
+        tx.execute("INSERT INTO task_decisions(id,task_id,task_revision,kind,payload_json,operation_id,created_at) VALUES(?,?,?,?,?,?,?)", params![id, task, revision, req(input, "kind")?, input.get("payload").cloned().unwrap_or(json!({})).to_string(), req(input, "operationId")?, at]).map_err(|e| e.to_string())?;
+        self.record_task_activity(tx, task, "decision", input, at)?;
+        Ok(json!({"id":id,"taskId":task,"taskRevision":revision,"createdAt":at}))
+    }
+
+    fn complete_tx(
+        &self,
+        tx: &Transaction<'_>,
+        task: &str,
+        input: &Value,
+        at: &str,
+    ) -> Result<Value, String> {
+        let revision = self.expected(tx, task, input)?;
+        let state: String = tx
+            .query_row("SELECT state FROM tasks WHERE id=?", [task], |row| {
+                row.get(0)
+            })
+            .map_err(|e| e.to_string())?;
+        if state != "in_progress" {
+            return Err("transition_invalid: task must be in_progress before completion".into());
+        }
+        let id = task_repository::new_id();
+        tx.execute("INSERT INTO task_completions(id,task_id,task_revision,evidence,report,operation_id,created_at) VALUES(?,?,?,?,?,?,?)", params![id, task, revision, req(input, "evidence")?, input.get("report").and_then(Value::as_str).unwrap_or(""), req(input, "operationId")?, at]).map_err(|e| e.to_string())?;
+        tx.execute(
+            "UPDATE tasks SET state='completed',completed_at=? WHERE id=?",
+            params![at, task],
+        )
+        .map_err(|e| e.to_string())?;
+        self.record_task_activity(tx, task, "completed", input, at)?;
+        Ok(
+            json!({"id":id,"taskId":task,"taskRevision":revision,"state":"completed","createdAt":at}),
+        )
+    }
+
+    fn resolve_problem_tx(
+        &self,
+        tx: &Transaction<'_>,
+        problem: &str,
+        input: &Value,
+        at: &str,
+    ) -> Result<Value, String> {
+        let expected = input
+            .get("expectedProblemRevision")
+            .and_then(Value::as_i64)
+            .ok_or("invalid_input: expectedProblemRevision is required")?;
+        let current: i64 = tx
+            .query_row(
+                "SELECT current_revision FROM problems WHERE id=?",
+                [problem],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?
+            .ok_or("Problem not found")?;
+        if expected != current {
+            return Err(format!("head_conflict: currentRevision={current}"));
+        }
+        let id = task_repository::new_id();
+        tx.execute("INSERT INTO problem_resolution_decisions(id,problem_id,problem_revision,rationale,evidence_refs_json,operation_id,created_at) VALUES(?,?,?,?,?,?,?)", params![id, problem, current, req(input, "rationale")?, input.get("evidenceRefs").cloned().unwrap_or(json!([])).to_string(), req(input, "operationId")?, at]).map_err(|e| e.to_string())?;
+        tx.execute("UPDATE problems SET state='resolved' WHERE id=?", [problem])
+            .map_err(|e| e.to_string())?;
+        self.record_problem_activity(tx, problem, "resolved", input, at)?;
+        Ok(
+            json!({"id":id,"problemId":problem,"problemRevision":current,"state":"resolved","createdAt":at}),
+        )
+    }
+
+    fn record_task_activity(
+        &self,
+        tx: &Transaction<'_>,
+        task: &str,
+        operation: &str,
+        input: &Value,
+        at: &str,
+    ) -> Result<(), String> {
+        task_repository::record_activity_tx(
+            tx,
+            "task",
+            task,
+            operation,
+            req(input, "operationId")?,
+            at,
+        )
+    }
+
+    fn record_problem_activity(
+        &self,
+        tx: &Transaction<'_>,
+        problem: &str,
+        operation: &str,
+        input: &Value,
+        at: &str,
+    ) -> Result<(), String> {
+        task_repository::record_activity_tx(
+            tx,
+            "problem",
+            problem,
+            operation,
+            req(input, "operationId")?,
+            at,
+        )
+    }
+
     pub(crate) fn create_task_tx(
         &self,
         tx: &Transaction<'_>,
@@ -308,14 +595,13 @@ impl TaskApplicationService {
     fn capture(&self, input: &Value) -> Result<Value, String> {
         self.repo.transaction(|tx|{if let Some(x)=self.op(tx,input,"capture.create")?{return Ok(x)}let id=task_repository::new_id();let at=task_repository::now();let text=req(input,"text")?;tx.execute("INSERT INTO captures(id,text,created_at,source_mode,last_user_activity_at) VALUES(?,?,?,'capture',?)",params![id,text,at,at]).map_err(|e|e.to_string())?;let x=json!({"id":id,"text":text,"createdAt":at});self.finish(tx,input,"capture.create",&x)?;Ok(x)})
     }
-    fn create(&self, input: &Value) -> Result<Value, String> {
-        self.repo.transaction(|tx|{if let Some(x)=self.op(tx,input,"task.create")?{return Ok(x)}let at=task_repository::now();let origin=input.get("originCaptureId").and_then(Value::as_str);let direct=input.get("inputText").and_then(Value::as_str);if origin.is_some()==direct.is_some(){return Err("invalid_input: supply exactly one originCaptureId or inputText".into())}let provenance=if let Some(text)=direct{let id=task_repository::new_id();tx.execute("INSERT INTO captures(id,text,created_at,source_mode,last_user_activity_at) VALUES(?,?,?,'direct_task_provenance',?)",params![id,text,at,at]).map_err(|e|e.to_string())?;Some(id)}else{origin.map(str::to_owned)};let x=self.create_task_tx(tx,input,provenance.as_deref(),None,&at)?;task_repository::record_activity_tx(tx,"task",x["id"].as_str().unwrap(),"created",req(input,"operationId")?,&at)?;self.finish(tx,input,"task.create",&x)?;Ok(x)})
-    }
     fn expected(&self, tx: &Transaction<'_>, id: &str, input: &Value) -> Result<i64, String> {
-        let got: i64 = tx
-            .query_row("SELECT current_revision FROM tasks WHERE id=?", [id], |r| {
-                r.get(0)
-            })
+        let current: i64 = tx
+            .query_row(
+                "SELECT current_revision FROM tasks WHERE id=?",
+                [id],
+                |row| row.get(0),
+            )
             .optional()
             .map_err(|e| e.to_string())?
             .ok_or("Task not found")?;
@@ -323,151 +609,62 @@ impl TaskApplicationService {
             .get("expectedTaskRevision")
             .and_then(Value::as_i64)
             .ok_or("invalid_input: expectedTaskRevision is required")?;
-        if got != expected {
-            return Err(format!("head_conflict: currentRevision={got}"));
+        if current != expected {
+            return Err(format!("head_conflict: currentRevision={current}"));
         }
-        Ok(got)
-    }
-    fn revise(&self, id: &str, input: &Value) -> Result<Value, String> {
-        self.repo.transaction(|tx|{if let Some(x)=self.op(tx,input,"task.revision")?{return Ok(x)}let rev=self.expected(tx,id,input)?;let patch=input.get("patch").and_then(Value::as_object).ok_or("invalid_input: patch is required")?;let prior:(String,String,String,String,String,String)=tx.query_row("SELECT title,detail,outcome,scope,non_goals,validation_criteria FROM task_revisions WHERE task_id=? AND revision=?",params![id,rev],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?))).map_err(|e|e.to_string())?;let f=|camel:&str,old:String|patch.get(camel).and_then(Value::as_str).unwrap_or(&old).trim().to_owned();let fields=[f("title",prior.0),f("detail",prior.1),f("outcome",prior.2),f("scope",prior.3),f("nonGoals",prior.4),f("validationCriteria",prior.5)];if fields[0].is_empty(){return Err("invalid_input: title is required".into())}let at=task_repository::now();tx.execute("INSERT INTO task_revisions(task_id,revision,title,detail,outcome,scope,non_goals,validation_criteria,content_hash,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)",params![id,rev+1,fields[0],fields[1],fields[2],fields[3],fields[4],fields[5],content_hash(&fields.iter().map(String::as_str).collect::<Vec<_>>()),at]).map_err(|e|e.to_string())?;tx.execute("UPDATE tasks SET current_revision=? WHERE id=?",params![rev+1,id]).map_err(|e|e.to_string())?;task_repository::record_activity_tx(tx,"task",id,"revised",req(input,"operationId")?,&at)?;let x=json!({"id":id,"taskRevision":rev+1,"title":fields[0],"detail":fields[1],"outcome":fields[2],"scope":fields[3],"nonGoals":fields[4],"validationCriteria":fields[5]});self.finish(tx,input,"task.revision",&x)?;Ok(x)})
-    }
-    fn transition(&self, id: &str, input: &Value) -> Result<Value, String> {
-        self.repo.transaction(|tx|{let rev=self.expected(tx,id,input)?;let state:String=tx.query_row("SELECT state FROM tasks WHERE id=?",[id],|r|r.get(0)).map_err(|e|e.to_string())?;let to=validate_state_transition(&state,req(input,"to")?)?;let at=task_repository::now();tx.execute("UPDATE tasks SET state=?,started_at=CASE WHEN ?='in_progress' AND started_at IS NULL THEN ? ELSE started_at END,reopened_at=CASE WHEN ?='in_progress' AND ?='completed' THEN ? ELSE reopened_at END WHERE id=?",params![to,to,at,to,state,at,id]).map_err(|e|e.to_string())?;task_repository::record_activity_tx(tx,"task",id,"transition",req(input,"operationId")?,&at)?;let x=json!({"id":id,"taskRevision":rev,"state":to});self.finish(tx,input,"task.transition",&x)?;Ok(x)})
-    }
-    fn problem(&self, input: &Value, id: Option<&str>) -> Result<Value, String> {
-        self.repo.transaction(|tx| {
-            let x = self.create_problem_revision_tx(tx, input, id, &task_repository::now())?;
-            self.finish(
-                tx,
-                input,
-                if id.is_some() {
-                    "problem.revision"
-                } else {
-                    "problem.create"
-                },
-                &x,
-            )?;
-            Ok(x)
-        })
-    }
-    fn problem_link(&self, task: &str, input: &Value) -> Result<Value, String> {
-        self.repo.transaction(|tx|{self.expected(tx,task,input)?;let p=req(input,"problemId")?;let rev=input.get("problemRevision").and_then(Value::as_i64).ok_or("invalid_input: problemRevision is required")?;let exists:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM problem_revisions WHERE problem_id=? AND revision=?)",params![p,rev],|r|r.get(0)).map_err(|e|e.to_string())?;if !exists{return Err("Problem revision not found".into())}let at=task_repository::now();let id=task_repository::new_id();tx.execute("INSERT INTO task_problem_links(id,task_id,problem_id,problem_revision,relationship,note,created_at) VALUES(?,?,?,?,?,?,?)",params![id,task,p,rev,input.get("relationship").and_then(Value::as_str).unwrap_or("context"),input.get("note").and_then(Value::as_str).unwrap_or(""),at]).map_err(|e|e.to_string())?;let x=json!({"id":id,"taskId":task,"problemId":p,"problemRevision":rev});self.finish(tx,input,"task.problem-link.create",&x)?;Ok(x)})
-    }
-    fn unlink(&self, table: &str, id: &str, input: &Value) -> Result<Value, String> {
-        if !["task_problem_links", "task_relationships"].contains(&table) {
-            return Err("invalid_input".into());
-        }
-        self.repo.transaction(|tx| {
-            let n = tx
-                .execute(
-                    &format!("UPDATE {table} SET unlinked_at=? WHERE id=? AND unlinked_at IS NULL"),
-                    params![task_repository::now(), id],
-                )
-                .map_err(|e| e.to_string())?;
-            if n == 0 {
-                return Err("Link not found".into());
-            }
-            let x = json!({"id":id,"unlinked":true});
-            self.finish(
-                tx,
-                input,
-                if table == "task_problem_links" {
-                    "task.problem-link.delete"
-                } else {
-                    "task.relationship.delete"
-                },
-                &x,
-            )?;
-            Ok(x)
-        })
-    }
-    fn relationship(&self, task: &str, input: &Value) -> Result<Value, String> {
-        self.repo.transaction(|tx| {
-            self.expected(tx, task, input)?;
-            let x = task_repository::add_relationship_tx(tx, task, input, &task_repository::now())?;
-            self.finish(tx, input, "task.relationship.create", &x)?;
-            Ok(x)
-        })
+        Ok(current)
     }
     fn readiness(&self, id: &str) -> Result<Value, String> {
         let c = crate::native::database::open(self.repo.path())?;
-        let rev: i64 = c
-            .query_row("SELECT current_revision FROM tasks WHERE id=?", [id], |r| {
-                r.get(0)
-            })
+        Self::readiness_on(&c, id)
+    }
+    pub(crate) fn readiness_on(c: &rusqlite::Connection, id: &str) -> Result<Value, String> {
+        let revision: i64 = c
+            .query_row(
+                "SELECT current_revision FROM tasks WHERE id=?",
+                [id],
+                |row| row.get(0),
+            )
             .optional()
             .map_err(|e| e.to_string())?
             .ok_or("Task not found")?;
-        let fields:(String,String,String)=c.query_row("SELECT outcome,scope,validation_criteria FROM task_revisions WHERE task_id=? AND revision=?",params![id,rev],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).map_err(|e|e.to_string())?;
-        let vals = [fields.0, fields.1, fields.2];
+        let fields: (String, String, String) = c.query_row("SELECT outcome,scope,validation_criteria FROM task_revisions WHERE task_id=? AND revision=?", params![id, revision], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))).map_err(|e| e.to_string())?;
+        let values = [fields.0, fields.1, fields.2];
         let mut entries = Vec::new();
-        for (i, key) in READINESS_FIELDS.iter().enumerate() {
-            let override_row:Option<(String,String,String)>=c.query_row("SELECT status,reason,evidence_refs_json FROM task_readiness_decisions WHERE task_id=? AND task_revision=? AND field_key=? ORDER BY created_at DESC LIMIT 1",params![id,rev,key],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional().map_err(|e|e.to_string())?;
-            let (status, reason, evidence): (String, String, String) =
-                if let Some((s, r, e)) = override_row {
-                    (
-                        if s == "not_applicable" {
-                            "not_applicable"
-                        } else {
-                            "missing"
-                        }
-                        .into(),
-                        r,
-                        e,
-                    )
-                } else if *key == "prerequisites" {
-                    (
-                        "resolved".into(),
-                        "No explicit prerequisite".into(),
-                        "[]".into(),
-                    )
-                } else if !vals[i].is_empty() {
-                    ("resolved".into(), "".into(), "[]".into())
-                } else {
-                    ("missing".into(), "".into(), "[]".into())
-                };
-            entries.push(json!({"key":key,"status":status,"reason":reason,"evidenceRefs":serde_json::from_str::<Value>(&evidence).unwrap_or(json!([])),"sourceRevision":rev,"provenance":"calculated"}));
+        for (index, key) in READINESS_FIELDS.iter().enumerate() {
+            let override_row: Option<(String, String, String)> = c.query_row("SELECT status,reason,evidence_refs_json FROM task_readiness_decisions WHERE task_id=? AND task_revision=? AND field_key=? ORDER BY created_at DESC LIMIT 1", params![id, revision, key], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))).optional().map_err(|e| e.to_string())?;
+            let (status, reason, evidence) = if let Some((status, reason, evidence)) = override_row
+            {
+                (
+                    if status == "not_applicable" {
+                        "not_applicable"
+                    } else {
+                        "missing"
+                    }
+                    .to_owned(),
+                    reason,
+                    evidence,
+                )
+            } else if *key == "prerequisites" {
+                (
+                    "resolved".into(),
+                    "No explicit prerequisite".into(),
+                    "[]".into(),
+                )
+            } else if !values[index].is_empty() {
+                ("resolved".into(), "".into(), "[]".into())
+            } else {
+                ("missing".into(), "".into(), "[]".into())
+            };
+            entries.push(json!({"key":key,"status":status,"reason":reason,"evidenceRefs":serde_json::from_str::<Value>(&evidence).unwrap_or(json!([])),"sourceRevision":revision,"provenance":"calculated"}));
         }
-        Ok(json!({"taskId":id,"taskRevision":rev,"entries":entries}))
-    }
-    fn readiness_decision(&self, id: &str, input: &Value) -> Result<Value, String> {
-        self.repo.transaction(|tx|{let rev=self.expected(tx,id,input)?;let status=req(input,"status")?;if !["not_applicable","calculated"].contains(&status){return Err("invalid_input: status".into())}let at=task_repository::now();let did=task_repository::new_id();tx.execute("INSERT INTO task_readiness_decisions(id,task_id,task_revision,field_key,status,reason,evidence_refs_json,operation_id,created_at) VALUES(?,?,?,?,?,?,?,?,?)",params![did,id,rev,req(input,"key")?,status,input.get("reason").and_then(Value::as_str).unwrap_or(""),input.get("evidenceRefs").cloned().unwrap_or(json!([])).to_string(),req(input,"operationId")?,at]).map_err(|e|e.to_string())?;Ok(json!({"id":did,"taskId":id,"taskRevision":rev}))})
-    }
-    fn work_log_create(&self, id: &str, input: &Value) -> Result<Value, String> {
-        self.repo.transaction(|tx|{self.expected(tx,id,input)?;let at=task_repository::now();let eid=task_repository::new_id();tx.execute("INSERT INTO task_work_log_entries(id,task_id,body,image_data,image_media_type,image_summary,created_at) VALUES(?,?,?,?,?,?,?)",params![eid,id,input.get("body").and_then(Value::as_str).unwrap_or(""),input.get("imageData").and_then(Value::as_str).unwrap_or(""),input.get("imageMediaType").and_then(Value::as_str).unwrap_or(""),input.get("imageSummary").and_then(Value::as_str).unwrap_or(""),at]).map_err(|e|e.to_string())?;if let Some(a)=input.get("attachment"){tx.execute("INSERT INTO task_attachments(id,task_id,entry_id,name,media_type,data,byte_hash,created_at) VALUES(?,?,?,?,?,?,?,?)",params![task_repository::new_id(),id,eid,a.get("name").and_then(Value::as_str).unwrap_or(""),a.get("mediaType").and_then(Value::as_str).unwrap_or(""),a.get("data").and_then(Value::as_str).unwrap_or(""),content_hash(&[a.get("data").and_then(Value::as_str).unwrap_or("")]),at]).map_err(|e|e.to_string())?;}task_repository::record_activity_tx(tx,"task",id,"work_log",req(input,"operationId")?,&at)?;let x=json!({"id":eid,"taskId":id,"body":input.get("body").cloned().unwrap_or(json!("")),"createdAt":at});self.finish(tx,input,"task.work-log.create",&x)?;Ok(x)})
+        Ok(json!({"taskId":id,"taskRevision":revision,"entries":entries}))
     }
     fn work_log(&self, id: &str) -> Result<Value, String> {
         let c = crate::native::database::open(self.repo.path())?;
-        let mut s=c.prepare("SELECT id,body,image_data,image_media_type,image_summary,created_at FROM task_work_log_entries WHERE task_id=? ORDER BY created_at").map_err(|e|e.to_string())?;
-        let rows=s.query_map([id],|r|Ok(json!({"id":r.get::<_,String>(0)?,"body":r.get::<_,String>(1)?,"imageData":r.get::<_,String>(2)?,"imageMediaType":r.get::<_,String>(3)?,"imageSummary":r.get::<_,String>(4)?,"createdAt":r.get::<_,String>(5)?}))).map_err(|e|e.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|e|e.to_string())?;
-        Ok(json!({"entries":rows}))
-    }
-    fn comment(&self, e: &str, input: &Value) -> Result<Value, String> {
-        self.repo.transaction(|tx| {
-            let id = task_repository::new_id();
-            let at = task_repository::now();
-            tx.execute(
-                "INSERT INTO task_work_log_comments(id,entry_id,body,created_at) VALUES(?,?,?,?)",
-                params![id, e, req(input, "body")?, at],
-            )
-            .map_err(|x| x.to_string())?;
-            Ok(json!({"id":id,"entryId":e,"createdAt":at}))
-        })
-    }
-    fn checklist(&self, t: &str, input: &Value) -> Result<Value, String> {
-        self.repo.transaction(|tx|{self.expected(tx,t,input)?;let id=task_repository::new_id();let at=task_repository::now();tx.execute("INSERT INTO task_checklist_items(id,task_id,body,checked,created_at,updated_at) VALUES(?,?,?,0,?,?)",params![id,t,req(input,"body")?,at,at]).map_err(|x|x.to_string())?;Ok(json!({"id":id,"taskId":t,"body":input["body"],"checked":false,"createdAt":at}))})
-    }
-    fn checklist_update(&self, t: &str, item: &str, input: &Value) -> Result<Value, String> {
-        self.repo.transaction(|tx|{self.expected(tx,t,input)?;let at=task_repository::now();let n=tx.execute("UPDATE task_checklist_items SET checked=COALESCE(?,checked),updated_at=? WHERE id=? AND task_id=?",params![input.get("checked").and_then(Value::as_bool).map(i64::from),at,item,t]).map_err(|x|x.to_string())?;if n==0{return Err("Checklist item not found".into())}Ok(json!({"id":item,"taskId":t,"updatedAt":at}))})
-    }
-    fn decision(&self, t: &str, input: &Value) -> Result<Value, String> {
-        self.repo.transaction(|tx|{let rev=self.expected(tx,t,input)?;let id=task_repository::new_id();let at=task_repository::now();tx.execute("INSERT INTO task_decisions(id,task_id,task_revision,kind,payload_json,operation_id,created_at) VALUES(?,?,?,?,?,?,?)",params![id,t,rev,req(input,"kind")?,input.get("payload").cloned().unwrap_or(json!({})).to_string(),req(input,"operationId")?,at]).map_err(|x|x.to_string())?;Ok(json!({"id":id,"taskId":t,"taskRevision":rev,"createdAt":at}))})
-    }
-    fn complete(&self, t: &str, input: &Value) -> Result<Value, String> {
-        self.repo.transaction(|tx|{let rev=self.expected(tx,t,input)?;let state:String=tx.query_row("SELECT state FROM tasks WHERE id=?",[t],|r|r.get(0)).map_err(|x|x.to_string())?;if state!="in_progress"{return Err("transition_invalid: task must be in_progress before completion".into())}let id=task_repository::new_id();let at=task_repository::now();tx.execute("INSERT INTO task_completions(id,task_id,task_revision,evidence,report,operation_id,created_at) VALUES(?,?,?,?,?,?,?)",params![id,t,rev,req(input,"evidence")?,input.get("report").and_then(Value::as_str).unwrap_or(""),req(input,"operationId")?,at]).map_err(|x|x.to_string())?;tx.execute("UPDATE tasks SET state='completed',completed_at=? WHERE id=?",params![at,t]).map_err(|x|x.to_string())?;Ok(json!({"id":id,"taskId":t,"taskRevision":rev,"state":"completed","createdAt":at}))})
-    }
-    fn resolve_problem(&self, p: &str, input: &Value) -> Result<Value, String> {
-        self.repo.transaction(|tx|{let r=input.get("expectedProblemRevision").and_then(Value::as_i64).ok_or("invalid_input: expectedProblemRevision is required")?;let cur:i64=tx.query_row("SELECT current_revision FROM problems WHERE id=?",[p],|row|row.get(0)).optional().map_err(|x|x.to_string())?.ok_or("Problem not found")?;if r!=cur{return Err(format!("head_conflict: currentRevision={cur}"))}let id=task_repository::new_id();let at=task_repository::now();tx.execute("INSERT INTO problem_resolution_decisions(id,problem_id,problem_revision,rationale,evidence_refs_json,operation_id,created_at) VALUES(?,?,?,?,?,?,?)",params![id,p,r,req(input,"rationale")?,input.get("evidenceRefs").cloned().unwrap_or(json!([])).to_string(),req(input,"operationId")?,at]).map_err(|x|x.to_string())?;tx.execute("UPDATE problems SET state='resolved' WHERE id=?",[p]).map_err(|x|x.to_string())?;Ok(json!({"id":id,"problemId":p,"problemRevision":r,"state":"resolved","createdAt":at}))})
+        let mut statement = c.prepare("SELECT id,body,image_data,image_media_type,image_summary,created_at FROM task_work_log_entries WHERE task_id=? ORDER BY created_at").map_err(|e| e.to_string())?;
+        let entries = statement.query_map([id], |row| Ok(json!({"id":row.get::<_, String>(0)?,"body":row.get::<_, String>(1)?,"imageData":row.get::<_, String>(2)?,"imageMediaType":row.get::<_, String>(3)?,"imageSummary":row.get::<_, String>(4)?,"createdAt":row.get::<_, String>(5)?}))).map_err(|e| e.to_string())?.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())?;
+        Ok(json!({"entries":entries}))
     }
     fn get(&self, id: &str) -> Result<Value, String> {
         let c = crate::native::database::open(self.repo.path())?;
@@ -489,7 +686,10 @@ impl TaskApplicationService {
         let checklist = c.prepare("SELECT id,body,checked FROM task_checklist_items WHERE task_id=? ORDER BY created_at").map_err(|e|e.to_string())?.query_map([id],|r|Ok(json!({"id":r.get::<_,String>(0)?,"body":r.get::<_,String>(1)?,"checked":r.get::<_,i64>(2)? != 0}))).map_err(|e|e.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|e|e.to_string())?;
         let decisions = c.prepare("SELECT id,kind,payload_json,created_at FROM task_decisions WHERE task_id=? ORDER BY created_at").map_err(|e|e.to_string())?.query_map([id],|r|Ok(json!({"id":r.get::<_,String>(0)?,"kind":r.get::<_,String>(1)?,"body":serde_json::from_str::<Value>(&r.get::<_,String>(2)?).ok().and_then(|v|v.get("body").cloned()).unwrap_or(Value::Null),"createdAt":r.get::<_,String>(3)?}))).map_err(|e|e.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|e|e.to_string())?;
         let completion = c.query_row("SELECT id,evidence,report,created_at FROM task_completions WHERE task_id=? ORDER BY created_at DESC LIMIT 1",[id],|r|Ok(json!({"id":r.get::<_,String>(0)?,"evidence":r.get::<_,String>(1)?,"report":r.get::<_,String>(2)?,"createdAt":r.get::<_,String>(3)?}))).optional().map_err(|e|e.to_string())?;
-        let publication = c.query_row("SELECT revision,state,content_hash FROM task_knowledge_drafts WHERE task_id=? ORDER BY revision DESC LIMIT 1",[id],|r|Ok(json!({"draftRevision":r.get::<_,i64>(0)?,"state":r.get::<_,String>(1)?,"contentHash":r.get::<_,String>(2)?}))).optional().map_err(|e|e.to_string())?;
+        let publication = c.query_row("SELECT revision,state,content_hash,lineage_json FROM task_knowledge_drafts WHERE task_id=? ORDER BY revision DESC LIMIT 1",[id],|r| {
+            let lineage: Value = serde_json::from_str(&r.get::<_,String>(3)?).unwrap_or(Value::Null);
+            Ok(json!({"draftRevision":r.get::<_,i64>(0)?,"state":r.get::<_,String>(1)?,"contentHash":r.get::<_,String>(2)?,"sourceHash":lineage["sourceHash"]}))
+        }).optional().map_err(|e|e.to_string())?;
         let problem_links=c.prepare("SELECT id,problem_id,problem_revision,relationship,note FROM task_problem_links WHERE task_id=? AND unlinked_at IS NULL").map_err(|e|e.to_string())?.query_map([id],|r|Ok(json!({"id":r.get::<_,String>(0)?,"problemId":r.get::<_,String>(1)?,"problemRevision":r.get::<_,i64>(2)?,"relationship":r.get::<_,String>(3)?,"note":r.get::<_,String>(4)?}))).map_err(|e|e.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|e|e.to_string())?;
         let relationships=c.prepare("SELECT id,CASE WHEN source_task_id=? THEN target_task_id ELSE source_task_id END,kind,note FROM task_relationships WHERE (source_task_id=? OR (kind='related' AND target_task_id=?)) AND unlinked_at IS NULL").map_err(|e|e.to_string())?.query_map(params![id,id,id],|r|Ok(json!({"id":r.get::<_,String>(0)?,"targetTaskId":r.get::<_,String>(1)?,"kind":r.get::<_,String>(2)?,"note":r.get::<_,String>(3)?}))).map_err(|e|e.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|e|e.to_string())?;
         let readiness = self.readiness(id)?;
@@ -557,7 +757,53 @@ impl TaskApplicationService {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rusqlite::params;
     use tempfile::tempdir;
+
+    fn link_owned_session(
+        connection: &rusqlite::Connection,
+        connection_id: &str,
+        session_id: &str,
+        capture_id: &str,
+        event_id: &str,
+        task_id: &str,
+    ) {
+        connection
+            .execute(
+                "INSERT INTO mcp_connections(id,name,scopes_json,allowed_topics_json,checkpoint_policy,state,created_at,updated_at)
+                 VALUES(?,?, '[]','[]','confirm_each','active','2026-01-01','2026-01-01')",
+                params![connection_id, connection_id],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO captures(id,text,source_mode,last_user_activity_at,created_at)
+                 VALUES(?,?,'capture','2026-01-01','2026-01-01')",
+                params![capture_id, capture_id],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO work_tracking_sessions(id,connection_id,source_interface,conversation_ref_hash,capture_id,head_event_id,head_revision,created_at,updated_at)
+                 VALUES(?,?, 'mcp', ?,?,?,1,'2026-01-01','2026-01-01')",
+                params![session_id, connection_id, format!("lineage-{session_id}"), capture_id, event_id],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO work_tracking_events(id,session_id,revision,stream_id,source_sequence,kind,payload_json,payload_hash,occurred_at,ingested_at)
+                 VALUES(?,?,1,'mcp',1,'task_binding','{}','binding','2026-01-01','2026-01-01')",
+                params![event_id, session_id],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO work_tracking_links(id,session_id,source_event_id,entity_type,entity_id,relationship,created_at)
+                 VALUES(?,?,?,'tasks',?,'adopted_task','2026-01-01')",
+                params![format!("link-{session_id}"), session_id, event_id, task_id],
+            )
+            .unwrap();
+    }
 
     #[test]
     fn task_lifecycle_preserves_problem_independence_and_rejects_stale_revision() {
@@ -626,5 +872,224 @@ mod tests {
         assert_eq!(refinement["problemRevision"], 1);
         assert_eq!(refinement["title"], "Preserve this migrated Problem");
         assert!(!items.iter().any(|item| item["kind"] == "task"));
+    }
+
+    #[test]
+    fn desktop_task_mutation_appends_one_applied_event_per_linked_session_and_replays_cleanly() {
+        let root = tempdir().unwrap();
+        let db = root.path().join("state.db");
+        crate::native::database::initialize(&db).unwrap();
+        let service = TaskApplicationService::new(&db);
+        let task = service
+            .execute(
+                "task.create",
+                &json!({"operationId":"desktop-create","inputText":"direct","title":"Sync this Task"}),
+            )
+            .unwrap();
+        let task_id = task["id"].as_str().unwrap();
+        let connection = crate::native::database::open(&db).unwrap();
+        link_owned_session(
+            &connection,
+            "mcp-a",
+            "session-a",
+            "capture-a",
+            "event-a",
+            task_id,
+        );
+        link_owned_session(
+            &connection,
+            "mcp-b",
+            "session-b",
+            "capture-b",
+            "event-b",
+            task_id,
+        );
+        drop(connection);
+
+        let input = json!({
+            "operationId":"desktop-revision",
+            "taskId":task_id,
+            "expectedTaskRevision":1,
+            "patch":{"title":"Synced Task"}
+        });
+        service.execute("task.revision", &input).unwrap();
+        let replay = service.execute("task.revision", &input).unwrap();
+        assert_eq!(replay["taskRevision"], 2);
+
+        let connection = crate::native::database::open(&db).unwrap();
+        for session_id in ["session-a", "session-b"] {
+            assert_eq!(
+                connection
+                    .query_row(
+                        "SELECT head_revision FROM work_tracking_sessions WHERE id=?",
+                        [session_id],
+                        |row| row.get::<_, i64>(0),
+                    )
+                    .unwrap(),
+                2
+            );
+            assert_eq!(
+                connection
+                    .query_row(
+                        "SELECT count(*) FROM work_tracking_events WHERE session_id=? AND kind='desktop_task_change' AND json_extract(payload_json,'$.operationId')='desktop-revision'",
+                        [session_id],
+                        |row| row.get::<_, i64>(0),
+                    )
+                    .unwrap(),
+                1,
+            );
+            assert_eq!(
+                connection
+                    .query_row(
+                        "SELECT state FROM work_tracking_projection_results WHERE event_id=(SELECT head_event_id FROM work_tracking_sessions WHERE id=?) AND projection_name='workflow'",
+                        [session_id],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .unwrap(),
+                "applied"
+            );
+        }
+    }
+
+    #[test]
+    fn tracking_origin_session_is_suppressed_but_other_linked_sessions_receive_the_change() {
+        let root = tempdir().unwrap();
+        let db = root.path().join("state.db");
+        crate::native::database::initialize(&db).unwrap();
+        let service = TaskApplicationService::new(&db);
+        let task = service
+            .execute(
+                "task.create",
+                &json!({"operationId":"origin-create","inputText":"direct","title":"Origin Task"}),
+            )
+            .unwrap();
+        let task_id = task["id"].as_str().unwrap();
+        let connection = crate::native::database::open(&db).unwrap();
+        link_owned_session(
+            &connection,
+            "mcp-source",
+            "source-session",
+            "source-capture",
+            "source-event",
+            task_id,
+        );
+        link_owned_session(
+            &connection,
+            "mcp-other",
+            "other-session",
+            "other-capture",
+            "other-event",
+            task_id,
+        );
+        drop(connection);
+        let input = json!({
+            "operationId":"source-advance",
+            "taskId":task_id,
+            "expectedTaskRevision":1,
+            "patch":{"title":"Applied by source"}
+        });
+        service
+            .repo
+            .transaction(|tx| {
+                service.execute_tx_for_tracking(tx, "task.revision", &input, Some("source-session"))
+            })
+            .unwrap();
+        let connection = crate::native::database::open(&db).unwrap();
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT head_revision FROM work_tracking_sessions WHERE id='source-session'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            1,
+            "the accepted source event owns its session head"
+        );
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT head_revision FROM work_tracking_sessions WHERE id='other-session'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            2
+        );
+    }
+
+    #[test]
+    fn relationship_change_fans_out_once_to_each_endpoint_session() {
+        let root = tempdir().unwrap();
+        let db = root.path().join("state.db");
+        crate::native::database::initialize(&db).unwrap();
+        let service = TaskApplicationService::new(&db);
+        let first = service
+            .execute(
+                "task.create",
+                &json!({"operationId":"relationship-first","inputText":"first","title":"First"}),
+            )
+            .unwrap();
+        let second = service
+            .execute(
+                "task.create",
+                &json!({"operationId":"relationship-second","inputText":"second","title":"Second"}),
+            )
+            .unwrap();
+        let first_id = first["id"].as_str().unwrap();
+        let second_id = second["id"].as_str().unwrap();
+        let connection = crate::native::database::open(&db).unwrap();
+        link_owned_session(
+            &connection,
+            "mcp-first",
+            "first-session",
+            "first-capture",
+            "first-event",
+            first_id,
+        );
+        link_owned_session(
+            &connection,
+            "mcp-second",
+            "second-session",
+            "second-capture",
+            "second-event",
+            second_id,
+        );
+        drop(connection);
+        service
+            .execute(
+                "task.relationship.create",
+                &json!({
+                    "operationId":"relationship-both",
+                    "taskId":first_id,
+                    "targetTaskId":second_id,
+                    "expectedTaskRevision":1,
+                    "kind":"related"
+                }),
+            )
+            .unwrap();
+        let connection = crate::native::database::open(&db).unwrap();
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT count(*) FROM user_activity_events WHERE operation_id LIKE 'relationship-both:%'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            2,
+        );
+        for session_id in ["first-session", "second-session"] {
+            assert_eq!(
+                connection
+                    .query_row(
+                        "SELECT count(*) FROM work_tracking_events WHERE session_id=? AND kind='desktop_task_change' AND json_extract(payload_json,'$.operationId')='relationship-both'",
+                        [session_id],
+                        |row| row.get::<_, i64>(0),
+                    )
+                    .unwrap(),
+                1,
+            );
+        }
     }
 }

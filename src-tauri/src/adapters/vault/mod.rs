@@ -42,6 +42,10 @@ fn cosine(left: &[f32], bytes: &[u8]) -> f32 {
 }
 
 impl MarkdownVaultAdapter {
+    pub(crate) fn root_path(&self) -> &Path {
+        &self.vault_path
+    }
+
     pub fn withdraw(&self, path: &str, hash: &str, review_id: &str) -> Result<String, AppError> {
         let root = self
             .vault_path

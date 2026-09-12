@@ -10,8 +10,8 @@ import workbenchSource from '../../public/runtime/workbench.js?raw';
 import { JSDOM } from 'jsdom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-type AnyFunction = (...args: any[]) => any;
-const $ = (selector: string) => document.querySelector(selector) as any;
+type RuntimeFunction = (...args: unknown[]) => unknown;
+const $ = (selector: string) => document.querySelector(selector) as HTMLElement;
 const flush = () => new Promise(resolve => setTimeout(resolve, 0));
 const dialog = (id: string) => `<dialog id="${id}"></dialog>`;
 
@@ -22,7 +22,7 @@ function runModule<T>(source: string, dependencies: Record<string, unknown>, ret
 function executableDom(html: string, globals: Record<string, unknown>, source: string) {
   const realm = new JSDOM(`<body>${html}</body>`, { runScripts: 'dangerously', url: 'http://runtime.test' });
   Object.assign(realm.window, globals);
-  (realm.window as any).$ = (selector: string) => realm.window.document.querySelector(selector);
+  (realm.window as Window & Record<string, unknown>).$ = (selector: string) => realm.window.document.querySelector(selector);
   realm.window.eval(source);
   return realm;
 }
@@ -31,7 +31,7 @@ beforeEach(() => {
   document.body.innerHTML = '';
   vi.restoreAllMocks();
   for (const method of ['showModal', 'close']) {
-    if (!(HTMLDialogElement.prototype as any)[method]) {
+    if (!((HTMLDialogElement.prototype as unknown as Record<string, unknown>)[method])) {
       Object.defineProperty(HTMLDialogElement.prototype, method, {
         configurable: true,
         value() { this.open = method === 'showModal'; },
@@ -73,7 +73,7 @@ describe('production Workbench button templates', () => {
     };
     const transitionMenuItem = (id: string, type: string, entityId: string) => `<button onclick="openTransition('${id}','${type}','${entityId}')">Transition ${id}</button>`;
     const setImportant = new Function('$', 'api', 'loadBoard', `${conflictsSource.split('\n').find(line => line.startsWith('async function setImportant('))};return setImportant;`)($, api, vi.fn());
-    const runtime = runModule<Record<string, AnyFunction>>(workbenchSource, {
+    const runtime = runModule<Record<string, RuntimeFunction>>(workbenchSource, {
       $, api, esc: String, t: (key: string) => key, transitionMenuItem,
       setImportant,
       copyHandoff: calls.handoff, moveSolution: calls.move, runConflictReview: calls.conflict, openTransition: calls.transition,
@@ -173,7 +173,7 @@ describe('production manual, search, and provider controls', () => {
     await flush();
     expect(api).toHaveBeenCalledTimes(2);
     expect(loadBoard).toHaveBeenCalledTimes(2);
-    expect($('#draft-submit').disabled).toBe(false);
+    expect(($('#draft-submit') as HTMLButtonElement).disabled).toBe(false);
   });
 
   it('submits manual edits through the rendered save button and restores it after failure', async () => {
@@ -182,7 +182,7 @@ describe('production manual, search, and provider controls', () => {
     const notice = vi.fn();
     runModule(manualSource, { $, api, manualModal: $('#manual-modal'), activeLocale: 'en', scheduleLocaleApply: vi.fn(), showNotice: notice, loadBoard: vi.fn(), applicationRequest: vi.fn(), navigator, alert: vi.fn(), window }, []);
     const form = $('#manual-form') as HTMLFormElement;
-    const save = form.querySelector('button')!;
+    const save = form.querySelector<HTMLButtonElement>('button')!;
     save.click();
     await flush();
     expect(api).toHaveBeenCalledWith('/items/problems/p', expect.objectContaining({ method: 'PUT' }));
@@ -251,7 +251,7 @@ describe('production Explore controls', () => {
     const loadBoard = vi.fn();
     const clearWarning = () => { $('#refinement-preview-warning').hidden = true; };
     const showWarning = () => { $('#refinement-preview-warning').hidden = false; };
-    const runtime = runModule<Record<string, AnyFunction>>(exploreSource, {
+    const runtime = runModule<Record<string, RuntimeFunction>>(exploreSource, {
       $, esc: String, api, chatModal: $('#chat-modal'), refinementPreviewDraft: null, previewActiveTab: 'context',
       supersedeRefinementPreview: vi.fn(), clearRefinementPreviewWarning: clearWarning, showRefinementPreviewWarning: showWarning,
       draftWithAI, applicationRequest, activeLocale: 'en', startBackgroundRefinement: vi.fn(), closeRefinementModal: close,
@@ -310,7 +310,7 @@ describe('production transition and conflict decision controls', () => {
     const transitions = ['capture_to_problem', 'problem_to_solution', 'solution_to_approved', 'solution_to_completed'].map(id => ({ id, label: id, fields: [] }));
     const api = vi.fn(async (path: string) => path === '/transitions' ? { transitions } : ({ completed: true }));
     const notice = vi.fn();
-    const runtime = runModule<Record<string, AnyFunction>>(transitionsSource, { $, api, esc: String, showNotice: notice, loadBoard: vi.fn() }, ['openTransition']);
+    const runtime = runModule<Record<string, RuntimeFunction>>(transitionsSource, { $, api, esc: String, showNotice: notice, loadBoard: vi.fn() }, ['openTransition']);
     for (const id of transitions.map(item => item.id)) {
       await runtime.openTransition(id, 'features', 's');
       ($('#transition-submit') as HTMLButtonElement).click();
@@ -322,14 +322,14 @@ describe('production transition and conflict decision controls', () => {
     ($('#transition-submit') as HTMLButtonElement).click();
     await flush();
     expect(notice).toHaveBeenCalledWith('transition down', 'Manual transition failed');
-    expect($('#transition-submit').disabled).toBe(false);
+    expect(($('#transition-submit') as HTMLButtonElement).disabled).toBe(false);
   });
 
   it('clicks no-conflict decisions, every per-conflict resolution, continue, and failure recovery', async () => {
     const realm = new JSDOM(`<body>${dialog('item-detail-modal')}<div id="item-detail-type"></div><div id="item-detail-title"></div><div id="item-detail-notes"></div><button id="item-detail-close"></button><section id="board"></section><section id="queue-panel"></section><button id="queue-toggle"></button><div id="organize-status"></div></body>`, { runScripts: 'dangerously', url: 'http://runtime.test' });
-    const win = realm.window as any;
+    const win = realm.window as unknown as Window & { conflictReviewMarkup: (...args: unknown[]) => string; $: (selector: string) => Element; eval: (source: string) => void; Event: typeof Event };
     const doc = win.document as Document;
-    const select = (selector: string) => doc.querySelector(selector) as any;
+    const select = (selector: string) => doc.querySelector(selector) as HTMLElement;
     const detailModal = select('#item-detail-modal') as HTMLDialogElement;
     Object.defineProperty(detailModal, 'open', { configurable: true, writable: true, value: true });
     detailModal.close = vi.fn(function close(this: HTMLDialogElement) { this.open = false; });
@@ -385,7 +385,7 @@ describe('production transition and conflict decision controls', () => {
     select('#conflict-review-continue').click();
     await flush();
     expect(select('#conflict-review-error').textContent).toBe('save failed');
-    expect(select('#conflict-review-continue').disabled).toBe(false);
+    expect((select('#conflict-review-continue') as HTMLButtonElement).disabled).toBe(false);
 
     select('#item-detail-close').click();
     expect(detailModal.close).toHaveBeenCalled();

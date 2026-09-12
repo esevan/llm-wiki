@@ -9,11 +9,11 @@
   "interface": {
     "displayName": "LLM Wiki",
     "shortDescription": "Track and resume Workbench work in chat.",
-    "longDescription": "LLM Wiki provides a local MCP bridge and a conversational workflow skill for Capture, Problem, Solution, Work Log, completion, and separate Knowledge publication.",
+    "longDescription": "LLM Wiki provides a local MCP bridge and a conversational workflow skill for independent Capture and Task work, optional Problem context, Work Log, completion, and separate Knowledge publication.",
     "developerName": "LLM Wiki",
     "category": "Productivity",
     "capabilities": ["Local MCP", "Workbench context", "Vault evidence"],
-    "defaultPrompt": "Show my current LLM Wiki work and help me continue it naturally in this chat."
+    "defaultPrompt": "Show my current LLM Wiki work and help me continue an independent Task naturally in this chat."
   },
   "mcpServers": "./.mcp.json"
 }

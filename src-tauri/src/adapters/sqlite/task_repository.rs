@@ -54,13 +54,160 @@ pub(crate) fn record_activity_tx(
     op: &str,
     at: &str,
 ) -> Result<(), String> {
-    tx.execute("INSERT OR IGNORE INTO user_activity_events(id,entity_type,entity_id,operation,operation_id,created_at) VALUES(?,?,?,?,?,?)",params![new_id(),kind,id,operation,op,at]).map_err(|e|e.to_string())?;
+    // One canonical operation can update two relationship endpoints.  Preserve each affected
+    // aggregate under a stable per-entity operation key so the session synchronizer can fan out
+    // once per linked session without treating a retry as another desktop change.
+    let activity_operation = format!("{op}:{kind}:{id}");
+    let inserted = tx.execute("INSERT OR IGNORE INTO user_activity_events(id,entity_type,entity_id,operation,operation_id,created_at) VALUES(?,?,?,?,?,?)",params![new_id(),kind,id,operation,activity_operation,at]).map_err(|e|e.to_string())?;
+    if inserted == 0 {
+        return Ok(());
+    }
     if kind == "task" {
         tx.execute(
             "UPDATE tasks SET last_user_activity_at=? WHERE id=?",
             params![at, id],
         )
         .map_err(|e| e.to_string())?;
+    }
+    // v8 removed the legacy Workbench mutation triggers.  Canonical Capture, Problem, and
+    // Task writes share this application helper so every aggregate mutation invalidates the
+    // same workspace freshness counter once in its owning transaction.
+    tx.execute(
+        "UPDATE work_tracking_workspace SET revision=revision+1 WHERE id=1",
+        [],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Append an immutable, already-applied desktop change to every work session that owns an
+/// affected Task (including Tasks linked through an affected Problem). The origin is supplied
+/// only by the trusted tracking adapter after it resolves the challenge's session row.
+pub(crate) fn sync_linked_sessions_tx(
+    tx: &Transaction<'_>,
+    operation_id: &str,
+    operation: &str,
+    origin_session_id: Option<&str>,
+    at: &str,
+) -> Result<(), String> {
+    let prefix = format!("{operation_id}:");
+    let mut activity = tx
+        .prepare(
+            "SELECT entity_type,entity_id FROM user_activity_events
+             WHERE operation_id=? OR substr(operation_id,1,length(?))=?",
+        )
+        .map_err(|error| error.to_string())?;
+    let changed = activity
+        .query_map(params![operation_id, prefix, prefix], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+    drop(activity);
+    if changed.is_empty() {
+        return Ok(());
+    }
+    // Session events are readable by their owners. Do not copy a cross-connection list of
+    // affected aggregate IDs into every linked session merely to explain a refresh.
+    let payload = serde_json::json!({
+        "operationId": operation_id,
+        "operation": operation,
+    });
+    let payload_text = payload.to_string();
+    let payload_hash = content_hash(&[&payload_text]);
+
+    let mut sessions = tx
+        .prepare(
+            "WITH changed AS (
+                SELECT entity_type,entity_id FROM user_activity_events
+                WHERE operation_id=? OR substr(operation_id,1,length(?))=?
+             ), affected_sessions AS (
+                SELECT l.session_id FROM work_tracking_links l
+                  JOIN changed c ON c.entity_type='task' AND l.entity_type='tasks' AND l.entity_id=c.entity_id
+                UNION
+                SELECT l.session_id FROM work_tracking_links l
+                  JOIN task_problem_links p ON p.task_id=l.entity_id AND p.unlinked_at IS NULL
+                  JOIN changed c ON c.entity_type='problem' AND p.problem_id=c.entity_id
+                 WHERE l.entity_type='tasks'
+                UNION
+                SELECT s.id FROM work_tracking_sessions s
+                  JOIN changed c ON c.entity_type='problem'
+                  JOIN problems p ON p.id=c.entity_id AND p.capture_id=s.capture_id
+                UNION
+                SELECT s.id FROM work_tracking_sessions s
+                  JOIN changed c ON c.entity_type='capture' AND s.capture_id=c.entity_id
+             )
+             SELECT DISTINCT session_id FROM affected_sessions",
+        )
+        .map_err(|error| error.to_string())?;
+    let session_ids = sessions
+        .query_map(params![operation_id, prefix, prefix], |row| {
+            row.get::<_, String>(0)
+        })
+        .map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+    drop(sessions);
+
+    for session_id in session_ids {
+        if origin_session_id == Some(session_id.as_str()) {
+            continue;
+        }
+        let already_present: bool = tx
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM work_tracking_events WHERE session_id=? AND kind='desktop_task_change' AND json_extract(payload_json,'$.operationId')=?)",
+                params![session_id, operation_id],
+                |row| row.get(0),
+            )
+            .map_err(|error| error.to_string())?;
+        if already_present {
+            continue;
+        }
+        let (head_revision, previous_event_id): (i64, String) = tx
+            .query_row(
+                "SELECT head_revision,head_event_id FROM work_tracking_sessions WHERE id=?",
+                [&session_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .map_err(|error| error.to_string())?;
+        let stream_id = "desktop_task_sync";
+        let source_sequence: i64 = tx
+            .query_row(
+                "SELECT COALESCE(MAX(source_sequence),0)+1 FROM work_tracking_events WHERE session_id=? AND stream_id=?",
+                params![session_id, stream_id],
+                |row| row.get(0),
+            )
+            .map_err(|error| error.to_string())?;
+        let event_id = new_id();
+        let revision = head_revision + 1;
+        tx.execute(
+            "INSERT INTO work_tracking_events(id,session_id,revision,previous_event_id,stream_id,source_sequence,kind,payload_json,payload_hash,occurred_at,ingested_at)
+             VALUES(?,?,?,?,?,?, 'desktop_task_change', ?,?,?,?)",
+            params![event_id, session_id, revision, previous_event_id, stream_id, source_sequence, payload_text, payload_hash, at, at],
+        )
+        .map_err(|error| error.to_string())?;
+        tx.execute(
+            "UPDATE work_tracking_sessions SET head_revision=?,head_event_id=?,updated_at=? WHERE id=?",
+            params![revision, event_id, at, session_id],
+        )
+        .map_err(|error| error.to_string())?;
+        tx.execute(
+            "INSERT INTO work_tracking_projection_results(event_id,projection_name,state,result_entity_id,updated_at)
+             VALUES(?,'workflow','applied',NULL,?)
+             ON CONFLICT(event_id,projection_name) DO NOTHING",
+            params![event_id, at],
+        )
+        .map_err(|error| error.to_string())?;
+        tx.execute(
+            "INSERT INTO work_tracking_stream_watermarks(session_id,stream_id,projection_name,last_occurred_at,last_source_sequence,last_event_id,version,updated_at)
+             VALUES(?,?,'workflow',?,?,?,1,?)
+             ON CONFLICT(session_id,stream_id,projection_name) DO UPDATE SET
+               last_occurred_at=excluded.last_occurred_at,last_source_sequence=excluded.last_source_sequence,last_event_id=excluded.last_event_id,
+               version=work_tracking_stream_watermarks.version+1,updated_at=excluded.updated_at",
+            params![session_id, stream_id, at, source_sequence, event_id, at],
+        )
+        .map_err(|error| error.to_string())?;
     }
     Ok(())
 }
@@ -91,6 +238,9 @@ pub(crate) fn create_task_tx(
         .unwrap_or("General");
     tx.execute("INSERT INTO tasks(id,origin_capture_id,current_revision,state,category,created_at,last_user_activity_at) VALUES(?,?,1,'task',?,?,?)",params![task_id,origin,category,at,at]).map_err(|e|e.to_string())?;
     tx.execute("INSERT INTO task_revisions(task_id,revision,title,detail,outcome,scope,non_goals,validation_criteria,content_hash,created_at) VALUES(?,1,?,?,?,?,?,?,?,?)",params![task_id,title,detail,outcome,scope,non_goals,criteria,content_hash(&[title,detail,outcome,scope,non_goals,criteria]),at]).map_err(|e|e.to_string())?;
+    if let Some(operation_id) = input.get("operationId").and_then(Value::as_str) {
+        record_activity_tx(tx, "task", &task_id, "created", operation_id, at)?;
+    }
     Ok(
         json!({"id":task_id,"taskRevision":1,"state":"task","title":title,"detail":detail,"outcome":outcome,"scope":scope,"nonGoals":non_goals,"validationCriteria":criteria,"category":category,"createdAt":at}),
     )

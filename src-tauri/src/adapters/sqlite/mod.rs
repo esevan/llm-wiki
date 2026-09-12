@@ -10,6 +10,7 @@ use chrono::{SecondsFormat, Utc};
 use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
@@ -74,9 +75,20 @@ fn require_text<'a>(value: &'a Value, field: &str, max: usize) -> Result<&'a str
 
 fn action_result_type(action: &str) -> Option<&'static str> {
     match action {
-        "create_task" | "revise_task" | "transition_task" | "link_task" => Some("tasks"),
-        "complete_task" => Some("task_completions"),
-        "resolve_problem" => Some("problems"),
+        "create_task" | "task.create" | "revise_task" | "task.revision" | "transition_task"
+        | "task.transition" | "task.reopen" | "link_task" => Some("tasks"),
+        "complete_task" | "task.completion.create" => Some("task_completions"),
+        "resolve_problem" | "problem.resolution.create" => Some("problems"),
+        "problem.create" | "problem.revision" => Some("problems"),
+        "task.problem-link.create" | "task.problem-link.delete" => Some("task_problem_links"),
+        "task.relationship.create" | "task.relationship.delete" => Some("task_relationships"),
+        "task.work-log.create"
+        | "work-log.comment.create"
+        | "task.checklist.create"
+        | "task.checklist.update"
+        | "task.decision.create"
+        | "task.readiness.decision"
+        | "review_conflict" => Some("tasks"),
         "adopt_problem" | "approve_problem" => Some("problems"),
         "adopt_solution" | "resolve_conflict" | "approve_solution" => Some("features"),
         "accept_completion_proposal" => Some("completion_reviews"),
@@ -86,6 +98,9 @@ fn action_result_type(action: &str) -> Option<&'static str> {
 }
 
 impl SqliteWorkTrackingStore {
+    pub(crate) fn database_path(&self) -> &std::path::Path {
+        &self.path
+    }
     fn require_scope_on(connection: &Connection, owner: &str, scope: &str) -> Result<(), AppError> {
         let raw: Option<String> = connection
             .query_row(
@@ -294,6 +309,191 @@ impl SqliteWorkTrackingStore {
         }
     }
 
+    pub fn task_continuation_discoverable(
+        &self,
+        connection_id: &str,
+        task_id: &str,
+    ) -> Result<(), AppError> {
+        let connection = database::open(&self.path).map_err(storage_error)?;
+        Self::task_continuation_access_on(&connection, connection_id, task_id)
+    }
+
+    pub fn refinement_session_discoverable(
+        &self,
+        connection_id: &str,
+        refinement_session_id: &str,
+    ) -> Result<(), AppError> {
+        let connection = database::open(&self.path).map_err(storage_error)?;
+        let task_id: Option<String> = connection
+            .query_row(
+                "SELECT task_id FROM refinement_sessions WHERE id=?",
+                [refinement_session_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(storage_error)?
+            .flatten();
+        let task_id = task_id.ok_or_else(|| {
+            AppError::new(
+                "not_found_or_not_visible",
+                "Refinement session is unavailable",
+            )
+        })?;
+        Self::task_continuation_access_on(&connection, connection_id, &task_id)
+    }
+
+    /// A Current Chat advisory is a Task-scoped record. Resolve its Task in SQLite
+    /// before exposing a guessed run ID to an MCP connection.
+    pub fn current_chat_advisory_discoverable(
+        &self,
+        connection_id: &str,
+        run_id: &str,
+    ) -> Result<(), AppError> {
+        let connection = database::open(&self.path).map_err(storage_error)?;
+        let task_id: String = connection
+            .query_row(
+                "SELECT subject_id FROM task_conflict_review_runs WHERE id=? AND subject_kind='current_chat'",
+                [run_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(storage_error)?
+            .ok_or_else(|| {
+                AppError::new(
+                    "not_found_or_not_visible",
+                    "Current Chat advisory is unavailable",
+                )
+            })?;
+        Self::task_continuation_access_on(&connection, connection_id, &task_id)
+    }
+
+    pub fn task_assistance_subject_task(
+        &self,
+        connection_id: &str,
+        subject_kind: &str,
+        subject_id: &str,
+    ) -> Result<String, AppError> {
+        let connection = database::open(&self.path).map_err(storage_error)?;
+        let task_id: String = match subject_kind {
+            "refinement" => connection.query_row("SELECT task_id FROM refinement_sessions WHERE id=?",[subject_id],|row|row.get::<_,Option<String>>(0)).optional().map_err(storage_error)?.flatten(),
+            "advisory" => connection.query_row("SELECT subject_id FROM task_conflict_review_runs WHERE id=? AND subject_kind='current_chat'",[subject_id],|row|row.get::<_,String>(0)).optional().map_err(storage_error)?,
+            _ => None,
+        }.ok_or_else(||AppError::new("not_found_or_not_visible","Task assistance subject is unavailable"))?;
+        Self::task_continuation_access_on(&connection, connection_id, &task_id)?;
+        Ok(task_id)
+    }
+
+    /// Translate an in-app session-shaped Knowledge request to the immutable
+    /// canonical Task completion that it is allowed to address.
+    pub fn canonical_task_completion_for_session(
+        &self,
+        connection_id: &str,
+        session_id: &str,
+    ) -> Result<Value, AppError> {
+        let connection = database::open(&self.path).map_err(storage_error)?;
+        let task_id: String = connection.query_row("SELECT l.entity_id FROM work_tracking_links l JOIN work_tracking_sessions s ON s.id=l.session_id WHERE l.session_id=? AND l.relationship='adopted_task' AND (s.connection_id=? OR ?='native-in-app-chat') ORDER BY l.created_at DESC LIMIT 1",params![session_id,connection_id,connection_id],|row|row.get(0)).optional().map_err(storage_error)?.ok_or_else(||AppError::new("workflow_precondition","A canonical Task must be linked before Knowledge can be drafted"))?;
+        let (revision, completion_id): (i64, String) = connection.query_row("SELECT t.current_revision,c.id FROM tasks t JOIN task_completions c ON c.task_id=t.id AND c.task_revision=t.current_revision WHERE t.id=? ORDER BY c.created_at DESC LIMIT 1",[&task_id],|row|Ok((row.get(0)?,row.get(1)?))).optional().map_err(storage_error)?.ok_or_else(||AppError::new("workflow_precondition","A completed current Task is required before Knowledge can be drafted"))?;
+        Ok(json!({"taskId":task_id,"expectedTaskRevision":revision,"completionId":completion_id}))
+    }
+
+    pub fn canonical_knowledge_draft_for_review(
+        &self,
+        connection_id: &str,
+        input: &Value,
+        withdraw: bool,
+    ) -> Result<Value, AppError> {
+        let task_id = require_text(input, "taskId", 120)?;
+        let revision = input
+            .get("draftRevision")
+            .and_then(Value::as_i64)
+            .ok_or_else(|| AppError::new("invalid_input", "draftRevision is required"))?;
+        let content_hash = require_text(input, "expectedContentHash", 128)?;
+        let source_hash = require_text(input, "expectedSourceHash", 128)?;
+        let connection = database::open(&self.path).map_err(storage_error)?;
+        Self::task_continuation_access_on(&connection, connection_id, task_id)?;
+        let draft: Value = connection.query_row("SELECT k.task_id,k.revision,k.body_markdown,k.content_hash,k.lineage_json,k.state,r.title FROM task_knowledge_drafts k JOIN task_revisions r ON r.task_id=k.task_id AND r.revision=k.task_revision WHERE k.task_id=? AND k.revision=?",params![task_id,revision],|row| {
+            let lineage: Value=serde_json::from_str(&row.get::<_,String>(4)?).unwrap_or(Value::Null);
+            Ok(json!({"taskId":row.get::<_,String>(0)?,"draftRevision":row.get::<_,i64>(1)?,"bodyMarkdown":row.get::<_,String>(2)?,"contentHash":row.get::<_,String>(3)?,"sourceHash":lineage["sourceHash"],"lineage":lineage,"state":row.get::<_,String>(5)?,"title":row.get::<_,String>(6)?}))
+        }).optional().map_err(storage_error)?.ok_or_else(||AppError::new("not_found_or_not_visible","Knowledge draft is unavailable"))?;
+        if draft["contentHash"] != content_hash || draft["sourceHash"] != source_hash {
+            return Err(AppError::new(
+                "draft_conflict",
+                "Knowledge draft body or source changed; refresh before review",
+            ));
+        }
+        let expected_state = if withdraw { "published" } else { "draft" };
+        if draft["state"] != expected_state {
+            return Err(AppError::new(
+                "workflow_precondition",
+                format!("Knowledge draft must be {expected_state}"),
+            ));
+        }
+        Ok(draft)
+    }
+
+    fn task_continuation_access_on(
+        connection: &Connection,
+        connection_id: &str,
+        task_id: &str,
+    ) -> Result<(), AppError> {
+        let (scopes, allowed): (String, String) = connection.query_row(
+            "SELECT scopes_json,allowed_topics_json FROM mcp_connections WHERE id=? AND state='active'",
+            [connection_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        ).optional().map_err(storage_error)?.ok_or_else(|| AppError::new("not_found_or_not_visible", "Connection is unavailable"))?;
+        let scopes = serde_json::from_str::<Vec<String>>(&scopes).unwrap_or_default();
+        if scopes
+            .iter()
+            .any(|scope| scope == "workbench:overview:read")
+        {
+            let exists: bool = connection
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM tasks WHERE id=?)",
+                    [task_id],
+                    |row| row.get(0),
+                )
+                .map_err(storage_error)?;
+            return exists
+                .then_some(())
+                .ok_or_else(|| AppError::new("not_found_or_not_visible", "Task is unavailable"));
+        }
+        if scopes.iter().any(|scope| scope == "workbench:current:read") {
+            let visible: bool = connection.query_row(
+                "SELECT EXISTS(
+                   SELECT 1 FROM work_tracking_links l JOIN work_tracking_sessions s ON s.id=l.session_id
+                     WHERE l.entity_type='tasks' AND l.entity_id=?1 AND (s.connection_id=?2 OR ?2='native-in-app-chat')
+                   UNION ALL
+                   SELECT 1 FROM (
+                     SELECT t.id FROM tasks t WHERE NOT EXISTS(
+                       SELECT 1 FROM work_tracking_links l JOIN work_tracking_sessions s ON s.id=l.session_id
+                        WHERE l.entity_type='tasks' AND l.entity_id=t.id AND s.state='active' AND (s.connection_id=?2 OR ?2='native-in-app-chat')
+                     ) ORDER BY t.last_user_activity_at DESC,t.id LIMIT 20
+                   ) WHERE id=?1
+                   UNION ALL
+                   SELECT 1 FROM work_tracking_workspace WHERE id=1
+                     AND json_extract(selection_json,'$.entityType')='tasks'
+                     AND json_extract(selection_json,'$.entityId')=?1
+                 )",
+                params![task_id, connection_id],
+                |row| row.get(0),
+            ).map_err(storage_error)?;
+            if visible {
+                return Ok(());
+            }
+        }
+        if !scopes.iter().any(|scope| scope == "topic:read") {
+            return Err(AppError::new(
+                "not_found_or_not_visible",
+                "Task discovery is unavailable",
+            ));
+        }
+        let allowed = serde_json::from_str::<Vec<String>>(&allowed).unwrap_or_default();
+        let visible: bool = connection.query_row("SELECT EXISTS(SELECT 1 FROM work_tracking_topic_memberships WHERE entity_type='tasks' AND entity_id=? AND topic_id IN (SELECT value FROM json_each(?)))",params![task_id,serde_json::to_string(&allowed).unwrap_or_else(|_|"[]".into())],|row|row.get(0)).map_err(storage_error)?;
+        visible
+            .then_some(())
+            .ok_or_else(|| AppError::new("not_found_or_not_visible", "Task topic is unavailable"))
+    }
+
     pub fn owned_sessions(&self, connection_id: &str) -> Result<Vec<(String, String)>, AppError> {
         self.connection_scopes(connection_id)?;
         let connection = database::open(&self.path).map_err(storage_error)?;
@@ -357,6 +557,35 @@ impl SqliteWorkTrackingStore {
         Ok(())
     }
 
+    fn replace_idempotency_response(
+        transaction: &Transaction<'_>,
+        owner: &str,
+        operation: &str,
+        operation_id: &str,
+        request_hash: &str,
+        response: &Value,
+        timestamp: &str,
+    ) -> Result<(), AppError> {
+        let source = if owner == hash_text("native-in-app-chat") {
+            "in_app_chat"
+        } else {
+            "external_mcp_chat"
+        };
+        let updated = transaction
+            .execute(
+                "UPDATE work_tracking_idempotency_records SET response_json=?,committed_at=? WHERE source_interface=? AND source_owner_hash=? AND operation_name=? AND operation_id=? AND request_hash=?",
+                params![response.to_string(), timestamp, source, owner, operation, operation_id, request_hash],
+            )
+            .map_err(storage_error)?;
+        if updated != 1 {
+            return Err(AppError::new(
+                "storage_unavailable",
+                "Reviewed operation replay record is unavailable",
+            ));
+        }
+        Ok(())
+    }
+
     // Keep the storage boundary explicit: these arguments map to one atomic record.
     #[allow(clippy::too_many_arguments)]
     pub fn open_session(
@@ -369,11 +598,12 @@ impl SqliteWorkTrackingStore {
         parent_session_id: Option<&str>,
         review_context: Option<&Value>,
         review: Option<(&str, &str)>,
+        task_id: Option<&str>,
     ) -> Result<Value, AppError> {
         self.connection_scopes(connection_id)?;
         let owner = hash_text(connection_id);
         let lineage_hash = hash_text(&format!("{connection_id}:{lineage_key}"));
-        let request = json!({"lineageKey":lineage_key,"mode":mode,"capture":capture,"parentSessionId":parent_session_id,"reviewContext":review_context});
+        let request = json!({"lineageKey":lineage_key,"mode":mode,"capture":capture,"parentSessionId":parent_session_id,"reviewContext":review_context,"taskId":task_id});
         let request_hash = hash_text(&request.to_string());
         let mut connection = database::open(&self.path).map_err(storage_error)?;
         let transaction = connection
@@ -423,6 +653,120 @@ impl SqliteWorkTrackingStore {
                 None,
                 &response,
                 &now(),
+            )?;
+            transaction.commit().map_err(storage_error)?;
+            return Ok(response);
+        }
+        if mode == "continue_task" {
+            let task_id =
+                task_id.ok_or_else(|| AppError::new("invalid_input", "taskId is required"))?;
+            Self::task_continuation_access_on(&transaction, connection_id, task_id)?;
+            let snapshot = Self::task_continuation_snapshot(&transaction, connection_id, task_id)?;
+            let stored = transaction.query_row("SELECT id,payload_hash,state,expires_at,payload_json FROM work_tracking_reviews WHERE connection_id=? AND operation_id=? AND action='task_continuation'", params![connection_id,operation_id], |row| Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?,row.get::<_,String>(2)?,row.get::<_,String>(3)?,row.get::<_,String>(4)?))).optional().map_err(storage_error)?;
+            let (review_id, expiry, reviewed_snapshot) = if let Some((
+                id,
+                hash,
+                state,
+                expiry,
+                payload,
+            )) = stored
+            {
+                if hash != request_hash {
+                    return Err(AppError::new(
+                        "idempotency_conflict",
+                        "Preview content changed; create a new review",
+                    ));
+                }
+                if state != "pending" {
+                    return Err(AppError::new(
+                        "challenge_replayed",
+                        "Task continuation review was already decided",
+                    ));
+                }
+                if expiry < now() {
+                    return Err(AppError::new(
+                        "challenge_expired",
+                        "Task continuation review expired",
+                    ));
+                }
+                let target = serde_json::from_str::<Value>(&payload)
+                    .ok()
+                    .and_then(|value| value.get("target").cloned())
+                    .ok_or_else(|| {
+                        AppError::new("storage_unavailable", "Task continuation review is invalid")
+                    })?;
+                (id, expiry, target)
+            } else {
+                if review.is_some() {
+                    return Err(AppError::new(
+                        "invalid_input",
+                        "Task continuation review is unavailable",
+                    ));
+                }
+                let id = Uuid::new_v4().to_string();
+                let expiry = (Utc::now() + chrono::Duration::minutes(10))
+                    .to_rfc3339_opts(SecondsFormat::Nanos, true);
+                let payload = json!({"request":request,"target":snapshot});
+                transaction.execute("INSERT INTO work_tracking_reviews(id,connection_id,operation_id,action,payload_hash,payload_json,expires_at,created_at) VALUES (?,?,?,'task_continuation',?,?,?,?)",params![id,connection_id,operation_id,request_hash,payload.to_string(),expiry,now()]).map_err(storage_error)?;
+                (id, expiry, snapshot)
+            };
+            let Some((supplied_id, decision)) = review else {
+                transaction.commit().map_err(storage_error)?;
+                return Ok(
+                    json!({"reviewState":review_id,"stage":"task_continuation","preview":Self::task_continuation_preview(&reviewed_snapshot),"expiresAt":expiry,"created":false,"decisionRequired":true}),
+                );
+            };
+            if supplied_id != review_id || !matches!(decision, "accept" | "reject" | "cancel") {
+                return Err(AppError::new(
+                    "invalid_input",
+                    "Invalid Task continuation decision",
+                ));
+            }
+            transaction
+                .execute(
+                    "UPDATE work_tracking_reviews SET state=? WHERE id=?",
+                    params![decision, review_id],
+                )
+                .map_err(storage_error)?;
+            if decision != "accept" {
+                transaction.commit().map_err(storage_error)?;
+                return Ok(json!({"decision":decision,"created":false}));
+            }
+            Self::task_continuation_access_on(&transaction, connection_id, task_id)?;
+            let current_snapshot =
+                Self::task_continuation_snapshot(&transaction, connection_id, task_id)?;
+            if current_snapshot != reviewed_snapshot {
+                return Err(AppError::new(
+                    "head_conflict",
+                    "Task changed; review the refreshed target",
+                ));
+            }
+            let session_id = Uuid::new_v4().to_string();
+            let event_id = Uuid::new_v4().to_string();
+            let decision_id = Uuid::new_v4().to_string();
+            let timestamp = now();
+            let source_interface = if connection_id == "native-in-app-chat" {
+                "in_app_chat"
+            } else {
+                "external_mcp_chat"
+            };
+            let payload = json!({"taskId":task_id,"target":reviewed_snapshot,"operation":"bind_existing_task"});
+            let payload_hash = hash_text(&payload.to_string());
+            transaction.execute("INSERT INTO work_tracking_sessions(id,connection_id,source_interface,conversation_ref_hash,capture_id,head_event_id,head_revision,state,publication_state,parent_session_id,created_at,updated_at) VALUES (?,?,?,?,NULL,?,1,'active','not_requested',?,?,?)",params![session_id,connection_id,source_interface,lineage_hash,event_id,parent_session_id,timestamp,timestamp]).map_err(storage_error)?;
+            transaction.execute("INSERT INTO work_tracking_events(id,session_id,revision,stream_id,source_sequence,kind,payload_json,payload_hash,occurred_at,ingested_at) VALUES (?,?,1,?,1,'task_binding',?,?,?,?)",params![event_id,session_id,format!("{source_interface}:{connection_id}"),payload.to_string(),payload_hash,timestamp,timestamp]).map_err(storage_error)?;
+            transaction.execute("INSERT INTO work_tracking_decisions(id,session_id,event_id,decision,accepted_payload_hash,decision_channel,created_at) VALUES (?,?,?,'accepted',?,?,?)",params![decision_id,session_id,event_id,payload_hash,format!("{source_interface}:task_continuation_review:{review_id}"),timestamp]).map_err(storage_error)?;
+            transaction.execute("INSERT INTO work_tracking_links(id,session_id,source_event_id,entity_type,entity_id,relationship,decision_id,created_at) VALUES (?,?,?,'tasks',?,'adopted_task',?,?)",params![Uuid::new_v4().to_string(),session_id,event_id,task_id,decision_id,timestamp]).map_err(storage_error)?;
+            let response = json!({"sessionId":session_id,"captureId":Value::Null,"headEventId":event_id,"headRevision":1,"state":"active","created":true,"deduplicated":false,"persistenceStatus":"durable","projectionStatus":"not_required","resourceUri":format!("llm-wiki://work-session/{session_id}")});
+            Self::insert_idempotency(
+                &transaction,
+                &owner,
+                "inbound_work_open",
+                operation_id,
+                &request_hash,
+                Some(&session_id),
+                Some(&event_id),
+                &response,
+                &timestamp,
             )?;
             transaction.commit().map_err(storage_error)?;
             return Ok(response);
@@ -642,42 +986,6 @@ impl SqliteWorkTrackingStore {
         Ok(response)
     }
 
-    pub fn append_native_event(
-        &self,
-        operation_id: &str,
-        conversation_key: &str,
-        session_id: Option<&str>,
-        expected_revision: Option<i64>,
-        kind: EventKind,
-        payload: &Value,
-    ) -> Result<Value, AppError> {
-        const NATIVE_CONNECTION: &str = "native-in-app-chat";
-        self.ensure_native_connection()?;
-        if let Some(session_id) = session_id {
-            self.append_event(
-                NATIVE_CONNECTION,
-                operation_id,
-                session_id,
-                expected_revision.unwrap_or(0),
-                kind,
-                payload,
-                None,
-                None,
-            )
-        } else {
-            self.open_session(
-                NATIVE_CONNECTION,
-                operation_id,
-                conversation_key,
-                "create",
-                Some(payload),
-                None,
-                None,
-                None,
-            )
-        }
-    }
-
     pub fn record_decision(
         &self,
         connection_id: &str,
@@ -715,15 +1023,103 @@ impl SqliteWorkTrackingStore {
 
     pub fn create_challenge(&self, connection_id: &str, input: &Value) -> Result<String, AppError> {
         self.connection_scopes(connection_id)?;
+        let operation_id = require_text(input, "operationId", 160)?;
+        let owner = hash_text(connection_id);
+        let request_hash = hash_text(&input.to_string());
         let session_id = require_text(input, "sessionId", 80)?;
         let source_event_id = require_text(input, "sourceEventId", 80)?;
         let action = require_text(input, "action", 80)?;
+        if matches!(
+            action,
+            "adopt_problem"
+                | "approve_problem"
+                | "adopt_solution"
+                | "approve_solution"
+                | "resolve_conflict"
+                | "accept_completion_proposal"
+                | "verify_and_complete"
+        ) {
+            return Err(AppError::new(
+                "legacy_action_rejected",
+                "This legacy workflow action is preserved only as history; use a canonical Task action",
+            ));
+        }
+        if !matches!(
+            action,
+            "task.create"
+                | "task.revision"
+                | "task.transition"
+                | "task.reopen"
+                | "task.completion.create"
+                | "problem.create"
+                | "problem.revision"
+                | "problem.resolution.create"
+                | "task.problem-link.create"
+                | "task.problem-link.delete"
+                | "task.relationship.create"
+                | "task.relationship.delete"
+                | "task.readiness.decision"
+                | "task.work-log.create"
+                | "work-log.comment.create"
+                | "task.checklist.create"
+                | "task.checklist.update"
+                | "task.decision.create"
+                | "review_conflict"
+                | "link_current_work"
+                | "create_task"
+                | "revise_task"
+                | "transition_task"
+                | "complete_task"
+                | "resolve_problem"
+                | "accept_checkpoint"
+        ) {
+            return Err(AppError::new(
+                "invalid_input",
+                "Unsupported governed Task action",
+            ));
+        }
         let expected = input
             .get("expectedHeadRevision")
             .and_then(Value::as_i64)
             .ok_or_else(|| AppError::new("invalid_input", "expectedHeadRevision is required"))?;
-        let connection = database::open(&self.path).map_err(storage_error)?;
-        let current: i64 = connection
+        let mut connection = database::open(&self.path).map_err(storage_error)?;
+        let tx = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(storage_error)?;
+        let active: bool = tx
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM mcp_connections WHERE id=? AND state='active')",
+                [connection_id],
+                |row| row.get(0),
+            )
+            .map_err(storage_error)?;
+        if !active {
+            return Err(AppError::new(
+                "not_found_or_not_visible",
+                "Connection is unavailable",
+            ));
+        }
+        if let Some(response) = Self::check_idempotency(
+            &tx,
+            &owner,
+            "inbound_work_advance",
+            operation_id,
+            &request_hash,
+        )? {
+            let review_state = response["reviewState"]
+                .as_str()
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| {
+                    AppError::new(
+                        "storage_unavailable",
+                        "Reviewed operation replay record is invalid",
+                    )
+                })?
+                .to_owned();
+            tx.commit().map_err(storage_error)?;
+            return Ok(review_state);
+        }
+        let current: i64 = tx
             .query_row(
                 "SELECT head_revision FROM work_tracking_sessions WHERE id=?1 AND (connection_id=?2 OR ?2='native-in-app-chat')",
                 params![session_id, connection_id],
@@ -740,7 +1136,7 @@ impl SqliteWorkTrackingStore {
                 current,
             ));
         }
-        let exists: i64 = connection
+        let exists: i64 = tx
             .query_row(
                 "SELECT count(*) FROM work_tracking_events WHERE id=? AND session_id=?",
                 params![source_event_id, session_id],
@@ -753,17 +1149,297 @@ impl SqliteWorkTrackingStore {
                 "Source event is unavailable",
             ));
         }
+        let target = Self::governed_target_snapshot(
+            &tx,
+            connection_id,
+            session_id,
+            action,
+            &input["proposedPayload"],
+        )?;
         let id = Uuid::new_v4().to_string();
         let timestamp = now();
         let expiry = (Utc::now() + chrono::Duration::minutes(10))
             .to_rfc3339_opts(SecondsFormat::Nanos, true);
-        let target = if action == "link_current_work" {
-            Some(Self::link_snapshot(&connection, &input["proposedPayload"])?)
-        } else {
-            None
-        };
-        connection.execute("INSERT INTO mcp_elicitation_challenges(id,connection_id,session_id,action,source_event_id,proposed_payload_hash,expected_head_revision,nonce_hash,expires_at,created_at,target_snapshot_json) VALUES (?,?,?,?,?,?,?,?,?,?,?)",params![id,connection_id,session_id,action,source_event_id,hash_text(&input.to_string()),expected,hash_text(&Uuid::new_v4().to_string()),expiry,timestamp,target.map(|v|v.to_string())]).map_err(storage_error)?;
+        tx.execute("INSERT INTO mcp_elicitation_challenges(id,connection_id,session_id,action,source_event_id,proposed_payload_hash,expected_head_revision,nonce_hash,expires_at,created_at,target_snapshot_json) VALUES (?,?,?,?,?,?,?,?,?,?,?)",params![id,connection_id,session_id,action,source_event_id,&request_hash,expected,hash_text(&Uuid::new_v4().to_string()),expiry,timestamp,target.to_string()]).map_err(storage_error)?;
+        Self::insert_idempotency(
+            &tx,
+            &owner,
+            "inbound_work_advance",
+            operation_id,
+            &request_hash,
+            Some(session_id),
+            Some(source_event_id),
+            &json!({"reviewState":id,"decisionRequired":true}),
+            &timestamp,
+        )?;
+        tx.commit().map_err(storage_error)?;
         Ok(id)
+    }
+
+    pub fn advance_result_replay(
+        &self,
+        connection_id: &str,
+        input: &Value,
+    ) -> Result<Option<Value>, AppError> {
+        self.connection_scopes(connection_id)?;
+        let operation_id = require_text(input, "operationId", 160)?;
+        let owner = hash_text(connection_id);
+        let request_hash = hash_text(&input.to_string());
+        let connection = database::open(&self.path).map_err(storage_error)?;
+        let stored = connection
+            .query_row(
+                "SELECT request_hash,response_json FROM work_tracking_idempotency_records WHERE source_interface IN ('external_mcp_chat','in_app_chat') AND source_owner_hash=? AND operation_name='inbound_work_advance' AND operation_id=?",
+                params![owner, operation_id],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )
+            .optional()
+            .map_err(storage_error)?;
+        let Some((stored_hash, response)) = stored else {
+            return Ok(None);
+        };
+        if stored_hash != request_hash {
+            return Err(AppError::new(
+                "idempotency_conflict",
+                "Operation ID was already used with different input",
+            ));
+        }
+        let mut response: Value = serde_json::from_str(&response).map_err(storage_error)?;
+        if response.get("decision").is_none() {
+            return Ok(None);
+        }
+        response["deduplicated"] = json!(true);
+        Ok(Some(response))
+    }
+
+    fn governed_problem_access_on(
+        connection: &Connection,
+        connection_id: &str,
+        problem_id: &str,
+    ) -> Result<(), AppError> {
+        let (scopes, topics): (String, String) = connection
+            .query_row(
+                "SELECT scopes_json,allowed_topics_json FROM mcp_connections WHERE id=? AND state='active'",
+                [connection_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .map_err(storage_error)?
+            .ok_or_else(|| AppError::new("not_found_or_not_visible", "Connection is unavailable"))?;
+        let scopes = serde_json::from_str::<Vec<String>>(&scopes).unwrap_or_default();
+        let topics = serde_json::from_str::<Vec<String>>(&topics).unwrap_or_default();
+        // The in-app connection has an explicit Workbench overview grant. It can attach an
+        // existing Problem without first manufacturing a session link; unknown IDs remain
+        // indistinguishable from hidden records.
+        if scopes
+            .iter()
+            .any(|scope| scope == "workbench:overview:read")
+        {
+            let exists: bool = connection
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM problems WHERE id=?)",
+                    [problem_id],
+                    |row| row.get(0),
+                )
+                .map_err(storage_error)?;
+            if exists {
+                return Ok(());
+            }
+        }
+        let linked: bool = connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM work_tracking_links l JOIN work_tracking_sessions s ON s.id=l.session_id WHERE l.entity_type='problems' AND l.entity_id=? AND (s.connection_id=? OR ?='native-in-app-chat'))",
+                params![problem_id, connection_id, connection_id],
+                |row| row.get(0),
+            )
+            .map_err(storage_error)?;
+        if linked && scopes.iter().any(|scope| scope == "workbench:current:read") {
+            return Ok(());
+        }
+        let linked_through_task: bool = connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM task_problem_links p JOIN work_tracking_links l ON l.entity_type='tasks' AND l.entity_id=p.task_id JOIN work_tracking_sessions s ON s.id=l.session_id WHERE p.problem_id=? AND p.unlinked_at IS NULL AND (s.connection_id=? OR ?='native-in-app-chat'))",
+                params![problem_id, connection_id, connection_id],
+                |row| row.get(0),
+            )
+            .map_err(storage_error)?;
+        if linked_through_task && scopes.iter().any(|scope| scope == "workbench:current:read") {
+            return Ok(());
+        }
+        if scopes.iter().any(|scope| scope == "topic:read") {
+            let visible: bool = connection
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM work_tracking_topic_memberships WHERE entity_type='problems' AND entity_id=? AND topic_id IN (SELECT value FROM json_each(?)))",
+                    params![problem_id, serde_json::to_string(&topics).unwrap_or_else(|_| "[]".into())],
+                    |row| row.get(0),
+                )
+                .map_err(storage_error)?;
+            if visible {
+                return Ok(());
+            }
+        }
+        Err(AppError::new(
+            "not_found_or_not_visible",
+            "Problem target is unavailable",
+        ))
+    }
+
+    fn governed_target_snapshot(
+        connection: &Connection,
+        connection_id: &str,
+        session_id: &str,
+        action: &str,
+        payload: &Value,
+    ) -> Result<Value, AppError> {
+        let mut tasks = BTreeSet::new();
+        let mut problems = BTreeSet::new();
+        let mut exact_problem_revisions = BTreeMap::new();
+        let task_from_payload = |payload: &Value| {
+            payload
+                .get("taskId")
+                .and_then(Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .map(str::to_owned)
+        };
+        let session_task = || -> Result<String, AppError> {
+            connection
+                .query_row(
+                    "SELECT entity_id FROM work_tracking_links WHERE session_id=? AND entity_type='tasks' AND relationship='adopted_task' ORDER BY created_at DESC LIMIT 1",
+                    [session_id],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(storage_error)?
+                .ok_or_else(|| AppError::new("workflow_precondition", "Select an authorized Task first"))
+        };
+        let primary_task = || {
+            task_from_payload(payload)
+                .map(Ok)
+                .unwrap_or_else(session_task)
+        };
+        match action {
+            "task.create" | "create_task" | "problem.create" | "accept_checkpoint" => {}
+            "problem.revision" | "problem.resolution.create" | "resolve_problem" => {
+                let id = require_text(payload, "problemId", 120)?.to_owned();
+                let revision = payload
+                    .get("expectedProblemRevision")
+                    .or_else(|| payload.get("problemRevision"))
+                    .and_then(Value::as_i64)
+                    .ok_or_else(|| {
+                        AppError::new("invalid_input", "An exact Problem revision is required")
+                    })?;
+                problems.insert(id.clone());
+                exact_problem_revisions.insert(id, revision);
+            }
+            "work-log.comment.create" => {
+                let entry_id = require_text(payload, "entryId", 120)?;
+                let task: String = connection
+                    .query_row(
+                        "SELECT task_id FROM task_work_log_entries WHERE id=?",
+                        [entry_id],
+                        |row| row.get(0),
+                    )
+                    .optional()
+                    .map_err(storage_error)?
+                    .ok_or_else(|| {
+                        AppError::new("not_found_or_not_visible", "Work Log target is unavailable")
+                    })?;
+                tasks.insert(task);
+            }
+            "task.relationship.create" => {
+                tasks.insert(primary_task()?);
+                tasks.insert(require_text(payload, "targetTaskId", 120)?.to_owned());
+            }
+            "task.relationship.delete" => {
+                let relationship_id = require_text(payload, "relationshipId", 120)?;
+                let endpoints: (String, String) = connection
+                    .query_row(
+                        "SELECT source_task_id,target_task_id FROM task_relationships WHERE id=? AND unlinked_at IS NULL",
+                        [relationship_id],
+                        |row| Ok((row.get(0)?, row.get(1)?)),
+                    )
+                    .optional()
+                    .map_err(storage_error)?
+                    .ok_or_else(|| AppError::new("not_found_or_not_visible", "Relationship target is unavailable"))?;
+                tasks.insert(endpoints.0);
+                tasks.insert(endpoints.1);
+            }
+            "task.problem-link.delete" => {
+                let link_id = require_text(payload, "linkId", 120)?;
+                let link: (String, String, i64) = connection.query_row(
+                    "SELECT task_id,problem_id,problem_revision FROM task_problem_links WHERE id=? AND unlinked_at IS NULL",
+                    [link_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                ).optional().map_err(storage_error)?.ok_or_else(|| AppError::new("not_found_or_not_visible", "Problem link target is unavailable"))?;
+                tasks.insert(link.0);
+                problems.insert(link.1.clone());
+                exact_problem_revisions.insert(link.1, link.2);
+            }
+            "link_current_work" => match require_text(payload, "entityType", 40)? {
+                "tasks" => {
+                    tasks.insert(require_text(payload, "entityId", 120)?.to_owned());
+                }
+                "problems" => {
+                    problems.insert(require_text(payload, "entityId", 120)?.to_owned());
+                }
+                _ => return Err(AppError::new("invalid_input", "Unsupported link target")),
+            },
+            _ => {
+                tasks.insert(primary_task()?);
+            }
+        }
+        if let Some(problem_id) = payload.get("problemId").and_then(Value::as_str) {
+            problems.insert(problem_id.to_owned());
+            if let Some(revision) = payload
+                .get("problemRevision")
+                .or_else(|| payload.get("expectedProblemRevision"))
+                .and_then(Value::as_i64)
+            {
+                exact_problem_revisions.insert(problem_id.to_owned(), revision);
+            }
+        }
+        if let Some(related_task) = payload.get("relatedTaskId").and_then(Value::as_str) {
+            tasks.insert(related_task.to_owned());
+        }
+        if let Some(links) = payload.get("problemLinks").and_then(Value::as_array) {
+            for link in links {
+                let problem_id = require_text(link, "problemId", 120)?.to_owned();
+                let revision = link
+                    .get("problemRevision")
+                    .and_then(Value::as_i64)
+                    .ok_or_else(|| {
+                        AppError::new(
+                            "invalid_input",
+                            "Task Problem links require an exact Problem revision",
+                        )
+                    })?;
+                problems.insert(problem_id.clone());
+                exact_problem_revisions.insert(problem_id, revision);
+            }
+        }
+        let task_snapshots = tasks
+            .iter()
+            .map(|task_id| {
+                Self::task_continuation_access_on(connection, connection_id, task_id)?;
+                Self::task_continuation_snapshot(connection, connection_id, task_id)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let problem_snapshots = problems
+            .iter()
+            .map(|problem_id| {
+                Self::governed_problem_access_on(connection, connection_id, problem_id)?;
+                let selected_revision = exact_problem_revisions.get(problem_id).copied();
+                connection
+                    .query_row(
+                        "SELECT json_object('problemId',p.id,'currentRevision',p.current_revision,'state',p.state,'selectedRevision',r.revision,'revision',json_object('statement',r.statement,'detail',r.detail,'contentHash',r.content_hash)) FROM problems p JOIN problem_revisions r ON r.problem_id=p.id AND r.revision=COALESCE(?2,p.current_revision) WHERE p.id=?1",
+                        params![problem_id, selected_revision],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .optional()
+                    .map_err(storage_error)?
+                    .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+                    .ok_or_else(|| AppError::new("not_found_or_not_visible", "Problem target is unavailable"))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(json!({"tasks":task_snapshots,"problems":problem_snapshots}))
     }
 
     fn link_snapshot(connection: &Connection, payload: &Value) -> Result<Value, AppError> {
@@ -795,13 +1471,122 @@ impl SqliteWorkTrackingStore {
         )
     }
 
+    /// Snapshot every Task dependency that this continuation exposes.  It is deliberately
+    /// compared byte-for-byte at acceptance, which makes a child-only update stale even when
+    /// `tasks.current_revision` did not change.
+    fn task_continuation_snapshot(
+        connection: &Connection,
+        _connection_id: &str,
+        task_id: &str,
+    ) -> Result<Value, AppError> {
+        let topics: String = connection
+            .query_row(
+                "SELECT COALESCE(json_group_array(topic_id),'[]') FROM (SELECT topic_id FROM work_tracking_topic_memberships WHERE entity_type='tasks' AND entity_id=? ORDER BY topic_id)",
+                [task_id],
+                |row| row.get(0),
+            )
+            .map_err(storage_error)?;
+        let topics_value: Value = serde_json::from_str(&topics).unwrap_or_else(|_| json!([]));
+        let task: Value = connection.query_row(
+            "SELECT json_object('taskId',t.id,'taskRevision',t.current_revision,'state',t.state,'title',r.title,'detail',r.detail,'outcome',r.outcome,'scope',r.scope,'nonGoals',r.non_goals,'validationCriteria',r.validation_criteria,'contentHash',r.content_hash,'lastUserActivityAt',t.last_user_activity_at,'workspaceRevision',w.revision) FROM tasks t JOIN task_revisions r ON r.task_id=t.id AND r.revision=t.current_revision CROSS JOIN work_tracking_workspace w WHERE t.id=? AND w.id=1",
+            [task_id],
+            |row| row.get::<_, String>(0),
+        ).optional().map_err(storage_error)?.and_then(|row|serde_json::from_str(&row).ok()).ok_or_else(|| AppError::new("not_found_or_not_visible", "Task is unavailable"))?;
+        let aggregate = |sql: &str| -> Result<Value, AppError> {
+            connection
+                .query_row(sql, [task_id], |row| row.get::<_, String>(0))
+                .map_err(storage_error)
+                .map(|raw| serde_json::from_str(&raw).unwrap_or_else(|_| json!([])))
+        };
+        let links = aggregate("SELECT COALESCE(json_group_array(json_object('id',id,'problemId',problem_id,'problemRevision',problem_revision,'relationship',relationship,'note',note,'unlinkedAt',unlinked_at)),'[]') FROM (SELECT * FROM task_problem_links WHERE task_id=? ORDER BY id)")?;
+        // SQLite parameters are positional; the relationship query uses the Task twice.
+        let relationships: Value = connection.query_row("SELECT COALESCE(json_group_array(json_object('id',id,'sourceTaskId',source_task_id,'targetTaskId',target_task_id,'kind',kind,'note',note,'unlinkedAt',unlinked_at)),'[]') FROM (SELECT * FROM task_relationships WHERE source_task_id=? OR target_task_id=? ORDER BY id)",params![task_id,task_id],|row|row.get::<_,String>(0)).map_err(storage_error).map(|raw|serde_json::from_str(&raw).unwrap_or_else(|_|json!([])))?;
+        // Binary evidence affects freshness but never becomes an elicitation payload.
+        let mut work_statement = connection.prepare("SELECT id,body,image_data,image_media_type,image_summary,created_at FROM task_work_log_entries WHERE task_id=? ORDER BY id").map_err(storage_error)?;
+        let work = work_statement.query_map([task_id], |row| {
+            let image_data: String = row.get(2)?;
+            Ok(json!({"id":row.get::<_,String>(0)?,"body":row.get::<_,String>(1)?,"imageHash":hash_text(&image_data),"imageBytes":image_data.len(),"imageMediaType":row.get::<_,Option<String>>(3)?,"imageSummary":row.get::<_,Option<String>>(4)?,"createdAt":row.get::<_,String>(5)?}))
+        }).map_err(storage_error)?.collect::<Result<Vec<_>,_>>().map_err(storage_error)?;
+        let comments = aggregate("SELECT COALESCE(json_group_array(json_object('id',c.id,'entryId',c.entry_id,'body',c.body,'createdAt',c.created_at)),'[]') FROM (SELECT c.* FROM task_work_log_comments c JOIN task_work_log_entries e ON e.id=c.entry_id WHERE e.task_id=? ORDER BY c.id) c")?;
+        let mut attachment_statement = connection.prepare("SELECT id,entry_id,name,media_type,data,byte_hash,created_at FROM task_attachments WHERE task_id=? ORDER BY id").map_err(storage_error)?;
+        let attachments = attachment_statement.query_map([task_id], |row| {
+            let data: String = row.get(4)?;
+            let stored_hash: String = row.get(5)?;
+            Ok(json!({"id":row.get::<_,String>(0)?,"entryId":row.get::<_,String>(1)?,"name":row.get::<_,String>(2)?,"mediaType":row.get::<_,String>(3)?,"byteHash":if stored_hash.is_empty(){hash_text(&data)}else{stored_hash},"bytes":data.len(),"createdAt":row.get::<_,String>(6)?}))
+        }).map_err(storage_error)?.collect::<Result<Vec<_>,_>>().map_err(storage_error)?;
+        let readiness = aggregate("SELECT COALESCE(json_group_array(json_object('id',id,'taskRevision',task_revision,'fieldKey',field_key,'status',status,'reason',reason,'evidenceRefs',evidence_refs_json,'createdAt',created_at)),'[]') FROM (SELECT * FROM task_readiness_decisions WHERE task_id=? ORDER BY id)")?;
+        let checklist = aggregate("SELECT COALESCE(json_group_array(json_object('id',id,'body',body,'checked',checked,'updatedAt',updated_at)),'[]') FROM (SELECT * FROM task_checklist_items WHERE task_id=? ORDER BY id)")?;
+        let decisions = aggregate("SELECT COALESCE(json_group_array(json_object('id',id,'taskRevision',task_revision,'kind',kind,'payload',payload_json,'createdAt',created_at)),'[]') FROM (SELECT * FROM task_decisions WHERE task_id=? ORDER BY id)")?;
+        let completions = aggregate("SELECT COALESCE(json_group_array(json_object('id',id,'taskRevision',task_revision,'evidence',evidence,'report',report,'createdAt',created_at)),'[]') FROM (SELECT * FROM task_completions WHERE task_id=? ORDER BY id)")?;
+        let knowledge = aggregate("SELECT COALESCE(json_group_array(json_object('revision',revision,'taskRevision',task_revision,'contentHash',content_hash,'lineage',lineage_json,'state',state,'publishedHash',published_hash,'updatedAt',updated_at)),'[]') FROM (SELECT * FROM task_knowledge_drafts WHERE task_id=? ORDER BY revision)")?;
+        Ok(
+            json!({"task":task,"topics":topics_value,"problemLinks":links,"relationships":relationships,"workLog":work,"comments":comments,"attachments":attachments,"readinessDecisions":readiness,"checklist":checklist,"decisions":decisions,"completions":completions,"knowledge":knowledge}),
+        )
+    }
+
+    /// The persisted target snapshot is intentionally exhaustive for stale detection.  The
+    /// review display is not: raw attachments, work bodies, and decision payloads remain local
+    /// evidence and never become an MCP elicitation preview.
+    fn task_continuation_preview(snapshot: &Value) -> Value {
+        let task = &snapshot["task"];
+        let ids = |field: &str| {
+            snapshot[field]
+                .as_array()
+                .map(|items| items.len())
+                .unwrap_or_default()
+        };
+        json!({
+            "task": {
+                "taskId": task["taskId"], "taskRevision": task["taskRevision"],
+                "title": bounded_overview_text(task["title"].as_str().unwrap_or_default(), OVERVIEW_TEXT_LIMIT),
+                "state": task["state"], "contentHash": task["contentHash"],
+                "workspaceRevision": task["workspaceRevision"]
+            },
+            "problemLinks": snapshot["problemLinks"], "relationships": snapshot["relationships"],
+            "activity": {"workLogCount":ids("workLog"),"checklistCount":ids("checklist"),"decisionCount":ids("decisions"),"completionCount":ids("completions"),"knowledgeCount":ids("knowledge")},
+            "sourceHash": hash_text(&snapshot.to_string())
+        })
+    }
+
     pub fn review_target(&self, owner: &str, state: &str) -> Result<Value, AppError> {
         let connection = database::open(&self.path).map_err(storage_error)?;
         let target:Option<String>=connection.query_row("SELECT target_snapshot_json FROM mcp_elicitation_challenges WHERE id=? AND connection_id=?",params![state,owner],|row|row.get(0)).map_err(storage_error)?;
-        target
+        let target = target
             .map(|v| serde_json::from_str(&v).map_err(storage_error))
             .transpose()
-            .map(|v| v.unwrap_or(Value::Null))
+            .map(|v| v.unwrap_or(Value::Null))?;
+        // Challenge storage retains complete snapshots for acceptance freshness.  Elicitation
+        // receives only a bounded Task summary and selected Problem revision text.
+        if let Some(tasks) = target.get("tasks").and_then(Value::as_array) {
+            let problems = target
+                .get("problems")
+                .and_then(Value::as_array)
+                .map(|rows| {
+                    rows.iter()
+                        .map(|problem| {
+                            let mut problem = problem.clone();
+                            if let Some(revision) =
+                                problem.get_mut("revision").and_then(Value::as_object_mut)
+                            {
+                                for key in ["statement", "detail"] {
+                                    if let Some(text) = revision.get(key).and_then(Value::as_str) {
+                                        revision.insert(
+                                            key.to_owned(),
+                                            Value::String(bounded_overview_text(text, 4000)),
+                                        );
+                                    }
+                                }
+                            }
+                            problem
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            return Ok(
+                json!({"tasks":tasks.iter().map(Self::task_continuation_preview).collect::<Vec<_>>(),"problems":problems}),
+            );
+        }
+        Ok(target)
     }
 
     pub fn set_topic_membership(&self, input: &Value) -> Result<Value, AppError> {
@@ -861,10 +1646,39 @@ impl SqliteWorkTrackingStore {
             ));
         }
         self.connection_scopes(connection_id)?;
+        let operation_id = require_text(input, "operationId", 160)?;
+        let owner = hash_text(connection_id);
+        let request_hash = hash_text(&input.to_string());
         let mut connection = database::open(&self.path).map_err(storage_error)?;
         let tx = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(storage_error)?;
+        let has_idempotency = tx
+            .query_row(
+                "SELECT request_hash,response_json FROM work_tracking_idempotency_records WHERE source_interface IN ('external_mcp_chat','in_app_chat') AND source_owner_hash=? AND operation_name='inbound_work_advance' AND operation_id=?",
+                params![owner, operation_id],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )
+            .optional()
+            .map_err(storage_error)?;
+        if let Some((stored_hash, response)) = &has_idempotency {
+            if stored_hash != &request_hash {
+                return Err(AppError::new(
+                    "idempotency_conflict",
+                    "Operation ID was already used with different input",
+                ));
+            }
+            let mut response: Value = serde_json::from_str(response).map_err(storage_error)?;
+            let stored_state = response["reviewState"].as_str();
+            if stored_state != Some(challenge_id) {
+                return Err(AppError::new("invalid_input", "Review state is invalid"));
+            }
+            if response.get("decision").is_some() {
+                response["deduplicated"] = json!(true);
+                tx.commit().map_err(storage_error)?;
+                return Ok(response);
+            }
+        }
         let (session_id,event_id,action,input_hash,expected,expires,status)=tx.query_row("SELECT session_id,source_event_id,action,proposed_payload_hash,expected_head_revision,expires_at,status FROM mcp_elicitation_challenges WHERE id=? AND connection_id=?",params![challenge_id,connection_id],|row|Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?,row.get::<_,String>(2)?,row.get::<_,String>(3)?,row.get::<_,i64>(4)?,row.get::<_,String>(5)?,row.get::<_,String>(6)?))).optional().map_err(storage_error)?.ok_or_else(||AppError::new("invalid_input","Review state is invalid"))?;
         let active: bool = tx
             .query_row(
@@ -888,10 +1702,28 @@ impl SqliteWorkTrackingStore {
         if expires < now() {
             return Err(AppError::new("challenge_expired", "Review state expired"));
         }
-        if input_hash != hash_text(&input.to_string()) {
+        // Challenges created before the Task workflow migration are retained as
+        // audit history only. A delayed accept must never resurrect a Problem /
+        // Solution approval chain; the caller must begin a fresh canonical review.
+        if matches!(
+            action.as_str(),
+            "adopt_problem"
+                | "approve_problem"
+                | "adopt_solution"
+                | "approve_solution"
+                | "resolve_conflict"
+                | "accept_completion_proposal"
+                | "verify_and_complete"
+        ) {
+            return Err(AppError::new(
+                "legacy_action_rejected",
+                "This legacy workflow action is preserved only as history; use a canonical Task action",
+            ));
+        }
+        if input_hash != request_hash {
             return Err(AppError::new("invalid_input", "Reviewed payload changed"));
         }
-        if decision == "accept" && action == "link_current_work" {
+        if decision == "accept" {
             let captured: String = tx
                 .query_row(
                     "SELECT target_snapshot_json FROM mcp_elicitation_challenges WHERE id=?",
@@ -899,12 +1731,17 @@ impl SqliteWorkTrackingStore {
                     |row| row.get(0),
                 )
                 .map_err(storage_error)?;
-            if serde_json::from_str::<Value>(&captured).map_err(storage_error)?
-                != Self::link_snapshot(&tx, &input["proposedPayload"])?
-            {
+            let fresh = Self::governed_target_snapshot(
+                &tx,
+                connection_id,
+                &session_id,
+                &action,
+                &input["proposedPayload"],
+            )?;
+            if serde_json::from_str::<Value>(&captured).map_err(storage_error)? != fresh {
                 return Err(AppError::new(
                     "head_conflict",
-                    "Workbench target changed; review the refreshed target",
+                    "Governed target changed; review the refreshed target",
                 ));
             }
         }
@@ -935,7 +1772,7 @@ impl SqliteWorkTrackingStore {
                 |row| row.get(0),
             )
             .map_err(storage_error)?;
-        if accepted && closed {
+        if accepted && closed && action != "task.reopen" {
             return Err(AppError::new(
                 "session_closed",
                 "Completed work requires a follow-up session",
@@ -986,10 +1823,40 @@ impl SqliteWorkTrackingStore {
                 proposed,
                 &timestamp,
             )?;
+            if action == "task.reopen" {
+                tx.execute(
+                    "UPDATE work_tracking_sessions SET state='active',updated_at=? WHERE id=?",
+                    params![timestamp, session_id],
+                )
+                .map_err(storage_error)?;
+            }
             tx.execute("UPDATE work_tracking_decisions SET result_entity_type=?,result_entity_id=? WHERE id=?",params![action_result_type(&action),result_entity_id,decision_id]).map_err(storage_error)?;
+            // Canonical Task actions finish in this transaction, so their source event
+            // must be settled here rather than replayed by the asynchronous projector.
+            // A Work Log checkpoint is different: its accepted decision deliberately
+            // leaves the event queued until the projector can attach it to a Task (or
+            // retain it as `waiting_solution` when no Task has been adopted yet).
+            if action != "accept_checkpoint" {
+                let (stream_id, source_sequence, occurred_at): (String, i64, String) = tx
+                    .query_row(
+                        "SELECT stream_id,source_sequence,occurred_at FROM work_tracking_events WHERE id=?",
+                        [&event_id],
+                        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                    )
+                    .map_err(storage_error)?;
+                tx.execute("INSERT INTO work_tracking_projection_results(event_id,projection_name,state,result_entity_id,updated_at) VALUES (?,'workflow','applied',?,?) ON CONFLICT(event_id,projection_name) DO UPDATE SET state='applied',result_entity_id=excluded.result_entity_id,updated_at=excluded.updated_at",params![event_id,result_entity_id,timestamp]).map_err(storage_error)?;
+                tx.execute("INSERT INTO work_tracking_stream_watermarks(session_id,stream_id,projection_name,last_occurred_at,last_source_sequence,last_event_id,version,updated_at) VALUES (?,?,'workflow',?,?,?,1,?) ON CONFLICT(session_id,stream_id,projection_name) DO UPDATE SET last_occurred_at=excluded.last_occurred_at,last_source_sequence=excluded.last_source_sequence,last_event_id=excluded.last_event_id,version=work_tracking_stream_watermarks.version+1,updated_at=excluded.updated_at WHERE excluded.last_occurred_at>work_tracking_stream_watermarks.last_occurred_at OR (excluded.last_occurred_at=work_tracking_stream_watermarks.last_occurred_at AND (excluded.last_source_sequence>work_tracking_stream_watermarks.last_source_sequence OR (excluded.last_source_sequence=work_tracking_stream_watermarks.last_source_sequence AND excluded.last_event_id>work_tracking_stream_watermarks.last_event_id)))",params![session_id,stream_id,occurred_at,source_sequence,event_id,timestamp]).map_err(storage_error)?;
+            }
         }
         tx.execute("UPDATE mcp_elicitation_challenges SET status=?,consumed_at=? WHERE id=? AND status='pending'",params![if accepted{"accepted"}else{"rejected"},timestamp,challenge_id]).map_err(storage_error)?;
-        tx.execute("UPDATE work_tracking_projection_jobs SET state=?,safe_error_code=?,updated_at=? WHERE event_id=?",params![if accepted{"pending"}else{"conflict"},if accepted{None::<String>}else{Some("rejected".to_owned())},timestamp,event_id]).map_err(storage_error)?;
+        let projection_state = if accepted && action == "accept_checkpoint" {
+            "pending"
+        } else if accepted {
+            "applied"
+        } else {
+            "conflict"
+        };
+        tx.execute("UPDATE work_tracking_projection_jobs SET state=?,lease_owner=NULL,lease_expires_at=NULL,safe_error_code=?,updated_at=? WHERE event_id=?",params![projection_state,if accepted{None::<String>}else{Some("rejected".to_owned())},timestamp,event_id]).map_err(storage_error)?;
         let final_head: i64 = tx
             .query_row(
                 "SELECT head_revision FROM work_tracking_sessions WHERE id=?",
@@ -997,10 +1864,20 @@ impl SqliteWorkTrackingStore {
                 |row| row.get(0),
             )
             .map_err(storage_error)?;
+        let response = json!({"decisionId":decision_id,"sessionId":session_id,"sourceEventId":event_id,"action":action,"decision":decision,"resultEntityId":result_entity_id,"headRevision":final_head,"projectionStatus":projection_state,"resourceUri":format!("llm-wiki://work-session/{session_id}"),"reviewState":challenge_id,"deduplicated":false});
+        if has_idempotency.is_some() {
+            Self::replace_idempotency_response(
+                &tx,
+                &owner,
+                "inbound_work_advance",
+                operation_id,
+                &request_hash,
+                &response,
+                &timestamp,
+            )?;
+        }
         tx.commit().map_err(storage_error)?;
-        Ok(
-            json!({"decisionId":decision_id,"sessionId":session_id,"sourceEventId":event_id,"action":action,"decision":decision,"resultEntityId":result_entity_id,"headRevision":final_head,"projectionStatus":if accepted{"queued"}else{"conflict"},"resourceUri":format!("llm-wiki://work-session/{session_id}")}),
-        )
+        Ok(response)
     }
 
     // Keep the storage boundary explicit: these arguments map to one atomic record.
@@ -1019,8 +1896,8 @@ impl SqliteWorkTrackingStore {
             tx.query_row("SELECT entity_id FROM work_tracking_links WHERE session_id=? AND relationship=? ORDER BY created_at DESC LIMIT 1",params![session_id,relationship],|row|row.get(0)).optional().map_err(storage_error)
         };
         match action {
-            "create_task" => {
-                let capture: String = tx
+            "create_task" | "task.create" => {
+                let capture: Option<String> = tx
                     .query_row(
                         "SELECT capture_id FROM work_tracking_sessions WHERE id=?",
                         [session_id],
@@ -1029,8 +1906,12 @@ impl SqliteWorkTrackingStore {
                     .map_err(storage_error)?;
                 let service =
                     crate::application::task_service::TaskApplicationService::new(&self.path);
+                let mut task_input = payload.clone();
+                // The Task repository records canonical activity for creates too. This ID is
+                // server-derived from the accepted decision, never a client suppression key.
+                task_input["operationId"] = json!(format!("review:{decision_id}"));
                 let task = service
-                    .create_task_tx(tx, payload, Some(&capture), None, timestamp)
+                    .create_task_tx(tx, &task_input, capture.as_deref(), None, timestamp)
                     .map_err(storage_error)?;
                 let id = task["id"]
                     .as_str()
@@ -1064,10 +1945,29 @@ impl SqliteWorkTrackingStore {
                 tx.execute("INSERT INTO work_tracking_links(id,session_id,source_event_id,entity_type,entity_id,relationship,decision_id,created_at) VALUES (?,?,?,'tasks',?,'adopted_task',?,?)",params![Uuid::new_v4().to_string(),session_id,event_id,id,decision_id,timestamp]).map_err(storage_error)?;
                 Ok(Some(id.to_owned()))
             }
-            "revise_task" | "transition_task" | "complete_task" | "resolve_problem" => {
+            "problem.create" | "problem.revision" => {
                 let mut input = payload.clone();
                 input["operationId"] = json!(format!("review:{decision_id}"));
-                if action != "resolve_problem" && input.get("taskId").is_none() {
+                let result =
+                    crate::application::task_service::TaskApplicationService::new(&self.path)
+                        .execute_tx_for_tracking(tx, action, &input, Some(session_id))
+                        .map_err(storage_error)?;
+                Ok(result["id"].as_str().map(str::to_owned))
+            }
+            "revise_task"
+            | "task.revision"
+            | "transition_task"
+            | "task.transition"
+            | "task.reopen"
+            | "complete_task"
+            | "task.completion.create"
+            | "resolve_problem"
+            | "problem.resolution.create" => {
+                let mut input = payload.clone();
+                input["operationId"] = json!(format!("review:{decision_id}"));
+                if !matches!(action, "resolve_problem" | "problem.resolution.create")
+                    && input.get("taskId").is_none()
+                {
                     input["taskId"] =
                         json!(linked("adopted_task")?.ok_or_else(|| AppError::new(
                             "workflow_precondition",
@@ -1075,22 +1975,67 @@ impl SqliteWorkTrackingStore {
                         ))?);
                 }
                 let name = match action {
-                    "revise_task" => "task.revision",
-                    "transition_task" => "task.transition",
-                    "complete_task" => "task.completion.create",
+                    "revise_task" | "task.revision" => "task.revision",
+                    "transition_task" | "task.transition" => "task.transition",
+                    "task.reopen" => "task.reopen",
+                    "complete_task" | "task.completion.create" => "task.completion.create",
                     _ => "problem.resolution.create",
                 };
                 let result =
                     crate::application::task_service::TaskApplicationService::new(&self.path)
-                        .execute_tx(tx, name, &input)
+                        .execute_tx_for_tracking(tx, name, &input, Some(session_id))
                         .map_err(storage_error)?;
-                if action == "complete_task" {
+                if matches!(action, "complete_task" | "task.completion.create") {
                     tx.execute("UPDATE work_tracking_sessions SET state='completed',publication_state='offered',publication_offer_revision=head_revision,updated_at=? WHERE id=?",params![timestamp,session_id]).map_err(storage_error)?;
                 }
                 Ok(result["id"]
                     .as_str()
                     .map(str::to_owned)
                     .or_else(|| input["taskId"].as_str().map(str::to_owned)))
+            }
+            "task.problem-link.create"
+            | "task.problem-link.delete"
+            | "task.relationship.create"
+            | "task.relationship.delete" => {
+                let mut input = payload.clone();
+                input["operationId"] = json!(format!("review:{decision_id}"));
+                if input.get("taskId").is_none() {
+                    input["taskId"] = json!(linked("adopted_task")?.ok_or_else(|| {
+                        AppError::new("workflow_precondition", "Select a Task first")
+                    })?);
+                }
+                let result =
+                    crate::application::task_service::TaskApplicationService::new(&self.path)
+                        .execute_tx_for_tracking(tx, action, &input, Some(session_id))
+                        .map_err(storage_error)?;
+                Ok(result["id"].as_str().map(str::to_owned))
+            }
+            "task.work-log.create"
+            | "work-log.comment.create"
+            | "task.checklist.create"
+            | "task.checklist.update"
+            | "task.decision.create"
+            | "task.readiness.decision"
+            | "review_conflict" => {
+                let mut input = payload.clone();
+                input["operationId"] = json!(format!("review:{decision_id}"));
+                if input.get("taskId").is_none() {
+                    input["taskId"] = json!(linked("adopted_task")?.ok_or_else(|| {
+                        AppError::new("workflow_precondition", "Select a Task first")
+                    })?);
+                }
+                let name = if action == "review_conflict" {
+                    input["kind"] = json!("advisory_review");
+                    input["payload"] = payload.clone();
+                    "task.decision.create"
+                } else {
+                    action
+                };
+                let result =
+                    crate::application::task_service::TaskApplicationService::new(&self.path)
+                        .execute_tx_for_tracking(tx, name, &input, Some(session_id))
+                        .map_err(storage_error)?;
+                Ok(result["id"].as_str().map(str::to_owned))
             }
             "adopt_problem" => {
                 let id = linked("adopted_problem")?.unwrap_or_else(|| Uuid::new_v4().to_string());
@@ -1397,8 +2342,12 @@ impl SqliteWorkTrackingStore {
         session_id: &str,
     ) -> Result<Value, AppError> {
         let mut value = connection.query_row(
-            "SELECT s.id,s.capture_id,s.head_event_id,s.head_revision,s.state,s.publication_state,c.text,s.updated_at FROM work_tracking_sessions s JOIN captures c ON c.id=s.capture_id WHERE s.id=?1 AND (s.connection_id=?2 OR ?2='native-in-app-chat')",
-            params![session_id,connection_id],|row|Ok(json!({"sessionId":row.get::<_,String>(0)?,"capture":{"id":row.get::<_,String>(1)?,"summary":row.get::<_,String>(6)?},"headEventId":row.get::<_,String>(2)?,"headRevision":row.get::<_,i64>(3)?,"state":row.get::<_,String>(4)?,"publicationState":row.get::<_,String>(5)?,"updatedAt":row.get::<_,String>(7)?})),
+            "SELECT s.id,s.capture_id,s.head_event_id,s.head_revision,s.state,s.publication_state,c.text,s.updated_at FROM work_tracking_sessions s LEFT JOIN captures c ON c.id=s.capture_id WHERE s.id=?1 AND (s.connection_id=?2 OR ?2='native-in-app-chat')",
+            params![session_id,connection_id],|row| {
+                let capture_id: Option<String> = row.get(1)?;
+                let capture_summary: Option<String> = row.get(6)?;
+                Ok(json!({"sessionId":row.get::<_,String>(0)?,"capture":capture_id.map(|id|json!({"id":id,"summary":capture_summary.unwrap_or_default()})).unwrap_or(Value::Null),"headEventId":row.get::<_,String>(2)?,"headRevision":row.get::<_,i64>(3)?,"state":row.get::<_,String>(4)?,"publicationState":row.get::<_,String>(5)?,"updatedAt":row.get::<_,String>(7)?}))
+            },
         ).optional().map_err(storage_error)?.ok_or_else(||AppError::new("not_found_or_not_visible","Work session is unavailable"))?;
         let mut statement = connection.prepare(
             "SELECT e.id,e.revision,e.kind,e.payload_json,e.occurred_at,COALESCE(r.state,j.state,'queued') FROM work_tracking_events e LEFT JOIN work_tracking_projection_results r ON r.event_id=e.id AND r.projection_name='workflow' LEFT JOIN work_tracking_projection_jobs j ON j.event_id=e.id AND j.projection_name='workflow' WHERE e.session_id=? ORDER BY e.revision DESC LIMIT 8"
@@ -1421,8 +2370,16 @@ impl SqliteWorkTrackingStore {
         value["acceptedCompletion"]=connection.query_row("SELECT e.id,e.payload_json FROM work_tracking_events e JOIN work_tracking_decisions d ON d.event_id=e.id WHERE e.session_id=? AND d.result_entity_type IN ('task_completions','completions') AND d.decision='accepted' ORDER BY e.revision DESC LIMIT 1",[session_id],|row|Ok(json!({"eventId":row.get::<_,String>(0)?,"payload":serde_json::from_str::<Value>(&row.get::<_,String>(1)?).unwrap_or(Value::Null)}))).optional().map_err(storage_error)?.unwrap_or(Value::Null);
         let problem=connection.query_row("SELECT p.id,p.statement,p.state,l.source_event_id FROM work_tracking_links l JOIN problems p ON p.id=l.entity_id WHERE l.session_id=? AND l.relationship='adopted_problem' ORDER BY l.created_at DESC LIMIT 1",[session_id],|row|Ok(json!({"id":row.get::<_,String>(0)?,"title":row.get::<_,String>(1)?,"state":row.get::<_,String>(2)?,"sourceEventId":row.get::<_,String>(3)?}))).optional().map_err(storage_error)?;
         let solution=connection.query_row("SELECT f.id,f.title,f.state,f.conflict_state,l.source_event_id FROM work_tracking_links l JOIN features f ON f.id=l.entity_id WHERE l.session_id=? AND l.relationship='adopted_solution' ORDER BY l.created_at DESC LIMIT 1",[session_id],|row|Ok(json!({"id":row.get::<_,String>(0)?,"title":row.get::<_,String>(1)?,"state":row.get::<_,String>(2)?,"conflictState":row.get::<_,String>(3)?,"sourceEventId":row.get::<_,String>(4)?}))).optional().map_err(storage_error)?;
-        let task = connection.query_row("SELECT t.id,r.title,t.state,t.current_revision,l.source_event_id FROM work_tracking_links l JOIN tasks t ON t.id=l.entity_id JOIN task_revisions r ON r.task_id=t.id AND r.revision=t.current_revision WHERE l.session_id=? AND l.relationship='adopted_task' ORDER BY l.created_at DESC LIMIT 1",[session_id],|row|Ok(json!({"id":row.get::<_,String>(0)?,"title":row.get::<_,String>(1)?,"state":row.get::<_,String>(2)?,"taskRevision":row.get::<_,i64>(3)?,"sourceEventId":row.get::<_,String>(4)?}))).optional().map_err(storage_error)?;
+        let task = connection.query_row("SELECT t.id,r.title,t.state,t.current_revision,l.source_event_id FROM work_tracking_links l JOIN tasks t ON t.id=l.entity_id JOIN task_revisions r ON r.task_id=t.id AND r.revision=t.current_revision WHERE l.session_id=? AND l.relationship='adopted_task' ORDER BY l.created_at DESC LIMIT 1",[session_id],|row|Ok(json!({"id":row.get::<_,String>(0)?,"taskId":row.get::<_,String>(0)?,"title":row.get::<_,String>(1)?,"state":row.get::<_,String>(2)?,"taskRevision":row.get::<_,i64>(3)?,"sourceEventId":row.get::<_,String>(4)?}))).optional().map_err(storage_error)?;
         value["linkedWorkflow"] = json!({"problem":problem,"solution":solution,"task":task});
+        if let Some(task_id) = value["linkedWorkflow"]["task"]["id"].as_str() {
+            let links: String = connection.query_row("SELECT COALESCE(json_group_array(json_object('id',id,'problemId',problem_id,'problemRevision',problem_revision,'relationship',relationship,'note',note)),'[]') FROM (SELECT * FROM task_problem_links WHERE task_id=? AND unlinked_at IS NULL ORDER BY id)",[task_id],|row|row.get(0)).map_err(storage_error)?;
+            let relationships: String = connection.query_row("SELECT COALESCE(json_group_array(json_object('id',id,'sourceTaskId',source_task_id,'targetTaskId',target_task_id,'kind',kind,'note',note)),'[]') FROM (SELECT * FROM task_relationships WHERE (source_task_id=? OR target_task_id=?) AND unlinked_at IS NULL ORDER BY id)",params![task_id,task_id],|row|row.get(0)).map_err(storage_error)?;
+            value["linkedWorkflow"]["task"]["problemLinks"] =
+                serde_json::from_str(&links).unwrap_or_else(|_| json!([]));
+            value["linkedWorkflow"]["task"]["relationships"] =
+                serde_json::from_str(&relationships).unwrap_or_else(|_| json!([]));
+        }
         let mut decisions_statement=connection.prepare("SELECT id,event_id,decision,decision_channel,created_at FROM work_tracking_decisions WHERE session_id=? ORDER BY created_at DESC LIMIT 8").map_err(storage_error)?;
         let decisions=decisions_statement.query_map([session_id],|row|Ok(json!({"decisionId":row.get::<_,String>(0)?,"eventId":row.get::<_,String>(1)?,"decision":row.get::<_,String>(2)?,"channel":row.get::<_,String>(3)?,"createdAt":row.get::<_,String>(4)?}))).map_err(storage_error)?.collect::<Result<Vec<_>,_>>().map_err(storage_error)?;
         value["recentDecisions"] = json!(decisions);
@@ -1435,27 +2392,68 @@ impl SqliteWorkTrackingStore {
             .map_err(storage_error)?
             .map(Value::from)
             .unwrap_or(Value::Null);
-        value["latestDraft"]=connection.query_row("SELECT id,revision,content_hash,title,summary,state FROM knowledge_drafts WHERE session_id=? ORDER BY created_at DESC,revision DESC LIMIT 1",[session_id],|row|Ok(json!({"draftId":row.get::<_,String>(0)?,"draftRevision":row.get::<_,i64>(1)?,"contentHash":row.get::<_,String>(2)?,"title":row.get::<_,String>(3)?,"summary":row.get::<_,String>(4)?,"state":row.get::<_,String>(5)?}))).optional().map_err(storage_error)?.unwrap_or(Value::Null);
-        let state = value
-            .get("state")
-            .and_then(Value::as_str)
-            .unwrap_or("active");
-        let publication = value
-            .get("publicationState")
-            .and_then(Value::as_str)
-            .unwrap_or("not_requested");
-        value["nextActions"] = if state == "completed" && publication == "offered" {
-            json!(["offer_knowledge_publication"])
-        } else if state == "completed" && publication == "draft_saved" {
-            json!(["review_knowledge_draft"])
-        } else if state == "completed" && publication == "published" {
-            json!(["review_publication_withdrawal"])
-        } else if state == "completed" {
-            json!([])
+        // Canonical Task Knowledge wins whenever the session binds a Task. The old
+        // session-only drafts table remains readable only for pre-migration history.
+        value["latestDraft"] = if let Some(task_id) =
+            task.as_ref().and_then(|item| item["id"].as_str())
+        {
+            connection.query_row("SELECT k.task_id,k.revision,k.content_hash,k.lineage_json,k.state,r.title FROM task_knowledge_drafts k JOIN task_revisions r ON r.task_id=k.task_id AND r.revision=k.task_revision WHERE k.task_id=? ORDER BY k.revision DESC LIMIT 1",[task_id],|row| {
+                let lineage: Value = serde_json::from_str(&row.get::<_,String>(3)?).unwrap_or(Value::Null);
+                Ok(json!({"taskId":row.get::<_,String>(0)?,"draftRevision":row.get::<_,i64>(1)?,"contentHash":row.get::<_,String>(2)?,"sourceHash":lineage["sourceHash"],"title":row.get::<_,String>(5)?,"state":row.get::<_,String>(4)?,"canonical":true}))
+            }).optional().map_err(storage_error)?.unwrap_or(Value::Null)
+        } else {
+            connection.query_row("SELECT id,revision,content_hash,title,summary,state FROM knowledge_drafts WHERE session_id=? ORDER BY created_at DESC,revision DESC LIMIT 1",[session_id],|row|Ok(json!({"draftId":row.get::<_,String>(0)?,"draftRevision":row.get::<_,i64>(1)?,"contentHash":row.get::<_,String>(2)?,"title":row.get::<_,String>(3)?,"summary":row.get::<_,String>(4)?,"state":row.get::<_,String>(5)?,"legacy":true}))).optional().map_err(storage_error)?.unwrap_or(Value::Null)
+        };
+        // A bound canonical Task is the source of completion and publication state. Session
+        // projection fields remain legacy compatibility state and must not hide Task drafts.
+        let canonical_completion = task.as_ref().and_then(|item| item["id"].as_str()).map(|task_id| {
+            connection.query_row("SELECT c.id,c.task_revision,c.evidence,c.report FROM task_completions c JOIN tasks t ON t.id=c.task_id WHERE c.task_id=? AND c.task_revision=t.current_revision AND t.state='completed' ORDER BY c.created_at DESC LIMIT 1", [task_id], |row| Ok(json!({"id":row.get::<_,String>(0)?,"taskRevision":row.get::<_,i64>(1)?,"evidence":row.get::<_,String>(2)?,"report":row.get::<_,String>(3)?}))).optional().map_err(storage_error)
+        }).transpose()?.flatten();
+        value["taskCompletion"] = canonical_completion.clone().unwrap_or(Value::Null);
+        let legacy_publication = value["publicationState"]
+            .as_str()
+            .unwrap_or("not_requested")
+            .to_owned();
+        let canonical_completed = canonical_completion.is_some();
+        let publication = if canonical_completed {
+            match value["latestDraft"]["state"].as_str() {
+                Some("draft") => "draft_saved",
+                Some("published") => "published",
+                Some("withdrawn") => "deferred",
+                _ if legacy_publication == "deferred" => "deferred",
+                _ => "offered",
+            }
+        } else if task.is_some() {
+            // A reopened/noncompleted Task cannot inherit an old session offer. A historical
+            // canonical draft may still be withdrawn, but a new draft needs a new completion.
+            match value["latestDraft"]["state"].as_str() {
+                Some("published") => "published",
+                Some("withdrawn") => "deferred",
+                Some("draft") => "draft_saved",
+                _ if legacy_publication == "deferred" => "deferred",
+                _ => "not_requested",
+            }
+        } else {
+            legacy_publication.as_str()
+        };
+        value["publicationState"] = json!(publication);
+        value["nextActions"] = if canonical_completed && publication == "offered" {
+            json!(["offer_knowledge_publication", "reopen_task"])
+        } else if canonical_completed && publication == "draft_saved" {
+            json!(["review_knowledge_draft", "reopen_task"])
+        } else if canonical_completed && publication == "published" {
+            json!(["review_publication_withdrawal", "reopen_task"])
+        } else if canonical_completed {
+            json!(["reopen_task"])
         } else if task.as_ref().is_some_and(|t| t["state"] == "task") {
             json!(["transition_task", "accept_checkpoint"])
+        } else if task.is_some() && publication == "published" {
+            json!(["review_publication_withdrawal"])
         } else if task.is_some() {
             json!(["accept_checkpoint", "complete_task"])
+        } else if value["state"] == "completed" {
+            // Session-only history is read-only after migration.
+            json!([])
         } else {
             json!(["create_task"])
         };
@@ -1494,28 +2492,99 @@ impl SqliteWorkTrackingStore {
         Ok(selected)
     }
 
-    pub fn begin_review(
+    pub fn task_assistance_review_target(
+        &self,
+        connection_id: &str,
+        task_id: &str,
+    ) -> Result<Value, AppError> {
+        let mut connection = database::open(&self.path).map_err(storage_error)?;
+        let tx = connection.transaction().map_err(storage_error)?;
+        Self::task_continuation_access_on(&tx, connection_id, task_id)?;
+        let snapshot = Self::task_continuation_snapshot(&tx, connection_id, task_id)?;
+        tx.commit().map_err(storage_error)?;
+        Ok(snapshot)
+    }
+
+    /// One scoped read snapshot. Binary attachment contents remain local; text and child rows
+    /// are bounded for Chat, while sourceHash covers the complete material before truncation.
+    pub fn task_context_read(&self, connection_id: &str, task_id: &str) -> Result<Value, AppError> {
+        let mut connection = database::open(&self.path).map_err(storage_error)?;
+        let tx = connection.transaction().map_err(storage_error)?;
+        Self::task_continuation_access_on(&tx, connection_id, task_id)?;
+        let mut snapshot = Self::task_continuation_snapshot(&tx, connection_id, task_id)?;
+        let source_hash = hash_text(&snapshot.to_string());
+        let readiness =
+            crate::application::task_service::TaskApplicationService::readiness_on(&tx, task_id)
+                .map_err(storage_error)?;
+        let mut truncated = false;
+        fn bound(value: &mut Value, truncated: &mut bool) {
+            match value {
+                Value::String(text) if text.chars().count() > 4000 => {
+                    *text = text.chars().take(4000).collect();
+                    *truncated = true;
+                }
+                Value::Array(rows) => {
+                    if rows.len() > 100 {
+                        rows.truncate(100);
+                        *truncated = true;
+                    }
+                    for row in rows {
+                        bound(row, truncated);
+                    }
+                }
+                Value::Object(object) => {
+                    object.remove("imageData");
+                    object.remove("data");
+                    for item in object.values_mut() {
+                        bound(item, truncated);
+                    }
+                }
+                _ => {}
+            }
+        }
+        // Draft lineage is retained in the lineage tool rather than copied into Task context.
+        if let Some(rows) = snapshot["knowledge"].as_array_mut() {
+            for row in rows {
+                if let Some(object) = row.as_object_mut() {
+                    object.remove("lineage");
+                }
+            }
+        }
+        snapshot["readiness"] = readiness;
+        bound(&mut snapshot, &mut truncated);
+        snapshot["sourceHash"] = Value::String(source_hash);
+        snapshot["truncated"] = Value::Bool(truncated);
+        tx.commit().map_err(storage_error)?;
+        Ok(snapshot)
+    }
+
+    /// Store the external request separately from internal, immutable material.  The model sees
+    /// only a bounded preview, while acceptance compares the complete child-aware snapshot.
+    pub fn begin_task_assistance_review(
         &self,
         owner: &str,
         action: &str,
         input: &Value,
+        target: &Value,
+        prepared: &Value,
     ) -> Result<Value, AppError> {
         self.connection_scopes(owner)?;
-        if input.to_string().len() > 64 * 1024 {
+        let operation = require_text(input, "operationId", 120)?;
+        let request_hash = hash_text(&input.to_string());
+        let envelope = json!({"request":input,"target":target,"prepared":prepared});
+        if envelope.to_string().len() > 256 * 1024 {
             return Err(AppError::new(
                 "invalid_input",
                 "Review content exceeds the bounded payload limit",
             ));
         }
-        let operation = require_text(input, "operationId", 120)?;
         let mut connection = database::open(&self.path).map_err(storage_error)?;
         let tx = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(storage_error)?;
-        let hash = hash_text(&input.to_string());
-        let existing=tx.query_row("SELECT id,payload_hash,state,expires_at FROM work_tracking_reviews WHERE connection_id=? AND operation_id=? AND action=?",params![owner,operation,action],|row|Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?,row.get::<_,String>(2)?,row.get::<_,String>(3)?))).optional().map_err(storage_error)?;
-        let id = if let Some((id, stored, state, expiry)) = existing {
-            if stored != hash {
+        let existing = tx.query_row("SELECT id,payload_hash,state,expires_at FROM work_tracking_reviews WHERE connection_id=? AND operation_id=? AND action=?",params![owner,operation,action],|row|Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?,row.get::<_,String>(2)?,row.get::<_,String>(3)?))).optional().map_err(storage_error)?;
+        let id = if let Some((id, hash, state, expiry)) = existing {
+            if hash != request_hash {
                 return Err(AppError::new(
                     "idempotency_conflict",
                     "Reviewed content changed",
@@ -1532,21 +2601,42 @@ impl SqliteWorkTrackingStore {
             let id = Uuid::new_v4().to_string();
             let expiry = (Utc::now() + chrono::Duration::minutes(10))
                 .to_rfc3339_opts(SecondsFormat::Nanos, true);
-            tx.execute("INSERT INTO work_tracking_reviews(id,connection_id,operation_id,action,payload_hash,payload_json,expires_at,created_at) VALUES (?,?,?,?,?,?,?,?)",params![id,owner,operation,action,hash,input.to_string(),expiry,now()]).map_err(storage_error)?;
+            tx.execute("INSERT INTO work_tracking_reviews(id,connection_id,operation_id,action,payload_hash,payload_json,expires_at,created_at) VALUES (?,?,?,?,?,?,?,?)",params![id,owner,operation,action,request_hash,envelope.to_string(),expiry,now()]).map_err(storage_error)?;
             id
         };
         tx.commit().map_err(storage_error)?;
-        Ok(json!({"decisionRequired":true,"reviewState":id,"preview":input}))
+        Ok(
+            json!({"decisionRequired":true,"reviewState":id,"preview":{"request":input,"target":Self::task_continuation_preview(target),"prepared":prepared}}),
+        )
     }
 
-    pub fn decide_review(
+    pub fn consume_task_assistance_review(
         &self,
         owner: &str,
         action: &str,
         input: &Value,
         id: &str,
         decision: &str,
-    ) -> Result<bool, AppError> {
+    ) -> Result<Option<Value>, AppError> {
+        self.consume_task_assistance_review_with(
+            owner,
+            action,
+            input,
+            id,
+            decision,
+            |_, envelope| Ok(envelope.clone()),
+        )
+    }
+
+    pub(crate) fn consume_task_assistance_review_with(
+        &self,
+        owner: &str,
+        action: &str,
+        input: &Value,
+        id: &str,
+        decision: &str,
+        persist: impl FnOnce(&rusqlite::Transaction<'_>, &Value) -> Result<Value, AppError>,
+    ) -> Result<Option<Value>, AppError> {
         if !matches!(decision, "accept" | "reject" | "cancel") {
             return Err(AppError::new("invalid_input", "Invalid review decision"));
         }
@@ -1554,38 +2644,9 @@ impl SqliteWorkTrackingStore {
         let tx = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(storage_error)?;
-        let scopes: String = tx
-            .query_row(
-                "SELECT scopes_json FROM mcp_connections WHERE id=? AND state='active'",
-                [owner],
-                |row| row.get(0),
-            )
-            .optional()
-            .map_err(storage_error)?
-            .ok_or_else(|| {
-                AppError::new("not_found_or_not_visible", "Connection is unavailable")
-            })?;
-        let required = if matches!(action, "publish" | "withdraw") {
-            "knowledge:publish"
-        } else {
-            "knowledge:draft:write"
-        };
-        if !serde_json::from_str::<Vec<String>>(&scopes)
-            .unwrap_or_default()
-            .iter()
-            .any(|scope| scope == required)
-        {
-            return Err(AppError::new(
-                "not_found_or_not_visible",
-                "Capability is unavailable",
-            ));
-        }
-        let (hash,state,expiry)=tx.query_row("SELECT payload_hash,state,expires_at FROM work_tracking_reviews WHERE id=? AND connection_id=? AND action=?",params![id,owner,action],|row|Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?,row.get::<_,String>(2)?))).optional().map_err(storage_error)?.ok_or_else(||AppError::new("invalid_input","Review is unavailable"))?;
+        let (hash, state, expiry, stored): (String,String,String,String) = tx.query_row("SELECT payload_hash,state,expires_at,payload_json FROM work_tracking_reviews WHERE id=? AND connection_id=? AND action=?",params![id,owner,action],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?))).optional().map_err(storage_error)?.ok_or_else(||AppError::new("invalid_input", "Review is unavailable"))?;
         if hash != hash_text(&input.to_string()) {
             return Err(AppError::new("invalid_input", "Reviewed payload changed"));
-        }
-        if state == "accept" && decision == "accept" {
-            return Ok(true);
         }
         if state != "pending" {
             return Err(AppError::new(
@@ -1596,25 +2657,54 @@ impl SqliteWorkTrackingStore {
         if expiry < now() {
             return Err(AppError::new("challenge_expired", "Review expired"));
         }
+        let envelope: Value = serde_json::from_str(&stored).map_err(storage_error)?;
+        let required_scope = match action {
+            "task_knowledge_publish" | "task_knowledge_withdraw" => "knowledge:publish",
+            "task_knowledge_draft" | "task_knowledge_correction" | "task_knowledge_regenerate" => {
+                "knowledge:draft:write"
+            }
+            _ => "session:write",
+        };
+        Self::require_scope_on(&tx, owner, required_scope)?;
+        if decision == "accept" {
+            let task_id = envelope["target"]["task"]["taskId"]
+                .as_str()
+                .ok_or_else(|| AppError::new("invalid_input", "Review Task is unavailable"))?;
+            Self::task_continuation_access_on(&tx, owner, task_id)?;
+            let target = Self::task_continuation_snapshot(&tx, owner, task_id)?;
+            if envelope["target"] != target {
+                return Err(AppError::new(
+                    "head_conflict",
+                    "The reviewed Task material changed; review again",
+                ));
+            }
+        }
+        let result = if decision == "accept" {
+            Some(persist(&tx, &envelope)?)
+        } else {
+            None
+        };
         tx.execute(
             "UPDATE work_tracking_reviews SET state=? WHERE id=?",
             params![decision, id],
         )
         .map_err(storage_error)?;
-        if matches!(action, "publish" | "withdraw") && decision == "accept" {
+        if decision == "accept"
+            && matches!(action, "task_knowledge_publish" | "task_knowledge_withdraw")
+        {
             tx.execute(
-                "INSERT OR IGNORE INTO work_tracking_publication_jobs(review_id) VALUES (?)",
+                "INSERT OR IGNORE INTO work_tracking_publication_jobs(review_id) VALUES(?)",
                 [id],
             )
             .map_err(storage_error)?;
         }
         tx.commit().map_err(storage_error)?;
-        Ok(decision == "accept")
+        Ok(result)
     }
 
     pub fn publication_recovery(&self) -> Result<Vec<(String, String, Value)>, AppError> {
         let connection = database::open(&self.path).map_err(storage_error)?;
-        let mut statement=connection.prepare("SELECT r.id,r.connection_id,r.payload_json FROM work_tracking_publication_jobs j JOIN work_tracking_reviews r ON r.id=j.review_id JOIN mcp_connections c ON c.id=r.connection_id WHERE j.state='pending' AND c.state='active' AND (j.next_attempt_at IS NULL OR j.next_attempt_at<=?) ORDER BY r.created_at LIMIT 5").map_err(storage_error)?;
+        let mut statement=connection.prepare("SELECT r.id,r.connection_id,r.payload_json FROM work_tracking_publication_jobs j JOIN work_tracking_reviews r ON r.id=j.review_id JOIN mcp_connections c ON c.id=r.connection_id WHERE j.state='pending' AND r.state='accept' AND c.state='active' AND (j.next_attempt_at IS NULL OR j.next_attempt_at<=?) ORDER BY r.created_at LIMIT 5").map_err(storage_error)?;
         let rows = statement
             .query_map([now()], |row| {
                 Ok((
@@ -1628,11 +2718,12 @@ impl SqliteWorkTrackingStore {
             .map_err(storage_error)?;
         rows.into_iter()
             .map(|(id, owner, payload)| {
-                Ok((
-                    id,
-                    owner,
-                    serde_json::from_str(&payload).map_err(storage_error)?,
-                ))
+                let payload: Value = serde_json::from_str(&payload).map_err(storage_error)?;
+                // Canonical Task publication reviews persist an internal envelope.
+                // Recovery must replay only the originally reviewed request, never
+                // the envelope itself or caller-supplied replacement fields.
+                let payload = payload.get("request").cloned().unwrap_or(payload);
+                Ok((id, owner, payload))
             })
             .collect()
     }
@@ -1683,117 +2774,6 @@ impl SqliteWorkTrackingStore {
                 |row| row.get(0),
             )
             .map_err(storage_error)
-    }
-
-    pub fn save_knowledge_draft(
-        &self,
-        connection_id: &str,
-        operation_id: &str,
-        input: &Value,
-    ) -> Result<Value, AppError> {
-        let owner = hash_text(connection_id);
-        let request_hash = hash_text(&input.to_string());
-        let session_id = require_text(input, "sessionId", 80)?;
-        let mut connection = database::open(&self.path).map_err(storage_error)?;
-        let tx = connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(storage_error)?;
-        Self::require_scope_on(&tx, connection_id, "knowledge:draft:write")?;
-        if let Some(response) = Self::check_idempotency(
-            &tx,
-            &owner,
-            "knowledge_draft_save",
-            operation_id,
-            &request_hash,
-        )? {
-            return Ok(response);
-        }
-        let state: String = tx
-            .query_row(
-                "SELECT state FROM work_tracking_sessions WHERE id=?1 AND (connection_id=?2 OR ?2='native-in-app-chat')",
-                params![session_id, connection_id],
-                |row| row.get(0),
-            )
-            .optional()
-            .map_err(storage_error)?
-            .ok_or_else(|| {
-                AppError::new("not_found_or_not_visible", "Completed work is unavailable")
-            })?;
-        if state != "completed" {
-            return Err(AppError::new(
-                "workflow_precondition",
-                "Complete the work before creating a Knowledge draft",
-            ));
-        }
-        let draft_id = input
-            .get("draftId")
-            .and_then(Value::as_str)
-            .map(str::to_owned)
-            .unwrap_or_else(|| Uuid::new_v4().to_string());
-        let current: i64 = tx
-            .query_row(
-                "SELECT COALESCE(MAX(revision),0) FROM knowledge_drafts WHERE id=?",
-                [&draft_id],
-                |row| row.get(0),
-            )
-            .map_err(storage_error)?;
-        let pending:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM work_tracking_publication_jobs j JOIN work_tracking_reviews r ON r.id=j.review_id WHERE j.state='pending' AND json_extract(r.payload_json,'$.draftId')=?)",[&draft_id],|row|row.get(0)).map_err(storage_error)?;
-        if pending {
-            return Err(AppError::new("publish_conflict","A reviewed publication change is pending recovery; refresh before editing its draft"));
-        }
-        let expected = input
-            .get("expectedDraftRevision")
-            .and_then(Value::as_i64)
-            .unwrap_or(0);
-        if current > 0 {
-            let original_session:String=tx.query_row("SELECT session_id FROM knowledge_drafts WHERE id=? ORDER BY revision DESC LIMIT 1",[&draft_id],|row|row.get(0)).map_err(storage_error)?;
-            if original_session != session_id {
-                return Err(AppError::new(
-                    "not_found_or_not_visible",
-                    "Draft does not belong to this work session",
-                ));
-            }
-        }
-        if current != expected {
-            return Err(AppError::conflict(
-                "Knowledge draft changed; refresh before saving",
-                current,
-            ));
-        }
-        let completion_event_id = require_text(input, "completionEventId", 80)?;
-        let completed:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM work_tracking_decisions WHERE session_id=? AND event_id=? AND result_entity_type IN ('task_completions','completions') AND decision='accepted')",params![session_id,completion_event_id],|row|row.get(0)).map_err(storage_error)?;
-        if !completed {
-            return Err(AppError::new(
-                "workflow_precondition",
-                "Use the accepted completion event for this work session",
-            ));
-        }
-        let title = require_text(input, "title", 200)?;
-        let summary = require_text(input, "summary", 4000)?;
-        let body = require_text(input, "bodyMarkdown", 50_000)?;
-        let revision = current + 1;
-        let content_hash = hash_text(body);
-        let timestamp = now();
-        let evidence = input
-            .get("evidenceRefs")
-            .cloned()
-            .unwrap_or_else(|| json!([]));
-        tx.execute("INSERT INTO knowledge_drafts(id,revision,session_id,completion_event_id,title,summary,body_markdown,evidence_refs_json,content_hash,state,created_at) VALUES (?,?,?,?,?,?,?,?,?,'draft',?)",params![draft_id,revision,session_id,completion_event_id,title,summary,body,evidence.to_string(),content_hash,timestamp]).map_err(storage_error)?;
-        tx.execute("UPDATE work_tracking_sessions SET publication_state='draft_saved',updated_at=? WHERE id=?",params![timestamp,session_id]).map_err(storage_error)?;
-        let response = json!({"draftId":draft_id,"draftRevision":revision,"contentHash":content_hash,"status":"draft","sessionId":session_id});
-        Self::insert_idempotency(
-            &tx,
-            &owner,
-            "knowledge_draft_save",
-            operation_id,
-            &request_hash,
-            Some(session_id),
-            Some(completion_event_id),
-            &response,
-            &timestamp,
-        )?;
-        tx.commit().map_err(storage_error)?;
-        Ok(response)
     }
 
     pub fn knowledge_draft(
@@ -1979,7 +2959,7 @@ impl WorkProjection for SqliteWorkTrackingStore {
 }
 
 impl WorkflowRepository for SqliteWorkTrackingStore {
-    fn current_workbench(&self, limit: usize) -> Result<Value, AppError> {
+    fn current_workbench(&self, connection_id: &str, limit: usize) -> Result<Value, AppError> {
         let connection = database::open(&self.path).map_err(storage_error)?;
         let connection = connection.unchecked_transaction().map_err(storage_error)?;
         let revision: i64 = connection
@@ -1989,12 +2969,12 @@ impl WorkflowRepository for SqliteWorkTrackingStore {
                 |row| row.get(0),
             )
             .map_err(storage_error)?;
-        let mut statement=connection.prepare("SELECT s.id,c.text,s.state,s.publication_state,s.head_revision,s.source_interface,s.updated_at FROM work_tracking_sessions s JOIN captures c ON c.id=s.capture_id ORDER BY s.updated_at DESC LIMIT ?").map_err(storage_error)?;
-        let mut rows=statement.query_map([limit as i64],|row|Ok(json!({"trackedSessionId":row.get::<_,String>(0)?,"capture":row.get::<_,String>(1)?,"state":row.get::<_,String>(2)?,"publicationState":row.get::<_,String>(3)?,"headRevision":row.get::<_,i64>(4)?,"sourceInterface":row.get::<_,String>(5)?,"updatedAt":row.get::<_,String>(6)?}))).map_err(storage_error)?.collect::<Result<Vec<_>,_>>().map_err(storage_error)?;
+        let mut statement=connection.prepare("SELECT s.id,c.text,s.state,s.publication_state,s.head_revision,s.source_interface,s.updated_at FROM work_tracking_sessions s LEFT JOIN captures c ON c.id=s.capture_id WHERE s.connection_id=? OR ?='native-in-app-chat' ORDER BY s.updated_at DESC LIMIT ?").map_err(storage_error)?;
+        let mut rows=statement.query_map(params![connection_id,connection_id,limit as i64],|row|Ok(json!({"trackedSessionId":row.get::<_,String>(0)?,"capture":row.get::<_,Option<String>>(1)?,"state":row.get::<_,String>(2)?,"publicationState":row.get::<_,String>(3)?,"headRevision":row.get::<_,i64>(4)?,"sourceInterface":row.get::<_,String>(5)?,"updatedAt":row.get::<_,String>(6)?}))).map_err(storage_error)?.collect::<Result<Vec<_>,_>>().map_err(storage_error)?;
         for row in &mut rows {
             let session = Self::session_value_on(
                 &connection,
-                "native-in-app-chat",
+                connection_id,
                 row["trackedSessionId"].as_str().unwrap_or_default(),
             )?;
             row["problem"] = session["linkedWorkflow"]["problem"].clone();
@@ -2011,6 +2991,24 @@ impl WorkflowRepository for SqliteWorkTrackingStore {
             row["recentDecisions"] = session["recentDecisions"].clone();
             row["nextDecision"] = session["nextActions"].clone();
         }
+        // Desktop-created Tasks are canonical work even before any chat session binds them.
+        // Keep them sessionless here; discovery must not manufacture a Capture or tracking event.
+        if rows.len() < limit {
+            let remaining = (limit - rows.len()) as i64;
+            let mut tasks = connection.prepare("SELECT t.id,r.title,t.state,t.current_revision,t.last_user_activity_at FROM tasks t JOIN task_revisions r ON r.task_id=t.id AND r.revision=t.current_revision WHERE NOT EXISTS(SELECT 1 FROM work_tracking_links l JOIN work_tracking_sessions s ON s.id=l.session_id WHERE l.entity_type='tasks' AND l.entity_id=t.id AND s.state='active' AND (s.connection_id=? OR ?='native-in-app-chat')) ORDER BY t.last_user_activity_at DESC,t.id LIMIT ?").map_err(storage_error)?;
+            let direct = tasks.query_map(params![connection_id,connection_id,remaining],|row|Ok(json!({"trackedSessionId":Value::Null,"capture":Value::Null,"state":row.get::<_,String>(2)?,"publicationState":"not_requested","headRevision":Value::Null,"sourceInterface":"desktop","updatedAt":row.get::<_,String>(4)?,"task":{"id":row.get::<_,String>(0)?,"taskId":row.get::<_,String>(0)?,"title":row.get::<_,String>(1)?,"state":row.get::<_,String>(2)?,"taskRevision":row.get::<_,i64>(3)?},"problem":Value::Null,"solution":Value::Null,"recentProgress":[],"recentDecisions":[],"nextDecision":["continue_task"]}))).map_err(storage_error)?.collect::<Result<Vec<_>,_>>().map_err(storage_error)?;
+            let mut direct = direct;
+            for row in &mut direct {
+                let task_id = row["task"]["id"].as_str().unwrap_or_default();
+                let links: String = connection.query_row("SELECT COALESCE(json_group_array(json_object('id',id,'problemId',problem_id,'problemRevision',problem_revision,'relationship',relationship,'note',note)),'[]') FROM (SELECT * FROM task_problem_links WHERE task_id=? AND unlinked_at IS NULL ORDER BY id)",[task_id],|record|record.get(0)).map_err(storage_error)?;
+                let relationships: String = connection.query_row("SELECT COALESCE(json_group_array(json_object('id',id,'sourceTaskId',source_task_id,'targetTaskId',target_task_id,'kind',kind,'note',note)),'[]') FROM (SELECT * FROM task_relationships WHERE (source_task_id=? OR target_task_id=?) AND unlinked_at IS NULL ORDER BY id)",params![task_id,task_id],|record|record.get(0)).map_err(storage_error)?;
+                row["task"]["problemLinks"] =
+                    serde_json::from_str(&links).unwrap_or_else(|_| json!([]));
+                row["task"]["relationships"] =
+                    serde_json::from_str(&relationships).unwrap_or_else(|_| json!([]));
+            }
+            rows.extend(direct);
+        }
         let selection: Option<String> = connection
             .query_row(
                 "SELECT selection_json FROM work_tracking_workspace WHERE id=1",
@@ -2021,21 +3019,30 @@ impl WorkflowRepository for SqliteWorkTrackingStore {
         let selection = selection
             .and_then(|value| serde_json::from_str::<Value>(&value).ok())
             .and_then(|mut selected| {
-                let (table, field) = match selected["entityType"].as_str()? {
-                    "captures" => ("captures", "text"),
-                    "problems" => ("problems", "statement"),
-                    "features" => ("features", "title"),
+                let id = selected["entityId"].as_str()?;
+                let title = match selected["entityType"].as_str()? {
+                    "tasks" => connection
+                        .query_row(
+                            "SELECT r.title FROM tasks t JOIN task_revisions r ON r.task_id=t.id AND r.revision=t.current_revision WHERE t.id=?",
+                            [id],
+                            |row| row.get::<_, String>(0),
+                        )
+                        .optional()
+                        .ok()??,
+                    "captures" => connection
+                        .query_row("SELECT text FROM captures WHERE id=?", [id], |row| row.get::<_, String>(0))
+                        .optional()
+                        .ok()??,
+                    "problems" => connection
+                        .query_row("SELECT statement FROM problems WHERE id=?", [id], |row| row.get::<_, String>(0))
+                        .optional()
+                        .ok()??,
+                    "features" => connection
+                        .query_row("SELECT title FROM features WHERE id=?", [id], |row| row.get::<_, String>(0))
+                        .optional()
+                        .ok()??,
                     _ => return None,
                 };
-                let id = selected["entityId"].as_str()?;
-                let title = connection
-                    .query_row(
-                        &format!("SELECT {field} FROM {table} WHERE id=?"),
-                        [id],
-                        |row| row.get::<_, String>(0),
-                    )
-                    .optional()
-                    .ok()??;
                 selected["title"] = json!(title);
                 Some(selected)
             });
@@ -2046,6 +3053,7 @@ impl WorkflowRepository for SqliteWorkTrackingStore {
 
     fn overview(
         &self,
+        connection_id: &str,
         limit: usize,
         offset: usize,
         attention_offset: usize,
@@ -2075,6 +3083,47 @@ impl WorkflowRepository for SqliteWorkTrackingStore {
                     })
             })
             .collect();
+        // Include the canonical Task dependencies in the public snapshot.  Task content
+        // revision alone is not enough for a caller to decide whether a link/review is stale.
+        let connection = database::open(&self.path).map_err(storage_error)?;
+        let snapshot = connection.unchecked_transaction().map_err(storage_error)?;
+        for item in &mut items {
+            if item["kind"] != "task" {
+                continue;
+            }
+            let Some(task_id) = item["entityRef"].as_str() else {
+                continue;
+            };
+            let links: String = snapshot.query_row("SELECT COALESCE(json_group_array(json_object('id',id,'problemId',problem_id,'problemRevision',problem_revision,'relationship',relationship,'note',note)),'[]') FROM (SELECT * FROM task_problem_links WHERE task_id=? AND unlinked_at IS NULL ORDER BY id)",[task_id],|row|row.get(0)).map_err(storage_error)?;
+            let relationships: String = snapshot.query_row("SELECT COALESCE(json_group_array(json_object('id',id,'sourceTaskId',source_task_id,'targetTaskId',target_task_id,'kind',kind,'note',note)),'[]') FROM (SELECT * FROM task_relationships WHERE (source_task_id=? OR target_task_id=?) AND unlinked_at IS NULL ORDER BY id)",params![task_id,task_id],|row|row.get(0)).map_err(storage_error)?;
+            let work_log: i64 = snapshot
+                .query_row(
+                    "SELECT count(*) FROM task_work_log_entries WHERE task_id=?",
+                    [task_id],
+                    |row| row.get(0),
+                )
+                .map_err(storage_error)?;
+            let checklist: i64 = snapshot
+                .query_row(
+                    "SELECT count(*) FROM task_checklist_items WHERE task_id=?",
+                    [task_id],
+                    |row| row.get(0),
+                )
+                .map_err(storage_error)?;
+            let decisions: i64 = snapshot
+                .query_row(
+                    "SELECT count(*) FROM task_decisions WHERE task_id=?",
+                    [task_id],
+                    |row| row.get(0),
+                )
+                .map_err(storage_error)?;
+            let knowledge: Value = snapshot.query_row("SELECT revision,state,content_hash,lineage_json FROM task_knowledge_drafts WHERE task_id=? ORDER BY revision DESC LIMIT 1",[task_id],|row|Ok(json!({"revision":row.get::<_,i64>(0)?,"state":row.get::<_,String>(1)?,"contentHash":row.get::<_,String>(2)?,"lineageHash":hash_text(&row.get::<_,String>(3)?)}))).optional().map_err(storage_error)?.unwrap_or(Value::Null);
+            item["problemLinks"] = serde_json::from_str(&links).unwrap_or_else(|_| json!([]));
+            item["relationships"] =
+                serde_json::from_str(&relationships).unwrap_or_else(|_| json!([]));
+            item["activity"] = json!({"workLogCount":work_log,"checklistCount":checklist,"decisionCount":decisions});
+            item["knowledge"] = knowledge;
+        }
         items.sort_by(|a, b| {
             b["updatedAt"]
                 .as_str()
@@ -2092,9 +3141,8 @@ impl WorkflowRepository for SqliteWorkTrackingStore {
             .take(10)
             .cloned()
             .collect();
-        let connection = database::open(&self.path).map_err(storage_error)?;
-        let mut statement = connection.prepare("SELECT e.id,e.session_id,e.kind,e.payload_json,e.ingested_at FROM work_tracking_events e WHERE e.kind IN ('task_created','task_revision_proposed','task_transition_proposed','problem_resolution_proposed','completion_proposal') AND NOT EXISTS(SELECT 1 FROM work_tracking_decisions d WHERE d.event_id=e.id) AND NOT EXISTS(SELECT 1 FROM work_tracking_events x WHERE x.supersedes_event_id=e.id) ORDER BY e.ingested_at DESC,e.id").map_err(storage_error)?;
-        let attention=statement.query_map([],|row|Ok(json!({"eventId":row.get::<_,String>(0)?,"sessionId":row.get::<_,String>(1)?,"kind":row.get::<_,String>(2)?,"summary":bounded_overview_text(&row.get::<_,String>(3)?,OVERVIEW_TEXT_LIMIT),"createdAt":row.get::<_,String>(4)?}))).map_err(storage_error)?.collect::<Result<Vec<_>,_>>().map_err(storage_error)?;
+        let mut statement = snapshot.prepare("SELECT e.id,e.session_id,e.kind,e.payload_json,e.ingested_at FROM work_tracking_events e JOIN work_tracking_sessions s ON s.id=e.session_id WHERE (s.connection_id=? OR ?='native-in-app-chat') AND e.kind IN ('task_created','task_revision_proposed','task_transition_proposed','problem_resolution_proposed','completion_proposal') AND NOT EXISTS(SELECT 1 FROM work_tracking_decisions d WHERE d.event_id=e.id) AND NOT EXISTS(SELECT 1 FROM work_tracking_events x WHERE x.supersedes_event_id=e.id) ORDER BY e.ingested_at DESC,e.id").map_err(storage_error)?;
+        let attention=statement.query_map(params![connection_id,connection_id],|row|Ok(json!({"eventId":row.get::<_,String>(0)?,"sessionId":row.get::<_,String>(1)?,"kind":row.get::<_,String>(2)?,"summary":bounded_overview_text(&row.get::<_,String>(3)?,OVERVIEW_TEXT_LIMIT),"createdAt":row.get::<_,String>(4)?}))).map_err(storage_error)?.collect::<Result<Vec<_>,_>>().map_err(storage_error)?;
         let attention_total = attention.len();
         let attention_page: Vec<_> = attention
             .iter()
@@ -2146,3 +3194,253 @@ impl WorkflowRepository for SqliteWorkTrackingStore {
     }
 }
 pub mod task_repository;
+
+#[cfg(test)]
+mod challenge_idempotency_tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    fn fixture() -> (tempfile::TempDir, SqliteWorkTrackingStore, String, String) {
+        let root = tempdir().unwrap();
+        let path = root.path().join("state.sqlite3");
+        database::initialize(&path).unwrap();
+        let connection_id = "connection-1".to_owned();
+        let session_id = "session-1".to_owned();
+        let event_id = "event-1".to_owned();
+        let capture_id = "capture-1";
+        let timestamp = now();
+        let connection = database::open(&path).unwrap();
+        connection
+            .execute(
+                "INSERT INTO mcp_connections(id,name,scopes_json,allowed_topics_json,checkpoint_policy,state,created_at,updated_at) VALUES(?,?,?,?,'allowed_for_started_sessions','active',?,?)",
+                params![connection_id, "Challenge test", r#"["session:write","workbench:current:read"]"#, "[]", timestamp, timestamp],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO captures(id,text,created_at,source_mode,last_user_activity_at) VALUES(?,'challenge capture',?,'capture',?)",
+                params![capture_id, timestamp, timestamp],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO work_tracking_sessions(id,connection_id,source_interface,conversation_ref_hash,capture_id,head_event_id,head_revision,state,publication_state,created_at,updated_at) VALUES(?,?,?,'conversation',?,?,1,'active','not_requested',?,?)",
+                params![session_id, connection_id, "external_mcp_chat", capture_id, event_id, timestamp, timestamp],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO work_tracking_events(id,session_id,revision,stream_id,source_sequence,kind,payload_json,payload_hash,occurred_at,ingested_at) VALUES(?,?,1,'mcp:connection-1',1,'task_created','{}',?, ?,?)",
+                params![event_id, session_id, hash_text("{}"), timestamp, timestamp],
+            )
+            .unwrap();
+        (
+            root,
+            SqliteWorkTrackingStore::new(path),
+            connection_id,
+            session_id,
+        )
+    }
+
+    fn create_task_input(operation_id: &str, session_id: &str) -> Value {
+        json!({
+            "operationId":operation_id,
+            "sessionId":session_id,
+            "expectedHeadRevision":1,
+            "sourceEventId":"event-1",
+            "action":"task.create",
+            "proposedPayload":{
+                "title":"Idempotent Task",
+                "outcome":"One durable Task",
+                "scope":"Focused fixture",
+                "validationCriteria":"Stored once"
+            }
+        })
+    }
+
+    #[test]
+    fn advance_challenge_replays_same_operation_and_replaces_it_with_the_final_acceptance() {
+        let (_root, store, connection_id, session_id) = fixture();
+        let input = create_task_input("advance-1", &session_id);
+
+        let review_state = store.create_challenge(&connection_id, &input).unwrap();
+        assert_eq!(
+            store.create_challenge(&connection_id, &input).unwrap(),
+            review_state
+        );
+        let changed = json!({
+            "operationId":"advance-1",
+            "sessionId":session_id,
+            "expectedHeadRevision":1,
+            "sourceEventId":"event-1",
+            "action":"task.create",
+            "proposedPayload":{"title":"Different payload","outcome":"One durable Task","scope":"Focused fixture","validationCriteria":"Stored once"}
+        });
+        assert_eq!(
+            store
+                .create_challenge(&connection_id, &changed)
+                .unwrap_err()
+                .code,
+            "idempotency_conflict"
+        );
+
+        let accepted = store
+            .consume_challenge(&connection_id, &review_state, &input, "accept")
+            .unwrap();
+        assert_eq!(accepted["decision"], "accept");
+        assert_eq!(accepted["reviewState"], review_state);
+        assert_eq!(accepted["deduplicated"], false);
+        let replayed = store
+            .consume_challenge(&connection_id, &review_state, &input, "accept")
+            .unwrap();
+        assert_eq!(replayed["deduplicated"], true);
+        let task_count: i64 = database::open(&store.path)
+            .unwrap()
+            .query_row("SELECT count(*) FROM tasks", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(task_count, 1);
+    }
+
+    #[test]
+    fn stale_acceptance_keeps_the_operation_pending_for_a_fresh_review() {
+        let (_root, store, connection_id, session_id) = fixture();
+        let input = create_task_input("advance-stale", &session_id);
+        let review_state = store.create_challenge(&connection_id, &input).unwrap();
+        database::open(&store.path)
+            .unwrap()
+            .execute(
+                "UPDATE work_tracking_sessions SET head_revision=2 WHERE id=?",
+                [session_id],
+            )
+            .unwrap();
+
+        assert_eq!(
+            store
+                .consume_challenge(&connection_id, &review_state, &input, "accept")
+                .unwrap_err()
+                .code,
+            "head_conflict"
+        );
+        let status: String = database::open(&store.path)
+            .unwrap()
+            .query_row(
+                "SELECT status FROM mcp_elicitation_challenges WHERE id=?",
+                [review_state],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(status, "pending");
+    }
+
+    #[test]
+    fn challenge_rejects_a_guessed_task_outside_the_connection_scope() {
+        let (_root, store, connection_id, session_id) = fixture();
+        let timestamp = now();
+        let hidden_task = "hidden-task";
+        let connection = database::open(&store.path).unwrap();
+        connection
+            .execute(
+                "UPDATE mcp_connections SET scopes_json='[\"session:write\"]' WHERE id=?",
+                [&connection_id],
+            )
+            .unwrap();
+        connection.execute("INSERT INTO tasks(id,current_revision,state,category,created_at,last_user_activity_at) VALUES(?,1,'task','General',?,?)", params![hidden_task, timestamp, timestamp]).unwrap();
+        connection.execute("INSERT INTO task_revisions(task_id,revision,title,detail,outcome,scope,non_goals,validation_criteria,content_hash,created_at) VALUES(?,1,'Hidden','','','','','','hash',?)", params![hidden_task, timestamp]).unwrap();
+        let input = json!({
+            "operationId":"hidden-task-attempt", "sessionId":session_id,
+            "expectedHeadRevision":1, "sourceEventId":"event-1", "action":"task.revision",
+            "proposedPayload":{"taskId":hidden_task,"expectedTaskRevision":1,"title":"Guess","operationId":"ignored"}
+        });
+        assert_eq!(
+            store
+                .create_challenge(&connection_id, &input)
+                .unwrap_err()
+                .code,
+            "not_found_or_not_visible"
+        );
+        let challenge_count: i64 = connection
+            .query_row(
+                "SELECT count(*) FROM mcp_elicitation_challenges",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(challenge_count, 0);
+    }
+
+    #[test]
+    fn accepted_task_reopen_reactivates_the_completed_session() {
+        let (_root, store, connection_id, session_id) = fixture();
+        let timestamp = now();
+        let task_id = "completed-task";
+        let connection = database::open(&store.path).unwrap();
+        connection.execute("INSERT INTO tasks(id,current_revision,state,category,created_at,last_user_activity_at) VALUES(?,1,'completed','General',?,?)", params![task_id, timestamp, timestamp]).unwrap();
+        connection.execute("INSERT INTO task_revisions(task_id,revision,title,detail,outcome,scope,non_goals,validation_criteria,content_hash,created_at) VALUES(?,1,'Done','','','','','','hash',?)", params![task_id, timestamp]).unwrap();
+        connection.execute("INSERT INTO task_completions(id,task_id,task_revision,evidence,report,operation_id,created_at) VALUES('completion-1',?,1,'evidence','report','fixture-complete',?)", params![task_id, timestamp]).unwrap();
+        connection.execute("INSERT INTO work_tracking_links(id,session_id,source_event_id,entity_type,entity_id,relationship,decision_id,created_at) VALUES('task-link',?,'event-1','tasks',?,'adopted_task',NULL,?)", params![session_id, task_id, timestamp]).unwrap();
+        connection
+            .execute(
+                "UPDATE work_tracking_sessions SET state='completed' WHERE id=?",
+                [&session_id],
+            )
+            .unwrap();
+        let input = json!({"operationId":"reopen-1","sessionId":session_id,"expectedHeadRevision":1,"sourceEventId":"event-1","action":"task.reopen","proposedPayload":{"taskId":task_id,"expectedTaskRevision":1}});
+        let review = store.create_challenge(&connection_id, &input).unwrap();
+        store
+            .consume_challenge(&connection_id, &review, &input, "accept")
+            .unwrap();
+        let state: String = connection
+            .query_row("SELECT state FROM tasks WHERE id=?", [task_id], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        let session_state: String = connection
+            .query_row(
+                "SELECT state FROM work_tracking_sessions WHERE id=?",
+                [session_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(state, "in_progress");
+        assert_eq!(session_state, "active");
+    }
+
+    #[test]
+    fn current_scope_allows_a_problem_linked_from_the_owned_task_but_not_a_hidden_problem() {
+        let (_root, store, connection_id, session_id) = fixture();
+        let timestamp = now();
+        let connection = database::open(&store.path).unwrap();
+        let task_id = "continued-task";
+        let visible_problem = "linked-problem";
+        let hidden_problem = "hidden-problem";
+        connection.execute("INSERT INTO tasks(id,current_revision,state,category,created_at,last_user_activity_at) VALUES(?,1,'in_progress','General',?,?)", params![task_id, timestamp, timestamp]).unwrap();
+        connection.execute("INSERT INTO task_revisions(task_id,revision,title,detail,outcome,scope,non_goals,validation_criteria,content_hash,created_at) VALUES(?,1,'Continued','','','','','','hash',?)", params![task_id, timestamp]).unwrap();
+        connection.execute("INSERT INTO work_tracking_links(id,session_id,source_event_id,entity_type,entity_id,relationship,decision_id,created_at) VALUES('continued-task-link',?,'event-1','tasks',?,'adopted_task',NULL,?)", params![session_id, task_id, timestamp]).unwrap();
+        for problem in [visible_problem, hidden_problem] {
+            connection.execute("INSERT INTO problems(id,capture_id,statement,detail,state,created_at,current_revision) VALUES(?,NULL,?,'','open',?,1)", params![problem, problem, timestamp]).unwrap();
+            connection.execute("INSERT INTO problem_revisions(problem_id,revision,statement,detail,content_hash,created_at) VALUES(?,1,?,'','hash',?)", params![problem, problem, timestamp]).unwrap();
+        }
+        connection.execute("INSERT INTO task_problem_links(id,task_id,problem_id,problem_revision,relationship,note,created_at) VALUES('visible-link',?,?,1,'context','',?)", params![task_id, visible_problem, timestamp]).unwrap();
+        let visible = json!({"operationId":"resolve-visible","sessionId":&session_id,"expectedHeadRevision":1,"sourceEventId":"event-1","action":"problem.resolution.create","proposedPayload":{"problemId":visible_problem,"expectedProblemRevision":1,"rationale":"Address the linked problem","evidenceRefs":[]}});
+        let review = store.create_challenge(&connection_id, &visible).unwrap();
+        store
+            .consume_challenge(&connection_id, &review, &visible, "accept")
+            .unwrap();
+        let state: String = connection
+            .query_row(
+                "SELECT state FROM problems WHERE id=?",
+                [visible_problem],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(state, "resolved");
+        let hidden = json!({"operationId":"resolve-hidden","sessionId":&session_id,"expectedHeadRevision":1,"sourceEventId":"event-1","action":"problem.resolution.create","proposedPayload":{"problemId":hidden_problem,"expectedProblemRevision":1,"rationale":"Guess","evidenceRefs":[]}});
+        assert_eq!(
+            store
+                .create_challenge(&connection_id, &hidden)
+                .unwrap_err()
+                .code,
+            "not_found_or_not_visible"
+        );
+    }
+}

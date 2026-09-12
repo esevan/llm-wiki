@@ -558,6 +558,59 @@ async function review(step: Step) {
     "Delayed review was cancelled, stale after a rendered Task revision, retried, and remained nonblocking with cited findings when evidence existed.",
   );
 }
+
+async function taskMcpContinuation(step: Step) {
+  const title = `desktop MCP Task ${Date.now()}`;
+  const relatedTitle = `desktop MCP related Task ${Date.now()}`;
+  await create(title);
+  await create(relatedTitle);
+  const related = await task(relatedTitle);
+  await detail(title);
+  clickElement(
+    document.querySelector<HTMLElement>(".connection-details > summary")!,
+    "Open Task connections for MCP evidence",
+  );
+  enter(field("New Problem statement"), "Exact desktop Problem for MCP continuation");
+  await clickAfter("New Problem statement", "Create exact Problem link");
+  await waitForAsync(async () => Boolean((await task(title)).problemLinks?.length), "desktop Problem link before MCP discovery");
+  await taskDetailIdle("linking related Task for MCP");
+  enter(field("Related Task ID"), related.id);
+  const relationship = document.querySelector<HTMLSelectElement>('[aria-label="Relationship kind"]');
+  if (!relationship) throw new Error("Missing relationship kind for MCP scenario");
+  relationship.value = "related";
+  relationship.dispatchEvent(new Event("change", { bubbles: true }));
+  clickElement(relationship.parentElement!.querySelector<HTMLButtonElement>("button")!, "Link Task before MCP discovery");
+  await waitForAsync(async () => Boolean((await task(title)).relationships?.length), "desktop Task relationship before MCP discovery");
+  const saved = await task(title);
+  const connection = await api<{ id: string }>("/work-tracking/connections", "POST", {
+    name: "Packaged Task continuation",
+    scopes: ["session:read", "session:write", "workbench:current:read", "workbench:overview:read"],
+    topicIds: [],
+    checkpointPolicy: "confirm_each",
+  });
+  const probe = await invoke<{ captureless: boolean; taskId: string; problemLinksVerified: boolean; relationshipsVerified: boolean; cancelledWithoutSession: boolean; changedDetail: string; expectedTaskRevision: number }>("desktop_e2e_mcp_probe", {
+    connectionId: connection.id,
+    revoked: false,
+    taskId: saved.id,
+  });
+  if (!probe.captureless || probe.taskId !== saved.id || !probe.problemLinksVerified || !probe.relationshipsVerified || !probe.cancelledWithoutSession) {
+    throw new Error("Real packaged MCP did not preserve direct Task identity, exact links, or cancelled continuation");
+  }
+  await waitForAsync(async () => {
+    const changed = await task(title);
+    return changed.taskRevision === probe.expectedTaskRevision && changed.detail === probe.changedDetail;
+  }, "canonical Task revision committed through real MCP");
+  click('[aria-label="Close Task detail"]', "Close Task detail before MCP refresh");
+  await waitFor(() => !document.querySelector(".task-detail"), "Task detail closed before refresh");
+  await detail(title);
+  await waitFor(() => document.querySelector(".task-detail")?.textContent?.includes(probe.changedDetail) ?? false, "MCP edit rendered in desktop Task detail");
+  await step("Desktop-created Task and exact Problem/Task relationships were read through a real stdio MCP child; rejected continuation created no session and accepted continuation created no Capture.");
+  await step("Exact reviewed MCP Task revision was committed through the GUI owner and rendered after reopening desktop detail.");
+  await api(`/work-tracking/connections/${connection.id}`, "DELETE");
+  const revoked = await invoke<{ revoked: boolean }>("desktop_e2e_mcp_probe", { connectionId: connection.id, revoked: true, taskId: saved.id });
+  if (!revoked.revoked) throw new Error("Revoked Task connection retained packaged MCP access");
+  await step("Revoked connection failed closed in the packaged stdio/GUI IPC boundary.");
+}
 async function publication(step: Step) {
   const title = `publish ${Date.now()}`;
   await create(title);
@@ -597,6 +650,7 @@ async function publication(step: Step) {
     () => !document.querySelector<HTMLButtonElement>('[data-control="task-worklog-add"]')?.disabled,
     "enabled publication Work Log action",
   );
+  await taskDetailIdle("adding publication Work Log");
   click('[data-control="task-worklog-add"]', "Add publication Work Log");
   await waitForAsync(async () =>
     Boolean((await task(title)).workLog?.some((item) => item.body === "Validated the signed desktop release")),
@@ -1053,6 +1107,7 @@ export function installDesktopScenario() {
           const captureId = await prepareRefinementRelaunchScenario({ ...scenarioHarness, providerUrl: e2eProviderUrl });
           await report({ status: "relaunch", steps, error: null, capture: captureId, coverage: coverage.report() });
         },
+        "task-mcp-continuation": taskMcpContinuation,
         "global-shell": () => runShellNavigationScenario(scenarioHarness),
         "global-search": async () => {
           await activateView("search");

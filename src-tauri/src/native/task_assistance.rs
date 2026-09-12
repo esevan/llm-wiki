@@ -1,5 +1,6 @@
 use crate::adapters::sqlite::task_repository::{
-    create_problem_revision_tx, create_task_tx, SqliteTaskRepository,
+    create_problem_revision_tx, create_task_tx, record_activity_tx, sync_linked_sessions_tx,
+    SqliteTaskRepository,
 };
 use crate::native::{database, semantic::SemanticEngine, settings, vault};
 use chrono::{SecondsFormat, Utc};
@@ -619,6 +620,10 @@ fn refinement_proposals(db_path: &Path, session_id: &str) -> Result<Value, Strin
 }
 
 fn refinement_decision(db_path: &Path, input: &Value) -> Result<Value, String> {
+    SqliteTaskRepository::new(db_path).transaction(|tx| refinement_decision_tx(tx, input))
+}
+
+pub(crate) fn refinement_decision_tx(tx: &Transaction<'_>, input: &Value) -> Result<Value, String> {
     let session_id = required(input, "sessionId")?;
     let proposal_id = required(input, "proposalId")?;
     let draft_revision = input
@@ -629,53 +634,98 @@ fn refinement_decision(db_path: &Path, input: &Value) -> Result<Value, String> {
     if !matches!(decision, "accept" | "reject" | "apply" | "edit") {
         return Err("invalid_input: decision must be accept, reject, apply, or edit".into());
     }
-    let repo = SqliteTaskRepository::new(db_path);
-    repo.transaction(|tx| {
-        if let Some(result) = operation_replay(tx, input)? {
-            return Ok(result);
-        }
-        let current: i64 = tx
-            .query_row(
-                "SELECT current_draft_revision FROM refinement_sessions WHERE id=?",
-                [session_id],
-                |row| row.get(0),
-            )
-            .optional()
-            .map_err(|error| error.to_string())?
-            .ok_or("Refinement session not found")?;
-        if current != draft_revision {
-            return Err(format!("draft_conflict: currentDraftRevision={current}"));
-        }
-        let (draft_payload, capture_id, session_task_id): (String, Option<String>, Option<String>) = tx
+
+    if let Some(result) = operation_replay(tx, input)? {
+        return Ok(result);
+    }
+    let current: i64 = tx
+        .query_row(
+            "SELECT current_draft_revision FROM refinement_sessions WHERE id=?",
+            [session_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| error.to_string())?
+        .ok_or("Refinement session not found")?;
+    if current != draft_revision {
+        return Err(format!("draft_conflict: currentDraftRevision={current}"));
+    }
+    let (draft_payload, capture_id, session_task_id): (String, Option<String>, Option<String>) = tx
             .query_row(
                 "SELECT d.payload_json,s.capture_id,s.task_id FROM refinement_drafts d JOIN refinement_sessions s ON s.id=d.session_id WHERE d.session_id=? AND d.revision=?",
                 params![session_id,draft_revision],
                 |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?)),
             )
             .map_err(|error| error.to_string())?;
-        let draft: Value = serde_json::from_str(&draft_payload).map_err(|error| error.to_string())?;
-        let proposal = draft
-            .get("proposals")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .find(|item| item.get("id").and_then(Value::as_str) == Some(proposal_id))
+    let draft: Value = serde_json::from_str(&draft_payload).map_err(|error| error.to_string())?;
+    let proposal = draft
+        .get("proposals")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .find(|item| item.get("id").and_then(Value::as_str) == Some(proposal_id))
+        .cloned()
+        .ok_or("Refinement proposal not found")?;
+    let timestamp = now();
+    let result = if decision == "reject" {
+        json!({"proposalId":proposal_id,"decision":"reject"})
+    } else {
+        let payload = input
+            .get("editedPayload")
             .cloned()
-            .ok_or("Refinement proposal not found")?;
-        let timestamp = now();
-        let result = if decision == "reject" {
-            json!({"proposalId":proposal_id,"decision":"reject"})
-        } else {
-            let payload = input.get("editedPayload").cloned().unwrap_or_else(|| proposal["payload"].clone());
-            apply_proposal_tx(tx, proposal["type"].as_str().unwrap_or(""), &payload, capture_id.as_deref(), session_task_id.as_deref(), &timestamp)?
-        };
-        tx.execute(
+            .unwrap_or_else(|| proposal["payload"].clone());
+        apply_proposal_tx(
+            tx,
+            proposal["type"].as_str().unwrap_or(""),
+            &payload,
+            capture_id.as_deref(),
+            session_task_id.as_deref(),
+            &timestamp,
+        )?
+    };
+    if decision != "reject" {
+        let operation_id = required(input, "operationId")?;
+        match proposal["type"].as_str().unwrap_or("") {
+            "problem_snapshot" => record_activity_tx(
+                tx,
+                "problem",
+                result["id"]
+                    .as_str()
+                    .ok_or("Refinement Problem result missing identity")?,
+                "refinement",
+                operation_id,
+                &timestamp,
+            )?,
+            "new_task" | "task_patch" => record_activity_tx(
+                tx,
+                "task",
+                result["id"]
+                    .as_str()
+                    .ok_or("Refinement Task result missing identity")?,
+                "refinement",
+                operation_id,
+                &timestamp,
+            )?,
+            "task_problem_link" => record_activity_tx(
+                tx,
+                "task",
+                result["taskId"]
+                    .as_str()
+                    .ok_or("Refinement Task link result missing Task")?,
+                "refinement",
+                operation_id,
+                &timestamp,
+            )?,
+            _ => {}
+        }
+        sync_linked_sessions_tx(tx, operation_id, "task.refinement", None, &timestamp)?;
+    }
+    tx.execute(
             "INSERT INTO refinement_proposal_decisions(id,session_id,draft_revision,proposal_id,decision,result_json,operation_id,created_at) VALUES(?,?,?,?,?,?,?,?)",
             params![id(),session_id,draft_revision,proposal_id,decision,result.to_string(),required(input,"operationId")?,timestamp],
         ).map_err(|error|error.to_string())?;
-        record_operation(tx,input,&result)?;
-        Ok(result)
-    })
+    record_operation(tx, input, &result)?;
+    Ok(result)
 }
 
 fn apply_proposal_tx(
@@ -1374,8 +1424,268 @@ fn review_decision(db_path: &Path, input: &Value) -> Result<Value, String> {
     Ok(result)
 }
 
+/// Captures the canonical, immutable Knowledge source inside the caller's SQLite snapshot.
+/// Later unlinking or changing active metadata must never make this stored source stale.
+pub(crate) fn knowledge_lineage_tx(
+    tx: &Transaction<'_>,
+    task_id: &str,
+    expected_task_revision: Option<i64>,
+) -> Result<Value, String> {
+    let (revision, state, origin_capture_id): (i64, String, Option<String>) = tx
+        .query_row(
+            "SELECT current_revision,state,origin_capture_id FROM tasks WHERE id=?",
+            [task_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .optional()
+        .map_err(|error| error.to_string())?
+        .ok_or("Task not found")?;
+    if let Some(expected) = expected_task_revision {
+        if expected != revision {
+            return Err(format!("head_conflict: currentRevision={revision}"));
+        }
+    }
+    let task_revision: Value = tx
+        .query_row("SELECT title,detail,outcome,scope,non_goals,validation_criteria,content_hash,created_at FROM task_revisions WHERE task_id=? AND revision=?", params![task_id, revision], |row| Ok(json!({"taskId":task_id,"revision":revision,"title":row.get::<_,String>(0)?,"detail":row.get::<_,String>(1)?,"outcome":row.get::<_,String>(2)?,"scope":row.get::<_,String>(3)?,"nonGoals":row.get::<_,String>(4)?,"validationCriteria":row.get::<_,String>(5)?,"contentHash":row.get::<_,String>(6)?,"createdAt":row.get::<_,String>(7)?})))
+        .optional()
+        .map_err(|error| error.to_string())?
+        .ok_or("Task revision not found")?;
+    let completion: Value = tx
+        .query_row("SELECT id,task_revision,evidence,report,created_at FROM task_completions WHERE task_id=? AND task_revision=? ORDER BY created_at DESC LIMIT 1", params![task_id, revision], |row| Ok(json!({"id":row.get::<_,String>(0)?,"taskRevision":row.get::<_,i64>(1)?,"evidence":row.get::<_,String>(2)?,"report":row.get::<_,String>(3)?,"createdAt":row.get::<_,String>(4)?})))
+        .optional()
+        .map_err(|error| error.to_string())?
+        .ok_or("Completed Task evidence not found")?;
+    let mut links = tx.prepare("SELECT l.id,l.problem_id,l.problem_revision,l.relationship,l.note,l.created_at,r.statement,r.detail,r.content_hash FROM task_problem_links l JOIN problem_revisions r ON r.problem_id=l.problem_id AND r.revision=l.problem_revision WHERE l.task_id=? AND l.unlinked_at IS NULL ORDER BY l.created_at,l.id").map_err(|error| error.to_string())?;
+    let problem_links = links.query_map([task_id], |row| Ok(json!({"linkId":row.get::<_,String>(0)?,"problemId":row.get::<_,String>(1)?,"problemRevision":row.get::<_,i64>(2)?,"relationship":row.get::<_,String>(3)?,"note":row.get::<_,String>(4)?,"createdAt":row.get::<_,String>(5)?,"statement":row.get::<_,String>(6)?,"detail":row.get::<_,String>(7)?,"contentHash":row.get::<_,String>(8)?}))).map_err(|error| error.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|error| error.to_string())?;
+    let mut relationships = tx.prepare("SELECT id,source_task_id,target_task_id,kind,note,created_at FROM task_relationships WHERE (source_task_id=? OR target_task_id=?) AND unlinked_at IS NULL ORDER BY created_at,id").map_err(|error| error.to_string())?;
+    let relationships = relationships.query_map(params![task_id,task_id], |row| Ok(json!({"relationshipId":row.get::<_,String>(0)?,"sourceTaskId":row.get::<_,String>(1)?,"targetTaskId":row.get::<_,String>(2)?,"kind":row.get::<_,String>(3)?,"note":row.get::<_,String>(4)?,"createdAt":row.get::<_,String>(5)?}))).map_err(|error| error.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|error| error.to_string())?;
+    let mut work_log = tx.prepare("SELECT e.id,e.body,e.image_summary,e.created_at,COALESCE((SELECT json_group_array(json_object('id',a.id,'name',a.name,'mediaType',a.media_type,'byteHash',a.byte_hash)) FROM task_attachments a WHERE a.entry_id=e.id),'[]'),COALESCE((SELECT json_group_array(json_object('id',c.id,'body',c.body,'createdAt',c.created_at)) FROM task_work_log_comments c WHERE c.entry_id=e.id),'[]') FROM task_work_log_entries e WHERE e.task_id=? ORDER BY e.created_at,e.id").map_err(|error| error.to_string())?;
+    let work_log = work_log.query_map([task_id], |row| Ok(json!({"id":row.get::<_,String>(0)?,"body":row.get::<_,String>(1)?,"imageSummary":row.get::<_,String>(2)?,"createdAt":row.get::<_,String>(3)?,"attachments":serde_json::from_str::<Value>(&row.get::<_,String>(4)?).unwrap_or(json!([])),"comments":serde_json::from_str::<Value>(&row.get::<_,String>(5)?).unwrap_or(json!([]))}))).map_err(|error| error.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|error| error.to_string())?;
+    let mut checklist = tx.prepare("SELECT id,body,checked,created_at,updated_at FROM task_checklist_items WHERE task_id=? ORDER BY created_at,id").map_err(|error| error.to_string())?;
+    let checklist = checklist.query_map([task_id], |row| Ok(json!({"id":row.get::<_,String>(0)?,"body":row.get::<_,String>(1)?,"checked":row.get::<_,i64>(2)? != 0,"createdAt":row.get::<_,String>(3)?,"updatedAt":row.get::<_,String>(4)?}))).map_err(|error| error.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|error| error.to_string())?;
+    let mut decisions = tx.prepare("SELECT id,kind,payload_json,created_at FROM task_decisions WHERE task_id=? ORDER BY created_at,id").map_err(|error| error.to_string())?;
+    let decisions = decisions.query_map([task_id], |row| Ok(json!({"id":row.get::<_,String>(0)?,"kind":row.get::<_,String>(1)?,"payload":serde_json::from_str::<Value>(&row.get::<_,String>(2)?).unwrap_or(Value::Null),"createdAt":row.get::<_,String>(3)?}))).map_err(|error| error.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|error| error.to_string())?;
+    let capture = origin_capture_id.map(|capture_id| json!({"id":capture_id}));
+    let source = json!({"taskId":task_id,"taskState":state,"taskRevision":task_revision,"completion":completion,"originCapture":capture,"problemLinks":problem_links,"relationships":relationships,"evidence":{"workLog":work_log,"checklist":checklist,"decisions":decisions}});
+    let source_hash = digest(&source.to_string());
+    Ok(
+        json!({"taskId":task_id,"taskRevision":revision,"completionId":source["completion"]["id"],"sourceHash":source_hash,"source":source}),
+    )
+}
+
+/// Creates a Current Chat advisory record.  It is intentionally provider-free: callers supply
+/// already bounded and cited findings through `complete_current_chat_advisory_tx`.
+pub(crate) fn create_current_chat_advisory_tx(
+    tx: &Transaction<'_>,
+    input: &Value,
+) -> Result<Value, String> {
+    if let Some(result) = operation_replay(tx, input)? {
+        return Ok(result);
+    }
+    let task_id = required(input, "taskId")?;
+    let expected = input
+        .get("expectedTaskRevision")
+        .and_then(Value::as_i64)
+        .ok_or("expectedTaskRevision is required")?;
+    let identity = review_identity(
+        tx,
+        &json!({"kind":"task_revision","taskId":task_id,"taskRevision":expected}),
+    )?;
+    let run_id = id();
+    let source_hash = identity.material_hash;
+    let subject = json!({"kind":"current_chat","taskId":task_id,"taskRevision":expected,"sourceHash":source_hash});
+    tx.execute("INSERT INTO task_conflict_review_runs(id,subject_kind,subject_id,subject_revision,material_hash,vault_revision,scope_revision,trigger_kind,status,subject_json,created_at) VALUES(?,?,?, ?,?,'current_chat','current_chat','current_chat','queued',?,?)", params![run_id,"current_chat",task_id,expected,source_hash.clone(),subject.to_string(),now()]).map_err(|error| error.to_string())?;
+    let result = json!({"id":run_id,"taskId":task_id,"taskRevision":expected,"sourceHash":source_hash,"status":"queued","advisory":true});
+    record_operation(tx, input, &result)?;
+    Ok(result)
+}
+
+pub(crate) fn complete_current_chat_advisory_tx(
+    tx: &Transaction<'_>,
+    input: &Value,
+    findings: &Value,
+    evidence_refs: &Value,
+) -> Result<Value, String> {
+    if let Some(result) = operation_replay(tx, input)? {
+        return Ok(result);
+    }
+    if !findings.is_array() || !evidence_refs.is_array() {
+        return Err("invalid_input: findings and evidenceRefs must be arrays".into());
+    }
+    let evidence_items = evidence_refs.as_array().unwrap();
+    if evidence_items.len() > 100 {
+        return Err("invalid_input: too many evidence references".into());
+    }
+    let mut supplied = HashMap::new();
+    for evidence in evidence_items {
+        let evidence_id = evidence
+            .get("evidenceId")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or("invalid_input: evidenceId is required")?;
+        if evidence_id.len() > 200 {
+            return Err("invalid_input: evidenceId is too long".into());
+        }
+        let revision = evidence
+            .get("revision")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        if revision.len() > 120 {
+            return Err("invalid_input: evidence revision is too long".into());
+        }
+        if supplied
+            .insert(evidence_id.to_owned(), revision.to_owned())
+            .is_some()
+        {
+            return Err("invalid_input: duplicate evidence reference".into());
+        }
+    }
+    let finding_items = findings.as_array().unwrap();
+    if finding_items.len() > 50 {
+        return Err("invalid_input: too many findings".into());
+    }
+    let mut finding_ids = HashMap::new();
+    for finding in finding_items {
+        let finding_id = finding
+            .get("id")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or("invalid_input: finding id is required")?;
+        if finding_id.len() > 120 {
+            return Err("invalid_input: finding id is too long".into());
+        }
+        if finding_ids.insert(finding_id.to_owned(), ()).is_some() {
+            return Err("invalid_input: duplicate finding id".into());
+        }
+        if let Some(summary) = finding.get("summary").and_then(Value::as_str) {
+            if summary.len() > 4000 {
+                return Err("invalid_input: finding summary is too long".into());
+            }
+        }
+        let citations: &[Value] = finding
+            .get("evidenceIds")
+            .map(|value| {
+                value
+                    .as_array()
+                    .ok_or("invalid_input: evidenceIds must be an array")
+            })
+            .transpose()?
+            .map_or(&[], Vec::as_slice);
+        if citations.len() > 100 {
+            return Err("invalid_input: too many finding citations".into());
+        }
+        for citation in citations {
+            let citation = citation
+                .as_str()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or("invalid_input: finding evidence ID is required")?;
+            if !supplied.contains_key(citation) {
+                return Err("invalid_input: finding cites an unsupplied evidence reference".into());
+            }
+        }
+    }
+    let run_id = required(input, "runId")?;
+    let changed = tx.execute("UPDATE task_conflict_review_runs SET status=?,findings_json=?,evidence_json=?,started_at=COALESCE(started_at,?),first_evidence_at=CASE WHEN json_array_length(?)>0 THEN COALESCE(first_evidence_at,?) ELSE first_evidence_at END,finished_at=? WHERE id=? AND subject_kind='current_chat' AND status IN ('queued','running')", params![if findings.as_array().is_some_and(|items| items.is_empty()) { "clear" } else { "findings" },findings.to_string(),evidence_refs.to_string(),now(),evidence_refs.to_string(),now(),now(),run_id]).map_err(|error| error.to_string())?;
+    if changed == 0 {
+        return Err("Current Chat advisory is not runnable".into());
+    }
+    let result = json!({"id":run_id,"status":if findings.as_array().is_some_and(|items| items.is_empty()) { "clear" } else { "findings" },"findings":findings,"evidence":evidence_refs,"advisory":true});
+    record_operation(tx, input, &result)?;
+    Ok(result)
+}
+
+pub(crate) fn current_chat_advisory_get_tx(
+    tx: &Transaction<'_>,
+    run_id: &str,
+) -> Result<Value, String> {
+    let mut value = tx.query_row("SELECT id,subject_id,subject_revision,material_hash,status,subject_json,findings_json,evidence_json,created_at,started_at,finished_at,cancel_requested_at FROM task_conflict_review_runs WHERE id=? AND subject_kind='current_chat'", [run_id], |row| Ok(json!({"id":row.get::<_,String>(0)?,"taskId":row.get::<_,String>(1)?,"taskRevision":row.get::<_,i64>(2)?,"sourceHash":row.get::<_,String>(3)?,"status":row.get::<_,String>(4)?,"subject":serde_json::from_str::<Value>(&row.get::<_,String>(5)?).unwrap_or(Value::Null),"findings":serde_json::from_str::<Value>(&row.get::<_,String>(6)?).unwrap_or(json!([])),"evidence":serde_json::from_str::<Value>(&row.get::<_,String>(7)?).unwrap_or(json!([])),"createdAt":row.get::<_,String>(8)?,"startedAt":row.get::<_,Option<String>>(9)?,"finishedAt":row.get::<_,Option<String>>(10)?,"cancelRequestedAt":row.get::<_,Option<String>>(11)?}))).optional().map_err(|error| error.to_string())?.ok_or("Current Chat advisory not found")?;
+    let current = value["taskRevision"].as_i64().is_some_and(|revision| {
+        review_identity(
+            tx,
+            &json!({"kind":"task_revision","taskId":value["taskId"],"taskRevision":revision}),
+        )
+        .is_ok_and(|identity| identity.material_hash == value["sourceHash"].as_str().unwrap_or(""))
+    });
+    value["current"] = json!(current);
+    if !current
+        && matches!(
+            value["status"].as_str(),
+            Some("queued" | "running" | "clear" | "findings")
+        )
+    {
+        value["status"] = json!("stale");
+    }
+    Ok(value)
+}
+
+pub(crate) fn current_chat_advisory_history_tx(
+    tx: &Transaction<'_>,
+    task_id: &str,
+) -> Result<Value, String> {
+    let mut statement = tx.prepare("SELECT id FROM task_conflict_review_runs WHERE subject_kind='current_chat' AND subject_id=? ORDER BY created_at DESC").map_err(|error| error.to_string())?;
+    let ids = statement
+        .query_map([task_id], |row| row.get::<_, String>(0))
+        .map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+    let attempts = ids
+        .iter()
+        .map(|run_id| current_chat_advisory_get_tx(tx, run_id))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(json!({"taskId":task_id,"attempts":attempts}))
+}
+
+pub(crate) fn cancel_current_chat_advisory_tx(
+    tx: &Transaction<'_>,
+    input: &Value,
+) -> Result<Value, String> {
+    if let Some(result) = operation_replay(tx, input)? {
+        return Ok(result);
+    }
+    let run_id = required(input, "runId")?;
+    if tx.execute("UPDATE task_conflict_review_runs SET status='cancelled',cancel_requested_at=?,finished_at=? WHERE id=? AND subject_kind='current_chat' AND status IN ('queued','running')", params![now(),now(),run_id]).map_err(|error| error.to_string())? == 0 { return Err("Current Chat advisory is not cancellable".into()); }
+    let result = json!({"id":run_id,"status":"cancelled","current":false,"advisory":true});
+    record_operation(tx, input, &result)?;
+    Ok(result)
+}
+
+pub(crate) fn decide_current_chat_advisory_tx(
+    tx: &Transaction<'_>,
+    input: &Value,
+) -> Result<Value, String> {
+    if let Some(result) = operation_replay(tx, input)? {
+        return Ok(result);
+    }
+    let run_id = required(input, "runId")?;
+    let run = current_chat_advisory_get_tx(tx, run_id)?;
+    if run["current"] != true || run["status"] != "findings" {
+        return Err(
+            "source_changed: Review the current Task material before deciding a finding".into(),
+        );
+    }
+    let finding_id = required(input, "findingId")?;
+    let exists: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM task_conflict_review_runs,json_each(findings_json) WHERE task_conflict_review_runs.id=? AND subject_kind='current_chat' AND json_extract(value,'$.id')=?)", params![run_id,finding_id], |row| row.get(0)).map_err(|error| error.to_string())?;
+    if !exists {
+        return Err("Current Chat finding not found".into());
+    }
+    let decision_id = id();
+    tx.execute("INSERT INTO task_conflict_decisions(id,run_id,finding_id,disposition,rationale,created_at) VALUES(?,?,?,?,?,?)", params![decision_id,run_id,finding_id,required(input,"disposition")?,input.get("rationale").and_then(Value::as_str).unwrap_or(""),now()]).map_err(|error| error.to_string())?;
+    let result = json!({"id":decision_id,"runId":run_id,"findingId":finding_id,"disposition":input["disposition"],"advisory":true});
+    record_operation(tx, input, &result)?;
+    Ok(result)
+}
+
 fn task_lineage(db_path: &Path, task_id: &str) -> Result<Value, String> {
-    let connection = database::open(db_path)?;
+    SqliteTaskRepository::new(db_path).transaction(|tx| task_lineage_tx(tx, task_id))
+}
+
+pub(crate) fn task_lineage_tx(
+    connection: &Transaction<'_>,
+    task_id: &str,
+) -> Result<Value, String> {
     let (revision, state, origin): (i64, String, Option<String>) = connection
         .query_row(
             "SELECT current_revision,state,origin_capture_id FROM tasks WHERE id=?",
@@ -1393,9 +1703,9 @@ fn task_lineage(db_path: &Path, task_id: &str) -> Result<Value, String> {
     }
     let task_node = format!("task:{task_id}:{revision}");
     nodes.push(json!({"id":task_node,"kind":"task_revision","recordId":task_id,"revision":revision,"state":state}));
-    collect_nodes(&connection,"SELECT l.problem_id,l.problem_revision,r.statement FROM task_problem_links l JOIN problem_revisions r ON r.problem_id=l.problem_id AND r.revision=l.problem_revision WHERE l.task_id=? AND l.unlinked_at IS NULL",task_id,|row|Ok((json!({"id":format!("problem:{}:{}",row.get::<_,String>(0)?,row.get::<_,i64>(1)?),"kind":"problem_revision","recordId":row.get::<_,String>(0)?,"revision":row.get::<_,i64>(1)?,"title":row.get::<_,String>(2)?}),"linked_problem".into())),&task_node,&mut nodes,&mut edges)?;
+    collect_nodes(connection,"SELECT l.problem_id,l.problem_revision,r.statement FROM task_problem_links l JOIN problem_revisions r ON r.problem_id=l.problem_id AND r.revision=l.problem_revision WHERE l.task_id=? AND l.unlinked_at IS NULL",task_id,|row|Ok((json!({"id":format!("problem:{}:{}",row.get::<_,String>(0)?,row.get::<_,i64>(1)?),"kind":"problem_revision","recordId":row.get::<_,String>(0)?,"revision":row.get::<_,i64>(1)?,"title":row.get::<_,String>(2)?}),"linked_problem".into())),&task_node,&mut nodes,&mut edges)?;
     collect_nodes(
-        &connection,
+        connection,
         "SELECT id,body FROM task_work_log_entries WHERE task_id=? ORDER BY created_at",
         task_id,
         |row| {
@@ -1409,7 +1719,7 @@ fn task_lineage(db_path: &Path, task_id: &str) -> Result<Value, String> {
         &mut edges,
     )?;
     collect_nodes(
-        &connection,
+        connection,
         "SELECT id,kind FROM task_decisions WHERE task_id=? ORDER BY created_at",
         task_id,
         |row| {
@@ -1423,7 +1733,7 @@ fn task_lineage(db_path: &Path, task_id: &str) -> Result<Value, String> {
         &mut edges,
     )?;
     collect_nodes(
-        &connection,
+        connection,
         "SELECT id,evidence FROM task_completions WHERE task_id=? ORDER BY created_at",
         task_id,
         |row| {
@@ -1491,28 +1801,49 @@ async fn knowledge_draft(
     settings_path: &Path,
     input: &Value,
 ) -> Result<Value, String> {
+    let prepared = prepare_knowledge_draft(db_path, settings_path, input).await?;
+    save_knowledge_draft(
+        db_path,
+        input,
+        required(&prepared, "taskId")?,
+        prepared["taskRevision"]
+            .as_i64()
+            .ok_or("taskRevision is required")?,
+        required(&prepared, "completionId")?,
+        required(&prepared, "bodyMarkdown")?.to_owned(),
+        prepared["lineage"].clone(),
+        prepared["modelStatus"].as_str().unwrap_or("deterministic"),
+        prepared["modelError"].as_str().unwrap_or(""),
+    )
+}
+
+/// Produce a reviewable immutable Knowledge body without inserting a draft. The caller may
+/// persist it only after a separate governed decision accepts the exact source snapshot.
+pub(crate) async fn prepare_knowledge_draft(
+    db_path: &Path,
+    settings_path: &Path,
+    input: &Value,
+) -> Result<Value, String> {
     let task_id = required(input, "taskId")?;
     let expected = input
         .get("expectedTaskRevision")
         .and_then(Value::as_i64)
         .ok_or("expectedTaskRevision is required")?;
-    let connection = database::open(db_path)?;
-    let current: i64 = connection
-        .query_row(
-            "SELECT current_revision FROM tasks WHERE id=?",
-            [task_id],
-            |row| row.get(0),
-        )
-        .optional()
-        .map_err(|error| error.to_string())?
-        .ok_or("Task not found")?;
-    if current != expected {
-        return Err(format!("head_conflict: currentRevision={current}"));
-    }
-    let completion_id:String=connection.query_row("SELECT id FROM task_completions WHERE task_id=? AND task_revision=? ORDER BY created_at DESC LIMIT 1",params![task_id,current],|row|row.get(0)).optional().map_err(|error|error.to_string())?.ok_or("Completed Task evidence not found")?;
-    let lineage = task_lineage(db_path, task_id)?;
-    let deterministic =
-        deterministic_knowledge(&connection, task_id, current, &completion_id, &lineage)?;
+    let (lineage, completion_id, deterministic) = {
+        let mut connection = database::open(db_path)?;
+        let tx = connection
+            .transaction()
+            .map_err(|error| error.to_string())?;
+        let lineage = knowledge_lineage_tx(&tx, task_id, Some(expected))?;
+        let completion_id = lineage["completionId"]
+            .as_str()
+            .ok_or("Completed Task evidence not found")?
+            .to_owned();
+        let deterministic =
+            deterministic_knowledge(&tx, task_id, expected, &completion_id, &lineage)?;
+        tx.commit().map_err(|error| error.to_string())?;
+        (lineage, completion_id, deterministic)
+    };
     let (body, model_status, model_error) =
         match enhance_knowledge(settings_path, &deterministic, task_id).await {
             Ok(Some(enhanced)) => (
@@ -1531,16 +1862,9 @@ async fn knowledge_draft(
                 safe_async_error(&error).to_owned(),
             ),
         };
-    save_knowledge_draft(
-        db_path,
-        input,
-        task_id,
-        current,
-        &completion_id,
-        body,
-        lineage,
-        model_status,
-        &model_error,
+    let source_hash = lineage["sourceHash"].clone();
+    Ok(
+        json!({"taskId":task_id,"taskRevision":expected,"completionId":completion_id,"bodyMarkdown":body,"lineage":lineage,"sourceHash":source_hash,"modelStatus":model_status,"modelError":model_error}),
     )
 }
 
@@ -1688,6 +2012,82 @@ async fn enhance_knowledge(
 }
 
 #[allow(clippy::too_many_arguments)]
+fn insert_knowledge_draft_tx(
+    tx: &Transaction<'_>,
+    task_id: &str,
+    task_revision: i64,
+    completion_id: &str,
+    body: &str,
+    lineage: &Value,
+    model_status: &str,
+    model_error: &str,
+) -> Result<Value, String> {
+    let revision: i64 = tx
+        .query_row(
+            "SELECT COALESCE(MAX(revision),0)+1 FROM task_knowledge_drafts WHERE task_id=?",
+            [task_id],
+            |row| row.get(0),
+        )
+        .map_err(|error| error.to_string())?;
+    let content_hash = digest(body);
+    let timestamp = now();
+    let prior_publication: Option<(String, String)> = tx
+        .query_row(
+            "SELECT path,published_hash FROM task_knowledge_drafts WHERE task_id=? AND state='published' AND path IS NOT NULL AND published_hash IS NOT NULL ORDER BY revision DESC LIMIT 1",
+            [task_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+        .map_err(|error| error.to_string())?;
+    tx.execute("INSERT INTO task_knowledge_drafts(task_id,revision,task_revision,completion_id,body_markdown,content_hash,lineage_json,state,path,published_hash,model_status,model_error,created_at,updated_at) VALUES(?,?,?,?,?,?,?,'draft',?,?,?,?,?,?)",params![task_id,revision,task_revision,completion_id,body,content_hash,lineage.to_string(),prior_publication.as_ref().map(|value|value.0.as_str()),prior_publication.as_ref().map(|value|value.1.as_str()),model_status,model_error,timestamp,timestamp]).map_err(|error|error.to_string())?;
+    Ok(
+        json!({"taskId":task_id,"draftRevision":revision,"taskRevision":task_revision,"completionId":completion_id,"bodyMarkdown":body,"contentHash":content_hash,"bodyHash":content_hash,"sourceHash":lineage["sourceHash"],"state":"draft","modelStatus":model_status,"modelError":model_error,"lineage":lineage}),
+    )
+}
+
+/// Stores a user- or MCP-supplied Knowledge body through the same canonical Task draft table as
+/// desktop generation.  The lineage and its hash are captured in the caller's transaction.
+pub(crate) fn save_supplied_knowledge_draft_tx(
+    tx: &Transaction<'_>,
+    input: &Value,
+    body: &str,
+    model_status: &str,
+) -> Result<Value, String> {
+    if let Some(result) = operation_replay(tx, input)? {
+        return Ok(result);
+    }
+    if body.trim().is_empty() {
+        return Err("invalid_input: bodyMarkdown is required".into());
+    }
+    let task_id = required(input, "taskId")?;
+    let expected = input
+        .get("expectedTaskRevision")
+        .and_then(Value::as_i64)
+        .ok_or("expectedTaskRevision is required")?;
+    let lineage = knowledge_lineage_tx(tx, task_id, Some(expected))?;
+    let completion_id = lineage["completionId"]
+        .as_str()
+        .ok_or("Completed Task evidence not found")?;
+    if let Some(requested) = input.get("completionId").and_then(Value::as_str) {
+        if requested != completion_id {
+            return Err("completion_conflict".into());
+        }
+    }
+    let result = insert_knowledge_draft_tx(
+        tx,
+        task_id,
+        expected,
+        completion_id,
+        body,
+        &lineage,
+        model_status,
+        "",
+    )?;
+    record_operation(tx, input, &result)?;
+    Ok(result)
+}
+
+#[allow(clippy::too_many_arguments)]
 fn save_knowledge_draft(
     db_path: &Path,
     input: &Value,
@@ -1706,25 +2106,16 @@ fn save_knowledge_draft(
     if let Some(result) = operation_replay(&tx, input)? {
         return Ok(result);
     }
-    let revision: i64 = tx
-        .query_row(
-            "SELECT COALESCE(MAX(revision),0)+1 FROM task_knowledge_drafts WHERE task_id=?",
-            [task_id],
-            |row| row.get(0),
-        )
-        .map_err(|error| error.to_string())?;
-    let content_hash = digest(&body);
-    let timestamp = now();
-    let prior_publication: Option<(String, String)> = tx
-        .query_row(
-            "SELECT path,published_hash FROM task_knowledge_drafts WHERE task_id=? AND state='published' AND path IS NOT NULL AND published_hash IS NOT NULL ORDER BY revision DESC LIMIT 1",
-            [task_id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )
-        .optional()
-        .map_err(|error| error.to_string())?;
-    tx.execute("INSERT INTO task_knowledge_drafts(task_id,revision,task_revision,completion_id,body_markdown,content_hash,lineage_json,state,path,published_hash,model_status,model_error,created_at,updated_at) VALUES(?,?,?,?,?,?,?,'draft',?,?,?,?,?,?)",params![task_id,revision,task_revision,completion_id,body,content_hash,lineage.to_string(),prior_publication.as_ref().map(|value|value.0.as_str()),prior_publication.as_ref().map(|value|value.1.as_str()),model_status,model_error,timestamp,timestamp]).map_err(|error|error.to_string())?;
-    let result = json!({"taskId":task_id,"draftRevision":revision,"taskRevision":task_revision,"completionId":completion_id,"bodyMarkdown":body,"contentHash":content_hash,"state":"draft","modelStatus":model_status,"modelError":model_error,"lineage":lineage});
+    let result = insert_knowledge_draft_tx(
+        &tx,
+        task_id,
+        task_revision,
+        completion_id,
+        &body,
+        &lineage,
+        model_status,
+        model_error,
+    )?;
     record_operation(&tx, input, &result)?;
     tx.commit().map_err(|error| error.to_string())?;
     Ok(result)
@@ -1734,6 +2125,13 @@ fn save_knowledge_draft(
 /// exact revision and content hash are both required so an older preview can
 /// never overwrite a newer correction.
 fn knowledge_correction(db_path: &Path, input: &Value) -> Result<Value, String> {
+    SqliteTaskRepository::new(db_path).transaction(|tx| knowledge_correction_tx(tx, input))
+}
+
+pub(crate) fn knowledge_correction_tx(
+    tx: &Transaction<'_>,
+    input: &Value,
+) -> Result<Value, String> {
     let task_id = required(input, "taskId")?;
     let revision = input
         .get("draftRevision")
@@ -1742,36 +2140,50 @@ fn knowledge_correction(db_path: &Path, input: &Value) -> Result<Value, String> 
     let expected_hash = required(input, "expectedContentHash")?;
     let body = required(input, "bodyMarkdown")?;
     let hash = digest(body);
-    let mut connection = database::open(db_path)?;
-    let tx = connection
-        .transaction()
-        .map_err(|error| error.to_string())?;
-    if let Some(result) = operation_replay(&tx, input)? {
+    if let Some(result) = operation_replay(tx, input)? {
         return Ok(result);
     }
-    let (stored_hash, state): (String, String) = tx
+    let (stored_hash, state, task_revision, completion_id, lineage_json): (String, String, i64, String, String) = tx
         .query_row(
-            "SELECT content_hash,state FROM task_knowledge_drafts WHERE task_id=? AND revision=?",
+            "SELECT content_hash,state,task_revision,completion_id,lineage_json FROM task_knowledge_drafts WHERE task_id=? AND revision=?",
             params![task_id, revision],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
         )
         .optional()
         .map_err(|error| error.to_string())?
         .ok_or("Knowledge draft not found")?;
-    if state != "draft" {
-        return Err("Only an unpublished Knowledge draft can be corrected".into());
-    }
     if stored_hash != expected_hash {
         return Err("draft_conflict: content hash changed".into());
+    }
+    let lineage: Value = serde_json::from_str(&lineage_json).map_err(|error| error.to_string())?;
+    let source_hash = lineage["sourceHash"].clone();
+    if source_hash.as_str() != Some(required(input, "expectedSourceHash")?) {
+        return Err("draft_conflict: source hash changed".into());
+    }
+    if state == "published" {
+        let result = insert_knowledge_draft_tx(
+            tx,
+            task_id,
+            task_revision,
+            &completion_id,
+            body,
+            &lineage,
+            "corrected",
+            "",
+        )?;
+        record_operation(tx, input, &result)?;
+        return Ok(result);
+    }
+    if state != "draft" {
+        return Err("Only an unpublished Knowledge draft can be corrected".into());
     }
     tx.execute(
         "UPDATE task_knowledge_drafts SET body_markdown=?,content_hash=?,updated_at=? WHERE task_id=? AND revision=?",
         params![body, hash, now(), task_id, revision],
     )
     .map_err(|error| error.to_string())?;
-    let result = json!({"taskId":task_id,"draftRevision":revision,"bodyMarkdown":body,"contentHash":hash,"state":"draft"});
-    record_operation(&tx, input, &result)?;
-    tx.commit().map_err(|error| error.to_string())?;
+    let result = json!({"taskId":task_id,"draftRevision":revision,"bodyMarkdown":body,"contentHash":hash,"bodyHash":hash,"sourceHash":source_hash,"state":"draft"});
+    record_operation(tx, input, &result)?;
     Ok(result)
 }
 
@@ -1789,30 +2201,53 @@ fn knowledge_publish(db_path: &Path, vault_root: &Path, input: &Value) -> Result
     if let Some(result) = operation_replay(&tx, input)? {
         return Ok(result);
     }
-    let (body,hash,state,path,published_hash,title):(String,String,String,Option<String>,Option<String>,String)=tx.query_row("SELECT k.body_markdown,k.content_hash,k.state,k.path,k.published_hash,r.title FROM task_knowledge_drafts k JOIN task_revisions r ON r.task_id=k.task_id AND r.revision=k.task_revision WHERE k.task_id=? AND k.revision=?",params![task_id,revision],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?,row.get(5)?))).optional().map_err(|error|error.to_string())?.ok_or("Knowledge draft not found")?;
+    let (body,hash,state,path,published_hash,title,lineage_json):(String,String,String,Option<String>,Option<String>,String,String)=tx.query_row("SELECT k.body_markdown,k.content_hash,k.state,k.path,k.published_hash,r.title,k.lineage_json FROM task_knowledge_drafts k JOIN task_revisions r ON r.task_id=k.task_id AND r.revision=k.task_revision WHERE k.task_id=? AND k.revision=?",params![task_id,revision],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?,row.get(5)?,row.get(6)?))).optional().map_err(|error|error.to_string())?.ok_or("Knowledge draft not found")?;
     if hash != expected {
         return Err("draft_conflict: content hash changed".into());
+    }
+    let lineage: Value = serde_json::from_str(&lineage_json).map_err(|error| error.to_string())?;
+    let source_hash = lineage["sourceHash"]
+        .as_str()
+        .map(str::to_owned)
+        .unwrap_or_else(|| digest(&lineage_json));
+    if required(input, "expectedSourceHash")? != source_hash {
+        return Err("draft_conflict: source hash changed".into());
     }
     if state == "withdrawn" {
         return Err("Withdrawn Knowledge requires a new draft".into());
     }
     let relative =
         path.unwrap_or_else(|| format!("Knowledge/Tasks/{}-{}.md", task_id, slug(&title)));
+    let document=format!("---\nllm_wiki_task_id: \"{task_id}\"\nllm_wiki_task_revision: {}\nllm_wiki_draft_revision: {revision}\nsource_hash: \"{source_hash}\"\nbody_hash: \"{hash}\"\n---\n\n{}",tx.query_row("SELECT task_revision FROM task_knowledge_drafts WHERE task_id=? AND revision=?",params![task_id,revision],|row|row.get::<_,i64>(0)).map_err(|error|error.to_string())?,body);
+    let document_hash = digest(&document);
     let target = vault::resolve_markdown(vault_root, &relative, false)?;
     if target.exists() {
         let current = fs::read_to_string(&target).map_err(|error| error.to_string())?;
-        if published_hash.as_deref() != Some(&digest(&current)) {
+        // A process may have written these exact immutable bytes before SQLite
+        // committed the durable publication state. The accepted review job can
+        // safely recover only that byte-for-byte document; all other files stay
+        // guarded as external changes.
+        let recoverable_exact_write = published_hash.is_none() && digest(&current) == document_hash;
+        if published_hash.as_deref() != Some(&digest(&current)) && !recoverable_exact_write {
             return Err("source_changed: Knowledge file changed outside LLM Wiki".into());
         }
     }
-    let document=format!("---\nllm_wiki_task_id: \"{task_id}\"\nllm_wiki_task_revision: {}\nllm_wiki_draft_revision: {revision}\nsource_hash: \"{hash}\"\n---\n\n{}",tx.query_row("SELECT task_revision FROM task_knowledge_drafts WHERE task_id=? AND revision=?",params![task_id,revision],|row|row.get::<_,i64>(0)).map_err(|error|error.to_string())?,body);
     vault::atomic_write(vault_root, &relative, &document)?;
-    let published = digest(&document);
+    let published = document_hash;
     tx.execute("UPDATE task_knowledge_drafts SET state='published',path=?,published_hash=?,updated_at=? WHERE task_id=? AND revision=?",params![relative,published,now(),task_id,revision]).map_err(|error|error.to_string())?;
-    let result = json!({"taskId":task_id,"draftRevision":revision,"state":"published","path":relative,"publishedHash":published});
+    let result = json!({"taskId":task_id,"draftRevision":revision,"state":"published","path":relative,"publishedHash":published,"contentHash":hash,"bodyHash":hash,"sourceHash":source_hash});
     record_operation(&tx, input, &result)?;
     tx.commit().map_err(|error| error.to_string())?;
     Ok(result)
+}
+
+/// Used only by the durable work-tracking publication job after its accepted review.
+pub(crate) fn publish_reviewed_knowledge(
+    db_path: &Path,
+    vault_root: &Path,
+    input: &Value,
+) -> Result<Value, String> {
+    knowledge_publish(db_path, vault_root, input)
 }
 
 fn knowledge_withdraw(db_path: &Path, vault_root: &Path, input: &Value) -> Result<Value, String> {
@@ -1828,9 +2263,22 @@ fn knowledge_withdraw(db_path: &Path, vault_root: &Path, input: &Value) -> Resul
     if let Some(result) = operation_replay(&tx, input)? {
         return Ok(result);
     }
-    let (path,published_hash,state):(String,String,String)=tx.query_row("SELECT path,published_hash,state FROM task_knowledge_drafts WHERE task_id=? AND revision=?",params![task_id,revision],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?))).optional().map_err(|error|error.to_string())?.ok_or("Published Knowledge draft not found")?;
+    let (path,published_hash,state,content_hash,lineage_json):(String,String,String,String,String)=tx.query_row("SELECT path,published_hash,state,content_hash,lineage_json FROM task_knowledge_drafts WHERE task_id=? AND revision=?",params![task_id,revision],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?))).optional().map_err(|error|error.to_string())?.ok_or("Published Knowledge draft not found")?;
     if state != "published" {
         return Err("Only published Knowledge can be withdrawn".into());
+    }
+    if let Some(expected) = input.get("expectedContentHash").and_then(Value::as_str) {
+        if expected != content_hash {
+            return Err("draft_conflict: content hash changed".into());
+        }
+    }
+    let lineage: Value = serde_json::from_str(&lineage_json).map_err(|error| error.to_string())?;
+    let source_hash = lineage["sourceHash"]
+        .as_str()
+        .map(str::to_owned)
+        .unwrap_or_else(|| digest(&lineage_json));
+    if required(input, "expectedSourceHash")? != source_hash {
+        return Err("draft_conflict: source hash changed".into());
     }
     let target = vault::resolve_markdown(vault_root, &path, true)?;
     let current = fs::read_to_string(&target).map_err(|error| error.to_string())?;
@@ -1844,10 +2292,19 @@ fn knowledge_withdraw(db_path: &Path, vault_root: &Path, input: &Value) -> Resul
     }
     fs::rename(&target, &recovery).map_err(|error| error.to_string())?;
     tx.execute("UPDATE task_knowledge_drafts SET state='withdrawn',updated_at=? WHERE task_id=? AND revision=?",params![now(),task_id,revision]).map_err(|error|error.to_string())?;
-    let result = json!({"taskId":task_id,"draftRevision":revision,"state":"withdrawn","recoveryPath":recovery_relative});
+    let result = json!({"taskId":task_id,"draftRevision":revision,"state":"withdrawn","recoveryPath":recovery_relative,"contentHash":content_hash,"bodyHash":content_hash,"sourceHash":source_hash});
     record_operation(&tx, input, &result)?;
     tx.commit().map_err(|error| error.to_string())?;
     Ok(result)
+}
+
+/// Used only by the durable work-tracking publication job after its accepted review.
+pub(crate) fn withdraw_reviewed_knowledge(
+    db_path: &Path,
+    vault_root: &Path,
+    input: &Value,
+) -> Result<Value, String> {
+    knowledge_withdraw(db_path, vault_root, input)
 }
 
 fn slug(title: &str) -> String {
@@ -2242,12 +2699,281 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("Passing contract test"));
-        let published=execute(&db,&settings,&vault,SemanticEngine::new(None),"task-knowledge.publish",&json!({"operationId":"publish-1","taskId":task,"draftRevision":draft["draftRevision"],"expectedContentHash":draft["contentHash"]})).await.unwrap();
+        let published=execute(&db,&settings,&vault,SemanticEngine::new(None),"task-knowledge.publish",&json!({"operationId":"publish-1","taskId":task,"draftRevision":draft["draftRevision"],"expectedContentHash":draft["contentHash"],"expectedSourceHash":draft["sourceHash"]})).await.unwrap();
         assert!(vault.join(published["path"].as_str().unwrap()).is_file());
-        let withdrawn=execute(&db,&settings,&vault,SemanticEngine::new(None),"task-knowledge.withdraw",&json!({"operationId":"withdraw-1","taskId":task,"draftRevision":draft["draftRevision"]})).await.unwrap();
+        let withdrawn=execute(&db,&settings,&vault,SemanticEngine::new(None),"task-knowledge.withdraw",&json!({"operationId":"withdraw-1","taskId":task,"draftRevision":draft["draftRevision"],"expectedSourceHash":draft["sourceHash"]})).await.unwrap();
         assert!(vault
             .join(withdrawn["recoveryPath"].as_str().unwrap())
             .is_file());
         assert!(!vault.join(published["path"].as_str().unwrap()).exists());
+    }
+
+    #[test]
+    fn supplied_body_uses_canonical_task_drafts_and_records_immutable_hashes() {
+        let (_root, db, _vault, _settings) = fixture();
+        let task = completed_task(&db);
+        let repo = SqliteTaskRepository::new(&db);
+        let draft = repo
+            .transaction(|tx| {
+                save_supplied_knowledge_draft_tx(
+                    tx,
+                    &json!({"operationId":"supplied-body","taskId":task,"expectedTaskRevision":1}),
+                    "# Supplied Knowledge\n\nOnly verified facts.",
+                    "supplied",
+                )
+            })
+            .unwrap();
+        assert_eq!(draft["bodyHash"], draft["contentHash"]);
+        assert!(draft["sourceHash"]
+            .as_str()
+            .is_some_and(|hash| !hash.is_empty()));
+        let connection = database::open(&db).unwrap();
+        let canonical: i64 = connection
+            .query_row(
+                "SELECT count(*) FROM task_knowledge_drafts WHERE task_id=?",
+                [&task],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(canonical, 1);
+        let old_store_exists: bool = connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='knowledge_drafts')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        if old_store_exists {
+            let old_count: i64 = connection
+                .query_row("SELECT count(*) FROM knowledge_drafts", [], |row| {
+                    row.get(0)
+                })
+                .unwrap();
+            assert_eq!(old_count, 0);
+        }
+    }
+
+    #[test]
+    fn stored_lineage_remains_publishable_after_active_links_change() {
+        let (_root, db, vault, _settings) = fixture();
+        let task = completed_task(&db);
+        let repo = SqliteTaskRepository::new(&db);
+        let (problem_id, link_id, relationship_id) = repo
+            .transaction(|tx| {
+                let timestamp = now();
+                let related = create_task_tx(tx, &json!({"title":"Related evidence"}), None, None, &timestamp)?["id"]
+                    .as_str()
+                    .unwrap()
+                    .to_owned();
+                let problem = create_problem_revision_tx(
+                    tx,
+                    &json!({"statement":"Immutable linked Problem","detail":"v1"}),
+                    None,
+                    &timestamp,
+                )?["id"]
+                    .as_str()
+                    .unwrap()
+                    .to_owned();
+                let link = id();
+                let relationship = id();
+                tx.execute("INSERT INTO task_problem_links(id,task_id,problem_id,problem_revision,relationship,note,created_at) VALUES(?,?,?,?,?,'historic',?)", params![link,task,problem,1,"context",timestamp]).map_err(|error| error.to_string())?;
+                tx.execute("INSERT INTO task_relationships(id,source_task_id,target_task_id,kind,note,created_at) VALUES(?,?,?,'related','historic',?)", params![relationship,task,related,timestamp]).map_err(|error| error.to_string())?;
+                Ok((problem, link, relationship))
+            })
+            .unwrap();
+        let draft = repo
+            .transaction(|tx| {
+                save_supplied_knowledge_draft_tx(
+                    tx,
+                    &json!({"operationId":"historic-draft","taskId":task,"expectedTaskRevision":1}),
+                    "# Historical lineage",
+                    "supplied",
+                )
+            })
+            .unwrap();
+        let source = draft["lineage"]["source"].clone();
+        assert_eq!(source["problemLinks"][0]["linkId"], link_id);
+        assert_eq!(source["problemLinks"][0]["problemId"], problem_id);
+        assert_eq!(
+            source["relationships"][0]["relationshipId"],
+            relationship_id
+        );
+        database::open(&db)
+            .unwrap()
+            .execute(
+                "UPDATE task_problem_links SET unlinked_at=? WHERE id=?",
+                params![now(), link_id],
+            )
+            .unwrap();
+        database::open(&db)
+            .unwrap()
+            .execute(
+                "UPDATE task_relationships SET unlinked_at=? WHERE id=?",
+                params![now(), relationship_id],
+            )
+            .unwrap();
+        let published = knowledge_publish(&db, &vault, &json!({"operationId":"publish-historic","taskId":task,"draftRevision":draft["draftRevision"],"expectedContentHash":draft["contentHash"],"expectedSourceHash":draft["sourceHash"]})).unwrap();
+        assert_eq!(published["state"], "published");
+        let draft_revision = draft["draftRevision"].as_i64().unwrap();
+        let stored: Value = database::open(&db)
+            .unwrap()
+            .query_row(
+                "SELECT lineage_json FROM task_knowledge_drafts WHERE task_id=? AND revision=?",
+                params![task, draft_revision],
+                |row| {
+                    let text: String = row.get(0)?;
+                    Ok(serde_json::from_str::<Value>(&text).unwrap())
+                },
+            )
+            .unwrap();
+        assert_eq!(stored["source"]["problemLinks"][0]["linkId"], link_id);
+        assert_eq!(
+            stored["source"]["relationships"][0]["relationshipId"],
+            relationship_id
+        );
+    }
+
+    #[test]
+    fn knowledge_source_and_body_hashes_are_independent_compare_and_swap_guards() {
+        let (_root, db, vault, _settings) = fixture();
+        let task = completed_task(&db);
+        let repo = SqliteTaskRepository::new(&db);
+        let draft = repo
+            .transaction(|tx| {
+                save_supplied_knowledge_draft_tx(
+                    tx,
+                    &json!({"operationId":"hash-draft","taskId":task,"expectedTaskRevision":1}),
+                    "# Stable body",
+                    "supplied",
+                )
+            })
+            .unwrap();
+        let stale_source = knowledge_publish(&db, &vault, &json!({"operationId":"stale-source","taskId":task,"draftRevision":draft["draftRevision"],"expectedContentHash":draft["contentHash"],"expectedSourceHash":"stale-source"})).unwrap_err();
+        assert_eq!(stale_source, "draft_conflict: source hash changed");
+        let stale_correction = knowledge_correction(&db, &json!({"operationId":"stale-correction-source","taskId":task,"draftRevision":draft["draftRevision"],"expectedContentHash":draft["contentHash"],"expectedSourceHash":"stale-source","bodyMarkdown":"# Changed body"})).unwrap_err();
+        assert_eq!(stale_correction, "draft_conflict: source hash changed");
+        let correction = knowledge_correction(&db, &json!({"operationId":"fresh-correction","taskId":task,"draftRevision":draft["draftRevision"],"expectedContentHash":draft["contentHash"],"expectedSourceHash":draft["sourceHash"],"bodyMarkdown":"# Changed body"})).unwrap();
+        let stale_body = knowledge_correction(&db, &json!({"operationId":"stale-correction-body","taskId":task,"draftRevision":draft["draftRevision"],"expectedContentHash":draft["contentHash"],"expectedSourceHash":draft["sourceHash"],"bodyMarkdown":"# Another body"})).unwrap_err();
+        assert_eq!(stale_body, "draft_conflict: content hash changed");
+        assert_ne!(correction["bodyHash"], draft["bodyHash"]);
+    }
+
+    #[test]
+    fn published_correction_forks_a_new_draft_without_rewriting_publication() {
+        let (_root, db, vault, _settings) = fixture();
+        let task = completed_task(&db);
+        let repo = SqliteTaskRepository::new(&db);
+        let draft = repo
+            .transaction(|tx| {
+                save_supplied_knowledge_draft_tx(
+                    tx,
+                    &json!({"operationId":"fork-draft","taskId":task,"expectedTaskRevision":1}),
+                    "# Published original",
+                    "supplied",
+                )
+            })
+            .unwrap();
+        knowledge_publish(&db, &vault, &json!({"operationId":"fork-publish","taskId":task,"draftRevision":draft["draftRevision"],"expectedContentHash":draft["contentHash"],"expectedSourceHash":draft["sourceHash"]})).unwrap();
+        let corrected = knowledge_correction(&db, &json!({"operationId":"fork-correction","taskId":task,"draftRevision":draft["draftRevision"],"expectedContentHash":draft["contentHash"],"expectedSourceHash":draft["sourceHash"],"bodyMarkdown":"# New unpublished correction"})).unwrap();
+        assert_eq!(
+            corrected["draftRevision"].as_i64(),
+            draft["draftRevision"].as_i64().map(|revision| revision + 1)
+        );
+        assert_eq!(corrected["state"], "draft");
+        let connection = database::open(&db).unwrap();
+        let draft_revision = draft["draftRevision"].as_i64().unwrap();
+        let (old_state, old_body): (String, String) = connection.query_row("SELECT state,body_markdown FROM task_knowledge_drafts WHERE task_id=? AND revision=?", params![task, draft_revision], |row| Ok((row.get(0)?,row.get(1)?))).unwrap();
+        assert_eq!(old_state, "published");
+        assert_eq!(old_body, "# Published original");
+    }
+
+    #[test]
+    fn current_chat_advisories_are_provider_free_and_support_history_cancel_and_decision() {
+        let (_root, db, _vault, settings) = fixture();
+        assert!(!settings.exists());
+        let repo = SqliteTaskRepository::new(&db);
+        let task = repo
+            .transaction(|tx| {
+                create_task_tx(tx, &json!({"title":"Advisory task"}), None, None, &now())
+            })
+            .unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let created = repo.transaction(|tx| create_current_chat_advisory_tx(tx, &json!({"operationId":"advisory-create","taskId":task,"expectedTaskRevision":1}))).unwrap();
+        let history = repo
+            .transaction(|tx| current_chat_advisory_history_tx(tx, &task))
+            .unwrap();
+        assert_eq!(history["attempts"].as_array().unwrap().len(), 1);
+        let cancelled = repo
+            .transaction(|tx| {
+                cancel_current_chat_advisory_tx(
+                    tx,
+                    &json!({"operationId":"advisory-cancel","runId":created["id"]}),
+                )
+            })
+            .unwrap();
+        assert_eq!(cancelled["status"], "cancelled");
+        let run = repo.transaction(|tx| create_current_chat_advisory_tx(tx, &json!({"operationId":"advisory-create-2","taskId":task,"expectedTaskRevision":1}))).unwrap();
+        let completed = repo
+            .transaction(|tx| {
+                complete_current_chat_advisory_tx(
+                    tx,
+                    &json!({"operationId":"advisory-run","runId":run["id"]}),
+                    &json!([{"id":"finding-1","summary":"Current Chat observation","evidenceIds":["evidence-1"]}]),
+                    &json!([{"evidenceId":"evidence-1","kind":"chat","messageId":"m1"}]),
+                )
+            })
+            .unwrap();
+        assert_eq!(completed["status"], "findings");
+        let decision = repo.transaction(|tx| decide_current_chat_advisory_tx(tx, &json!({"operationId":"advisory-decision","runId":run["id"],"findingId":"finding-1","disposition":"acknowledged"}))).unwrap();
+        assert_eq!(decision["findingId"], "finding-1");
+        let jobs: i64 = database::open(&db)
+            .unwrap()
+            .query_row("SELECT count(*) FROM task_assistance_jobs", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(jobs, 0);
+    }
+
+    #[test]
+    fn current_chat_advisory_rejects_duplicate_or_fabricated_finding_citations() {
+        let (_root, db, _vault, _settings) = fixture();
+        let repo = SqliteTaskRepository::new(&db);
+        let task = repo
+            .transaction(|tx| {
+                create_task_tx(tx, &json!({"title":"Advisory task"}), None, None, &now())
+            })
+            .unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let run = repo
+            .transaction(|tx| {
+                create_current_chat_advisory_tx(
+                    tx,
+                    &json!({"operationId":"advisory-create","taskId":task,"expectedTaskRevision":1}),
+                )
+            })
+            .unwrap();
+        let fabricated = repo.transaction(|tx| {
+            complete_current_chat_advisory_tx(
+                tx,
+                &json!({"operationId":"advisory-fabricated","runId":run["id"]}),
+                &json!([{"id":"finding-1","summary":"Bad citation","evidenceIds":["missing"]}]),
+                &json!([{"evidenceId":"evidence-1","revision":"r1"}]),
+            )
+        });
+        assert!(fabricated.is_err());
+        let duplicate = repo.transaction(|tx| {
+            complete_current_chat_advisory_tx(
+                tx,
+                &json!({"operationId":"advisory-duplicate","runId":run["id"]}),
+                &json!([{"id":"finding-1","summary":"One"},{"id":"finding-1","summary":"Two"}]),
+                &json!([]),
+            )
+        });
+        assert!(duplicate.is_err());
     }
 }

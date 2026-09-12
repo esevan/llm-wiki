@@ -94,6 +94,9 @@ fn dispatch(
             "Review the exact workflow proposal before advancing",
         )),
         "work_tracking.advance.preview" => {
+            if let Some(result) = service.advance_result_replay(NATIVE_CONNECTION, input)? {
+                return Ok((200, result));
+            }
             let state = service.begin_advance(NATIVE_CONNECTION, input)?;
             Ok((
                 200,

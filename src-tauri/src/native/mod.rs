@@ -105,6 +105,13 @@ impl NativeApplication {
         }
         let vault_adapter =
             crate::adapters::vault::MarkdownVaultAdapter::new(&db_path, &vault, semantic.clone());
+        let task_assistance =
+            crate::application::task_assistance_service::TaskAssistanceApplicationService::new(
+                db_path.clone(),
+                settings_path.clone(),
+                vault.clone(),
+                semantic.clone(),
+            );
         Ok(Self {
             db_path: db_path.clone(),
             settings_path,
@@ -116,6 +123,7 @@ impl NativeApplication {
                 crate::application::work_tracking_service::WorkTrackingApplicationService::new(
                     store,
                     vault_adapter,
+                    task_assistance,
                 ),
             task_service: crate::application::task_service::TaskApplicationService::new(&db_path),
         })

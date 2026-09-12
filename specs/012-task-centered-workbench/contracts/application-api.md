@@ -12,6 +12,12 @@ Revision-bound mutation errors use `409`:
 
 ## Workbench and Creation
 
+The MCP bridge exposes the same logical operations through closed `inbound_work_open` and reviewed
+`inbound_work_advance` actions; it does not provide arbitrary native passthrough. A direct Task
+continuation uses `mode:"continue_task"` with `taskId`, exact session/head/source-event binding,
+and user Elicitation. Acceptance may create a connection-owned captureless session; cancellation
+creates none. It never fabricates a Capture or claims another connection's session.
+
 `GET /workbench` returns:
 
 ```json
@@ -104,3 +110,10 @@ changes do not.
 `/board`, `/captures/{id}/promote`, Problem approval, `/problems/{id}/features`, feature approval/stage,
 feature Work Log, feature conflict/completion/lineage and Problem completion-playbook write routes are
 removed in the Task-centered release. There is no legacy write alias.
+
+New legacy Problem/Solution adoption or approval, mandatory conflict gates, and
+`verify_and_complete` are rejected. Historical completed events and legacy Knowledge draft
+lineages remain readable. Unresolved legacy mutation proposals require a fresh canonical Task,
+Problem-link, completion, or Knowledge review. Canonical Knowledge operations use
+`task-knowledge.{draft,correction,regenerate,publish,withdraw}` semantics with immutable lineage
+JSON and separate body/source/lineage hashes.

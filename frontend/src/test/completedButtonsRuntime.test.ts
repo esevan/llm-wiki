@@ -6,6 +6,17 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 const $ = (selector: string) => document.querySelector(selector) as HTMLElement;
+type RuntimeFunction = (...args: unknown[]) => unknown;
+type Runtime = {
+  openChat: (type: string, id: string, context?: Record<string, unknown>) => void;
+  askNotice: (message: string, title: string, confirm: string) => Promise<boolean>;
+  openSolutionWorkDetail: (id: string) => Promise<void>;
+  loadWorkbenchContext: () => Promise<void>;
+  openCompletedWorkspace: (id: string) => Promise<void>;
+  renderKnowledgeLineage: (lineage: unknown) => string;
+  waitForJob: RuntimeFunction;
+  searchArchivedDocument: RuntimeFunction;
+};
 const esc = (value: unknown) => String(value || '').replace(/[&<>]/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[character]!));
 
 function dialog(element: HTMLDialogElement) {
@@ -15,7 +26,7 @@ function dialog(element: HTMLDialogElement) {
 }
 
 function fixture() {
-  (window as any).llmWikiFormatSystemTime = (value: string) => value;
+  window.llmWikiFormatSystemTime = (value: string) => value;
   document.body.innerHTML = `<section class="workbench-context"><div id="recent-archive"></div><div id="completed-solutions"></div></section>
     <dialog id="item-detail-modal"><span id="item-detail-type"></span><h2 id="item-detail-title"></h2><div id="item-detail-notes"></div></dialog>
     <dialog id="notice-modal"><h2 id="notice-title"></h2><p id="notice-message"></p><button id="notice-confirm"></button><button id="notice-cancel"></button></dialog>
@@ -25,8 +36,8 @@ function fixture() {
   for (const selector of ['#item-detail-modal', '#notice-modal', '#chat-modal']) dialog($(selector) as HTMLDialogElement);
 }
 
-function load(api: ReturnType<typeof vi.fn>) {
-  const context: Record<string, any> = {
+function load(api: ReturnType<typeof vi.fn>): Runtime {
+  const context: Record<string, unknown> = {
     api, $, esc, localTime: (value: string) => value, activeLocale: 'en', archiveLimit: 5, pendingProgressImage: null, previewActiveTab: 'context', explorePreviewRequest: 0,
     chatTarget: null, refinementPreviewDraft: null, activeRefinementPreview: null, activeKnowledgeTranslation: null, knowledgeReadRequest: 0,
     itemDetailModal: $('#item-detail-modal'), chatModal: $('#chat-modal'), draftModal: document.createElement('dialog'),
@@ -39,19 +50,19 @@ function load(api: ReturnType<typeof vi.fn>) {
     setAiActionState: vi.fn(), waitForJob: vi.fn(), loadExploreRefinementPreview: vi.fn(), initializeLocale: () => Promise.resolve(), loadAllTransitions: vi.fn(),
     knowledgeDocumentMarkup: () => '', setKnowledgeProgress: vi.fn(), applicationRequest: vi.fn(), openItemDetail: vi.fn(), openSolutionDetail: vi.fn(),
   };
-  const scope = new Proxy(context, { has: (_target, key) => key !== 'scope', get: (target, key) => key in target ? target[key as string] : (globalThis as any)[key as string], set: (target, key, value) => { target[key as string] = value; return true; } });
+  const scope = new Proxy(context, { has: (_target, key) => key !== 'scope', get: (target, key) => key in target ? target[key as string] : (globalThis as unknown as Record<string, unknown>)[key as string], set: (target, key, value) => { target[key as string] = value; return true; } });
   const execute = (source: string, expose = '') => new Function('scope', `with(scope){${source}\n${expose}}`)(scope);
   execute(`${explore}\n${solutionWork}\nscope.openSolutionWorkDetail=refreshSolutionWorkDetail;\n${archive}\n${completed}`, 'scope.loadWorkbenchContext=loadWorkbenchContext;scope.regenerateCompletionPlaybook=regenerateCompletionPlaybook;scope.deleteCompletionPlaybook=deleteCompletionPlaybook;scope.openCompletedWorkspace=openCompletedWorkspace;scope.openChat=openChat;scope.renderKnowledgeLineage=renderKnowledgeLineage;scope.askNotice=askNotice;scope.showNotice=showNotice;');
-  return context;
+  return context as unknown as Runtime;
 }
 
-afterEach(() => { vi.restoreAllMocks(); document.body.innerHTML = ''; delete (window as any).boardItems; delete (window as any).workbenchBoard; delete (window as any).completedSolutions; });
+afterEach(() => { vi.restoreAllMocks(); document.body.innerHTML = ''; const globals = window as unknown as Window & Record<string, unknown>; delete globals.boardItems; delete globals.workbenchBoard; delete globals.completedSolutions; });
 
 describe('production completed-work button bindings', () => {
   it('forwards migrated Problem revision context through the completed-work chat override', async () => {
     fixture();
     const selected = vi.fn(async () => undefined);
-    (window as any).selectTrackedWork = selected;
+    (window as unknown as Window & Record<string, unknown>).selectTrackedWork = selected;
     const runtime = load(vi.fn(async (path: string) => {
       if (path.startsWith('/workbench/recent-archive')) return { documents: [] };
       if (path.startsWith('/workbench/completed-solutions')) return { solutions: [] };
@@ -65,7 +76,7 @@ describe('production completed-work button bindings', () => {
       sourceTitle: 'Preserved Problem',
     }));
     await flush();
-    delete (window as any).selectTrackedWork;
+    delete (window as unknown as Window & Record<string, unknown>).selectTrackedWork;
   });
 
   it('resolves the production confirmation notice on both cancel and confirm clicks', async () => {
@@ -91,8 +102,9 @@ describe('production completed-work button bindings', () => {
       return { id: 'image-entry' };
     });
     const runtime = load(api);
-    (window as any).boardItems = { 'features:s': { id: 's', title: 'Solution', state: 'approved', problem_id: 'p', outcome: 'Done', non_goals: '', conflict_state: 'clear' } };
-    window.workbenchBoard = { problems: [{ id: 'p', statement: 'Problem' }], features: [] } as any;
+    (window as unknown as Window & Record<string, unknown>).boardItems = { 'features:s': { id: 's', title: 'Solution', state: 'approved', problem_id: 'p', outcome: 'Done', non_goals: '', conflict_state: 'clear' } };
+    const workbenchBoard = { problems: [{ id: 'p', statement: 'Problem', state: 'approved' }], features: [] };
+    window.workbenchBoard = workbenchBoard;
     await runtime.openSolutionWorkDetail('s');
 
     let notes = $('#item-detail-notes');
@@ -129,8 +141,9 @@ describe('production completed-work button bindings', () => {
       return {};
     });
     const runtime = load(api);
-    (window as any).boardItems = { 'features:s': { id: 's', title: 'Solution', state: 'approved', problem_id: 'p', outcome: 'Done', non_goals: '', conflict_state: 'clear' } };
-    window.workbenchBoard = { problems: [{ id: 'p', statement: 'Problem' }], features: [] } as any;
+    (window as unknown as Window & Record<string, unknown>).boardItems = { 'features:s': { id: 's', title: 'Solution', state: 'approved', problem_id: 'p', outcome: 'Done', non_goals: '', conflict_state: 'clear' } };
+    const workbenchBoard = { problems: [{ id: 'p', statement: 'Problem', state: 'approved' }], features: [] };
+    window.workbenchBoard = workbenchBoard;
     await runtime.openSolutionWorkDetail('s');
     runtime.waitForJob = vi.fn(() => new Promise<void>((resolve) => { finishJob = () => { summarized = true; resolve(); }; }));
 
@@ -159,8 +172,9 @@ describe('production completed-work button bindings', () => {
       return {};
     });
     const runtime = load(api);
-    (window as any).boardItems = { 'features:s': { id: 's', title: 'Solution', state: 'approved', problem_id: 'p', outcome: 'Done', non_goals: '', conflict_state: 'clear' } };
-    window.workbenchBoard = { problems: [{ id: 'p', statement: 'Problem' }], features: [] } as any;
+    (window as unknown as Window & Record<string, unknown>).boardItems = { 'features:s': { id: 's', title: 'Solution', state: 'approved', problem_id: 'p', outcome: 'Done', non_goals: '', conflict_state: 'clear' } };
+    const workbenchBoard = { problems: [{ id: 'p', statement: 'Problem', state: 'approved' }], features: [] };
+    window.workbenchBoard = workbenchBoard;
     await runtime.openSolutionWorkDetail('s');
     const button = $('#item-detail-notes').querySelector<HTMLButtonElement>('[data-summarize-entry]')!;
     button.click();
@@ -183,8 +197,9 @@ describe('production completed-work button bindings', () => {
       return {};
     });
     const runtime = load(api);
-    (window as any).boardItems = { 'features:s': { id: 's', title: 'Solution', state: 'approved', problem_id: 'p', outcome: 'Done', non_goals: '', conflict_state: 'clear' } };
-    window.workbenchBoard = { problems: [{ id: 'p', statement: 'Problem' }], features: [] } as any;
+    (window as unknown as Window & Record<string, unknown>).boardItems = { 'features:s': { id: 's', title: 'Solution', state: 'approved', problem_id: 'p', outcome: 'Done', non_goals: '', conflict_state: 'clear' } };
+    const workbenchBoard = { problems: [{ id: 'p', statement: 'Problem', state: 'approved' }], features: [] };
+    window.workbenchBoard = workbenchBoard;
     runtime.openChat('features', 's');
     await flush(); await flush();
     ($('#preview-work-tab') as HTMLButtonElement).click();

@@ -11,6 +11,8 @@ npm run test:desktop -- --scenario task-refinement --scenario task-refinement-pr
 
 `--full`은 릴리스 수락 명령입니다. 현재 checkout의 runner에 등록한 모든 시나리오를 실행하고 결과 커버리지가 완전하지 않으면 실패합니다. 집중 실행은 부분 실행으로 표시되며 이 게이트를 통과시키지 않습니다. 최종 시나리오·컨트롤 수는 생성한 `results.json`과 `interactive-coverage.json`에서 확인하세요.
 
+`task-mcp-continuation` 시나리오는 렌더링된 Workbench 컨트롤로 Task, 정확한 Problem 리비전 링크, Task 관계를 생성합니다. 실제 stdio MCP 자식 프로세스로 현재/전체 투영을 읽고, 거절 시 세션이 생성되지 않는지, 승인 시 Capture 없이 세션과 바인딩 이벤트가 생성되는지, 정확한 링크·관계가 유지되는지, 검토한 Task 수정이 데스크톱 상세 화면에 반영되는지, 연결 해제 후 접근이 차단되는지 확인합니다.
+
 기본 실행 파일은 `src-tauri/target/release`의 릴리스 파일입니다. 전체 실행 전에 릴리스 번들을 빌드하세요. 이미 서명된 빌드를 의도적으로 재사용하려면 `LLM_WIKI_E2E_EXECUTABLE=/absolute/path/to/executable`을 설정합니다. 결정적인 로컬 제공자는 자동으로 시작되며 외부 제공자 인증 정보는 필요하지 않습니다.
 
 각 시나리오는 새 Vault, SQLite 데이터베이스, workbench 홈, IPC 엔드포인트와 로컬 가짜 제공자를 받습니다. 결과는 `.tmp/desktop-e2e-artifacts-*/results.json` 또는 `--artifact-dir PATH`에 기록되고 커버리지는 `interactive-coverage.json`에 기록됩니다. 실패한 사례는 로그, 격리 상태와 `failure.txt`를 보존합니다. 임시 상태를 확인하려면 `--keep-state`를 사용하세요.

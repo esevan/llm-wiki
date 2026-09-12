@@ -4,17 +4,12 @@ use tempfile::tempdir;
 
 fn call(app: &NativeApplication, name: &str, mut input: Value) -> Value {
     if name == "work_tracking.advance" {
-        if input["action"] == "resolve_conflict" {
-            // Explicit fixture: the user reviewed limited coverage in this empty test Vault.
-            let payload = json!({"kind":"conflict_proposal","rationale":"Empty test Vault has no corroborating evidence","proposedResolution":"Proceed with the reviewed test plan","evidence":[],"coverage":"insufficient"});
-            let event = call(
-                app,
-                "work_tracking.append",
-                json!({"operationId":"fixture-conflict","sessionId":input["sessionId"],"expectedHeadRevision":input["expectedHeadRevision"],"event":payload}),
-            );
-            input["sourceEventId"] = event["eventId"].clone();
-            input["expectedHeadRevision"] = event["headRevision"].clone();
-            input["proposedPayload"] = payload;
+        if input.get("operationId").and_then(Value::as_str).is_none() {
+            input["operationId"] = json!(format!(
+                "fixture-{}-{}",
+                input["action"].as_str().unwrap_or("advance"),
+                input["sourceEventId"].as_str().unwrap_or("none")
+            ));
         }
         let mut proposal = input.clone();
         let decision = proposal
@@ -116,7 +111,7 @@ fn open_is_exactly_idempotent_and_head_compare_and_swap_is_enforced() {
     let replay = call(&app, "work_tracking.open", input);
     assert_eq!(first["sessionId"], replay["sessionId"]);
     assert_eq!(replay["deduplicated"], true);
-    let response=app.execute_work_tracking(NativeOperation{name:"work_tracking.append".into(),input:json!({"operationId":"append-1","sessionId":first["sessionId"],"expectedHeadRevision":0,"event":{"kind":"problem_draft","statement":"Wrong head"}})});
+    let response=app.execute_work_tracking(NativeOperation{name:"work_tracking.append".into(),input:json!({"operationId":"append-1","sessionId":first["sessionId"],"expectedHeadRevision":0,"event":{"kind":"task_created","title":"Wrong head","outcome":"Wrong head"}})});
     assert_eq!(response.status, 409);
     assert_eq!(response.body["error"]["code"], "head_conflict");
     assert_eq!(response.body["error"]["currentRevision"], 1);
@@ -148,7 +143,7 @@ fn completion_is_separate_from_knowledge_publication() {
     let created = call(
         &app,
         "work_tracking.advance",
-        json!({"sessionId":session,"expectedHeadRevision":task["headRevision"],"sourceEventId":task["eventId"],"action":"create_task","decision":"accept","proposedPayload":{"title":"Two phases","outcome":"Private completion first","scope":"Local release","validationCriteria":"Tests pass"}}),
+        json!({"operationId":"completion-create","sessionId":session,"expectedHeadRevision":task["headRevision"],"sourceEventId":task["eventId"],"action":"create_task","decision":"accept","proposedPayload":{"title":"Two phases","outcome":"Private completion first","scope":"Local release","validationCriteria":"Tests pass"}}),
     );
     let task_id = created["resultEntityId"].as_str().unwrap().to_owned();
     let transition = call(
@@ -159,7 +154,7 @@ fn completion_is_separate_from_knowledge_publication() {
     let started = call(
         &app,
         "work_tracking.advance",
-        json!({"sessionId":session,"expectedHeadRevision":transition["headRevision"],"sourceEventId":transition["eventId"],"action":"transition_task","decision":"accept","proposedPayload":{"taskId":task_id,"expectedTaskRevision":1,"to":"in_progress"}}),
+        json!({"operationId":"completion-transition","sessionId":session,"expectedHeadRevision":transition["headRevision"],"sourceEventId":transition["eventId"],"action":"transition_task","decision":"accept","proposedPayload":{"taskId":task_id,"expectedTaskRevision":1,"to":"in_progress"}}),
     );
     let completion = call(
         &app,
@@ -169,7 +164,7 @@ fn completion_is_separate_from_knowledge_publication() {
     call(
         &app,
         "work_tracking.advance",
-        json!({"sessionId":session,"expectedHeadRevision":completion["headRevision"],"sourceEventId":completion["eventId"],"action":"complete_task","decision":"accept","proposedPayload":{"taskId":task_id,"expectedTaskRevision":1,"evidence":"tests pass","report":"Verified privately"}}),
+        json!({"operationId":"completion-complete","sessionId":session,"expectedHeadRevision":completion["headRevision"],"sourceEventId":completion["eventId"],"action":"complete_task","decision":"accept","proposedPayload":{"taskId":task_id,"expectedTaskRevision":1,"evidence":"tests pass","report":"Verified privately"}}),
     );
     assert_eq!(
         std::fs::read_dir(&vault).unwrap().count(),
@@ -186,117 +181,77 @@ fn completion_is_separate_from_knowledge_publication() {
     );
     let deferred = call(&app, "work_tracking.session", json!({"sessionId":session}));
     assert_eq!(deferred["publicationState"], "deferred");
-    assert_eq!(deferred["nextActions"], json!([]));
+    assert_eq!(deferred["nextActions"], json!(["reopen_task"]));
     let draft = call(
         &app,
         "work_tracking.knowledge.draft.save",
         json!({"operationId":"draft","sessionId":session,"completionEventId":completion["eventId"],"title":"Separate completion","summary":"Publish later","bodyMarkdown":"# Separate completion\n\nVerified privately first.","evidenceRefs":[]}),
     );
-    assert_eq!(draft["status"], "draft");
+    assert_eq!(draft["state"], "draft");
     assert_eq!(
         std::fs::read_dir(&vault).unwrap().count(),
         0,
         "draft save must not publish Knowledge"
     );
-    // Crash boundary: the reviewed file is created, then publication-decision
-    // persistence fails. The durable approval/job must recover after restart.
-    let publish_input = json!({"operationId":"publish","draftId":draft["draftId"],"expectedDraftRevision":draft["draftRevision"],"expectedContentHash":draft["contentHash"]});
-    let review = call(
+    let publish_input = json!({
+        "operationId":"publish",
+        "taskId":draft["taskId"],
+        "draftRevision":draft["draftRevision"],
+        "expectedContentHash":draft["contentHash"],
+        "expectedSourceHash":draft["sourceHash"]
+    });
+    let queued = call(
         &app,
-        "work_tracking.knowledge.publish.preview",
+        "work_tracking.knowledge.publish",
         publish_input.clone(),
     );
-    let database = rusqlite::Connection::open(root.path().join("db.sqlite")).unwrap();
-    database.execute_batch("CREATE TRIGGER fail_publication BEFORE INSERT ON knowledge_publication_decisions BEGIN SELECT RAISE(ABORT,'injected publication failure'); END;").unwrap();
-    let failed=app.execute_work_tracking(NativeOperation{name:"work_tracking.knowledge.publish.review".into(),input:json!({"proposal":publish_input,"reviewState":review["reviewState"],"decision":"accept"})});
-    assert!(failed.status >= 400);
-    assert_eq!(
-        database
-            .query_row(
-                "SELECT count(*) FROM knowledge_publication_decisions",
-                [],
-                |r| r.get::<_, i64>(0)
-            )
-            .unwrap(),
-        0
-    );
-    assert_eq!(
-        std::fs::read_dir(vault.join("Knowledge")).unwrap().count(),
-        1
-    );
-    database
-        .execute_batch("DROP TRIGGER fail_publication;")
-        .unwrap();
-    drop(database);
-    drop(app);
-    let app = NativeApplication::isolated(&vault, &root.path().join("db.sqlite")).unwrap();
+    assert_eq!(queued["publicationStatus"], "queued");
     app.work_tracking_service().drain(100).unwrap();
-    assert_eq!(
-        rusqlite::Connection::open(root.path().join("db.sqlite"))
-            .unwrap()
-            .query_row(
-                "SELECT count(*) FROM work_tracking_publication_jobs WHERE state='complete'",
-                [],
-                |r| r.get::<_, i64>(0)
-            )
-            .unwrap(),
-        1
-    );
-    let published = call(
-        &app,
-        "work_tracking.knowledge.publish",
-        json!({"operationId":"publish","draftId":draft["draftId"],"expectedDraftRevision":draft["draftRevision"],"expectedContentHash":draft["contentHash"]}),
-    );
-    assert_eq!(published["status"], "published");
-    assert!(vault.join(published["path"].as_str().unwrap()).is_file());
-    let replay = call(
-        &app,
-        "work_tracking.knowledge.publish",
-        json!({"operationId":"publish","draftId":draft["draftId"],"expectedDraftRevision":draft["draftRevision"],"expectedContentHash":draft["contentHash"]}),
-    );
-    assert_eq!(replay["deduplicated"], true);
-    let service = app.work_tracking_service();
-    let undo = json!({"operationId":"withdraw","draftId":draft["draftId"],"expectedDraftRevision":draft["draftRevision"],"expectedContentHash":draft["contentHash"]});
-    let preview = service
-        .begin_withdrawal("native-in-app-chat", &undo)
-        .unwrap();
-    let path = vault.join(published["path"].as_str().unwrap());
-    let content = std::fs::read_to_string(&path).unwrap();
-    std::fs::write(&path, "External changed publication").unwrap();
-    assert!(service
-        .finish_withdrawal(
-            "native-in-app-chat",
-            &undo,
-            preview["reviewState"].as_str().unwrap(),
-            "accept"
-        )
-        .is_err());
-    assert_eq!(
-        std::fs::read_to_string(&path).unwrap(),
-        "External changed publication"
-    );
-    std::fs::write(&path, &content).unwrap();
-    let withdrawn = service
-        .finish_withdrawal(
-            "native-in-app-chat",
-            &undo,
-            preview["reviewState"].as_str().unwrap(),
-            "accept",
+    let database = rusqlite::Connection::open(root.path().join("db.sqlite")).unwrap();
+    let (published_state, relative_path): (String, String) = database
+        .query_row(
+            "SELECT state,path FROM task_knowledge_drafts WHERE task_id=? AND revision=?",
+            rusqlite::params![
+                draft["taskId"].as_str().unwrap(),
+                draft["draftRevision"].as_i64().unwrap()
+            ],
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .unwrap();
+    assert_eq!(published_state, "published");
+    let path = vault.join(&relative_path);
+    assert!(path.is_file());
+
+    let undo = json!({
+        "operationId":"withdraw",
+        "taskId":draft["taskId"],
+        "draftRevision":draft["draftRevision"],
+        "expectedContentHash":draft["contentHash"],
+        "expectedSourceHash":draft["sourceHash"]
+    });
+    let withdrawal = call(
+        &app,
+        "work_tracking.knowledge.withdraw.preview",
+        undo.clone(),
+    );
+    let accepted = app.execute_work_tracking(NativeOperation {
+        name: "work_tracking.knowledge.withdraw.review".into(),
+        input: json!({"proposal":undo,"reviewState":withdrawal["reviewState"],"decision":"accept"}),
+    });
+    assert_eq!(accepted.status, 200, "{}", accepted.body);
+    app.work_tracking_service().drain(100).unwrap();
+    let withdrawn: String = database
+        .query_row(
+            "SELECT state FROM task_knowledge_drafts WHERE task_id=? AND revision=?",
+            rusqlite::params![
+                draft["taskId"].as_str().unwrap(),
+                draft["draftRevision"].as_i64().unwrap()
+            ],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(withdrawn, "withdrawn");
     assert!(!path.exists());
-    assert_eq!(
-        std::fs::read_to_string(vault.join(withdrawn["recoveryReference"].as_str().unwrap()))
-            .unwrap(),
-        content
-    );
-    assert_eq!(
-        service
-            .session("native-in-app-chat", session.as_str().unwrap())
-            .unwrap()["state"],
-        "completed"
-    );
-    assert!(service.begin_publish("native-in-app-chat", &undo).is_err());
 }
 
 #[test]

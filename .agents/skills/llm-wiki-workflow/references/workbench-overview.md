@@ -19,13 +19,13 @@ item/session detail unless the user selects an item or the overview marks it as 
 
 Give complete coverage with bounded detail:
 
-1. **At a glance** — counts for Captures, Problems, proposed Solutions, in-progress Solutions,
+1. **At a glance** — counts for Captures, Tasks by state, Problem context, in-progress work,
    blocked/conflicted work, pending decisions, and recently completed work.
 2. **Needs attention** — every blocker, conflict, stale item, or user decision currently requiring
    action. Put this before routine work even if it belongs to another stage.
-3. **In progress** — every active Solution, one compact line each: intended outcome, latest
+3. **In progress** — every active Task, one compact line each: intended outcome, latest
    meaningful progress, and next step.
-4. **Still shaping** — all Captures, Problems, and proposed Solutions grouped by lifecycle stage;
+4. **Still shaping** — all Captures, Tasks, and optional Problem context grouped by lifecycle stage;
    use title plus a short reason/context, not full record bodies.
 5. **Recently completed** — the bounded recent-completion list returned by the resource.
 
@@ -45,7 +45,7 @@ needs attention first. Do not end with a generic offer to help.
 Adapt the language and omit irrelevant sections:
 
 ```markdown
-Workbench 전체를 보면 Capture 3개, Problem 2개, 진행 중인 Solution 2개가 있어요. 지금 확인이
+Workbench 전체를 보면 Capture 3개, Task 2개, 진행 중인 작업 2개가 있어요. 지금 확인이
 필요한 건 1건입니다.
 
 **확인이 필요한 작업**

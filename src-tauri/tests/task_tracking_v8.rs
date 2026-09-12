@@ -112,16 +112,104 @@ fn migrated_problem_task_proposal_rejects_a_revision_that_does_not_exist() {
         .unwrap();
     let event = service.append("native-in-app-chat", &json!({"operationId":"missing-revision-event","sessionId":opened["sessionId"],"expectedHeadRevision":opened["headRevision"],"event":{"kind":"task_created","title":"Invalid migrated Task","outcome":"Must not be created"}})).unwrap();
     let proposal = json!({"operationId":"missing-revision-task","sessionId":opened["sessionId"],"expectedHeadRevision":event["headRevision"],"sourceEventId":event["eventId"],"action":"create_task","proposedPayload":{"title":"Invalid migrated Task","outcome":"Must not be created","problemId":problem.body["id"],"problemRevision":99}});
-    let review = service
-        .begin_advance("native-in-app-chat", &proposal)
-        .unwrap();
     let error = service
-        .finish_advance("native-in-app-chat", &review, &proposal, "accept")
+        .begin_advance("native-in-app-chat", &proposal)
         .unwrap_err();
     assert_eq!(error.code, "not_found_or_not_visible");
     assert!(
-        error.message.to_lowercase().contains("problem revision"),
+        error.message.to_lowercase().contains("problem target"),
         "{:?}",
         error
     );
+    let tasks: i64 = rusqlite::Connection::open(root.path().join("state.db"))
+        .unwrap()
+        .query_row("SELECT count(*) FROM tasks", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(tasks, 0);
+}
+
+#[test]
+fn direct_task_continuation_is_captureless_reviewed_and_stale_aware() {
+    let root = tempfile::tempdir().unwrap();
+    let db = root.path().join("state.db");
+    let app = NativeApplication::isolated(&root.path().join("vault"), &db).unwrap();
+    let task = app.execute(NativeOperation {
+        name: "task.create".into(),
+        input: json!({"operationId":"direct-task","inputText":"Desktop Task","title":"Desktop Task","outcome":"Visible to MCP"}),
+    });
+    assert_eq!(task.status, 200, "{}", task.body);
+    let task_id = task.body["id"].as_str().unwrap();
+    let service = app.work_tracking_service();
+
+    let cancel = json!({"operationId":"continue-cancel","lineageKey":"desktop-task-cancel","mode":"continue_task","taskId":task_id});
+    let preview = service.open("native-in-app-chat", &cancel).unwrap();
+    assert_eq!(preview["stage"], "task_continuation");
+    assert_eq!(preview["preview"]["task"]["taskId"], task_id);
+    let cancelled = service
+        .finish_open(
+            "native-in-app-chat",
+            &cancel,
+            preview["reviewState"].as_str().unwrap(),
+            "cancel",
+        )
+        .unwrap();
+    assert_eq!(cancelled["created"], false);
+    let sessions: i64 = rusqlite::Connection::open(&db)
+        .unwrap()
+        .query_row("SELECT count(*) FROM work_tracking_sessions", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(sessions, 0, "cancellation must not create a session");
+
+    let stale = json!({"operationId":"continue-stale","lineageKey":"desktop-task-stale","mode":"continue_task","taskId":task_id});
+    let review = service.open("native-in-app-chat", &stale).unwrap();
+    let revised = app.execute(NativeOperation { name:"task.revision".into(), input:json!({"operationId":"direct-task-r2","taskId":task_id,"expectedTaskRevision":1,"patch":{"detail":"child snapshot changed"}}) });
+    assert_eq!(revised.status, 200, "{}", revised.body);
+    assert_eq!(
+        service
+            .finish_open(
+                "native-in-app-chat",
+                &stale,
+                review["reviewState"].as_str().unwrap(),
+                "accept"
+            )
+            .unwrap_err()
+            .code,
+        "head_conflict"
+    );
+
+    let accept = json!({"operationId":"continue-accept","lineageKey":"desktop-task-accept","mode":"continue_task","taskId":task_id});
+    let review = service.open("native-in-app-chat", &accept).unwrap();
+    let opened = service
+        .finish_open(
+            "native-in-app-chat",
+            &accept,
+            review["reviewState"].as_str().unwrap(),
+            "accept",
+        )
+        .unwrap();
+    assert!(opened["captureId"].is_null());
+    let session = service
+        .session("native-in-app-chat", opened["sessionId"].as_str().unwrap())
+        .unwrap();
+    assert!(session["capture"].is_null());
+    assert_eq!(session["linkedWorkflow"]["task"]["id"], task_id);
+    let connection = rusqlite::Connection::open(db).unwrap();
+    let capture: Option<String> = connection
+        .query_row(
+            "SELECT capture_id FROM work_tracking_sessions WHERE id=?",
+            [opened["sessionId"].as_str().unwrap()],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(capture.is_none());
+    let event: String = connection
+        .query_row(
+            "SELECT kind FROM work_tracking_events WHERE session_id=?",
+            [opened["sessionId"].as_str().unwrap()],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(event, "task_binding");
 }

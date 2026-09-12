@@ -1,4 +1,7 @@
 use crate::adapters::{sqlite::SqliteWorkTrackingStore, vault::MarkdownVaultAdapter};
+use crate::application::task_assistance_service::{
+    TaskAssistanceAction, TaskAssistanceApplicationService,
+};
 use crate::domain::work_tracking_state::{AppError, EventKind};
 use crate::ports::{
     event_log::EventLog, vault_repository::VaultRepository, work_projection::WorkProjection,
@@ -13,11 +16,20 @@ use std::time::Instant;
 pub struct WorkTrackingApplicationService {
     store: SqliteWorkTrackingStore,
     vault: MarkdownVaultAdapter,
+    assistance: TaskAssistanceApplicationService,
 }
 
 impl WorkTrackingApplicationService {
-    pub fn new(store: SqliteWorkTrackingStore, vault: MarkdownVaultAdapter) -> Self {
-        Self { store, vault }
+    pub(crate) fn new(
+        store: SqliteWorkTrackingStore,
+        vault: MarkdownVaultAdapter,
+        assistance: TaskAssistanceApplicationService,
+    ) -> Self {
+        Self {
+            store,
+            vault,
+            assistance,
+        }
     }
 
     fn require_scope(&self, connection_id: &str, scope: &str) -> Result<(), AppError> {
@@ -57,6 +69,301 @@ impl WorkTrackingApplicationService {
         self.store.revoke_connection(id)
     }
 
+    /// Closed native-assistance dispatch for a future MCP adapter.  The adapter selects an enum
+    /// variant from a typed tool; callers cannot provide a native operation string.
+    pub fn task_context_read(&self, connection_id: &str, task_id: &str) -> Result<Value, AppError> {
+        self.require_scope(connection_id, "session:read")?;
+        self.store.task_context_read(connection_id, task_id)
+    }
+
+    pub(crate) async fn task_assistance(
+        &self,
+        connection_id: &str,
+        action: TaskAssistanceAction,
+        input: &Value,
+    ) -> Result<Value, AppError> {
+        if matches!(
+            action,
+            TaskAssistanceAction::Lineage
+                | TaskAssistanceAction::TaskLineage
+                | TaskAssistanceAction::RefinementOpen
+                | TaskAssistanceAction::RefinementGet
+                | TaskAssistanceAction::ReviewHistory
+                | TaskAssistanceAction::KnowledgeDraft
+                | TaskAssistanceAction::KnowledgeCorrection
+                | TaskAssistanceAction::KnowledgeRegenerate
+                | TaskAssistanceAction::KnowledgePublish
+                | TaskAssistanceAction::KnowledgeWithdraw
+        ) {
+            self.store
+                .task_continuation_discoverable(connection_id, text(input, "taskId")?)?;
+        }
+        if matches!(
+            action,
+            TaskAssistanceAction::RefinementWorkspace
+                | TaskAssistanceAction::RefinementProposals
+                | TaskAssistanceAction::RefinementMessage
+                | TaskAssistanceAction::RefinementDecision
+        ) {
+            self.store
+                .refinement_session_discoverable(connection_id, text(input, "sessionId")?)?;
+        }
+        if matches!(
+            action,
+            TaskAssistanceAction::ReviewGet
+                | TaskAssistanceAction::ReviewCancel
+                | TaskAssistanceAction::ReviewDecision
+        ) {
+            self.store
+                .current_chat_advisory_discoverable(connection_id, text(input, "runId")?)?;
+        }
+        let write = !matches!(
+            action,
+            TaskAssistanceAction::RefinementGet
+                | TaskAssistanceAction::RefinementProposals
+                | TaskAssistanceAction::ReviewGet
+                | TaskAssistanceAction::ReviewHistory
+                | TaskAssistanceAction::Lineage
+                | TaskAssistanceAction::TaskLineage
+        );
+        if action != TaskAssistanceAction::Lineage {
+            self.require_scope(
+                connection_id,
+                if write {
+                    "session:write"
+                } else {
+                    "session:read"
+                },
+            )?;
+        }
+        match action {
+            TaskAssistanceAction::KnowledgeDraft
+            | TaskAssistanceAction::KnowledgeCorrection
+            | TaskAssistanceAction::KnowledgeRegenerate => {
+                self.require_scope(connection_id, "knowledge:draft:write")?;
+            }
+            TaskAssistanceAction::KnowledgePublish | TaskAssistanceAction::KnowledgeWithdraw => {
+                self.require_scope(connection_id, "knowledge:publish")?;
+            }
+            _ => {}
+        }
+        self.assistance
+            .execute(action, input)
+            .await
+            .map_err(assistance_error)
+    }
+
+    /// Starts a provider-free Current Chat advisory over the exact current Task material.
+    /// The caller supplies bounded findings later; no native conflict job is queued.
+    pub fn create_current_chat_advisory(
+        &self,
+        connection_id: &str,
+        input: &Value,
+    ) -> Result<Value, AppError> {
+        self.require_scope(connection_id, "session:write")?;
+        self.store
+            .task_continuation_discoverable(connection_id, text(input, "taskId")?)?;
+        self.assistance
+            .create_current_chat_advisory(input)
+            .map_err(assistance_error)
+    }
+
+    pub fn complete_current_chat_advisory(
+        &self,
+        connection_id: &str,
+        input: &Value,
+    ) -> Result<Value, AppError> {
+        self.require_scope(connection_id, "session:write")?;
+        self.store
+            .current_chat_advisory_discoverable(connection_id, text(input, "runId")?)?;
+        let findings = input
+            .get("findings")
+            .ok_or_else(|| AppError::new("invalid_input", "findings is required"))?;
+        let evidence_refs = input
+            .get("evidenceRefs")
+            .ok_or_else(|| AppError::new("invalid_input", "evidenceRefs is required"))?;
+        let findings = findings
+            .as_array()
+            .ok_or_else(|| AppError::new("invalid_input", "findings must be an array"))?;
+        let evidence_refs = evidence_refs
+            .as_array()
+            .ok_or_else(|| AppError::new("invalid_input", "evidenceRefs must be an array"))?;
+        if findings.len() > 50 || evidence_refs.len() > 100 {
+            return Err(AppError::new(
+                "invalid_input",
+                "Too many advisory findings or evidence references",
+            ));
+        }
+        if !evidence_refs.is_empty() {
+            self.require_scope(connection_id, "vault:evidence:read")?;
+        }
+        for evidence in evidence_refs {
+            self.vault.evidence_read(
+                connection_id,
+                text(evidence, "evidenceId")?,
+                Some(text(evidence, "revision")?),
+            )?;
+        }
+        self.assistance
+            .complete_current_chat_advisory(
+                input,
+                &Value::Array(findings.clone()),
+                &Value::Array(evidence_refs.clone()),
+            )
+            .map_err(assistance_error)
+    }
+
+    /// Persist an exact typed mutation for MCP elicitation. The generic review table is
+    /// durable, binds the connection, operation, action and full input hash, and avoids
+    /// manufacturing a Capture session for a desktop-created Task.
+    pub(crate) async fn start_task_assistance_review(
+        &self,
+        connection_id: &str,
+        action: TaskAssistanceAction,
+        input: &Value,
+    ) -> Result<Value, AppError> {
+        self.authorize_task_assistance_review(connection_id, action, input)?;
+        let task_id = self.task_assistance_review_task(connection_id, action, input)?;
+        let target = self
+            .store
+            .task_assistance_review_target(connection_id, &task_id)?;
+        let prepared = match action {
+            TaskAssistanceAction::KnowledgeRegenerate => self
+                .assistance
+                .prepare_knowledge_draft(input)
+                .await
+                .map_err(assistance_error)?,
+            TaskAssistanceAction::KnowledgeDraft => {
+                let body = text(input, "bodyMarkdown")?;
+                let lineage = self
+                    .task_assistance(connection_id, TaskAssistanceAction::Lineage, input)
+                    .await?;
+                json!({"bodyMarkdown":body,"taskId":input["taskId"],"taskRevision":input["expectedTaskRevision"],"completionId":input["completionId"],"sourceHash":lineage["sourceHash"],"lineage":lineage})
+            }
+            TaskAssistanceAction::KnowledgePublish => self
+                .store
+                .canonical_knowledge_draft_for_review(connection_id, input, false)?,
+            TaskAssistanceAction::KnowledgeWithdraw => self
+                .store
+                .canonical_knowledge_draft_for_review(connection_id, input, true)?,
+            _ => Value::Null,
+        };
+        // Provider preparation and lineage reads may yield. Bind the returned body
+        // to the same full Task snapshot that will be reviewed, never a later mix.
+        let fresh_target = self
+            .store
+            .task_assistance_review_target(connection_id, &task_id)?;
+        if fresh_target != target {
+            return Err(AppError::new(
+                "head_conflict",
+                "Task material changed while preparing the review; refresh and retry",
+            ));
+        }
+        self.store.begin_task_assistance_review(
+            connection_id,
+            assistance_review_name(action),
+            input,
+            &target,
+            &prepared,
+        )
+    }
+
+    pub(crate) async fn finish_task_assistance_review(
+        &self,
+        connection_id: &str,
+        action: TaskAssistanceAction,
+        input: &Value,
+        review_state: &str,
+        decision: &str,
+    ) -> Result<Value, AppError> {
+        self.authorize_task_assistance_review(connection_id, action, input)?;
+        self.task_assistance_review_task(connection_id, action, input)?;
+        let result = self.store.consume_task_assistance_review_with(
+            connection_id, assistance_review_name(action), input, review_state, decision,
+            |tx, envelope| {
+                if matches!(action, TaskAssistanceAction::KnowledgePublish | TaskAssistanceAction::KnowledgeWithdraw) {
+                    return Ok(json!({"decision":"accept","publicationStatus":"queued","reviewState":review_state}));
+                }
+                let mut request = envelope["request"].clone();
+                let persist_action = if action == TaskAssistanceAction::KnowledgeRegenerate {
+                    let prepared = &envelope["prepared"];
+                    let body = prepared["bodyMarkdown"].as_str().ok_or_else(|| AppError::new("draft_conflict", "Prepared Knowledge body is unavailable"))?;
+                    request["bodyMarkdown"] = json!(body);
+                    request["completionId"] = prepared["completionId"].clone();
+                    request["expectedTaskRevision"] = prepared["taskRevision"].clone();
+                    TaskAssistanceAction::KnowledgeDraft
+                } else { action };
+                self.assistance.execute_reviewed_tx(tx, persist_action, &request).map_err(assistance_error)
+            },
+        )?;
+        Ok(result.unwrap_or_else(|| json!({"decision":decision})))
+    }
+
+    fn authorize_task_assistance_review(
+        &self,
+        connection_id: &str,
+        action: TaskAssistanceAction,
+        input: &Value,
+    ) -> Result<(), AppError> {
+        match action {
+            TaskAssistanceAction::RefinementDecision => {
+                self.require_scope(connection_id, "session:write")?;
+                self.store
+                    .refinement_session_discoverable(connection_id, text(input, "sessionId")?)
+            }
+            TaskAssistanceAction::ReviewDecision => {
+                self.require_scope(connection_id, "session:write")?;
+                self.store
+                    .current_chat_advisory_discoverable(connection_id, text(input, "runId")?)
+            }
+            TaskAssistanceAction::KnowledgeDraft
+            | TaskAssistanceAction::KnowledgeCorrection
+            | TaskAssistanceAction::KnowledgeRegenerate => {
+                self.require_scope(connection_id, "knowledge:draft:write")?;
+                self.store
+                    .task_continuation_discoverable(connection_id, text(input, "taskId")?)
+            }
+            TaskAssistanceAction::KnowledgePublish | TaskAssistanceAction::KnowledgeWithdraw => {
+                self.require_scope(connection_id, "knowledge:publish")?;
+                self.store
+                    .task_continuation_discoverable(connection_id, text(input, "taskId")?)
+            }
+            _ => Err(AppError::new(
+                "invalid_input",
+                "Unsupported Task assistance review action",
+            )),
+        }
+    }
+
+    fn task_assistance_review_task(
+        &self,
+        connection_id: &str,
+        action: TaskAssistanceAction,
+        input: &Value,
+    ) -> Result<String, AppError> {
+        match action {
+            TaskAssistanceAction::RefinementDecision => self.store.task_assistance_subject_task(
+                connection_id,
+                "refinement",
+                text(input, "sessionId")?,
+            ),
+            TaskAssistanceAction::ReviewDecision => self.store.task_assistance_subject_task(
+                connection_id,
+                "advisory",
+                text(input, "runId")?,
+            ),
+            TaskAssistanceAction::KnowledgeDraft
+            | TaskAssistanceAction::KnowledgeCorrection
+            | TaskAssistanceAction::KnowledgeRegenerate
+            | TaskAssistanceAction::KnowledgePublish
+            | TaskAssistanceAction::KnowledgeWithdraw => Ok(text(input, "taskId")?.to_owned()),
+            _ => Err(AppError::new(
+                "invalid_input",
+                "Unsupported Task assistance review action",
+            )),
+        }
+    }
+
     pub fn open(&self, connection_id: &str, input: &Value) -> Result<Value, AppError> {
         self.open_reviewed(connection_id, input, None)
     }
@@ -85,21 +392,38 @@ impl WorkTrackingApplicationService {
             .get("mode")
             .and_then(Value::as_str)
             .unwrap_or("create");
-        if !matches!(mode, "create" | "resume") {
+        if !matches!(mode, "create" | "resume" | "continue_task") {
             return Err(AppError::new(
                 "invalid_input",
-                "mode must be create or resume",
+                "mode must be create, resume, or continue_task",
             ));
+        }
+        if mode == "continue_task" {
+            // A session-write grant alone cannot turn a guessed desktop Task ID into a target.
+            // Either whole-Workbench discovery grant, or its explicit topic membership, is
+            // required and is checked again by the transaction that accepts the review.
+            if input
+                .get("capture")
+                .is_some_and(|capture| !capture.is_null())
+            {
+                return Err(AppError::new(
+                    "invalid_input",
+                    "Task continuation does not accept a Capture",
+                ));
+            }
+            self.store
+                .task_continuation_discoverable(connection_id, text(input, "taskId")?)?;
         }
         let result = self.store.open_session(
             connection_id,
             operation_id,
             lineage_key,
             mode,
-            input.get("capture"),
+            input.get("capture").filter(|capture| !capture.is_null()),
             input.get("parentSessionId").and_then(Value::as_str),
             input.get("reviewContext"),
             review,
+            input.get("taskId").and_then(Value::as_str),
         );
         let session = result
             .as_ref()
@@ -178,7 +502,8 @@ impl WorkTrackingApplicationService {
 
     pub fn current_workbench(&self, connection_id: &str, limit: usize) -> Result<Value, AppError> {
         self.require_scope(connection_id, "workbench:current:read")?;
-        self.store.current_workbench(limit.clamp(1, 20))
+        self.store
+            .current_workbench(connection_id, limit.clamp(1, 20))
     }
 
     pub fn overview(
@@ -241,9 +566,9 @@ impl WorkTrackingApplicationService {
             }
             cursor_snapshot = Some(embedded);
         }
-        let mut result = self
-            .store
-            .overview(limit.clamp(1, 50), offset, attention_offset)?;
+        let mut result =
+            self.store
+                .overview(connection_id, limit.clamp(1, 50), offset, attention_offset)?;
         let current = result
             .get("snapshotRevision")
             .and_then(Value::as_i64)
@@ -395,6 +720,20 @@ impl WorkTrackingApplicationService {
         self.store.create_challenge(connection_id, input)
     }
 
+    /// Replaying a terminal result is safe only for the same connection-owned operation
+    /// and exact request hash. Pending reviews deliberately return None so MCP still elicits.
+    pub fn advance_result_replay(
+        &self,
+        connection_id: &str,
+        input: &Value,
+    ) -> Result<Option<Value>, AppError> {
+        self.require_scope(connection_id, "session:write")?;
+        if input["action"] == "link_current_work" {
+            self.require_scope(connection_id, "workbench:current:read")?;
+        }
+        self.store.advance_result_replay(connection_id, input)
+    }
+
     pub fn review_target(&self, owner: &str, state: &str) -> Result<Value, AppError> {
         self.require_scope(owner, "session:write")?;
         self.store.review_target(owner, state)
@@ -411,13 +750,24 @@ impl WorkTrackingApplicationService {
         decision: &str,
     ) -> Result<Value, AppError> {
         self.require_scope(connection_id, "session:write")?;
-        if decision == "accept" && input["action"] == "resolve_conflict" {
-            if let Some(evidence) = input["proposedPayload"]["evidence"].as_array() {
+        if decision == "accept"
+            && matches!(
+                input["action"].as_str(),
+                Some("resolve_conflict" | "review_conflict")
+            )
+        {
+            let evidence = input["proposedPayload"]["evidenceRefs"]
+                .as_array()
+                .or_else(|| input["proposedPayload"]["evidence"].as_array());
+            if let Some(evidence) = evidence {
+                if !evidence.is_empty() {
+                    self.require_scope(connection_id, "vault:evidence:read")?;
+                }
                 for item in evidence {
                     self.vault.evidence_read(
                         connection_id,
                         text(item, "evidenceId")?,
-                        item["revision"].as_str(),
+                        Some(text(item, "revision")?),
                     )?;
                 }
             }
@@ -431,8 +781,12 @@ impl WorkTrackingApplicationService {
         connection_id: &str,
         input: &Value,
     ) -> Result<Value, AppError> {
-        self.require_scope(connection_id, "knowledge:draft:write")?;
-        self.store.begin_review(connection_id, "draft", input)
+        let input = self.canonical_gui_knowledge_input(connection_id, input)?;
+        self.start_gui_task_knowledge_review(
+            connection_id,
+            TaskAssistanceAction::KnowledgeDraft,
+            &input,
+        )
     }
 
     pub fn finish_knowledge_draft(
@@ -442,70 +796,41 @@ impl WorkTrackingApplicationService {
         state: &str,
         decision: &str,
     ) -> Result<Value, AppError> {
-        self.require_scope(connection_id, "knowledge:draft:write")?;
-        if !self
-            .store
-            .decide_review(connection_id, "draft", input, state, decision)?
-        {
-            return Ok(json!({"decision":decision}));
-        }
-        if let Some(items) = input.get("evidenceRefs").and_then(Value::as_array) {
-            for item in items {
-                let evidence = self.vault.evidence_read(
-                    connection_id,
-                    text(item, "evidenceId")?,
-                    item.get("revision").and_then(Value::as_str),
-                )?;
-                if let Some(hash) = item.get("contentHash").and_then(Value::as_str) {
-                    if evidence["contentHash"] != hash {
-                        return Err(AppError::new(
-                            "evidence_revision_changed",
-                            "Evidence changed; refresh the draft",
-                        ));
-                    }
-                }
-            }
-        }
-        self.store
-            .save_knowledge_draft(connection_id, text(input, "operationId")?, input)
+        let input = self.canonical_gui_knowledge_input(connection_id, input)?;
+        self.authorize_task_assistance_review(
+            connection_id,
+            TaskAssistanceAction::KnowledgeDraft,
+            &input,
+        )?;
+        let result = self.store.consume_task_assistance_review_with(
+            connection_id,
+            assistance_review_name(TaskAssistanceAction::KnowledgeDraft),
+            &input,
+            state,
+            decision,
+            |tx, envelope| {
+                self.assistance
+                    .execute_reviewed_tx(
+                        tx,
+                        TaskAssistanceAction::KnowledgeDraft,
+                        &envelope["request"],
+                    )
+                    .map_err(assistance_error)
+            },
+        )?;
+        Ok(result.unwrap_or_else(|| json!({"decision":decision})))
     }
 
     pub fn publish_knowledge(&self, connection_id: &str, input: &Value) -> Result<Value, AppError> {
-        let _ = input;
-        self.require_scope(connection_id, "knowledge:publish")?;
-        Err(AppError::new(
-            "approval_required",
-            "Review the exact Knowledge draft before publication",
-        ))
+        self.begin_publish(connection_id, input)
     }
 
     pub fn begin_publish(&self, connection_id: &str, input: &Value) -> Result<Value, AppError> {
-        self.require_scope(connection_id, "knowledge:publish")?;
-        let draft = self.store.knowledge_draft(
+        self.start_gui_task_knowledge_review(
             connection_id,
-            text(input, "draftId")?,
-            input["expectedDraftRevision"]
-                .as_i64()
-                .ok_or_else(|| AppError::new("invalid_input", "Draft revision is required"))?,
-            text(input, "expectedContentHash")?,
-        )?;
-        if draft["state"] == "withdrawn" {
-            return Err(AppError::new(
-                "publish_conflict",
-                "Withdrawn publication requires a newly reviewed draft revision",
-            ));
-        }
-        if draft["state"] == "published" {
-            return self.store.finalize_publication(
-                text(input, "draftId")?,
-                input["expectedDraftRevision"].as_i64().unwrap_or_default(),
-                text(input, "expectedContentHash")?,
-                draft["publishedPath"].as_str().unwrap_or_default(),
-            );
-        }
-        let mut review = self.store.begin_review(connection_id, "publish", input)?;
-        review["preview"] = draft;
-        Ok(review)
+            TaskAssistanceAction::KnowledgePublish,
+            input,
+        )
     }
 
     pub fn finish_publish(
@@ -515,58 +840,17 @@ impl WorkTrackingApplicationService {
         state: &str,
         decision: &str,
     ) -> Result<Value, AppError> {
-        self.require_scope(connection_id, "knowledge:publish")?;
-        if !self
-            .store
-            .decide_review(connection_id, "publish", input, state, decision)?
-        {
+        let Some(_) = self.consume_gui_task_knowledge_review(
+            connection_id,
+            TaskAssistanceAction::KnowledgePublish,
+            input,
+            state,
+            decision,
+        )?
+        else {
             return Ok(json!({"decision":decision}));
-        }
-        let draft_id = text(input, "draftId")?;
-        let revision = input
-            .get("expectedDraftRevision")
-            .and_then(Value::as_i64)
-            .ok_or_else(|| AppError::new("invalid_input", "expectedDraftRevision is required"))?;
-        let hash = text(input, "expectedContentHash")?;
-        let draft = self
-            .store
-            .knowledge_draft(connection_id, draft_id, revision, hash)?;
-        if draft["state"] == "withdrawn" {
-            return Err(AppError::new(
-                "publish_conflict",
-                "Withdrawn publication requires a newly reviewed draft revision",
-            ));
-        }
-        if draft["state"] == "published" {
-            let result = self.store.finalize_publication(
-                draft_id,
-                revision,
-                hash,
-                draft["publishedPath"].as_str().unwrap_or_default(),
-            )?;
-            self.store.publication_job_result(state, None)?;
-            return Ok(result);
-        }
-        let slug = draft["title"]
-            .as_str()
-            .unwrap_or("knowledge")
-            .chars()
-            .map(|c| if c.is_alphanumeric() { c } else { '-' })
-            .collect::<String>()
-            .trim_matches('-')
-            .to_lowercase();
-        let path = format!(
-            "Knowledge/{}-{}.md",
-            if slug.is_empty() { "knowledge" } else { &slug },
-            &draft_id[..draft_id.len().min(8)]
-        );
-        let body = draft["bodyMarkdown"].as_str().unwrap_or_default();
-        self.vault.publish(&path, None, body)?;
-        let result = self
-            .store
-            .finalize_publication(draft_id, revision, hash, &path)?;
-        self.store.publication_job_result(state, None)?;
-        Ok(result)
+        };
+        Ok(json!({"decision":"accept","publicationStatus":"queued","reviewState":state}))
     }
 
     pub fn defer_publication(
@@ -581,24 +865,7 @@ impl WorkTrackingApplicationService {
     }
 
     pub fn begin_withdrawal(&self, owner: &str, input: &Value) -> Result<Value, AppError> {
-        self.require_scope(owner, "knowledge:publish")?;
-        let draft = self.store.knowledge_draft(
-            owner,
-            text(input, "draftId")?,
-            input["expectedDraftRevision"]
-                .as_i64()
-                .ok_or_else(|| AppError::new("invalid_input", "Draft revision is required"))?,
-            text(input, "expectedContentHash")?,
-        )?;
-        if draft["state"] != "published" {
-            return Err(AppError::new(
-                "workflow_precondition",
-                "Only published Knowledge can be withdrawn",
-            ));
-        }
-        let mut review = self.store.begin_review(owner, "withdraw", input)?;
-        review["preview"] = draft;
-        Ok(review)
+        self.start_gui_task_knowledge_review(owner, TaskAssistanceAction::KnowledgeWithdraw, input)
     }
 
     pub fn finish_withdrawal(
@@ -608,41 +875,250 @@ impl WorkTrackingApplicationService {
         state: &str,
         decision: &str,
     ) -> Result<Value, AppError> {
-        self.require_scope(owner, "knowledge:publish")?;
-        if !self
-            .store
-            .decide_review(owner, "withdraw", input, state, decision)?
-        {
+        let Some(_) = self.consume_gui_task_knowledge_review(
+            owner,
+            TaskAssistanceAction::KnowledgeWithdraw,
+            input,
+            state,
+            decision,
+        )?
+        else {
             return Ok(json!({"decision":decision}));
+        };
+        Ok(json!({"decision":"accept","publicationStatus":"queued","reviewState":state}))
+    }
+
+    fn canonical_gui_knowledge_input(
+        &self,
+        connection_id: &str,
+        input: &Value,
+    ) -> Result<Value, AppError> {
+        if input.get("taskId").and_then(Value::as_str).is_some() {
+            return Ok(input.clone());
         }
-        let id = text(input, "draftId")?;
-        let revision = input["expectedDraftRevision"]
-            .as_i64()
-            .ok_or_else(|| AppError::new("invalid_input", "Draft revision is required"))?;
-        let hash = text(input, "expectedContentHash")?;
-        let draft = self.store.knowledge_draft(owner, id, revision, hash)?;
-        let recovery = self
-            .vault
-            .withdraw(text(&draft, "publishedPath")?, hash, state)?;
+        let session_id = text(input, "sessionId")?;
+        let mut canonical = input.clone();
+        let resolved = self
+            .store
+            .canonical_task_completion_for_session(connection_id, session_id)?;
+        canonical["taskId"] = resolved["taskId"].clone();
+        canonical["expectedTaskRevision"] = resolved["expectedTaskRevision"].clone();
+        canonical["completionId"] = resolved["completionId"].clone();
+        Ok(canonical)
+    }
+
+    fn start_gui_task_knowledge_review(
+        &self,
+        connection_id: &str,
+        action: TaskAssistanceAction,
+        input: &Value,
+    ) -> Result<Value, AppError> {
+        let input = self.canonical_gui_knowledge_input(connection_id, input)?;
+        self.authorize_task_assistance_review(connection_id, action, &input)?;
+        let target = self
+            .store
+            .task_assistance_review_target(connection_id, text(&input, "taskId")?)?;
+        let prepared = match action {
+            TaskAssistanceAction::KnowledgePublish => self
+                .store
+                .canonical_knowledge_draft_for_review(connection_id, &input, false)?,
+            TaskAssistanceAction::KnowledgeWithdraw => self
+                .store
+                .canonical_knowledge_draft_for_review(connection_id, &input, true)?,
+            TaskAssistanceAction::KnowledgeDraft => {
+                json!({"bodyMarkdown":input["bodyMarkdown"],"taskId":input["taskId"],"taskRevision":input["expectedTaskRevision"],"completionId":input["completionId"]})
+            }
+            _ => Value::Null,
+        };
+        self.store.begin_task_assistance_review(
+            connection_id,
+            assistance_review_name(action),
+            &input,
+            &target,
+            &prepared,
+        )
+    }
+
+    fn consume_gui_task_knowledge_review(
+        &self,
+        connection_id: &str,
+        action: TaskAssistanceAction,
+        input: &Value,
+        state: &str,
+        decision: &str,
+    ) -> Result<Option<Value>, AppError> {
+        let input = self.canonical_gui_knowledge_input(connection_id, input)?;
+        self.authorize_task_assistance_review(connection_id, action, &input)?;
         self.store
-            .finalize_withdrawal(state, id, revision, &recovery)
+            .consume_task_assistance_review(
+                connection_id,
+                assistance_review_name(action),
+                &input,
+                state,
+                decision,
+            )
+            .map(|envelope| envelope.map(|value| value["request"].clone()))
+    }
+
+    fn finish_task_knowledge_publication(
+        &self,
+        owner: &str,
+        input: &Value,
+        withdraw: bool,
+    ) -> Result<Value, AppError> {
+        let action = if withdraw {
+            TaskAssistanceAction::KnowledgeWithdraw
+        } else {
+            TaskAssistanceAction::KnowledgePublish
+        };
+        self.authorize_task_assistance_review(owner, action, input)?;
+        let result = if withdraw {
+            crate::native::task_assistance::withdraw_reviewed_knowledge(
+                self.store.database_path(),
+                self.vault.root_path(),
+                input,
+            )
+        } else {
+            crate::native::task_assistance::publish_reviewed_knowledge(
+                self.store.database_path(),
+                self.vault.root_path(),
+                input,
+            )
+        };
+        result.map_err(assistance_error)
+    }
+
+    /// Legacy `knowledge_drafts` are immutable audit history. The only remaining
+    /// write is recovery of a publication job that was already explicitly accepted
+    /// before migration; new GUI and MCP paths cannot enter this handler.
+    fn recover_approved_legacy_publication(
+        &self,
+        owner: &str,
+        input: &Value,
+        review_id: &str,
+        withdraw: bool,
+    ) -> Result<Value, AppError> {
+        let draft_id = text(input, "draftId")?;
+        let revision = input
+            .get("expectedDraftRevision")
+            .and_then(Value::as_i64)
+            .ok_or_else(|| AppError::new("invalid_input", "expectedDraftRevision is required"))?;
+        let content_hash = text(input, "expectedContentHash")?;
+        let draft = self
+            .store
+            .knowledge_draft(owner, draft_id, revision, content_hash)?;
+        if withdraw {
+            if draft["state"] != "published" {
+                return Err(AppError::new(
+                    "workflow_precondition",
+                    "Only an already published legacy draft can be recovered for withdrawal",
+                ));
+            }
+            let recovery =
+                self.vault
+                    .withdraw(text(&draft, "publishedPath")?, content_hash, review_id)?;
+            self.store
+                .finalize_withdrawal(review_id, draft_id, revision, &recovery)
+        } else {
+            if draft["state"] == "withdrawn" {
+                return Err(AppError::new(
+                    "publish_conflict",
+                    "Withdrawn legacy draft cannot be republished",
+                ));
+            }
+            let path = draft["publishedPath"].as_str().ok_or_else(|| {
+                AppError::new(
+                    "publish_conflict",
+                    "Approved legacy publication path is unavailable",
+                )
+            })?;
+            self.vault
+                .publish(path, None, text(&draft, "bodyMarkdown")?)?;
+            self.store
+                .finalize_publication(draft_id, revision, content_hash, path)
+        }
     }
 
     pub fn drain(&self, limit: usize) -> Result<usize, AppError> {
         let processed = self.store.drain(limit)?;
         for (state, owner, input) in self.store.publication_recovery()? {
-            let result = if self.store.review_action(&state)? == "withdraw" {
-                self.finish_withdrawal(&owner, &input, &state, "accept")
-            } else {
-                self.finish_publish(&owner, &input, &state, "accept")
+            let action = self.store.review_action(&state)?;
+            let result = match action.as_str() {
+                "task_knowledge_publish" => {
+                    self.finish_task_knowledge_publication(&owner, &input, false)
+                }
+                "task_knowledge_withdraw" => {
+                    self.finish_task_knowledge_publication(&owner, &input, true)
+                }
+                "withdraw" => {
+                    self.recover_approved_legacy_publication(&owner, &input, &state, true)
+                }
+                "publish" => {
+                    self.recover_approved_legacy_publication(&owner, &input, &state, false)
+                }
+                _ => Err(AppError::new(
+                    "invalid_input",
+                    "Unsupported publication recovery action",
+                )),
             };
-            if let Err(error) = result {
-                self.store
-                    .publication_job_result(&state, Some(&error.code))?;
+            match result {
+                Ok(_)
+                    if matches!(
+                        action.as_str(),
+                        "task_knowledge_publish" | "task_knowledge_withdraw"
+                    ) =>
+                {
+                    self.store.publication_job_result(&state, None)?;
+                }
+                Ok(_) => {
+                    // A recovered legacy job is terminal; otherwise every restart republishes it.
+                    self.store.publication_job_result(&state, None)?;
+                }
+                Err(error) => {
+                    self.store
+                        .publication_job_result(&state, Some(&error.code))?;
+                }
             }
         }
         Ok(processed)
     }
+}
+
+fn assistance_review_name(action: TaskAssistanceAction) -> &'static str {
+    match action {
+        TaskAssistanceAction::RefinementDecision => "task_refinement_decision",
+        TaskAssistanceAction::ReviewDecision => "task_advisory_decision",
+        TaskAssistanceAction::KnowledgeDraft => "task_knowledge_draft",
+        TaskAssistanceAction::KnowledgeCorrection => "task_knowledge_correction",
+        TaskAssistanceAction::KnowledgeRegenerate => "task_knowledge_regenerate",
+        TaskAssistanceAction::KnowledgePublish => "task_knowledge_publish",
+        TaskAssistanceAction::KnowledgeWithdraw => "task_knowledge_withdraw",
+        _ => "unsupported_task_assistance_review",
+    }
+}
+
+/// The native layer owns provider diagnostics.  MCP may return only stable workflow
+/// outcomes that a caller can act on; all other failures are deliberately opaque.
+fn assistance_error(error: String) -> AppError {
+    let code = error
+        .split_once(':')
+        .map(|(code, _)| code)
+        .unwrap_or(error.as_str());
+    let message = match code {
+        "draft_conflict" => "The Knowledge draft changed; read fresh lineage before retrying",
+        "head_conflict" => "The Task changed; read fresh state before retrying",
+        "operation_conflict" => "That operation ID was already used with different input",
+        "completion_conflict" => "The Task completion changed; read fresh state before retrying",
+        "subject_material_conflict" => {
+            "The reviewed material changed; read fresh state before retrying"
+        }
+        "source_changed" => "The Knowledge source changed outside LLM Wiki",
+        "review_scope_unavailable" => "The requested review is unavailable in this scope",
+        "invalid_input" => "The requested Task assistance input is invalid",
+        "cancelled" => "The requested Task assistance was cancelled",
+        _ => return AppError::new("assistance_unavailable", "Task assistance is unavailable"),
+    };
+    AppError::new(code, message)
 }
 
 fn text<'a>(value: &'a Value, name: &str) -> Result<&'a str, AppError> {

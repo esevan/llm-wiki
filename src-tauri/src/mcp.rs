@@ -1,3 +1,4 @@
+use crate::application::task_assistance_service::TaskAssistanceAction;
 use crate::application::work_tracking_service::WorkTrackingApplicationService;
 use crate::domain::work_tracking_state::AppError;
 use rmcp::{
@@ -96,15 +97,24 @@ struct CaptureInput {
     source_turn_key: Option<String>,
 }
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+enum OpenMode {
+    Create,
+    Resume,
+    ContinueTask,
+}
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct OpenInput {
     operation_id: String,
     lineage_key: String,
-    mode: String,
-    #[serde(default)]
+    mode: OpenMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     capture: Option<CaptureInput>,
     #[serde(default)]
     parent_session_id: Option<String>,
+    #[serde(default)]
+    task_id: Option<String>,
 }
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
@@ -210,13 +220,90 @@ struct AppendInput {
     observed_at: Option<String>,
 }
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
+enum GovernedAction {
+    #[serde(rename = "task.create")]
+    TaskCreate,
+    #[serde(rename = "task.revision")]
+    TaskRevision,
+    #[serde(rename = "task.transition")]
+    TaskTransition,
+    #[serde(rename = "task.reopen")]
+    TaskReopen,
+    #[serde(rename = "task.completion.create")]
+    TaskCompletionCreate,
+    #[serde(rename = "problem.create")]
+    ProblemCreate,
+    #[serde(rename = "problem.revision")]
+    ProblemRevision,
+    #[serde(rename = "problem.resolution.create")]
+    ProblemResolutionCreate,
+    #[serde(rename = "task.problem-link.create")]
+    TaskProblemLinkCreate,
+    #[serde(rename = "task.problem-link.delete")]
+    TaskProblemLinkDelete,
+    #[serde(rename = "task.relationship.create")]
+    TaskRelationshipCreate,
+    #[serde(rename = "task.relationship.delete")]
+    TaskRelationshipDelete,
+    #[serde(rename = "task.readiness.decision")]
+    TaskReadinessDecision,
+    #[serde(rename = "task.work-log.create")]
+    TaskWorkLogCreate,
+    #[serde(rename = "work-log.comment.create")]
+    WorkLogCommentCreate,
+    #[serde(rename = "task.checklist.create")]
+    TaskChecklistCreate,
+    #[serde(rename = "task.checklist.update")]
+    TaskChecklistUpdate,
+    #[serde(rename = "task.decision.create")]
+    TaskDecisionCreate,
+    #[serde(rename = "review_conflict")]
+    ReviewConflict,
+    #[serde(rename = "link_current_work")]
+    LinkCurrentWork,
+    #[serde(rename = "create_task")]
+    CreateTask,
+    #[serde(rename = "revise_task")]
+    ReviseTask,
+    #[serde(rename = "transition_task")]
+    TransitionTask,
+    #[serde(rename = "complete_task")]
+    CompleteTask,
+    #[serde(rename = "resolve_problem")]
+    ResolveProblem,
+    // These deserialize only so a pre-Task client gets the existing structured
+    // legacy rejection. `schemars(skip)` keeps retired approval commands out of
+    // the current MCP tool contract.
+    #[serde(rename = "adopt_problem")]
+    #[schemars(skip)]
+    LegacyAdoptProblem,
+    #[serde(rename = "approve_problem")]
+    #[schemars(skip)]
+    LegacyApproveProblem,
+    #[serde(rename = "adopt_solution")]
+    #[schemars(skip)]
+    LegacyAdoptSolution,
+    #[serde(rename = "approve_solution")]
+    #[schemars(skip)]
+    LegacyApproveSolution,
+    #[serde(rename = "resolve_conflict")]
+    #[schemars(skip)]
+    LegacyResolveConflict,
+    #[serde(rename = "accept_completion_proposal")]
+    #[schemars(skip)]
+    LegacyAcceptCompletionProposal,
+    #[serde(rename = "verify_and_complete")]
+    #[schemars(skip)]
+    LegacyVerifyAndComplete,
+}
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct AdvanceInput {
     operation_id: String,
     session_id: String,
     expected_head_revision: i64,
     source_event_id: String,
-    action: String,
+    action: GovernedAction,
     #[serde(default)]
     proposed_payload: Value,
 }
@@ -224,6 +311,157 @@ struct AdvanceInput {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct SessionInput {
     session_id: String,
+}
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct TaskIdInput {
+    task_id: String,
+}
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct TaskRefinementOpenInput {
+    operation_id: String,
+    task_id: String,
+}
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RefinementSessionInput {
+    session_id: String,
+}
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RefinementMessageInput {
+    operation_id: String,
+    session_id: String,
+    message: String,
+    #[serde(default)]
+    auto_review: bool,
+}
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RefinementWorkspaceInput {
+    operation_id: String,
+    session_id: String,
+    base_draft_revision: i64,
+    input_draft: String,
+    #[serde(default)]
+    active_tab: String,
+    #[serde(default)]
+    scroll_anchor: String,
+}
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RefinementDecisionInput {
+    operation_id: String,
+    session_id: String,
+    proposal_id: String,
+    draft_revision: i64,
+    decision: RefinementDecision,
+    #[serde(default)]
+    edited_payload: Option<Value>,
+}
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+enum RefinementDecision {
+    Accept,
+    Reject,
+    Apply,
+    Edit,
+}
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AdvisoryCreateInput {
+    operation_id: String,
+    task_id: String,
+    expected_task_revision: i64,
+}
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct EvidenceReferenceInput {
+    evidence_id: String,
+    #[serde(default)]
+    revision: Option<String>,
+    #[serde(default)]
+    content_hash: Option<String>,
+}
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AdvisoryFindingInput {
+    id: String,
+    summary: String,
+    #[serde(default)]
+    severity: Option<String>,
+    #[serde(default)]
+    recommendation: Option<String>,
+    #[serde(default)]
+    evidence_ids: Vec<String>,
+}
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AdvisoryCompleteInput {
+    operation_id: String,
+    run_id: String,
+    findings: Vec<AdvisoryFindingInput>,
+    evidence_refs: Vec<EvidenceReferenceInput>,
+}
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AdvisoryRunInput {
+    run_id: String,
+}
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AdvisoryDecisionInput {
+    operation_id: String,
+    run_id: String,
+    finding_id: String,
+    disposition: AdvisoryDisposition,
+    #[serde(default)]
+    rationale: String,
+}
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+enum AdvisoryDisposition {
+    Accept,
+    Reject,
+    Acknowledge,
+}
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct KnowledgeDraftInput {
+    operation_id: String,
+    task_id: String,
+    expected_task_revision: i64,
+    #[serde(default)]
+    completion_id: Option<String>,
+    body_markdown: String,
+}
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct KnowledgeCorrectionInput {
+    operation_id: String,
+    task_id: String,
+    draft_revision: i64,
+    expected_content_hash: String,
+    expected_source_hash: String,
+    body_markdown: String,
+}
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct KnowledgeRegenerateInput {
+    operation_id: String,
+    task_id: String,
+    #[serde(default)]
+    expected_task_revision: Option<i64>,
+}
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct KnowledgePublishInput {
+    operation_id: String,
+    task_id: String,
+    draft_revision: i64,
+    expected_content_hash: String,
+    expected_source_hash: String,
 }
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -264,39 +502,6 @@ struct EvidenceRefInput {
 struct EvidenceReadInput {
     items: Vec<EvidenceRefInput>,
 }
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct DraftInput {
-    operation_id: String,
-    session_id: String,
-    completion_event_id: String,
-    #[serde(default)]
-    draft_id: Option<String>,
-    #[serde(default)]
-    expected_draft_revision: Option<i64>,
-    title: String,
-    summary: String,
-    body_markdown: String,
-    #[serde(default)]
-    topic_ids: Vec<String>,
-    #[serde(default)]
-    evidence_refs: Vec<Value>,
-}
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct PublishInput {
-    operation_id: String,
-    draft_id: String,
-    expected_draft_revision: i64,
-    expected_content_hash: String,
-}
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct DeferInput {
-    session_id: String,
-    completion_revision: i64,
-}
-
 fn value(input: impl Serialize) -> Value {
     serde_json::to_value(input).expect("MCP DTO serialization")
 }
@@ -335,17 +540,20 @@ impl WorkTrackingMcpServer {
         })
     }
 
-    fn knowledge_review(
+    async fn governed_task_assistance_review(
         &self,
-        action: &str,
+        action: TaskAssistanceAction,
         input: &Value,
-        modern: bool,
+        context: &RequestContext<RoleServer>,
         state: Option<String>,
         responses: Option<Value>,
     ) -> Result<CallToolResponse, rmcp::ErrorData> {
-        if !modern {
+        if context
+            .protocol_version()
+            .is_none_or(|version| version < ProtocolVersion::V_2026_07_28)
+        {
             let mut result = CallToolResult::structured(
-                json!({"error":{"code":"elicitation_required","message":"Knowledge changes require explicit user review"}}),
+                json!({"error":{"code":"elicitation_required","message":"This governed Task action requires a client with elicitation support"}}),
             );
             result.is_error = Some(true);
             return Ok(result.into());
@@ -356,32 +564,23 @@ impl WorkTrackingMcpServer {
                 .and_then(|v| v.get("decision"))
                 .ok_or_else(|| rmcp::ErrorData::invalid_params("Missing decision", None))?;
             let decision = review_decision(response);
-            let result = if action == "draft" {
-                self.service
-                    .finish_knowledge_draft(&self.connection_id, input, &state, decision)
-            } else if action == "withdraw" {
-                self.service
-                    .finish_withdrawal(&self.connection_id, input, &state, decision)
-            } else {
-                self.service
-                    .finish_publish(&self.connection_id, input, &state, decision)
-            }
-            .map_err(error_data)?;
+            let result = self
+                .service
+                .finish_task_assistance_review(&self.connection_id, action, input, &state, decision)
+                .await
+                .map_err(error_data)?;
             return Ok(CallToolResult::structured(result).into());
         }
-        let review = if action == "draft" {
-            self.service
-                .save_knowledge_draft(&self.connection_id, input)
-        } else if action == "withdraw" {
-            self.service.begin_withdrawal(&self.connection_id, input)
-        } else {
-            self.service.begin_publish(&self.connection_id, input)
-        }
-        .map_err(error_data)?;
+        let review = self
+            .service
+            .start_task_assistance_review(&self.connection_id, action, input)
+            .await
+            .map_err(error_data)?;
         if review["decisionRequired"] != true {
             return Ok(CallToolResult::structured(review).into());
         }
-        let schema=serde_json::from_value(json!({"type":"object","additionalProperties":false,"required":["decision"],"properties":{"decision":{"type":"string","enum":["accept","reject"]}}})).map_err(|error|rmcp::ErrorData::internal_error(error.to_string(),None))?;
+        let schema = serde_json::from_value(json!({"type":"object","additionalProperties":false,"required":["decision"],"properties":{"decision":{"type":"string","enum":["accept","reject"]}}}))
+            .map_err(|error| rmcp::ErrorData::internal_error(error.to_string(), None))?;
         let mut requests = BTreeMap::new();
         requests.insert(
             "decision".into(),
@@ -389,30 +588,34 @@ impl WorkTrackingMcpServer {
                 ElicitRequestParams::FormElicitationParams {
                     meta: None,
                     message: format!(
-                        "{} this exact Knowledge draft?\n{}",
-                        if action == "draft" {
-                            "Save privately"
-                        } else if action=="withdraw" {
-                            "Withdraw from Vault into a recoverable local copy (Completed Work remains unchanged)"
-                        } else {
-                            "Publish to Vault"
-                        },
+                        "Review this exact {} action.\n{}",
+                        task_assistance_action_label(action),
                         review["preview"]
                     ),
                     requested_schema: schema,
                 },
             )),
         );
-        Ok(InputRequiredResult::new(
-            Some(requests),
-            Some(
-                review["reviewState"]
-                    .as_str()
-                    .unwrap_or_default()
-                    .to_owned(),
-            ),
-        )
-        .into())
+        let review_state = review["reviewState"]
+            .as_str()
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                rmcp::ErrorData::internal_error("Governed review did not return review state", None)
+            })?;
+        Ok(InputRequiredResult::new(Some(requests), Some(review_state.to_owned())).into())
+    }
+}
+
+fn task_assistance_action_label(action: TaskAssistanceAction) -> &'static str {
+    match action {
+        TaskAssistanceAction::RefinementDecision => "refinement adoption",
+        TaskAssistanceAction::ReviewDecision => "Current Chat advisory decision",
+        TaskAssistanceAction::KnowledgeDraft => "Knowledge draft",
+        TaskAssistanceAction::KnowledgeCorrection => "Knowledge correction",
+        TaskAssistanceAction::KnowledgeRegenerate => "Knowledge regeneration",
+        TaskAssistanceAction::KnowledgePublish => "Knowledge publication",
+        TaskAssistanceAction::KnowledgeWithdraw => "Knowledge withdrawal",
+        _ => "Task assistance",
     }
 }
 
@@ -420,7 +623,7 @@ impl WorkTrackingMcpServer {
 impl WorkTrackingMcpServer {
     #[tool(
         name = "inbound_work_open",
-        description = "Create or resume a private LLM Wiki work session for this chat"
+        description = "Create/resume a Capture-backed work session, or explicitly continue one authorized existing Task without fabricating a Capture"
     )]
     async fn inbound_work_open(
         &self,
@@ -436,7 +639,7 @@ impl WorkTrackingMcpServer {
                 .is_none_or(|version| version < ProtocolVersion::V_2026_07_28)
             {
                 return Err(rmcp::ErrorData::invalid_params(
-                    "Capture requires elicitation support",
+                    "Work session creation requires elicitation support",
                     None,
                 ));
             }
@@ -444,7 +647,9 @@ impl WorkTrackingMcpServer {
             let response = input_responses
                 .as_ref()
                 .and_then(|items| items.get("decision"))
-                .ok_or_else(|| rmcp::ErrorData::invalid_params("Missing Capture decision", None))?;
+                .ok_or_else(|| {
+                    rmcp::ErrorData::invalid_params("Missing work-session review decision", None)
+                })?;
             let decision = review_decision(response);
             return Ok(CallToolResult::structured(
                 self.service
@@ -465,7 +670,7 @@ impl WorkTrackingMcpServer {
             .is_none_or(|version| version < ProtocolVersion::V_2026_07_28)
         {
             let mut result = CallToolResult::structured(
-                json!({"error":{"code":"elicitation_required","message":"Capture requires a client with elicitation support"}}),
+                json!({"error":{"code":"elicitation_required","message":"Work session creation requires a client with elicitation support"}}),
             );
             result.is_error = Some(true);
             return Ok(result.into());
@@ -477,11 +682,18 @@ impl WorkTrackingMcpServer {
             InputRequest::Elicitation(ElicitRequest::new(
                 ElicitRequestParams::FormElicitationParams {
                     meta: None,
-                    message: format!(
-                        "Save this exact Capture?\n{}\n{}",
-                        result["preview"]["title"].as_str().unwrap_or_default(),
-                        result["preview"]["summary"].as_str().unwrap_or_default()
-                    ),
+                    message: if result["stage"] == "task_continuation" {
+                        format!(
+                            "Continue this exact existing Task without creating a Capture?\n{}",
+                            result["preview"]
+                        )
+                    } else {
+                        format!(
+                            "Save this exact Capture?\n{}\n{}",
+                            result["preview"]["title"].as_str().unwrap_or_default(),
+                            result["preview"]["summary"].as_str().unwrap_or_default()
+                        )
+                    },
                     requested_schema,
                 },
             )),
@@ -544,6 +756,13 @@ impl WorkTrackingMcpServer {
                 .map_err(error_data)?;
             return Ok(CallToolResult::structured(result).into());
         }
+        if let Some(result) = self
+            .service
+            .advance_result_replay(&self.connection_id, &input)
+            .map_err(error_data)?
+        {
+            return Ok(CallToolResult::structured(result).into());
+        }
         let state = self
             .service
             .begin_advance(&self.connection_id, &input)
@@ -576,6 +795,380 @@ impl WorkTrackingMcpServer {
         Parameters(input): Parameters<SessionInput>,
     ) -> Result<Json<Value>, String> {
         self.result(self.service.session(&self.connection_id, &input.session_id))
+    }
+
+    #[tool(
+        name = "task_context_read",
+        description = "Read one scoped Task snapshot: exact revision, readiness, Work Log and comments, checklist, decisions, completion, Problem links and relationships; binary attachments stay local and text is bounded"
+    )]
+    async fn task_context_read(
+        &self,
+        Parameters(input): Parameters<TaskIdInput>,
+    ) -> Result<Json<Value>, String> {
+        self.result(
+            self.service
+                .task_context_read(&self.connection_id, &input.task_id),
+        )
+    }
+
+    #[tool(
+        name = "task_lineage_read",
+        description = "Read immutable canonical Task lineage for one scoped Task; does not create or publish Knowledge"
+    )]
+    async fn task_lineage_read(
+        &self,
+        Parameters(input): Parameters<TaskIdInput>,
+    ) -> Result<Json<Value>, String> {
+        let input = value(input);
+        self.result(
+            self.service
+                .task_assistance(
+                    &self.connection_id,
+                    TaskAssistanceAction::TaskLineage,
+                    &input,
+                )
+                .await,
+        )
+    }
+
+    #[tool(
+        name = "task_refinement_open",
+        description = "Open one existing scoped Task's refinement workspace; this does not create a Task or Capture"
+    )]
+    async fn task_refinement_open(
+        &self,
+        Parameters(input): Parameters<TaskRefinementOpenInput>,
+    ) -> Result<Json<Value>, String> {
+        let input = value(input);
+        self.result(
+            self.service
+                .task_assistance(
+                    &self.connection_id,
+                    TaskAssistanceAction::RefinementOpen,
+                    &input,
+                )
+                .await,
+        )
+    }
+
+    #[tool(
+        name = "task_refinement_get",
+        description = "Read one scoped Task refinement workspace"
+    )]
+    async fn task_refinement_get(
+        &self,
+        Parameters(input): Parameters<TaskIdInput>,
+    ) -> Result<Json<Value>, String> {
+        let input = value(input);
+        self.result(
+            self.service
+                .task_assistance(
+                    &self.connection_id,
+                    TaskAssistanceAction::RefinementGet,
+                    &input,
+                )
+                .await,
+        )
+    }
+
+    #[tool(
+        name = "task_refinement_workspace",
+        description = "Save bounded refinement workspace state for one scoped Task session"
+    )]
+    async fn task_refinement_workspace(
+        &self,
+        Parameters(input): Parameters<RefinementWorkspaceInput>,
+    ) -> Result<Json<Value>, String> {
+        let input = value(input);
+        self.result(
+            self.service
+                .task_assistance(
+                    &self.connection_id,
+                    TaskAssistanceAction::RefinementWorkspace,
+                    &input,
+                )
+                .await,
+        )
+    }
+
+    #[tool(
+        name = "task_refinement_proposals",
+        description = "Read bounded proposals from one scoped refinement session"
+    )]
+    async fn task_refinement_proposals(
+        &self,
+        Parameters(input): Parameters<RefinementSessionInput>,
+    ) -> Result<Json<Value>, String> {
+        let input = value(input);
+        self.result(
+            self.service
+                .task_assistance(
+                    &self.connection_id,
+                    TaskAssistanceAction::RefinementProposals,
+                    &input,
+                )
+                .await,
+        )
+    }
+
+    #[tool(
+        name = "task_refinement_message",
+        description = "Send one bounded message to a scoped Task refinement workspace"
+    )]
+    async fn task_refinement_message(
+        &self,
+        Parameters(input): Parameters<RefinementMessageInput>,
+    ) -> Result<Json<Value>, String> {
+        let input = value(input);
+        self.result(
+            self.service
+                .task_assistance(
+                    &self.connection_id,
+                    TaskAssistanceAction::RefinementMessage,
+                    &input,
+                )
+                .await,
+        )
+    }
+
+    #[tool(
+        name = "task_refinement_decision",
+        description = "Accept, reject, apply, or edit one scoped refinement proposal"
+    )]
+    async fn task_refinement_decision(
+        &self,
+        Parameters(input): Parameters<RefinementDecisionInput>,
+        context: RequestContext<RoleServer>,
+        RequestState(state): RequestState,
+        ToolInputResponses(responses): ToolInputResponses,
+    ) -> Result<CallToolResponse, rmcp::ErrorData> {
+        let input = value(input);
+        self.governed_task_assistance_review(
+            TaskAssistanceAction::RefinementDecision,
+            &input,
+            &context,
+            state,
+            responses.map(value),
+        )
+        .await
+    }
+
+    #[tool(
+        name = "task_advisory_create",
+        description = "Create a provider-free Current Chat advisory for the exact scoped Task revision"
+    )]
+    async fn task_advisory_create(
+        &self,
+        Parameters(input): Parameters<AdvisoryCreateInput>,
+    ) -> Result<Json<Value>, String> {
+        let input = value(input);
+        self.result(
+            self.service
+                .create_current_chat_advisory(&self.connection_id, &input),
+        )
+    }
+
+    #[tool(
+        name = "task_advisory_complete",
+        description = "Persist bounded, cited Current Chat advisory findings; no AI job is started"
+    )]
+    async fn task_advisory_complete(
+        &self,
+        Parameters(input): Parameters<AdvisoryCompleteInput>,
+    ) -> Result<Json<Value>, String> {
+        let input = value(input);
+        self.result(
+            self.service
+                .complete_current_chat_advisory(&self.connection_id, &input),
+        )
+    }
+
+    #[tool(
+        name = "task_advisory_get",
+        description = "Read one scoped Current Chat advisory"
+    )]
+    async fn task_advisory_get(
+        &self,
+        Parameters(input): Parameters<AdvisoryRunInput>,
+    ) -> Result<Json<Value>, String> {
+        let input = value(input);
+        self.result(
+            self.service
+                .task_assistance(&self.connection_id, TaskAssistanceAction::ReviewGet, &input)
+                .await,
+        )
+    }
+
+    #[tool(
+        name = "task_advisory_history",
+        description = "Read Current Chat advisory history for one scoped Task"
+    )]
+    async fn task_advisory_history(
+        &self,
+        Parameters(input): Parameters<TaskIdInput>,
+    ) -> Result<Json<Value>, String> {
+        let input = value(input);
+        self.result(
+            self.service
+                .task_assistance(
+                    &self.connection_id,
+                    TaskAssistanceAction::ReviewHistory,
+                    &input,
+                )
+                .await,
+        )
+    }
+
+    #[tool(
+        name = "task_advisory_cancel",
+        description = "Cancel one queued scoped Current Chat advisory"
+    )]
+    async fn task_advisory_cancel(
+        &self,
+        Parameters(input): Parameters<AdvisoryRunInput>,
+    ) -> Result<Json<Value>, String> {
+        let input = value(input);
+        self.result(
+            self.service
+                .task_assistance(
+                    &self.connection_id,
+                    TaskAssistanceAction::ReviewCancel,
+                    &input,
+                )
+                .await,
+        )
+    }
+
+    #[tool(
+        name = "task_advisory_decision",
+        description = "Record a decision for one cited finding in a scoped Current Chat advisory"
+    )]
+    async fn task_advisory_decision(
+        &self,
+        Parameters(input): Parameters<AdvisoryDecisionInput>,
+        context: RequestContext<RoleServer>,
+        RequestState(state): RequestState,
+        ToolInputResponses(responses): ToolInputResponses,
+    ) -> Result<CallToolResponse, rmcp::ErrorData> {
+        let input = value(input);
+        self.governed_task_assistance_review(
+            TaskAssistanceAction::ReviewDecision,
+            &input,
+            &context,
+            state,
+            responses.map(value),
+        )
+        .await
+    }
+
+    #[tool(
+        name = "task_knowledge_draft",
+        description = "Save supplied Knowledge body with immutable exact Task lineage"
+    )]
+    async fn task_knowledge_draft(
+        &self,
+        Parameters(input): Parameters<KnowledgeDraftInput>,
+        context: RequestContext<RoleServer>,
+        RequestState(state): RequestState,
+        ToolInputResponses(responses): ToolInputResponses,
+    ) -> Result<CallToolResponse, rmcp::ErrorData> {
+        let input = value(input);
+        self.governed_task_assistance_review(
+            TaskAssistanceAction::KnowledgeDraft,
+            &input,
+            &context,
+            state,
+            responses.map(value),
+        )
+        .await
+    }
+
+    #[tool(
+        name = "task_knowledge_correction",
+        description = "Correct one exact Knowledge draft revision and content hash"
+    )]
+    async fn task_knowledge_correction(
+        &self,
+        Parameters(input): Parameters<KnowledgeCorrectionInput>,
+        context: RequestContext<RoleServer>,
+        RequestState(state): RequestState,
+        ToolInputResponses(responses): ToolInputResponses,
+    ) -> Result<CallToolResponse, rmcp::ErrorData> {
+        let input = value(input);
+        self.governed_task_assistance_review(
+            TaskAssistanceAction::KnowledgeCorrection,
+            &input,
+            &context,
+            state,
+            responses.map(value),
+        )
+        .await
+    }
+
+    #[tool(
+        name = "task_knowledge_regenerate",
+        description = "Regenerate Knowledge from the exact scoped Task revision"
+    )]
+    async fn task_knowledge_regenerate(
+        &self,
+        Parameters(input): Parameters<KnowledgeRegenerateInput>,
+        context: RequestContext<RoleServer>,
+        RequestState(state): RequestState,
+        ToolInputResponses(responses): ToolInputResponses,
+    ) -> Result<CallToolResponse, rmcp::ErrorData> {
+        let input = value(input);
+        self.governed_task_assistance_review(
+            TaskAssistanceAction::KnowledgeRegenerate,
+            &input,
+            &context,
+            state,
+            responses.map(value),
+        )
+        .await
+    }
+
+    #[tool(
+        name = "task_knowledge_publish",
+        description = "Publish an exact Knowledge draft only when body and source hashes still match"
+    )]
+    async fn task_knowledge_publish(
+        &self,
+        Parameters(input): Parameters<KnowledgePublishInput>,
+        context: RequestContext<RoleServer>,
+        RequestState(state): RequestState,
+        ToolInputResponses(responses): ToolInputResponses,
+    ) -> Result<CallToolResponse, rmcp::ErrorData> {
+        let input = value(input);
+        self.governed_task_assistance_review(
+            TaskAssistanceAction::KnowledgePublish,
+            &input,
+            &context,
+            state,
+            responses.map(value),
+        )
+        .await
+    }
+
+    #[tool(
+        name = "task_knowledge_withdraw",
+        description = "Withdraw an exact published Knowledge draft only when body and source hashes still match"
+    )]
+    async fn task_knowledge_withdraw(
+        &self,
+        Parameters(input): Parameters<KnowledgePublishInput>,
+        context: RequestContext<RoleServer>,
+        RequestState(state): RequestState,
+        ToolInputResponses(responses): ToolInputResponses,
+    ) -> Result<CallToolResponse, rmcp::ErrorData> {
+        let input = value(input);
+        self.governed_task_assistance_review(
+            TaskAssistanceAction::KnowledgeWithdraw,
+            &input,
+            &context,
+            state,
+            responses.map(value),
+        )
+        .await
     }
 
     #[tool(
@@ -672,85 +1265,68 @@ impl WorkTrackingMcpServer {
 
     #[tool(
         name = "knowledge_draft_save",
-        description = "Save a private append-versioned Knowledge draft from completed work; never publishes"
+        description = "Compatibility alias for saving a reviewed Task Knowledge draft with immutable lineage"
     )]
     async fn knowledge_draft_save(
         &self,
-        Parameters(input): Parameters<DraftInput>,
+        Parameters(input): Parameters<KnowledgeDraftInput>,
         context: RequestContext<RoleServer>,
         RequestState(state): RequestState,
         ToolInputResponses(responses): ToolInputResponses,
     ) -> Result<CallToolResponse, rmcp::ErrorData> {
         let input = value(input);
-        self.knowledge_review(
-            "draft",
+        self.governed_task_assistance_review(
+            TaskAssistanceAction::KnowledgeDraft,
             &input,
-            context
-                .protocol_version()
-                .is_some_and(|v| v >= ProtocolVersion::V_2026_07_28),
+            &context,
             state,
-            responses.map(|v| serde_json::to_value(v).unwrap_or(Value::Null)),
+            responses.map(value),
         )
+        .await
     }
 
     #[tool(
         name = "knowledge_publish",
-        description = "Publish one exact reviewed Knowledge draft revision and hash without content edits"
+        description = "Compatibility alias for publishing one exact reviewed Task Knowledge draft revision and hashes"
     )]
     async fn knowledge_publish(
         &self,
-        Parameters(input): Parameters<PublishInput>,
+        Parameters(input): Parameters<KnowledgePublishInput>,
         context: RequestContext<RoleServer>,
         RequestState(state): RequestState,
         ToolInputResponses(responses): ToolInputResponses,
     ) -> Result<CallToolResponse, rmcp::ErrorData> {
         let input = value(input);
-        self.knowledge_review(
-            "publish",
+        self.governed_task_assistance_review(
+            TaskAssistanceAction::KnowledgePublish,
             &input,
-            context
-                .protocol_version()
-                .is_some_and(|v| v >= ProtocolVersion::V_2026_07_28),
+            &context,
             state,
-            responses.map(|v| serde_json::to_value(v).unwrap_or(Value::Null)),
+            responses.map(value),
         )
-    }
-
-    #[tool(
-        name = "knowledge_publication_defer",
-        description = "Defer the one-time Knowledge publication offer for an exact completion revision"
-    )]
-    async fn knowledge_publication_defer(
-        &self,
-        Parameters(input): Parameters<DeferInput>,
-    ) -> Result<Json<Value>, String> {
-        self.result(self.service.defer_publication(
-            &self.connection_id,
-            &input.session_id,
-            input.completion_revision,
-        ))
+        .await
     }
 
     #[tool(
         name = "knowledge_publication_withdraw",
-        description = "Review withdrawing an exact publication into a recoverable local copy; preserves Completed Work and blocks external changes"
+        description = "Compatibility alias for withdrawing an exact reviewed Task Knowledge publication into a recoverable local copy"
     )]
     async fn knowledge_publication_withdraw(
         &self,
-        Parameters(input): Parameters<PublishInput>,
+        Parameters(input): Parameters<KnowledgePublishInput>,
         context: RequestContext<RoleServer>,
         RequestState(state): RequestState,
         ToolInputResponses(responses): ToolInputResponses,
     ) -> Result<CallToolResponse, rmcp::ErrorData> {
-        self.knowledge_review(
-            "withdraw",
-            &value(input),
-            context
-                .protocol_version()
-                .is_some_and(|v| v >= ProtocolVersion::V_2026_07_28),
+        let input = value(input);
+        self.governed_task_assistance_review(
+            TaskAssistanceAction::KnowledgeWithdraw,
+            &input,
+            &context,
             state,
             responses.map(value),
         )
+        .await
     }
 }
 
@@ -917,5 +1493,33 @@ mod decision_tests {
             review_decision(&json!({"action":"accept","content":{"decision":"accept"}})),
             "accept"
         );
+    }
+
+    #[test]
+    fn governed_task_payloads_reject_client_confirmation_and_unknown_modes() {
+        assert!(serde_json::from_value::<KnowledgeDraftInput>(json!({
+            "operationId":"draft-1",
+            "taskId":"task-1",
+            "expectedTaskRevision":1,
+            "bodyMarkdown":"# Reviewed body",
+            "clientConfirmed":true
+        }))
+        .is_err());
+        assert!(serde_json::from_value::<RefinementDecisionInput>(json!({
+            "operationId":"refine-1",
+            "sessionId":"session-1",
+            "proposalId":"proposal-1",
+            "draftRevision":1,
+            "decision":"approve"
+        }))
+        .is_err());
+        assert!(serde_json::from_value::<AdvisoryDecisionInput>(json!({
+            "operationId":"advisory-1",
+            "runId":"run-1",
+            "findingId":"finding-1",
+            "disposition":"accept",
+            "clientConfirmed":true
+        }))
+        .is_err());
     }
 }

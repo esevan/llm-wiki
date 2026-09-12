@@ -21,7 +21,7 @@ export interface ApplicationClient {
   request(request: ApplicationRequest): Promise<ApplicationResponse>;
 }
 
-export type WorkTrackingStage = 'capture' | 'problem' | 'solution' | 'checkpoint' | 'conflict' | 'completion' | 'knowledge';
+export type WorkTrackingStage = 'capture' | 'task' | 'problem' | 'solution' | 'checkpoint' | 'conflict' | 'completion' | 'knowledge';
 export type WorkTrackingProjection = 'pending_review' | 'queued' | 'claimed' | 'waiting_solution' | 'applied' | 'ignored_late' | 'conflict' | 'failed';
 
 export interface WorkTrackingCardModel {
@@ -42,6 +42,9 @@ export interface WorkTrackingSession {
   headRevision: number;
   state: 'active' | 'completion_proposed' | 'completed';
   publicationState: string;
+  capture?: { id: string; summary: string } | null;
+  linkedWorkflow?: { task?: { id: string; taskId?: string; taskRevision?: number; title: string; state: string; sourceEventId: string }; problem?: { id: string; title: string; state: string; sourceEventId: string } };
+  taskCompletion?: { id: string; taskRevision: number; evidence: string; report: string } | null;
   recentEvents: Array<Record<string, unknown>>;
   nextActions: string[];
 }
@@ -60,7 +63,7 @@ declare global {
     };
     loadBoard: () => Promise<void>;
     openChat?: (
-      type: "captures" | "problems" | "features",
+      type: "captures" | "problems" | "features" | "tasks",
       id: string,
       context?: { problemRevision?: number; sourceTitle?: string },
     ) => void;

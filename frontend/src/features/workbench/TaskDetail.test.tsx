@@ -323,3 +323,31 @@ it("rebases a disjoint refresh before save and lets the user discard overlapping
   expect(control("task-revision-detail")).toHaveValue("External detail");
   expect(control("task-revision-save")).toBeDisabled();
 });
+
+it("keeps Knowledge publication bound to the persisted source hash", async () => {
+    const knowledgeTask = {
+      ...task,
+      state: "completed" as const,
+      publication: {
+        state: "published",
+        draftRevision: 3,
+        contentHash: "body-3",
+        sourceHash: "source-2",
+      },
+    };
+    const request = vi.fn().mockResolvedValue(response(knowledgeTask));
+    window.llmWikiApplication = { request };
+    render(<TaskDetail taskId="task-1" onClose={vi.fn()} onChanged={vi.fn()} />);
+
+    await screen.findByText("Publish approved draft");
+    fireEvent.click(document.querySelector('[data-control="task-knowledge-publish"]')!);
+    await waitFor(() => {
+      const publish = request.mock.calls
+        .map(([input]) => input)
+        .find((input) => input.path.endsWith("/publish"));
+      expect(JSON.parse(publish.body)).toMatchObject({
+        expectedContentHash: "body-3",
+        expectedSourceHash: "source-2",
+      });
+    });
+  });

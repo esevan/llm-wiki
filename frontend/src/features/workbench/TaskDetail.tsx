@@ -45,6 +45,7 @@ export function TaskDetail({
     draftRevision: number;
     bodyMarkdown: string;
     contentHash: string;
+    sourceHash?: string;
     state: string;
   }>();
   const [knowledgeBusy, setKnowledgeBusy] = useState(false);
@@ -134,6 +135,10 @@ export function TaskDetail({
   };
   const correctKnowledge = async () => {
     if (!knowledgeDraft || knowledgeBusy) return;
+    if (!knowledgeDraft.sourceHash) {
+      setError("This Knowledge draft has no source hash. Refresh it before saving a correction.");
+      return;
+    }
     setKnowledgeBusy(true);
     try {
       setKnowledgeDraft(
@@ -141,6 +146,7 @@ export function TaskDetail({
           taskId,
           knowledgeDraft.draftRevision,
           knowledgeDraft.contentHash,
+          knowledgeDraft.sourceHash,
           knowledgeDraft.bodyMarkdown,
         ),
       );
@@ -152,12 +158,17 @@ export function TaskDetail({
   };
   const publishKnowledge = async () => {
     if (!knowledgeDraft || knowledgeBusy) return;
+    if (!knowledgeDraft.sourceHash) {
+      setError("This Knowledge draft has no source hash. Refresh it before publishing.");
+      return;
+    }
     setKnowledgeBusy(true);
     try {
       await taskClient.publish(
         taskId,
         knowledgeDraft.draftRevision,
         knowledgeDraft.contentHash,
+        knowledgeDraft.sourceHash,
       );
       setKnowledgeDraft(undefined);
       await load();
@@ -870,7 +881,7 @@ export function TaskDetail({
             <button
               type="button"
               data-control="task-knowledge-correct"
-              disabled={knowledgeBusy}
+              disabled={knowledgeBusy || !knowledgeDraft.sourceHash}
               aria-busy={knowledgeBusy}
               onClick={() => void correctKnowledge()}
             >
@@ -879,7 +890,7 @@ export function TaskDetail({
             <button
               type="button"
               data-control="task-knowledge-publish"
-              disabled={knowledgeBusy}
+              disabled={knowledgeBusy || !knowledgeDraft.sourceHash}
               onClick={() => void publishKnowledge()}
             >
               {text.publish}
@@ -895,12 +906,14 @@ export function TaskDetail({
             <button
               type="button"
               data-control="task-knowledge-publish"
+              disabled={knowledgeBusy || !task.publication.sourceHash}
               onClick={() =>
                 void taskClient
                   .publish(
                     task.id,
                     task.publication!.draftRevision!,
                     task.publication!.contentHash!,
+                    task.publication!.sourceHash!,
                   )
                   .then(() => load())
                   .catch((e) => setError(String(e.message ?? e)))
@@ -930,11 +943,14 @@ export function TaskDetail({
               <button
                 type="button"
                 data-control="task-knowledge-withdraw"
+                disabled={knowledgeBusy || !task.publication.sourceHash}
                 onClick={() =>
                   void taskClient
                     .withdrawKnowledge(
                       task.id,
                       task.publication!.draftRevision!,
+                      task.publication!.contentHash!,
+                      task.publication!.sourceHash!,
                     )
                     .then(() => load())
                     .catch((e) => setError(String(e.message ?? e)))
