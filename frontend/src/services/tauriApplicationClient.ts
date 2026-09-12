@@ -1,5 +1,7 @@
 import { Channel, invoke } from '@tauri-apps/api/core';
 import type { ApplicationClient, ApplicationRequest, ApplicationResponse } from '../types/application';
+import { taskOperation } from './taskOperation';
+import type { CoverageReport } from '../test/interactionCoverage';
 
 interface NativeResponse {
   status: number;
@@ -18,10 +20,12 @@ export interface DesktopE2eResult {
   steps: string[];
   error: string | null;
   capture?: string | null;
+  coverage?: CoverageReport;
 }
 
 export interface DesktopE2eState {
   providerUrl: string;
+  scenario: string;
   restoreCapture: string | null;
   restoreSteps: string[];
 }
@@ -50,6 +54,9 @@ const operationFor = (request: ApplicationRequest): NativeOperation => {
   )?.[1] ?? 'en';
   const withIds = (name: string, ids: Record<string, string>): NativeOperation => ({ name, input: { ...body, ...ids } });
   let ids: string[] | undefined;
+
+  const task = taskOperation(method, path, body, locale);
+  if (task) return task;
 
   if (method === 'GET' && path === '/health') return { name: 'health.get', input: {} };
   if (method === 'POST' && path === '/index') return { name: 'vault.index', input: {} };

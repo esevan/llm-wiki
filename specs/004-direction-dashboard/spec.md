@@ -1,3 +1,7 @@
+> **Partially superseded for schema 8+**: Direction/category behavior remains, but any Problem/Solution
+> Workbench projection is replaced by canonical Capture/Task/refinement items from
+> [012](../012-task-centered-workbench/spec.md). Worker scoring remains prohibited.
+
 # Feature Specification: Direction Dashboard
 
 **Created**: 2026-08-18

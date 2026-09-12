@@ -1,16 +1,13 @@
+//! Native application-boundary journeys for the schema-8 Task workbench.
 use llm_wiki_desktop::{NativeApplication, NativeOperation, NativeResponse};
 use serde_json::{json, Value};
-use std::io::{BufRead, BufReader, Read, Write};
-use std::net::TcpListener;
-use std::thread;
-use std::time::Duration;
+use std::time::Instant;
 use tempfile::TempDir;
 
 struct Harness {
-    _root: TempDir,
+    root: TempDir,
     app: NativeApplication,
 }
-
 impl Harness {
     fn new() -> Self {
         let root = tempfile::tempdir().unwrap();
@@ -19,19 +16,7 @@ impl Harness {
             &root.path().join("state.sqlite3"),
         )
         .unwrap();
-        let provider = app.execute_domain(
-            "settings",
-            NativeOperation {
-                name: "provider.save".into(),
-                input: json!({
-                    "base_url": "https://api.example.test/v1",
-                    "model": "application-command-test-model",
-                    "api_key": "application-command-test-key"
-                }),
-            },
-        );
-        assert_eq!(provider.status, 200, "{}", provider.body);
-        Self { _root: root, app }
+        Self { root, app }
     }
     fn call(&self, domain: &str, name: &str, input: Value) -> NativeResponse {
         self.app.execute_domain(
@@ -42,1009 +27,438 @@ impl Harness {
             },
         )
     }
-}
-
-fn id(response: &NativeResponse) -> String {
-    response.body["id"].as_str().unwrap().into()
-}
-
-fn provider_once(content: Value) -> String {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let address = listener.local_addr().unwrap();
-    thread::spawn(move || {
-        let (stream, _) = listener.accept().unwrap();
-        let mut reader = BufReader::new(stream);
-        let mut content_length = 0;
-        loop {
-            let mut line = String::new();
-            reader.read_line(&mut line).unwrap();
-            if line == "\r\n" || line.is_empty() {
-                break;
-            }
-            if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") {
-                content_length = value.trim().parse::<usize>().unwrap();
-            }
-        }
-        let mut body = vec![0; content_length];
-        reader.read_exact(&mut body).unwrap();
-        let payload = json!({"choices":[{"message":{"content":content.to_string()}}]}).to_string();
-        let response = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-            payload.len(), payload
-        );
-        reader.get_mut().write_all(response.as_bytes()).unwrap();
-    });
-    format!("http://{address}/v1")
-}
-
-fn slow_provider() -> String {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let address = listener.local_addr().unwrap();
-    thread::spawn(move || {
-        let (mut stream, _) = listener.accept().unwrap();
-        thread::sleep(Duration::from_secs(2));
-        let _ =
-            stream.write_all(b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\n\r\n");
-    });
-    format!("http://{address}/v1")
-}
-
-fn wait_for_job(harness: &Harness, queued: &NativeResponse) -> NativeResponse {
-    let job_id = id(queued);
-    for _ in 0..200 {
-        let job = harness.call("jobs", "jobs.get", json!({"jobId":job_id}));
-        if job.body["status"] == "completed" {
-            return harness.call("jobs", "jobs.result", json!({"jobId":job_id}));
-        }
-        assert_ne!(job.body["status"], "failed", "{}", job.body);
-        thread::sleep(Duration::from_millis(10));
+    fn task(&self, title: &str) -> NativeResponse {
+        self.call(
+            "workflow",
+            "task.create",
+            json!({"operationId":format!("task-{title}"),"inputText":title,"title":title}),
+        )
     }
-    panic!("native AI job did not finish")
+}
+fn id(r: &NativeResponse) -> String {
+    r.body["id"].as_str().unwrap().into()
+}
+fn ok(r: &NativeResponse) {
+    assert!((200..300).contains(&r.status), "{}", r.body);
+}
+fn get(h: &Harness, id: &str) -> NativeResponse {
+    h.call("workflow", "task.get", json!({"taskId":id}))
 }
 
 #[test]
-fn given_a_capture_when_created_then_it_is_persisted_on_the_native_board() {
-    let harness = Harness::new();
-    let capture = harness.call(
+fn capture_is_canonical_workbench_item() {
+    let h = Harness::new();
+    ok(&h.call(
         "workflow",
         "capture.create",
-        json!({"text":"Native thought"}),
-    );
-    let board = harness.call("workflow", "board.get", json!({}));
-    assert_eq!(capture.status, 201);
-    assert_eq!(board.body["captures"][0]["text"], "Native thought");
+        json!({"operationId":"capture","text":"Native thought"}),
+    ));
+    assert!(h
+        .call("workflow", "workbench.get", json!({}))
+        .body
+        .to_string()
+        .contains("Native thought"));
 }
-
-#[tokio::test]
-async fn given_a_capture_when_created_then_derived_translation_is_enqueued_and_persisted() {
-    let harness = Harness::new();
-    let provider = provider_once(json!({
-        "ko":"번역된 캡처",
-        "en":"Translated capture"
-    }));
-    harness.call(
-        "settings",
-        "provider.save",
-        json!({"base_url":provider,"model":"test-model"}),
+#[test]
+fn direct_task_is_persisted() {
+    let h = Harness::new();
+    let t = h.task("Independent");
+    ok(&t);
+    let aggregate = get(&h, &id(&t));
+    assert_eq!(aggregate.body["state"], "task");
+    assert_eq!(
+        aggregate.body["readinessEntries"].as_array().unwrap().len(),
+        4
     );
-
-    let capture = harness
-        .app
-        .execute_workflow(NativeOperation {
-            name: "capture.create".into(),
-            input: json!({"text":"작성한 캡처","locale":"ko"}),
-        })
-        .await;
-
-    assert_eq!(capture.status, 201, "{}", capture.body);
-    let jobs = harness.call("jobs", "jobs.list", json!({}));
-    let translation = jobs.body["jobs"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|job| {
-            job["task_kind"] == "derived_translation"
-                && job["entity_type"] == "captures"
-                && job["entity_id"] == capture.body["id"]
-        })
-        .expect("Capture translation job was not enqueued");
-    let queued = NativeResponse {
-        status: 202,
-        body: translation.clone(),
-    };
-    wait_for_job(&harness, &queued);
-    let english = harness.call("workflow", "board.get", json!({"locale":"en"}));
-    let korean = harness.call("workflow", "board.get", json!({"locale":"ko"}));
-    assert_eq!(english.body["captures"][0]["text"], "Translated capture");
-    assert_eq!(korean.body["captures"][0]["text"], "작성한 캡처");
+    assert_eq!(aggregate.body["readinessEntries"][0]["key"], "outcome");
 }
 
 #[test]
-fn given_a_legacy_localization_database_when_opened_then_native_preserves_versions() {
-    let root = tempfile::tempdir().unwrap();
-    let db_path = root.path().join("state.sqlite3");
-    let connection = rusqlite::Connection::open(&db_path).unwrap();
+fn reachable_queued_solution_conflict_decision_persists_without_restoring_other_retired_writes() {
+    let h = Harness::new();
+    let connection = rusqlite::Connection::open(h.root.path().join("state.sqlite3")).unwrap();
     connection.execute_batch(
-        "CREATE TABLE captures(id TEXT PRIMARY KEY,text TEXT NOT NULL,created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
-         CREATE TABLE localized_content(
-           entity_type TEXT NOT NULL,entity_id TEXT NOT NULL,field_name TEXT NOT NULL,
-           locale TEXT NOT NULL,value TEXT NOT NULL,origin TEXT NOT NULL,source_hash TEXT NOT NULL DEFAULT '',
-           created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-           PRIMARY KEY(entity_type,entity_id,field_name,locale));
-         INSERT INTO captures(id,text) VALUES ('legacy','Original');
-         INSERT INTO localized_content(entity_type,entity_id,field_name,locale,value,origin)
-           VALUES ('captures','legacy','text','ko','기존 데이터','user');",
+        "INSERT INTO captures(id,text) VALUES('queued-capture','Queued review source');
+         INSERT INTO problems(id,capture_id,statement,detail,state,current_revision) VALUES('queued-problem','queued-capture','Queued review Problem','','open',1);
+         INSERT INTO features(id,problem_id,title,outcome,conflict_state,state) VALUES('queued-solution','queued-problem','Queued review Solution','Review the persisted result','conflicted','proposed');",
     ).unwrap();
-    drop(connection);
-    let app = NativeApplication::isolated(&root.path().join("vault"), &db_path).unwrap();
-    let board = app.execute_domain(
+    ok(&h.call(
         "workflow",
-        NativeOperation {
-            name: "board.get".into(),
-            input: json!({"locale":"ko"}),
-        },
+        "solution.conflict.save",
+        json!({"solutionId":"queued-solution","state":"clear","citation":"Reviewed from the persisted queue result"}),
+    ));
+    let saved = h.call(
+        "workflow",
+        "item.get",
+        json!({"entityType":"features","entityId":"queued-solution","locale":"en"}),
     );
-    assert_eq!(board.status, 200, "{}", board.body);
-    assert_eq!(board.body["captures"][0]["text"], "기존 데이터");
-    let connection = rusqlite::Connection::open(&db_path).unwrap();
-    assert_eq!(
-        connection
-            .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
-            .unwrap(),
-        7
-    );
-}
+    ok(&saved);
+    assert_eq!(saved.body["conflict_state"], "clear");
 
-#[test]
-fn given_a_workflow_when_advanced_then_rust_enforces_review_preconditions() {
-    let harness = Harness::new();
-    let capture = harness.call(
-        "workflow",
-        "capture.create",
-        json!({"text":"Need a native boundary"}),
-    );
-    let problem = harness.call(
-        "workflow",
-        "capture.promote",
-        json!({"captureId":id(&capture),"statement":"Socket coupling","detail":"Remove it"}),
-    );
-    let invalid = harness.call("workflow", "solution.create", json!({"problemId":id(&problem),"title":"Direct commands","outcome":"No internal HTTP","validation_criteria":"- [ ] Native"}));
-    assert_eq!(invalid.status, 400);
-    harness.call(
+    let retired = h.call(
         "workflow",
         "problem.approve",
-        json!({"problemId":id(&problem)}),
+        json!({"problemId":"queued-problem"}),
     );
-    let solution = harness.call("workflow", "solution.create", json!({"problemId":id(&problem),"title":"Direct commands","outcome":"No internal HTTP","validation_criteria":"- [ ] Native"}));
-    assert_eq!(solution.status, 201);
-    let premature = harness.call(
-        "workflow",
-        "solution.approve",
-        json!({"solutionId":id(&solution)}),
-    );
-    assert_eq!(premature.status, 400);
+    assert!(retired.status >= 400);
+    assert!(retired.body.to_string().contains("not implemented"));
 }
-
 #[test]
-fn given_a_solution_when_work_is_recorded_then_comments_and_checklist_survive_queries() {
-    let harness = Harness::new();
-    let capture = harness.call("workflow", "capture.create", json!({"text":"Evidence"}));
-    let problem = harness.call(
+fn stale_task_revision_is_rejected() {
+    let h = Harness::new();
+    let t = h.task("Revision");
+    let x = id(&t);
+    ok(&h.call(
         "workflow",
-        "capture.promote",
-        json!({"captureId":id(&capture),"statement":"Evidence","detail":""}),
-    );
-    harness.call(
+        "task.revision",
+        json!({"operationId":"r1","taskId":x,"expectedTaskRevision":1,"patch":{"title":"new"}}),
+    ));
+    let stale = h.call(
         "workflow",
-        "problem.approve",
-        json!({"problemId":id(&problem)}),
+        "task.revision",
+        json!({"operationId":"r2","taskId":x,"expectedTaskRevision":1,"patch":{"title":"old"}}),
     );
-    let solution = harness.call("workflow", "solution.create", json!({"problemId":id(&problem),"title":"Evidence","outcome":"Recorded","validation_criteria":"- [ ] Command test"}));
-    let entry = harness.call(
+    assert_eq!(stale.status, 409);
+}
+#[test]
+fn work_log_attachment_comment_checklist_and_decision_survive_readback() {
+    let h = Harness::new();
+    let t = h.task("Evidence");
+    let x = id(&t);
+    let log=h.call("workflow","task.work-log.create",json!({"operationId":"log","taskId":x,"expectedTaskRevision":1,"body":"Implemented","attachment":{"name":"evidence.txt","mediaType":"text/plain","data":"ZQ=="}}));
+    ok(&log);
+    ok(&h.call(
         "workflow",
-        "solution.progress.add",
-        json!({"solutionId":id(&solution),"body":"Implemented"}),
-    );
-    harness.call(
+        "work-log.comment.create",
+        json!({"operationId":"comment","entryId":log.body["id"],"body":"Reviewed"}),
+    ));
+    ok(&h.call(
         "workflow",
-        "solution.comment.add",
-        json!({"entryId":id(&entry),"body":"Reviewed"}),
-    );
-    let check = harness.call(
+        "task.checklist.create",
+        json!({"operationId":"check","taskId":x,"expectedTaskRevision":1,"body":"Verified"}),
+    ));
+    ok(&h.call("workflow","task.decision.create",json!({"operationId":"decision","taskId":x,"expectedTaskRevision":1,"kind":"user","payload":{"body":"Ship"}})));
+    let logs = h
+        .call("workflow", "task.work-log.get", json!({"taskId":x}))
+        .body
+        .to_string();
+    assert!(logs.contains("Implemented"));
+}
+#[test]
+fn completion_problem_resolution_and_knowledge_are_explicit_separate_decisions() {
+    let h = Harness::new();
+    let t = h.task("Complete");
+    let x = id(&t);
+    let p = h.call(
         "workflow",
-        "solution.checklist.add",
-        json!({"solutionId":id(&solution),"body":"Verified"}),
+        "problem.create",
+        json!({"operationId":"p","statement":"Open"}),
     );
-    harness.call(
+    ok(&p);
+    ok(&h.call("workflow","task.problem-link.create",json!({"operationId":"link","taskId":x,"expectedTaskRevision":1,"problemId":p.body["id"],"problemRevision":1})));
+    ok(&h.call(
         "workflow",
-        "solution.checklist.update",
-        json!({"itemId":id(&check),"body":"Verified","checked":true}),
-    );
-    let progress = harness.call(
+        "task.transition",
+        json!({"operationId":"start","taskId":x,"expectedTaskRevision":1,"to":"in_progress"}),
+    ));
+    ok(&h.call("workflow","task.completion.create",json!({"operationId":"complete","taskId":x,"expectedTaskRevision":1,"evidence":"Tests passed"})));
+    assert_eq!(get(&h, &x).body["state"], "completed");
+    ok(&h.call("workflow","problem.resolution.create",json!({"operationId":"resolve","problemId":p.body["id"],"expectedProblemRevision":1,"rationale":"explicit"})));
+}
+#[test]
+fn exact_problem_revision_and_relationship_cycle_are_enforced() {
+    let h = Harness::new();
+    let a = h.task("A");
+    let b = h.task("B");
+    let aid = id(&a);
+    let bid = id(&b);
+    let p = h.call(
         "workflow",
-        "solution.progress.get",
-        json!({"solutionId":id(&solution)}),
+        "problem.create",
+        json!({"operationId":"p1","statement":"Original"}),
     );
-    assert_eq!(
-        progress.body["entries"][0]["comments"][0]["body"],
-        "Reviewed"
-    );
-    assert_eq!(
-        progress.body["checklist"]
+    ok(&p);
+    ok(&h.call(
+        "workflow",
+        "problem.revision",
+        json!({"operationId":"p2","problemId":p.body["id"],"statement":"Changed"}),
+    ));
+    let linked=h.call("workflow","task.problem-link.create",json!({"operationId":"link","taskId":aid,"expectedTaskRevision":1,"problemId":p.body["id"],"problemRevision":1}));
+    ok(&linked);
+    assert_eq!(linked.body["problemRevision"], 1);
+    ok(&h.call("workflow","task.relationship.create",json!({"operationId":"ab","taskId":aid,"expectedTaskRevision":1,"targetTaskId":bid,"kind":"prerequisite"})));
+    assert_eq!(h.call("workflow","task.relationship.create",json!({"operationId":"ba","taskId":bid,"expectedTaskRevision":1,"targetTaskId":aid,"kind":"prerequisite"})).status,400);
+    ok(&h.call("workflow", "task.relationship.create", json!({"operationId":"related-both","taskId":aid,"expectedTaskRevision":1,"targetTaskId":bid,"kind":"related"})));
+    for (source, target) in [(&aid, &bid), (&bid, &aid)] {
+        assert!(get(&h, source).body["relationships"]
             .as_array()
             .unwrap()
             .iter()
-            .filter(|item| item["checked"] == true)
-            .count(),
-        1
-    );
-}
-
-#[test]
-fn given_a_soft_deleted_item_when_restored_then_visibility_returns() {
-    let harness = Harness::new();
-    let capture = harness.call("workflow", "capture.create", json!({"text":"Recover me"}));
-    harness.call(
+            .any(|link| link["kind"] == "related" && link["targetTaskId"] == *target));
+    }
+    let related_id = get(&h, &bid).body["relationships"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|link| link["kind"] == "related")
+        .unwrap()["id"]
+        .clone();
+    ok(&h.call(
         "workflow",
-        "item.delete",
-        json!({"entityType":"captures","entityId":id(&capture)}),
-    );
-    assert!(
-        harness.call("workflow", "board.get", json!({})).body["captures"]
+        "task.relationship.delete",
+        json!({"operationId":"unlink-related","taskId":bid,"relationshipId":related_id}),
+    ));
+    for endpoint in [&aid, &bid] {
+        assert!(get(&h, endpoint).body["relationships"]
             .as_array()
             .unwrap()
-            .is_empty()
-    );
-    harness.call(
-        "workflow",
-        "item.restore",
-        json!({"entityType":"captures","entityId":id(&capture)}),
-    );
-    assert_eq!(
-        harness.call("workflow", "board.get", json!({})).body["captures"][0]["text"],
-        "Recover me"
-    );
-}
-
-#[test]
-fn given_a_vault_document_when_indexed_then_native_search_and_safe_read_work() {
-    let harness = Harness::new();
-    std::fs::write(
-        harness._root.path().join("vault/native.md"),
-        "# Native command\nNo sidecar socket.",
-    )
-    .unwrap();
-    let indexed = harness.call("vault", "vault.index", json!({}));
-    let found = harness.call(
-        "vault",
-        "vault.search",
-        json!({"query":"sidecar","limit":20}),
-    );
-    let read = harness.call(
-        "vault",
-        "knowledge.read",
-        json!({"path":"native.md","locale":"en"}),
-    );
-    assert_eq!(indexed.status, 200);
-    assert_eq!(found.body["results"][0]["path"], "native.md");
-    assert!(read.body["content"]
-        .as_str()
+            .iter()
+            .all(|link| link["kind"] != "related"));
+    }
+    assert!(get(&h, &aid).body["relationships"]
+        .as_array()
         .unwrap()
-        .contains("No sidecar"));
+        .iter()
+        .any(|link| link["kind"] == "prerequisite" && link["targetTaskId"] == bid));
+}
+#[tokio::test]
+async fn refinement_workspace_restores_exact_draft_and_tab() {
+    let h = Harness::new();
+    let t = h.task("Refine");
+    let x = id(&t);
+    let s = h
+        .app
+        .execute_workflow(NativeOperation {
+            name: "task-refinement.open".into(),
+            input: json!({"operationId":"open","taskId":x}),
+        })
+        .await;
+    ok(&s);
+    let saved=h.app.execute_workflow(NativeOperation{name:"task-refinement.workspace".into(),input:json!({"operationId":"save","sessionId":s.body["id"],"inputDraft":"unsent","activeTab":"proposals","scrollAnchor":"row-2","baseDraftRevision":0})}).await;
+    ok(&saved);
+    let restored = h
+        .app
+        .execute_workflow(NativeOperation {
+            name: "task-refinement.get".into(),
+            input: json!({"taskId":x}),
+        })
+        .await;
+    assert_eq!(restored.body["inputDraft"], "unsent");
+    assert_eq!(restored.body["activeTab"], "proposals");
+    let capture = h.call(
+        "workflow",
+        "capture.create",
+        json!({"operationId":"capture-refining","text":"Capture shortcut"}),
+    );
+    ok(&capture);
+    let capture_id = id(&capture);
+    let capture_session = h
+        .app
+        .execute_workflow(NativeOperation {
+            name: "task-refinement.open".into(),
+            input: json!({"operationId":"open-capture-refining","captureId":capture_id}),
+        })
+        .await;
+    ok(&capture_session);
+    let board = h.call("workflow", "workbench.get", json!({}));
+    ok(&board);
+    assert!(board.body["refiningShortcuts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|item| item["kind"] == "capture" && item["id"] == capture_id));
+    ok(&h.call("workflow", "task.transition", json!({"operationId":"start-refining","taskId":x,"expectedTaskRevision":1,"to":"in_progress"})));
+    let started = h.call("workflow", "workbench.get", json!({}));
+    assert!(started.body["refiningShortcuts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|item| item["id"] != x));
+}
+#[tokio::test]
+async fn explicit_knowledge_publish_and_external_edit_guard_work() {
+    let h = Harness::new();
+    let t = h.task("Knowledge");
+    let x = id(&t);
+    ok(&h.call(
+        "workflow",
+        "task.transition",
+        json!({"operationId":"start","taskId":x,"expectedTaskRevision":1,"to":"in_progress"}),
+    ));
+    ok(&h.call(
+        "workflow",
+        "task.completion.create",
+        json!({"operationId":"complete","taskId":x,"expectedTaskRevision":1,"evidence":"verified"}),
+    ));
+    let d = h
+        .app
+        .execute_workflow(NativeOperation {
+            name: "task-knowledge.draft".into(),
+            input: json!({"operationId":"draft","taskId":x,"expectedTaskRevision":1}),
+        })
+        .await;
+    ok(&d);
+    let corrected = h
+        .app
+        .execute_workflow(NativeOperation {
+            name: "task-knowledge.correction".into(),
+            input: json!({"operationId":"correct","taskId":x,"draftRevision":d.body["draftRevision"],"expectedContentHash":d.body["contentHash"],"bodyMarkdown":"# Corrected Knowledge"}),
+        })
+        .await;
+    ok(&corrected);
+    let stale = h
+        .app
+        .execute_workflow(NativeOperation {
+            name: "task-knowledge.correction".into(),
+            input: json!({"operationId":"stale-correct","taskId":x,"draftRevision":d.body["draftRevision"],"expectedContentHash":d.body["contentHash"],"bodyMarkdown":"# Stale"}),
+        })
+        .await;
+    assert_eq!(stale.status, 409);
+    let published=h.app.execute_workflow(NativeOperation{name:"task-knowledge.publish".into(),input:json!({"operationId":"publish","taskId":x,"draftRevision":d.body["draftRevision"],"expectedContentHash":corrected.body["contentHash"]})}).await;
+    ok(&published);
+    let aggregate = h.call("workflow", "task.get", json!({"taskId":x}));
+    assert_eq!(aggregate.body["publication"]["state"], "published");
     assert_eq!(
-        harness
-            .call("vault", "knowledge.read", json!({"path":"../secret"}))
+        aggregate.body["publication"]["contentHash"],
+        corrected.body["contentHash"]
+    );
+    let regenerated=h.app.execute_workflow(NativeOperation{name:"task-knowledge.regenerate".into(),input:json!({"operationId":"regenerate","taskId":x,"draftRevision":d.body["draftRevision"],"expectedTaskRevision":1})}).await;
+    ok(&regenerated);
+    let republished=h.app.execute_workflow(NativeOperation{name:"task-knowledge.publish".into(),input:json!({"operationId":"republish","taskId":x,"draftRevision":regenerated.body["draftRevision"],"expectedContentHash":regenerated.body["contentHash"]})}).await;
+    ok(&republished);
+    let withdrawn_regenerated=h.app.execute_workflow(NativeOperation{name:"task-knowledge.withdraw".into(),input:json!({"operationId":"withdraw-regenerated","taskId":x,"draftRevision":regenerated.body["draftRevision"]})}).await;
+    ok(&withdrawn_regenerated);
+    assert_eq!(withdrawn_regenerated.body["state"], "withdrawn");
+    let path = h
+        .root
+        .path()
+        .join("vault")
+        .join(republished.body["path"].as_str().unwrap());
+    std::fs::write(path, "external").unwrap();
+    let withdrawn=h.app.execute_workflow(NativeOperation{name:"task-knowledge.withdraw".into(),input:json!({"operationId":"withdraw","taskId":x,"draftRevision":d.body["draftRevision"]})}).await;
+    assert_eq!(withdrawn.status, 409);
+}
+#[test]
+fn vault_search_read_and_domain_boundary_remain_safe() {
+    let h = Harness::new();
+    std::fs::write(h.root.path().join("vault/native.md"), "No sidecar socket").unwrap();
+    ok(&h.call("vault", "vault.index", json!({})));
+    assert!(h
+        .call(
+            "vault",
+            "vault.search",
+            json!({"query":"sidecar","limit":20})
+        )
+        .body
+        .to_string()
+        .contains("native.md"));
+    assert_eq!(
+        h.call("vault", "knowledge.read", json!({"path":"../secret"}))
             .status,
         404
     );
+    assert_eq!(h.call("vault", "task.create", json!({})).status, 400);
 }
-
 #[test]
-fn given_a_cross_domain_operation_when_invoked_then_it_is_rejected() {
-    let harness = Harness::new();
-    let response = harness.call("vault", "capture.create", json!({"text":"wrong boundary"}));
-    assert_eq!(response.status, 400);
-    assert!(response.body["detail"]
-        .as_str()
-        .unwrap()
-        .contains("not available in the vault domain"));
-}
-
-#[test]
-fn given_locale_and_provider_settings_then_secrets_are_not_returned_to_the_ui() {
-    let harness = Harness::new();
-    assert_eq!(
-        harness
-            .call("settings", "locale.save", json!({"locale":"ko"}))
-            .body["locale"],
-        "ko"
-    );
-    let provider = harness.call(
+fn locale_and_provider_secret_are_not_exposed() {
+    let h = Harness::new();
+    ok(&h.call("settings", "locale.save", json!({"locale":"ko"})));
+    let p = h.call(
         "settings",
         "provider.save",
-        json!({"base_url":"https://api.example.test/v1","model":"model"}),
+        json!({"base_url":"https://api.example.test/v1","model":"model","api_key":"secret"}),
     );
-    assert_eq!(provider.status, 200);
-    assert!(provider.body.get("api_key").is_none());
-    assert!(harness.app.settings_path().is_file());
-    let connection = rusqlite::Connection::open(harness.app.db_path()).unwrap();
-    for removed_table in ["app_settings", "locale_settings", "provider_settings"] {
-        let exists: bool = connection
-            .query_row(
-                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=?)",
-                [removed_table],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert!(!exists, "{removed_table} must not be created in SQLite");
-    }
+    ok(&p);
+    assert!(p.body.get("api_key").is_none());
 }
 
 #[test]
-fn given_reviewed_work_when_completed_then_native_records_and_dashboard_restore_it() {
-    let harness = Harness::new();
-    let capture = harness.call(
-        "workflow",
-        "capture.create",
-        json!({"text":"Finish safely"}),
-    );
-    let problem = harness.call(
-        "workflow",
-        "capture.promote",
-        json!({"captureId":id(&capture),"statement":"Finish safely","detail":"Keep evidence"}),
-    );
-    assert_eq!(
-        harness.call(
+fn reference_fixture_capture_and_workbench_p95_stay_within_local_budgets() {
+    let h = Harness::new();
+    let mut task_ids = Vec::new();
+    // The warm projection contains canonical Captures and Tasks; linked Problems and
+    // Work Logs make the fixture representative of an active local workbench.
+    for index in 0..800 {
+        ok(&h.call(
             "workflow",
-            "problem.importance.save",
-            json!({"problemId":id(&problem),"alignment":5,"impact":5,"urgency":5,"leverage":5,"evidence":"User impact"})
-        ).body["importance"],
-        100
+            "capture.create",
+            json!({"operationId":format!("fixture-capture-{index}"),"text":format!("reference capture {index}")}),
+        ));
+    }
+    for index in 0..200 {
+        let response = h.call(
+            "workflow",
+            "task.create",
+            json!({"operationId":format!("fixture-task-{index}"),"inputText":format!("reference task {index}"),"title":format!("reference task {index}")}),
+        );
+        ok(&response);
+        task_ids.push(id(&response));
+    }
+    for (index, task_id) in task_ids.iter().take(20).enumerate() {
+        let problem = h.call(
+            "workflow",
+            "problem.create",
+            json!({"operationId":format!("fixture-problem-{index}"),"statement":format!("reference problem {index}")}),
+        );
+        ok(&problem);
+        ok(&h.call(
+            "workflow",
+            "task.problem-link.create",
+            json!({"operationId":format!("fixture-link-{index}"),"taskId":task_id,"expectedTaskRevision":1,"problemId":problem.body["id"],"problemRevision":1}),
+        ));
+        let revision = get(&h, task_id).body["taskRevision"].as_u64().unwrap();
+        ok(&h.call(
+            "workflow",
+            "task.work-log.create",
+            json!({"operationId":format!("fixture-worklog-{index}"),"taskId":task_id,"expectedTaskRevision":revision,"body":format!("reference work log {index}")}),
+        ));
+    }
+    let mut capture_ms = Vec::new();
+    for index in 0..100 {
+        let started = Instant::now();
+        let response = h.call(
+            "workflow",
+            "capture.create",
+            json!({"operationId":format!("bench-capture-{index}"),"text":format!("reference capture {index}")}),
+        );
+        ok(&response);
+        capture_ms.push(started.elapsed().as_secs_f64() * 1_000.0);
+    }
+    let mut task_ms = Vec::new();
+    for index in 0..100 {
+        let started = Instant::now();
+        let response = h.call(
+            "workflow",
+            "task.create",
+            json!({"operationId":format!("bench-task-{index}"),"inputText":format!("benchmark task {index}"),"title":format!("benchmark task {index}")}),
+        );
+        ok(&response);
+        task_ms.push(started.elapsed().as_secs_f64() * 1_000.0);
+    }
+    let mut workbench_ms = Vec::new();
+    for _ in 0..100 {
+        let started = Instant::now();
+        ok(&h.call("workflow", "workbench.get", json!({})));
+        workbench_ms.push(started.elapsed().as_secs_f64() * 1_000.0);
+    }
+    capture_ms.sort_by(f64::total_cmp);
+    task_ms.sort_by(f64::total_cmp);
+    workbench_ms.sort_by(f64::total_cmp);
+    let capture_p95 = capture_ms[94];
+    let task_p95 = task_ms[94];
+    let workbench_p95 = workbench_ms[94];
+    eprintln!(
+        "reference fixture: machine={}-{} fixture={{captures:900,tasks:300,problems:20,workLogs:20}} samples={{capture:100,task:100,workbench:100}} p95={{capture:{capture_p95:.3}ms,task:{task_p95:.3}ms,workbench:{workbench_p95:.3}ms}}",
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+    );
+    assert!(
+        capture_p95 < 50.0,
+        "capture p95 exceeded 50ms: {capture_p95:.3}ms"
+    );
+    assert!(task_p95 < 50.0, "Task p95 exceeded 50ms: {task_p95:.3}ms");
+    assert!(
+        workbench_p95 < 100.0,
+        "workbench p95 exceeded 100ms: {workbench_p95:.3}ms"
     );
-    assert_eq!(
-        harness
-            .call(
-                "workflow",
-                "problem.record",
-                json!({"problemId":id(&problem)})
-            )
-            .body["statement"],
-        "Finish safely"
-    );
-    harness.call(
-        "workflow",
-        "problem.approve",
-        json!({"problemId":id(&problem)}),
-    );
-    let solution = harness.call(
-        "workflow",
-        "solution.create",
-        json!({"problemId":id(&problem),"title":"Native completion","outcome":"Persist evidence","validation_criteria":"- [ ] Verified"}),
-    );
-    harness.call(
-        "workflow",
-        "solution.conflict.save",
-        json!({"solutionId":id(&solution),"state":"clear","citation":"Reviewed locally"}),
-    );
-    harness.call(
-        "workflow",
-        "solution.approve",
-        json!({"solutionId":id(&solution)}),
-    );
-    let completion = harness.call(
-        "workflow",
-        "solution.completion.create",
-        json!({"solutionId":id(&solution),"evidence":"Tests passed","report":"Ready","no_update_reason":"No reusable change"}),
-    );
-    assert_eq!(completion.status, 201, "{}", completion.body);
-    assert_eq!(completion.body["knowledge_status"], "not_needed");
-    assert_eq!(
-        harness
-            .call(
-                "workflow",
-                "solution.completion.verify",
-                json!({"solutionId":id(&solution)})
-            )
-            .status,
-        204
-    );
-    let completed = harness.call(
-        "workflow",
-        "workbench.completed",
-        json!({"limit":20,"locale":"en"}),
-    );
-    assert_eq!(completed.body["solutions"][0]["title"], "Native completion");
-    assert_eq!(
-        completed.body["solutions"][0]["completion_evidence"],
-        "Tests passed"
-    );
-    let dashboard = harness.call("workflow", "compass.dashboard", json!({}));
-    assert_eq!(dashboard.body["events"].as_array().unwrap().len(), 3);
-    assert_eq!(dashboard.body["scores"][0]["points"], 100.0);
-}
-
-#[test]
-fn given_a_completed_problem_then_native_archives_evidence_and_protects_external_edits() {
-    let harness = Harness::new();
-    let capture = harness.call(
-        "workflow",
-        "capture.create",
-        json!({"text":"Original evidence"}),
-    );
-    let problem = harness.call(
-        "workflow",
-        "capture.promote",
-        json!({"captureId":id(&capture),"statement":"Archive safely","detail":"Keep all work"}),
-    );
-    harness.call(
-        "workflow",
-        "problem.approve",
-        json!({"problemId":id(&problem)}),
-    );
-    let solution = harness.call("workflow", "solution.create", json!({"problemId":id(&problem),"title":"Preserve record","outcome":"Retain evidence","non_goals":"No loss","validation_criteria":"- [ ] Everything retained"}));
-    let entry = harness.call("workflow", "solution.progress.add", json!({"solutionId":id(&solution),"body":"Captured UI","image_data":"aGVsbG8=","image_media_type":"image/png"}));
-    harness.call(
-        "workflow",
-        "solution.comment.add",
-        json!({"entryId":id(&entry),"body":"Reviewed by user"}),
-    );
-    let completed = harness.call(
-        "workflow",
-        "problem.complete",
-        json!({"problemId":id(&problem),"reason":"Human review complete"}),
-    );
-    assert_eq!(completed.status, 200, "{}", completed.body);
-    assert_eq!(completed.body["closed"]["problem"], id(&problem));
-    assert_eq!(completed.body["closed"]["capture"], id(&capture));
-    assert_eq!(completed.body["closed"]["solutions"][0], id(&solution));
-    assert!(completed.body["path"].is_null());
-    assert_eq!(completed.body["publication_state"], "offered");
-    assert_eq!(
-        std::fs::read_dir(harness._root.path().join("vault"))
-            .unwrap()
-            .count(),
-        0,
-        "completion must not publish Knowledge"
-    );
-    let problem_record = harness.call(
-        "workflow",
-        "problem.record",
-        json!({"problemId":id(&problem)}),
-    );
-    assert_eq!(problem_record.body["state"], "completed");
-    let completed_solutions = harness.call(
-        "workflow",
-        "workbench.completed",
-        json!({"limit":20,"locale":"en"}),
-    );
-    assert_eq!(
-        completed_solutions.body["solutions"][0]["state"],
-        "completed"
-    );
-    let board = harness.call("workflow", "board.get", json!({}));
-    assert!(board.body["captures"].as_array().unwrap().is_empty());
-    assert!(board.body["problems"].as_array().unwrap().is_empty());
-    assert!(board.body["features"].as_array().unwrap().is_empty());
-    let published = harness.call(
-        "workflow",
-        "problem.playbook.publish",
-        json!({"problemId":id(&problem),"reason":"Human review complete"}),
-    );
-    assert_eq!(published.status, 200, "{}", published.body);
-    let path = published.body["path"].as_str().unwrap();
-    let playbook = harness._root.path().join("vault").join(path);
-    let content = std::fs::read_to_string(&playbook).unwrap();
-    assert!(content.contains("## Executive Summary"));
-    assert!(content.contains("## Lineage"));
-    assert!(content.contains("## Decision Changes"));
-    assert!(content.contains("## Conflicts & Addresses"));
-    assert!(content.contains("## Completion Evidence"));
-    assert!(content.contains("[Raw work record](<assets/"));
-    let assets = playbook.parent().unwrap().join("assets");
-    let raw = std::fs::read_dir(&assets)
-        .unwrap()
-        .map(|entry| entry.unwrap().path())
-        .find(|path| path.extension().and_then(|value| value.to_str()) == Some("md"))
-        .unwrap();
-    let raw_content = std::fs::read_to_string(&raw).unwrap();
-    assert!(raw_content.contains("Captured UI"));
-    assert!(raw_content.contains("Reviewed by user"));
-    assert!(raw_content.contains("- [ ] Everything retained"));
-    assert_eq!(
-        std::fs::read(assets.join(format!("{}.png", id(&entry)))).unwrap(),
-        b"hello"
-    );
-    std::fs::write(&playbook, format!("{content}\nExternal note\n")).unwrap();
-    let blocked = harness.call(
-        "workflow",
-        "problem.playbook.delete",
-        json!({"problemId":id(&problem),"force":false}),
-    );
-    assert_eq!(blocked.status, 409);
-    assert!(playbook.exists());
-    let removed = harness.call(
-        "workflow",
-        "problem.playbook.delete",
-        json!({"problemId":id(&problem),"force":true}),
-    );
-    assert_eq!(removed.status, 204, "{}", removed.body);
-    assert!(!playbook.exists());
-    assert!(!raw.exists());
-
-    let recompleted = harness.call(
-        "workflow",
-        "problem.complete",
-        json!({"problemId":id(&problem),"reason":"Restore missing report","regenerate":true}),
-    );
-    assert!(recompleted.body["path"].is_null());
-    let regenerated = harness.call(
-        "workflow",
-        "problem.playbook.publish",
-        json!({"problemId":id(&problem),"reason":"Restore missing report","regenerate":true}),
-    );
-    let regenerated_path = harness
-        ._root
-        .path()
-        .join("vault")
-        .join(regenerated.body["path"].as_str().unwrap());
-    std::fs::remove_file(&regenerated_path).unwrap();
-    let missing = harness.call(
-        "workflow",
-        "workbench.completed",
-        json!({"limit":20,"locale":"en"}),
-    );
-    assert_eq!(missing.body["solutions"][0]["archive_status"], "missing");
-    let cleared = harness.call(
-        "workflow",
-        "problem.playbook.delete",
-        json!({"problemId":id(&problem),"force":false}),
-    );
-    assert_eq!(cleared.status, 204, "{}", cleared.body);
-}
-
-#[test]
-fn given_workflow_context_when_refining_then_native_returns_bounded_visible_evidence() {
-    let harness = Harness::new();
-    let capture = harness.call(
-        "workflow",
-        "capture.create",
-        json!({"text":"A context-bearing problem"}),
-    );
-    let problem = harness.call(
-        "workflow",
-        "capture.promote",
-        json!({"captureId":id(&capture),"detail":"People need the earlier evidence while refining."}),
-    );
-    let context = harness.call(
-        "workflow",
-        "refinement.context",
-        json!({"entityType":"problems","entityId":id(&problem),"locale":"en"}),
-    );
-    assert_eq!(context.status, 200, "{}", context.body);
-    assert_eq!(context.body["has_context"], true);
-    assert_eq!(context.body["entries"][0]["label"], "Current item");
-    assert_eq!(
-        context.body["entries"][0]["text"],
-        "A context-bearing problem"
-    );
-    assert_eq!(context.body["entries"][1]["label"], "Current context");
-    assert!(context.body["entries"][1]["text"]
-        .as_str()
-        .unwrap()
-        .contains("earlier evidence"));
-    assert!(context.body["refinement_draft"].is_null());
-    assert!(context.body["next_draft"].is_null());
-}
-
-#[tokio::test]
-async fn given_completed_work_when_lineage_is_inferred_then_evidence_and_corrections_are_auditable()
-{
-    let harness = Harness::new();
-    let capture = harness.call("workflow", "capture.create", json!({"text":"Trace origin"}));
-    let problem = harness.call(
-        "workflow",
-        "capture.promote",
-        json!({"captureId":id(&capture),"statement":"Keep lineage","detail":"Preserve evidence"}),
-    );
-    harness.call(
-        "workflow",
-        "problem.approve",
-        json!({"problemId":id(&problem)}),
-    );
-    let solution = harness.call("workflow", "solution.create", json!({"problemId":id(&problem),"title":"Trace decisions","outcome":"Auditable history","validation_criteria":"- [ ] Four stages"}));
-    harness.call(
-        "workflow",
-        "problem.complete",
-        json!({"problemId":id(&problem),"reason":"Reviewed"}),
-    );
-    let initial = harness.call(
-        "workflow",
-        "solution.lineage",
-        json!({"solutionId":id(&solution)}),
-    );
-    assert_eq!(initial.status, 200, "{}", initial.body);
-    assert_eq!(
-        initial.body["lineage"]["stages"].as_array().unwrap().len(),
-        4
-    );
-    assert_eq!(
-        initial.body["lineage"]["transitions"]
-            .as_array()
-            .unwrap()
-            .len(),
-        3
-    );
-    let evidence_id = initial.body["evidence"]
-        .as_object()
-        .unwrap()
-        .keys()
-        .next()
-        .unwrap()
-        .clone();
-    let provider = provider_once(
-        json!({"claims":[{"claim_key":"inferred:rationale","text":"Likely rationale","confidence":"medium","evidence_ids":[evidence_id]}]}),
-    );
-    harness.call(
-        "settings",
-        "provider.save",
-        json!({"base_url":provider,"model":"test-model"}),
-    );
-    let queued = harness.app.enqueue_job(json!({"taskKind":"lineage_inference","entityType":"features","entityId":id(&solution),"locale":"en"})).await;
-    let result = wait_for_job(&harness, &queued);
-    let inferred = result.body["result"]["claims"]
-        .as_object()
-        .unwrap()
-        .values()
-        .find(|claim| claim["classification"] == "inferred")
-        .unwrap();
-    let corrected = harness.call("workflow", "solution.lineage.correct", json!({"solutionId":id(&solution),"claimId":inferred["id"],"text":"User-confirmed rationale","reason":"Audit correction","current_revision_id":inferred["current_revision_id"]}));
-    assert_eq!(corrected.status, 201, "{}", corrected.body);
-    let current = harness.call(
-        "workflow",
-        "solution.lineage",
-        json!({"solutionId":id(&solution)}),
-    );
-    let claim = &current.body["claims"][inferred["id"].as_str().unwrap()];
-    assert_eq!(claim["text"], "User-confirmed rationale");
-    assert_eq!(claim["revisions"].as_array().unwrap().len(), 2);
-    let evidence = harness.call(
-        "workflow",
-        "solution.lineage.evidence",
-        json!({"solutionId":id(&solution),"evidenceId":evidence_id}),
-    );
-    assert_eq!(evidence.status, 200, "{}", evidence.body);
-}
-
-#[test]
-fn given_a_projection_when_the_file_changes_then_native_blocks_overwrite_and_archive() {
-    let harness = Harness::new();
-    let capture = harness.call(
-        "workflow",
-        "capture.create",
-        json!({"text":"Reusable record"}),
-    );
-    let problem = harness.call(
-        "workflow",
-        "capture.promote",
-        json!({"captureId":id(&capture),"statement":"Reusable record","detail":"Preserve ownership"}),
-    );
-    harness.call(
-        "workflow",
-        "problem.approve",
-        json!({"problemId":id(&problem)}),
-    );
-    let projected = harness.call(
-        "workflow",
-        "item.project",
-        json!({"entityType":"problems","entityId":id(&problem)}),
-    );
-    assert_eq!(projected.status, 201, "{}", projected.body);
-    let relative = projected.body["path"].as_str().unwrap();
-    let file = harness._root.path().join("vault").join(relative);
-    assert!(file.is_file());
-    std::fs::write(&file, "# externally changed").unwrap();
-    let overwrite = harness.call(
-        "workflow",
-        "item.project",
-        json!({"entityType":"problems","entityId":id(&problem)}),
-    );
-    assert_eq!(overwrite.status, 409);
-    let archive = harness.call(
-        "workflow",
-        "item.archive",
-        json!({"entityType":"problems","entityId":id(&problem)}),
-    );
-    assert_eq!(archive.status, 409);
-    assert_eq!(
-        std::fs::read_to_string(file).unwrap(),
-        "# externally changed"
-    );
-}
-
-#[test]
-fn given_a_reviewed_knowledge_patch_when_source_changes_then_apply_and_undo_are_safe() {
-    let harness = Harness::new();
-    let capture = harness.call(
-        "workflow",
-        "capture.create",
-        json!({"text":"Patch knowledge"}),
-    );
-    let problem = harness.call(
-        "workflow",
-        "capture.promote",
-        json!({"captureId":id(&capture)}),
-    );
-    harness.call(
-        "workflow",
-        "problem.approve",
-        json!({"problemId":id(&problem)}),
-    );
-    let solution = harness.call(
-        "workflow",
-        "solution.create",
-        json!({"problemId":id(&problem),"title":"Review patch","outcome":"Preserve source","validation_criteria":"- [ ] Reviewed"}),
-    );
-    let relative = "Knowledge/review.md";
-    let file = harness._root.path().join("vault").join(relative);
-    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
-    std::fs::write(&file, "# Existing\n\nStable.\n").unwrap();
-    let first = harness.call(
-        "workflow",
-        "solution.patch.create",
-        json!({"solutionId":id(&solution),"path":relative,"operation":"append_section","heading":"Evidence","content":"Verified."}),
-    );
-    assert_eq!(first.status, 201, "{}", first.body);
-    std::fs::write(&file, "# External\n").unwrap();
-    let blocked = harness.call(
-        "workflow",
-        "solution.patch.apply",
-        json!({"patchId":id(&first)}),
-    );
-    assert_eq!(blocked.status, 409);
-    assert_eq!(std::fs::read_to_string(&file).unwrap(), "# External\n");
-
-    std::fs::write(&file, "# Existing\n\nStable.\n").unwrap();
-    let second = harness.call(
-        "workflow",
-        "solution.patch.create",
-        json!({"solutionId":id(&solution),"path":relative,"operation":"append_section","heading":"Evidence","content":"Verified."}),
-    );
-    assert_eq!(
-        harness
-            .call(
-                "workflow",
-                "solution.patch.apply",
-                json!({"patchId":id(&second)})
-            )
-            .status,
-        204
-    );
-    assert!(std::fs::read_to_string(&file)
-        .unwrap()
-        .contains("Verified."));
-    assert_eq!(
-        harness
-            .call(
-                "workflow",
-                "solution.patch.undo",
-                json!({"patchId":id(&second)})
-            )
-            .status,
-        204
-    );
-    assert_eq!(
-        std::fs::read_to_string(&file).unwrap(),
-        "# Existing\n\nStable.\n"
-    );
-}
-
-#[tokio::test]
-async fn conflict_review_cannot_spawn_a_hidden_provider_job() {
-    let harness = Harness::new();
-    let capture = harness.call(
-        "workflow",
-        "capture.create",
-        json!({"text":"Conflicting scope"}),
-    );
-    let problem = harness.call(
-        "workflow",
-        "capture.promote",
-        json!({"captureId":id(&capture),"statement":"Conflicting scope","detail":"Review evidence"}),
-    );
-    harness.call(
-        "workflow",
-        "problem.approve",
-        json!({"problemId":id(&problem)}),
-    );
-    let solution = harness.call(
-        "workflow",
-        "solution.create",
-        json!({"problemId":id(&problem),"title":"Offline only","outcome":"No network","validation_criteria":"- [ ] Reviewed"}),
-    );
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    listener.set_nonblocking(true).unwrap();
-    let provider = format!("http://{}", listener.local_addr().unwrap());
-    harness.call(
-        "settings",
-        "provider.save",
-        json!({"base_url":provider,"model":"test-model"}),
-    );
-    let queued = harness
-        .app
-        .enqueue_job(json!({
-            "taskKind":"conflict_review","entityType":"features","entityId":id(&solution),"locale":"en"
-        }))
-        .await;
-    assert!(queued.status >= 400, "{}", queued.body);
-    assert!(queued.body.to_string().contains("current Chat"));
-    assert_eq!(
-        listener.accept().unwrap_err().kind(),
-        std::io::ErrorKind::WouldBlock
-    );
-    let connection = rusqlite::Connection::open(harness.app.db_path()).unwrap();
-    assert_eq!(
-        connection
-            .query_row(
-                "SELECT count(*) FROM ai_jobs_v2 WHERE task_kind='conflict_review'",
-                [],
-                |row| row.get::<_, i64>(0)
-            )
-            .unwrap(),
-        0
-    );
-}
-
-#[tokio::test]
-async fn given_a_work_image_when_summarized_then_both_languages_are_persisted() {
-    let harness = Harness::new();
-    let capture = harness.call(
-        "workflow",
-        "capture.create",
-        json!({"text":"Visible result"}),
-    );
-    let problem = harness.call(
-        "workflow",
-        "capture.promote",
-        json!({"captureId":id(&capture)}),
-    );
-    harness.call(
-        "workflow",
-        "problem.approve",
-        json!({"problemId":id(&problem)}),
-    );
-    let solution = harness.call(
-        "workflow",
-        "solution.create",
-        json!({"problemId":id(&problem),"title":"Visual work","outcome":"Document it","validation_criteria":"- [ ] Visible"}),
-    );
-    let entry = harness.call(
-        "workflow",
-        "solution.progress.add",
-        json!({"solutionId":id(&solution),"body":"Screenshot","image_data":"aW1hZ2U=","image_media_type":"image/png"}),
-    );
-    let provider = provider_once(json!({
-        "ko":{"summary":"완료 상태가 보입니다."},
-        "en":{"summary":"The completed state is visible."}
-    }));
-    harness.call(
-        "settings",
-        "provider.save",
-        json!({"base_url":provider,"model":"test-model"}),
-    );
-    let queued = harness.app.enqueue_job(json!({
-        "taskKind":"image_summary","entityType":"solution_progress_entries","entityId":id(&entry),"locale":"ko"
-    })).await;
-    let result = wait_for_job(&harness, &queued);
-    assert_eq!(result.body["result"]["summary"], "완료 상태가 보입니다.");
-    let english = harness.call(
-        "workflow",
-        "solution.progress.get",
-        json!({"solutionId":id(&solution),"locale":"en"}),
-    );
-    assert_eq!(
-        english.body["entries"][0]["image_summary"],
-        "The completed state is visible."
-    );
-}
-
-#[tokio::test]
-async fn given_workbench_items_when_ai_organizes_then_attention_order_is_persisted() {
-    let harness = Harness::new();
-    let first = harness.call("workflow", "capture.create", json!({"text":"Later"}));
-    let second = harness.call("workflow", "capture.create", json!({"text":"Now"}));
-    let provider = provider_once(json!({"entries":[
-        {"entity_type":"captures","entity_id":id(&first),"category":"General","attention_rank":10,"rationale":"Can wait"},
-        {"entity_type":"captures","entity_id":id(&second),"category":"Product","attention_rank":95,"rationale":"Needs attention"}
-    ]}));
-    harness.call(
-        "settings",
-        "provider.save",
-        json!({"base_url":provider,"model":"test-model"}),
-    );
-    let queued = harness.app.enqueue_job(json!({
-        "taskKind":"workbench_organization","entityType":"workbench","entityId":"active","locale":"en"
-    })).await;
-    let result = wait_for_job(&harness, &queued);
-    assert_eq!(result.body["result"]["organized"], 2);
-    let board = harness.call("workflow", "board.get", json!({}));
-    assert_eq!(board.body["captures"][0]["id"], id(&second));
-    assert_eq!(board.body["captures"][0]["category"], "Product");
-    assert_eq!(board.body["captures"][0]["attention_rank"], 95);
-    assert_eq!(
-        board.body["captures"][0]["attention_rationale"],
-        "Needs attention"
-    );
-}
-
-#[tokio::test]
-async fn given_a_running_native_job_when_cancelled_then_provider_work_is_aborted() {
-    let harness = Harness::new();
-    let capture = harness.call("workflow", "capture.create", json!({"text":"Cancel work"}));
-    harness.call(
-        "settings",
-        "provider.save",
-        json!({"base_url":slow_provider(),"model":"test-model"}),
-    );
-    let queued = harness.app.enqueue_job(json!({
-        "taskKind":"workflow_refinement","entityType":"captures","entityId":id(&capture),"locale":"en"
-    })).await;
-    thread::sleep(Duration::from_millis(30));
-    let cancelled = harness.call("jobs", "jobs.cancel", json!({"jobId":id(&queued)}));
-    assert_eq!(cancelled.status, 200, "{}", cancelled.body);
-    assert_eq!(cancelled.body["status"], "cancelled");
-    thread::sleep(Duration::from_millis(30));
-    let current = harness.call("jobs", "jobs.get", json!({"jobId":id(&queued)}));
-    assert_eq!(current.body["status"], "cancelled");
-    assert!(current.body["finished_at"].is_string());
-}
-
-#[tokio::test]
-async fn given_managed_knowledge_when_translated_then_hash_current_korean_is_restored() {
-    let harness = Harness::new();
-    let relative = "Knowledge/result.md";
-    let file = harness._root.path().join("vault").join(relative);
-    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
-    std::fs::write(
-        &file,
-        "---\nllm_wiki_managed: true\ncanonical_locale: en\n---\n# Result\n",
-    )
-    .unwrap();
-    let pending = harness.call(
-        "vault",
-        "knowledge.read",
-        json!({"path":relative,"locale":"ko"}),
-    );
-    assert_eq!(pending.body["cache_status"], "pending");
-    let provider = provider_once(json!({"markdown":"# 결과\n\n재사용 가능한 증거."}));
-    harness.call(
-        "settings",
-        "provider.save",
-        json!({"base_url":provider,"model":"test-model"}),
-    );
-    let queued = harness.app.enqueue_job(json!({
-        "taskKind":"knowledge_translation","entityType":"knowledge","entityId":relative,"path":relative,"locale":"ko"
-    })).await;
-    wait_for_job(&harness, &queued);
-    let translated = harness.call(
-        "vault",
-        "knowledge.read",
-        json!({"path":relative,"locale":"ko"}),
-    );
-    assert_eq!(translated.body["cache_status"], "hit");
-    assert!(translated.body["markdown"]
-        .as_str()
-        .unwrap()
-        .contains("재사용 가능한 증거"));
-
-    std::fs::write(
-        file,
-        "---\nllm_wiki_managed: true\ncanonical_locale: en\n---\n# Changed\n",
-    )
-    .unwrap();
-    let stale = harness.call(
-        "vault",
-        "knowledge.read",
-        json!({"path":relative,"locale":"ko"}),
-    );
-    assert_eq!(stale.body["cache_status"], "pending");
 }

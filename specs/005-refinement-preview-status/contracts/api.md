@@ -1,3 +1,6 @@
+> **Retired for schema 8+**: Problem/Solution refinement is replaced by exact resumable Capture-or-Task
+> sessions and proposal decisions in [012](../../012-task-centered-workbench/contracts/application-api.md).
+
 # API Contract: Refinement Context
 
 ## Read a Problem or Solution context summary

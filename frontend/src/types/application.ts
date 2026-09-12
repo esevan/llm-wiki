@@ -59,6 +59,11 @@ declare global {
       features?: Array<{ id: string; state: string }>;
     };
     loadBoard: () => Promise<void>;
+    openChat?: (
+      type: "captures" | "problems" | "features",
+      id: string,
+      context?: { problemRevision?: number; sourceTitle?: string },
+    ) => void;
     __TAURI_INTERNALS__?: object;
   }
 }

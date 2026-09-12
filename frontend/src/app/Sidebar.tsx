@@ -22,6 +22,7 @@ export function Sidebar({ activeView, onSelectView }: SidebarProps) {
             className={activeView === view ? 'active' : undefined}
             aria-current={activeView === view ? 'page' : undefined}
             data-view={view}
+            data-control={`sidebar-view-${view}`}
             key={view}
             onClick={() => onSelectView(view)}
             type="button"
@@ -32,7 +33,7 @@ export function Sidebar({ activeView, onSelectView }: SidebarProps) {
       </nav>
       <label className="locale-switch">
         <span>Language</span>
-        <select id="locale-select" aria-label="Language" defaultValue="en">
+        <select id="locale-select" data-control="locale-select" aria-label="Language" defaultValue="en">
           <option value="en">English</option>
           <option value="ko">한국어</option>
         </select>

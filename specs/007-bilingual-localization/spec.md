@@ -1,3 +1,7 @@
+> **Partially superseded for schema 8+**: Locale persistence and bilingual storage remain. Workflow
+> entity names, routes, and user copy now follow the Task contract in
+> [012](../012-task-centered-workbench/spec.md); old Problem/Solution stage text is historical.
+
 # Feature Specification: Korean-English Localization
 
 **Feature Branch**: `007-bilingual-localization`

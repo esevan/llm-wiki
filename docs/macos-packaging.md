@@ -49,6 +49,13 @@ database, and settings directory. The review process does not read or write the 
 Vault or normal application data. It remains open
 until the reviewer closes it; its temporary state path is printed to the terminal.
 
+After the release artifact has already been built and verified, reuse that exact artifact without
+starting another build:
+
+```text
+npm run review:ui -- --reuse-build
+```
+
 ## Install a verified replacement
 
 After a successful signed build, install only with the guarded installer:
@@ -78,11 +85,17 @@ opening the same folder.
 
 ## Release verification
 
-For every release candidate, run the normal packaged scenario after the signed build:
+For every release candidate, run the Task-centred packaged scenario matrix after the signed build.
+It uses separate temporary homes, SQLite databases, and Vaults for capture, Work Log,
+refinement, relationships, review, publication, relaunch persistence, and locale/layout cases.
+To investigate one case, pass `-- --scenario task-refinement` to `npm run test:desktop`.
+
+See the [desktop E2E runbook](testing/desktop-e2e-runbook.md) for scenario discovery, focused subsets, artifact retention, and the strict full-suite command.
 
 ```text
 npm run tauri:build
 npm run test:desktop
+npm run review:ui -- --reuse-build
 codesign -dvvv "/Applications/LLM Wiki.app"
 codesign -d -r- "/Applications/LLM Wiki.app"
 ```

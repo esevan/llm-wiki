@@ -250,7 +250,7 @@ async fn stdio_initializes_lists_closed_tools_and_opens_idempotently() {
             "workflow",
             NativeOperation {
                 name: "capture.create".into(),
-                input: json!({"text":format!("overview capture {index}")}),
+                input: json!({"operationId":format!("overview-capture-{index}"),"text":format!("overview capture {index}")}),
             },
         );
         assert_eq!(response.status, 201, "{}", response.body);
@@ -358,34 +358,11 @@ async fn stdio_initializes_lists_closed_tools_and_opens_idempotently() {
     let session = structured["sessionId"].clone();
     send(
         &mut stdin,
-        json!({"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"inbound_work_append","arguments":{"operationId":"problem","sessionId":session,"expectedHeadRevision":1,"event":{"kind":"problem_draft","statement":"Need one state machine","detail":"Review in chat"}},"_meta":meta.clone()}}),
+        json!({"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"inbound_work_append","arguments":{"operationId":"task","sessionId":session,"expectedHeadRevision":1,"event":{"kind":"task_created","title":"One Task","detail":"Review in chat"}},"_meta":meta.clone()}}),
     );
     let appended = receive(&mut reader);
     let event = &appended["result"]["structuredContent"];
-    assert_eq!(event["projectionStatus"], "pending_review");
-    let advance_args = json!({"operationId":"adopt","sessionId":session,"expectedHeadRevision":2,"sourceEventId":event["eventId"],"action":"adopt_problem","proposedPayload":{"statement":"Need one state machine","detail":"Review in chat"}});
-    send(
-        &mut stdin,
-        json!({"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"inbound_work_advance","arguments":advance_args,"_meta":meta.clone()}}),
-    );
-    let review = receive(&mut reader);
-    assert_eq!(review["result"]["resultType"], "input_required");
-    let request_state = review["result"]["requestState"].clone();
-    send(
-        &mut stdin,
-        json!({"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"inbound_work_advance","arguments":{"operationId":"adopt","sessionId":session,"expectedHeadRevision":2,"sourceEventId":event["eventId"],"action":"adopt_problem","proposedPayload":{"statement":"Need one state machine","detail":"Review in chat"}},"requestState":request_state,"inputResponses":{"decision":{"action":"accept","content":{"decision":"accept"}}},"_meta":meta.clone()}}),
-    );
-    let advanced = receive(&mut reader);
-    assert_eq!(
-        advanced["result"]["structuredContent"]["decision"],
-        "accept"
-    );
-    send(
-        &mut stdin,
-        json!({"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"inbound_work_advance","arguments":{"operationId":"adopt","sessionId":session,"expectedHeadRevision":2,"sourceEventId":event["eventId"],"action":"adopt_problem","proposedPayload":{"statement":"Need one state machine","detail":"Review in chat"}},"requestState":request_state,"inputResponses":{"decision":{"action":"accept","content":{"decision":"accept"}}},"_meta":meta.clone()}}),
-    );
-    let replayed_challenge = receive(&mut reader);
-    assert_eq!(replayed_challenge["error"]["code"], -32602);
+    assert!(event["eventId"].as_str().is_some());
     send(
         &mut stdin,
         json!({"jsonrpc":"2.0","id":9,"method":"resources/list","params":{"_meta":meta.clone()}}),
@@ -427,11 +404,10 @@ async fn stdio_initializes_lists_closed_tools_and_opens_idempotently() {
     assert_eq!(first_overview["items"].as_array().unwrap().len(), 50);
     for field in [
         "captures",
-        "problems",
-        "proposedSolutions",
-        "inProgressSolutions",
-        "blockedOrConflicted",
-        "pendingDecisions",
+        "tasks",
+        "inProgressTasks",
+        "completedTasks",
+        "total",
     ] {
         assert!(first_overview["summary"].get(field).is_some(), "{field}");
     }

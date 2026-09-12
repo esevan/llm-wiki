@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { ChatTrackingSurface } from './ChatTrackingSurface';
@@ -47,5 +47,35 @@ describe('ChatTrackingSurface actions', () => {
     ]);
     window.removeEventListener('llm-wiki:chat-tracking-action', actions as EventListener);
     window.removeEventListener('llm-wiki:chat-tracking-propose', proposals as EventListener);
+  });
+
+  it('keeps the Explore chat tracking surface independent across updates, errors, and locale changes', async () => {
+    const actions = vi.fn();
+    window.addEventListener('llm-wiki:chat-tracking-action', actions as EventListener);
+    document.documentElement.lang = 'en';
+    render(<ChatTrackingSurface />);
+    act(() => window.dispatchEvent(new CustomEvent('llm-wiki:chat-tracking', { detail: {
+      busy: true,
+      error: 'The first streamed turn failed.',
+      cards: [{ id: 'turn-1', stage: 'capture', title: 'Existing Capture Solution', summary: 'Keep this context', revision: 1, payload: { title: 'Existing Capture Solution' } }],
+    }})));
+    expect(screen.getByText('Existing Capture Solution')).toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent('first streamed turn failed');
+    expect(screen.getByRole('button', { name: 'Accept' })).toBeDisabled();
+    expect(actions).not.toHaveBeenCalled();
+
+    act(() => window.dispatchEvent(new CustomEvent('llm-wiki:chat-tracking', { detail: {
+      cards: [{ id: 'turn-2', stage: 'solution', title: 'Corrected Task proposal', summary: 'User correction retained', revision: 2, payload: { title: 'Corrected Task proposal' } }],
+    }})));
+    expect(screen.queryByText('Existing Capture Solution')).not.toBeInTheDocument();
+    expect(screen.getByText('Corrected Task proposal')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: '{"title":"Reviewed correction"}' } });
+    fireEvent.click(screen.getByRole('button', { name: 'New preview' }));
+    expect(actions).toHaveBeenCalledWith(expect.objectContaining({ detail: { action: 'edit', id: 'turn-2', payload: { title: 'Reviewed correction' } } }));
+
+    act(() => document.documentElement.setAttribute('lang', 'ko'));
+    await waitFor(() => expect(screen.getByRole('button', { name: '수락' })).toBeInTheDocument());
+    window.removeEventListener('llm-wiki:chat-tracking-action', actions as EventListener);
   });
 });

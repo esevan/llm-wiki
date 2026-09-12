@@ -60,9 +60,9 @@ export function VaultSetupView({ phase, error, onChoose, onRetry }: VaultSetupVi
         <p className="vault-setup-detail">{text.detail}</p>
         {error && <p className="vault-setup-error" role="alert">{error}</p>}
         {phase === 'error' ? (
-          <button className="primary" type="button" onClick={onRetry}>{text.retry}</button>
+          <button data-control="vault-setup-retry" className="primary" type="button" onClick={onRetry}>{text.retry}</button>
         ) : (
-          <button className="primary" type="button" disabled={busy} onClick={onChoose} aria-busy={busy}>
+          <button data-control="vault-setup-choose" className="primary" type="button" disabled={busy} onClick={onChoose} aria-busy={busy}>
             {phase === 'checking' ? text.checking : phase === 'choosing' ? text.choosing : text.choose}
           </button>
         )}

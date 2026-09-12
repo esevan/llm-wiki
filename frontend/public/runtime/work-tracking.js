@@ -45,7 +45,8 @@ function trackedTargetKey(target){return target?'in-app:'+target.type+':'+target
 function renderTrackedChat(){
   const button=$('#chat-track-toggle');if(button){button.textContent=trackedMessage(trackedChatSession?'Tracking':'Track this chat');button.disabled=trackedBusy||Boolean(trackedChatSession)}
   const actions=[...(trackedChatSession?.nextActions||[])];
-  if(trackedChatSession&&['problems','features'].includes(chatTarget?.type)&&!trackedChatSession.linkedWorkflow?.problem)actions.unshift('link_current_work');
+  if(trackedChatSession&&chatTarget?.type==='problems')actions.unshift('create_task');
+  else if(trackedChatSession&&chatTarget?.type==='features'&&!trackedChatSession.linkedWorkflow?.problem)actions.unshift('link_current_work');
   window.dispatchEvent(new CustomEvent('llm-wiki:chat-tracking',{detail:{cards:trackedCards,busy:trackedBusy,error:trackedError,actions}}));
 }
 window.addEventListener('llm-wiki:chat-tracking-ready',renderTrackedChat);
@@ -67,7 +68,7 @@ async function previewTrackedCapture(proposal){
 }
 async function startTrackedChat(){
   if(!chatTarget||trackedChatSession||trackedBusy)return;trackedBusy=true;trackedError='';renderTrackedChat();
-  const target={...chatTarget},item=window.boardItems?.[target.type+':'+target.id]||{},summary=item.statement||item.title||item.text||$('#chat-title').textContent||'Tracked chat';
+  const target={...chatTarget},item=window.boardItems?.[target.type+':'+target.id]||{},summary=target.sourceTitle||item.statement||item.title||item.text||$('#chat-title').textContent||'Tracked chat';
   try{await previewTrackedCapture({operationId:crypto.randomUUID(),lineageKey:trackedTargetKey(target),mode:'create',capture:{title:String(summary).slice(0,200),summary:String(summary).slice(0,20000)}})}catch(error){trackedError=trackedFailure(error)}finally{trackedBusy=false;renderTrackedChat()}
 }
 window.offerTrackedCheckpoint=(message,answer,target)=>{
@@ -82,10 +83,10 @@ window.offerTrackedCheckpoint=(message,answer,target)=>{
 window.offerTrackedProposal=async(payload,action)=>{
   if(!trackedChatSession)return;
   const epoch=trackedEpoch,api=trackedRequest(epoch);
-  const id=crypto.randomUUID(),stage={problem_draft:'problem',solution_draft:'solution',conflict_proposal:'conflict',completion_proposal:'completion'}[payload.kind];
+  const id=crypto.randomUUID(),stage={problem_draft:'problem',solution_draft:'solution',task_draft:'solution',conflict_proposal:'conflict',completion_proposal:'completion'}[payload.kind];
   if(!stage)return;
   try{
-    await refreshTrackedChat();const saved=await api('/work-tracking/append',{method:'POST',body:JSON.stringify({operationId:id,sessionId:trackedChatSession.sessionId,expectedHeadRevision:trackedChatSession.headRevision,event:payload})});
+    await refreshTrackedChat();const eventPayload=payload.kind==='task_draft'?{...payload,kind:'task_created'}:payload,saved=await api('/work-tracking/append',{method:'POST',body:JSON.stringify({operationId:id,sessionId:trackedChatSession.sessionId,expectedHeadRevision:trackedChatSession.headRevision,event:eventPayload})});
     await refreshTrackedChat();
     const proposal={sessionId:trackedChatSession.sessionId,expectedHeadRevision:trackedChatSession.headRevision,sourceEventId:saved.eventId,action,proposedPayload:payload};
     const preview=await api('/work-tracking/advance/preview',{method:'POST',body:JSON.stringify(proposal)});
@@ -180,7 +181,11 @@ window.addEventListener('llm-wiki:chat-tracking-propose',async event=>{
     const proposal={sessionId:trackedChatSession.sessionId,expectedHeadRevision:trackedChatSession.headRevision,sourceEventId:trackedChatSession.headEventId,action,proposedPayload:{entityType:chatTarget.type,entityId:chatTarget.id}};
     const preview=await api('/work-tracking/advance/preview',{method:'POST',body:JSON.stringify(proposal)});
     trackedCard({id:preview.reviewState,stage:chatTarget.type==='features'?'solution':'problem',title:preview.target.title,summary:JSON.stringify(preview.target),revision:trackedChatSession.headRevision,payload:proposal.proposedPayload},{kind:'governed',proposal,reviewState:preview.reviewState,base:structuredClone(trackedChatSession)});
-  }else if(action==='adopt_problem')await window.offerTrackedProposal({kind:'problem_draft',statement:summary.slice(0,1000),detail:answer},'adopt_problem');
+  }else if(action==='create_task'){
+    if(!Number.isInteger(chatTarget.problemRevision)||chatTarget.problemRevision<1)throw new Error('This Problem revision is unavailable. Reopen it from the Workbench before creating a Task.');
+    await window.offerTrackedProposal({kind:'task_draft',title:String(chatTarget.sourceTitle||summary).slice(0,200),outcome:answer,problemId:chatTarget.id,problemRevision:chatTarget.problemRevision},'create_task');
+  }
+  else if(action==='adopt_problem')await window.offerTrackedProposal({kind:'problem_draft',statement:summary.slice(0,1000),detail:answer},'adopt_problem');
   else if(action==='adopt_solution')await window.offerTrackedProposal({kind:'solution_draft',title:summary.slice(0,200),outcome:answer,validationCriteria:''},'adopt_solution');
   else if(action==='accept_completion_proposal')await window.offerTrackedProposal({kind:'completion_proposal',outcomes:[summary],verification:[answer],selectedEvidence:trackedChatSession.acceptedEvidenceIds||[]},'verify_and_complete');
   else if(action==='accept_checkpoint')window.offerTrackedCheckpoint(summary,answer,chatTarget);
@@ -210,7 +215,7 @@ window.addEventListener('llm-wiki:tracked-resume',async event=>{
   try{
     const session=await trackedTransport('/work-tracking/sessions/'+encodeURIComponent(event.detail.sessionId));
     const solution=session.linkedWorkflow?.solution,problem=session.linkedWorkflow?.problem;
-    openChat(solution?'features':problem?'problems':'captures',solution?.id||problem?.id||session.capture.id);
+    if(!chatModal.open)openChat(solution?'features':problem?'problems':'captures',solution?.id||problem?.id||session.capture.id);
     trackedEpoch++;trackedCards=[];trackedPending.clear();trackedChatSession=session;await refreshTrackedChat();
     const api=trackedRequest();
     if(session.state!=='completed')for(const source of session.pendingProposals||[]){

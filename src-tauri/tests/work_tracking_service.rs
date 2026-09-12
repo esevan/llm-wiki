@@ -140,50 +140,36 @@ fn completion_is_separate_from_knowledge_publication() {
         json!({"operationId":"open","lineageKey":"complete-chat","mode":"create","capture":{"title":"Separate completion","summary":"Completion must remain private"}}),
     );
     let session = opened["sessionId"].clone();
-    let problem = call(
+    let task = call(
         &app,
         "work_tracking.append",
-        json!({"operationId":"p","sessionId":session,"expectedHeadRevision":1,"event":{"kind":"problem_draft","statement":"Publication is coupled","detail":"Split it"}}),
+        json!({"operationId":"task","sessionId":session,"expectedHeadRevision":1,"event":{"kind":"task_created","title":"Two phases","outcome":"Private completion first"}}),
     );
-    let adopted = call(
+    let created = call(
         &app,
         "work_tracking.advance",
-        json!({"sessionId":session,"expectedHeadRevision":2,"sourceEventId":problem["eventId"],"action":"adopt_problem","decision":"accept","proposedPayload":{"statement":"Publication is coupled","detail":"Split it"}}),
+        json!({"sessionId":session,"expectedHeadRevision":task["headRevision"],"sourceEventId":task["eventId"],"action":"create_task","decision":"accept","proposedPayload":{"title":"Two phases","outcome":"Private completion first","scope":"Local release","validationCriteria":"Tests pass"}}),
     );
-    let approved = call(
-        &app,
-        "work_tracking.advance",
-        json!({"sessionId":session,"expectedHeadRevision":adopted["headRevision"],"sourceEventId":problem["eventId"],"action":"approve_problem","decision":"accept","proposedPayload":{}}),
-    );
-    let solution = call(
+    let task_id = created["resultEntityId"].as_str().unwrap().to_owned();
+    let transition = call(
         &app,
         "work_tracking.append",
-        json!({"operationId":"s","sessionId":session,"expectedHeadRevision":approved["headRevision"],"event":{"kind":"solution_draft","title":"Two phases","outcome":"Private completion first"}}),
+        json!({"operationId":"transition","sessionId":session,"expectedHeadRevision":created["headRevision"],"event":{"kind":"task_transition_proposed","to":"in_progress"}}),
     );
-    let adopted_solution = call(
+    let started = call(
         &app,
         "work_tracking.advance",
-        json!({"sessionId":session,"expectedHeadRevision":solution["headRevision"],"sourceEventId":solution["eventId"],"action":"adopt_solution","decision":"accept","proposedPayload":{"title":"Two phases","outcome":"Private completion first"}}),
-    );
-    let resolved = call(
-        &app,
-        "work_tracking.advance",
-        json!({"sessionId":session,"expectedHeadRevision":adopted_solution["headRevision"],"sourceEventId":solution["eventId"],"action":"resolve_conflict","decision":"accept","proposedPayload":{}}),
-    );
-    let approved_solution = call(
-        &app,
-        "work_tracking.advance",
-        json!({"sessionId":session,"expectedHeadRevision":resolved["headRevision"],"sourceEventId":solution["eventId"],"action":"approve_solution","decision":"accept","proposedPayload":{}}),
+        json!({"sessionId":session,"expectedHeadRevision":transition["headRevision"],"sourceEventId":transition["eventId"],"action":"transition_task","decision":"accept","proposedPayload":{"taskId":task_id,"expectedTaskRevision":1,"to":"in_progress"}}),
     );
     let completion = call(
         &app,
         "work_tracking.append",
-        json!({"operationId":"c","sessionId":session,"expectedHeadRevision":approved_solution["headRevision"],"event":{"kind":"completion_proposal","outcomes":["done"],"verification":["tests pass"]}}),
+        json!({"operationId":"c","sessionId":session,"expectedHeadRevision":started["headRevision"],"event":{"kind":"completion_proposal","outcomes":["done"],"verification":["tests pass"]}}),
     );
     call(
         &app,
         "work_tracking.advance",
-        json!({"sessionId":session,"expectedHeadRevision":completion["headRevision"],"sourceEventId":completion["eventId"],"action":"verify_and_complete","decision":"accept","proposedPayload":{"verification":["tests pass"]}}),
+        json!({"sessionId":session,"expectedHeadRevision":completion["headRevision"],"sourceEventId":completion["eventId"],"action":"complete_task","decision":"accept","proposedPayload":{"taskId":task_id,"expectedTaskRevision":1,"evidence":"tests pass","report":"Verified privately"}}),
     );
     assert_eq!(
         std::fs::read_dir(&vault).unwrap().count(),

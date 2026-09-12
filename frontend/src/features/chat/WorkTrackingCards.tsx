@@ -26,16 +26,16 @@ export function WorkTrackingCards({ cards, busy=false, onAccept, onEdit, onRejec
   const translate = (key: string) => resources['work_tracking.card.' + key] ?? key;
   const text = Object.fromEntries(['region', 'revision', 'review', 'defer', 'editDraft', 'publish', 'reject', 'edit', 'accept'].map(key => [key, translate(key)]));
   return <section id="work-tracking-cards" className="work-tracking-cards" aria-label={text.region} aria-live="polite">
-    {cards.map(card => <article key={card.id} className="work-tracking-card" data-stage={card.stage} data-projection={card.projectionStatus}>
+    {cards.map(card => <article key={card.id} className="work-tracking-card" data-card-id={card.id} data-stage={card.stage} data-projection={card.projectionStatus}>
       <header><small>{translate('stage.' + card.stage)}</small><span>{text.revision} {card.revision}</span></header>
       <h3 data-user-content>{card.title}</h3><p data-user-content>{card.summary}</p>
       {card.projectionStatus && <p role="status">{translate('status.' + card.projectionStatus)}</p>}
-      {card.stage === 'knowledge' && card.publicationState === 'draft_saved' && <details><summary>{text.review}</summary><pre data-user-content>{card.draftMarkdown}</pre></details>}
+      {card.stage === 'knowledge' && card.publicationState === 'draft_saved' && <details data-control="tracking-knowledge-draft-details"><summary>{text.review}</summary><pre data-user-content>{card.draftMarkdown}</pre></details>}
       {card.stage === 'knowledge' && card.publicationState === 'offered'
-        ? <footer><button type="button" disabled={busy || !onDeferPublication} onClick={()=>onDeferPublication?.(card)}>{text.defer}</button><button type="button" disabled={busy || !onReviewDraft} onClick={()=>onReviewDraft?.(card)}>{text.review}</button></footer>
+        ? <footer><button type="button" data-control="tracking-defer" disabled={busy || !onDeferPublication} onClick={()=>onDeferPublication?.(card)}>{text.defer}</button><button type="button" data-control="tracking-review-draft" disabled={busy || !onReviewDraft} onClick={()=>onReviewDraft?.(card)}>{text.review}</button></footer>
         : card.stage === 'knowledge' && card.publicationState === 'draft_saved'
-          ? <footer><button type="button" disabled={busy || !onEdit} onClick={()=>onEdit?.(card)}>{text.editDraft}</button><button type="button" disabled={busy || !onPublish || !card.draftMarkdown} onClick={()=>onPublish?.(card)}>{text.publish}</button></footer>
-        : (card.stage !== 'knowledge' || card.publicationState === 'draft_review') && <footer><button type="button" disabled={busy || !onReject} onClick={()=>onReject?.(card)}>{text.reject}</button>{card.editable !== false && <button type="button" disabled={busy || !onEdit} onClick={()=>onEdit?.(card)}>{text.edit}</button>}<button type="button" disabled={busy || !onAccept} onClick={()=>onAccept?.(card)}>{text.accept}</button></footer>}
+          ? <footer><button type="button" data-control="tracking-edit-draft" disabled={busy || !onEdit} onClick={()=>onEdit?.(card)}>{text.editDraft}</button><button type="button" data-control="tracking-publish" disabled={busy || !onPublish || !card.draftMarkdown} onClick={()=>onPublish?.(card)}>{text.publish}</button></footer>
+        : (card.stage !== 'knowledge' || card.publicationState === 'draft_review') && <footer><button type="button" data-control="tracking-reject" disabled={busy || !onReject} onClick={()=>onReject?.(card)}>{text.reject}</button>{card.editable !== false && <button type="button" data-control="tracking-edit" disabled={busy || !onEdit} onClick={()=>onEdit?.(card)}>{text.edit}</button>}<button type="button" data-control="tracking-accept" disabled={busy || !onAccept} onClick={()=>onAccept?.(card)}>{text.accept}</button></footer>}
     </article>)}
   </section>;
 }

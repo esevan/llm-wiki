@@ -1,3 +1,6 @@
+> **Retired for schema 8+**: Completed-Solution paths are replaced by Task graph lineage and exact
+> Knowledge publication in [012](../../012-task-centered-workbench/contracts/application-api.md).
+
 # API Contract: Lineage Knowledge Layer
 
 All paths are under `/api`. Error bodies follow the application's existing HTTP error convention.

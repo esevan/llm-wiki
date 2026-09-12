@@ -6,7 +6,12 @@ import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const app = path.join(root, "src-tauri", "target", "release", "bundle", "macos", "LLM Wiki.app");
-const executable = path.join(app, "Contents", "MacOS", "llm-wiki-desktop");
+const executable = process.env.LLM_WIKI_UI_REVIEW_EXECUTABLE
+  ? path.resolve(process.env.LLM_WIKI_UI_REVIEW_EXECUTABLE)
+  : path.join(app, "Contents", "MacOS", "llm-wiki-desktop");
+const arguments_ = process.argv.slice(2);
+const reuseBuild = arguments_.includes("--reuse-build");
+if (arguments_.some((argument) => argument !== "--reuse-build")) throw new Error("Usage: node scripts/run_ui_review.mjs [--reuse-build]");
 
 function run(command, args) {
   return new Promise((resolve, reject) => {
@@ -25,7 +30,7 @@ const vault = path.join(state, "vault");
 await mkdir(vault);
 await writeFile(path.join(vault, "review-notes.md"), "# UI review\n\nThis temporary vault belongs only to the review session.\n", "utf8");
 
-await run(process.execPath, [path.join(root, "scripts", "build_desktop.mjs")]);
+if (!reuseBuild) await run(process.execPath, [path.join(root, "scripts", "build_desktop.mjs")]);
 const child = spawn(executable, ["-ApplePersistenceIgnoreState", "YES"], {
   cwd: root,
   detached: true,
@@ -38,4 +43,4 @@ const child = spawn(executable, ["-ApplePersistenceIgnoreState", "YES"], {
   },
 });
 child.unref();
-console.log(`Started a signed, isolated UI review app. Temporary review state: ${state}`);
+console.log(`Started a signed, isolated UI review app${reuseBuild ? " using the existing release artifact" : ""}. Temporary review state: ${state}`);

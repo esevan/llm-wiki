@@ -656,6 +656,10 @@ fn text<'a>(value: &'a Value, name: &str) -> Result<&'a str, AppError> {
 fn parse_kind(value: &str) -> Result<EventKind, AppError> {
     match value {
         "problem_draft" => Ok(EventKind::ProblemDraft),
+        "task_created" => Ok(EventKind::TaskCreated),
+        "task_revision_proposed" => Ok(EventKind::TaskRevisionProposed),
+        "task_transition_proposed" => Ok(EventKind::TaskTransitionProposed),
+        "problem_resolution_proposed" => Ok(EventKind::ProblemResolutionProposed),
         "solution_draft" => Ok(EventKind::SolutionDraft),
         "work_log_checkpoint" => Ok(EventKind::WorkLogCheckpoint),
         "conflict_proposal" => Ok(EventKind::ConflictProposal),

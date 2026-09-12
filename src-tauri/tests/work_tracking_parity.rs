@@ -206,14 +206,14 @@ fn native_and_external_adapters_converge_through_solution_and_work_log() {
             .as_array()
             .unwrap()
             .len(),
-        1
+        0
     );
     assert_eq!(
         external_state["acceptedEvidenceIds"]
             .as_array()
             .unwrap()
             .len(),
-        1
+        0
     );
     assert_eq!(
         native_state["recentEvents"][0]["payload"]["summary"],

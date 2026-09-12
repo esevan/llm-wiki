@@ -126,7 +126,7 @@ export function FirstRunIntro({ onFinish }: FirstRunIntroProps) {
         <span className="intro-orb intro-orb--two" />
         <span className="intro-orb intro-orb--three" />
       </div>
-      <button className="intro-skip" type="button" onClick={() => void finish()} disabled={phase === 'working'}>
+      <button data-control="intro-skip" className="intro-skip" type="button" onClick={() => void finish()} disabled={phase === 'working'}>
         {text.skip}
       </button>
       <section className="intro-stage" key={scene} aria-live="polite">
@@ -154,6 +154,7 @@ export function FirstRunIntro({ onFinish }: FirstRunIntroProps) {
         <div className="intro-progress" aria-label={`${scene + 1} / ${text.scenes.length}`}>
           {text.scenes.map((_, index) => (
             <button
+              data-control="intro-scene"
               key={index}
               type="button"
               className={index === scene ? 'active' : ''}
@@ -164,13 +165,13 @@ export function FirstRunIntro({ onFinish }: FirstRunIntroProps) {
             />
           ))}
         </div>
-        <button className="intro-next" type="button" onClick={advance} disabled={phase === 'working'}>
+        <button data-control="intro-next" className="intro-next" type="button" onClick={advance} disabled={phase === 'working'}>
           {phase === 'working' ? text.working : scene === text.scenes.length - 1 ? text.start : text.continue}
         </button>
         {phase === 'error' && (
           <div className="intro-error" role="alert">
             <span>{text.error}</span>
-            <button type="button" onClick={() => void finish()}>{text.retry}</button>
+            <button data-control="intro-retry" type="button" onClick={() => void finish()}>{text.retry}</button>
           </div>
         )}
       </nav>

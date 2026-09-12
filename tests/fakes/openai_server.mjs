@@ -1,5 +1,9 @@
 import http from "node:http";
 
+/** Visible only to deterministic test clients; never used by the application. */
+const requestHistory = [];
+const modelAttempts = new Map();
+
 function messageText(content) {
   if (typeof content === "string") return content;
   if (!Array.isArray(content)) return String(content ?? "");
@@ -13,6 +17,29 @@ function messageText(content) {
 }
 
 function deterministicResult(prompt) {
+  if (prompt.includes('"task_patch|new_task|problem_snapshot|task_problem_link"')) {
+    return {
+      message: "I prepared one reviewable Task proposal from the saved conversation.",
+      proposals: [{
+        id: "deterministic-task-proposal",
+        type: "new_task",
+        payload: { title: "Refined deterministic Task", outcome: "The recorded request is handled." },
+      }],
+    };
+  }
+  if (prompt.includes('"status":"clear|findings|insufficient_evidence"')) {
+    const path = prompt.match(/"path"\s*:\s*"([^"]+\.md)"/)?.[1];
+    if (!path) return { status: "insufficient_evidence", citations: [], findings: [] };
+    return {
+      status: "findings",
+      citations: [{ path }],
+      findings: [{ id: "deterministic-finding", path, summary: "The cited local evidence needs a user decision." }],
+    };
+  }
+  if (prompt.includes("Improve readability using only this evidence-bound Task document")) {
+    const taskId = prompt.match(/exact Task id `([^`]+)`/)?.[1] ?? "unknown-task";
+    return { markdown: `# Evidence-backed Task result\n\nTask \`${taskId}\` preserves its completion evidence and lineage.` };
+  }
   if (prompt.includes("executive_summary_markdown")) {
     return {
       executive_summary_markdown: "# Deterministic completion summary",
@@ -73,7 +100,7 @@ function deterministicResult(prompt) {
 
 function sendJson(response, status, value) {
   const body = JSON.stringify(value);
-  response.writeHead(status, { "content-type": "application/json", "content-length": Buffer.byteLength(body) });
+  response.writeHead(status, { "access-control-allow-origin": "*", "content-type": "application/json", "content-length": Buffer.byteLength(body) });
   response.end(body);
 }
 
@@ -81,6 +108,21 @@ const requestedPort = Number.parseInt(process.argv[process.argv.indexOf("--port"
 if (!Number.isInteger(requestedPort) || requestedPort < 0) throw new Error("Pass a valid --port value.");
 
 const server = http.createServer((request, response) => {
+  if (request.method === "OPTIONS") {
+    response.writeHead(204, { "access-control-allow-origin": "*", "access-control-allow-methods": "GET,POST,DELETE,OPTIONS", "access-control-allow-headers": "content-type" });
+    response.end();
+    return;
+  }
+  if (request.method === "GET" && request.url === "/__test/requests") {
+    sendJson(response, 200, { requests: requestHistory });
+    return;
+  }
+  if (request.method === "DELETE" && request.url === "/__test/requests") {
+    requestHistory.length = 0;
+    modelAttempts.clear();
+    sendJson(response, 204, {});
+    return;
+  }
   if (request.method === "GET" && request.url === "/v1/models") {
     sendJson(response, 200, { data: [{ id: "deterministic-test-model" }] });
     return;
@@ -93,13 +135,28 @@ const server = http.createServer((request, response) => {
   request.on("data", (chunk) => chunks.push(chunk));
   request.on("end", () => {
     const payload = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
+    requestHistory.push({
+      model: payload.model,
+      stream: Boolean(payload.stream),
+      messages: payload.messages ?? [],
+    });
+    const attempts = (modelAttempts.get(payload.model) ?? 0) + 1;
+    modelAttempts.set(payload.model, attempts);
     if (payload.model === "deterministic-failure") {
       sendJson(response, 400, { error: { message: "deterministic provider failure" } });
       return;
     }
+    if (payload.model === "deterministic-failure-once" && attempts === 1) {
+      sendJson(response, 503, { error: { message: "deterministic provider failure once" } });
+      return;
+    }
+    if (payload.model === "deterministic-malformed") {
+      sendJson(response, 200, { choices: [{ message: { content: "{not valid JSON" } }] });
+      return;
+    }
     const reply = () => {
       if (payload.stream) {
-        response.writeHead(200, { "content-type": "text/event-stream" });
+        response.writeHead(200, { "access-control-allow-origin": "*", "content-type": "text/event-stream" });
         for (const text of ["Deterministic ", "desktop response"]) {
           response.write(`data: ${JSON.stringify({ choices: [{ delta: { content: text } }] })}\n\n`);
         }

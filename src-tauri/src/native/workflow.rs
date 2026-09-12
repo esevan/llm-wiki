@@ -90,6 +90,7 @@ fn feature_row(row: &Row<'_>) -> rusqlite::Result<Value> {
     }))
 }
 
+#[allow(dead_code)]
 pub fn create_capture(db_path: &Path, input: &Value) -> Result<Value, String> {
     let text = required_text(input, "text")?.trim();
     if text.len() > 20_000 {
@@ -1053,6 +1054,15 @@ pub fn item_for_locale(
         _ => Err("Unsupported item type".into()),
     };
     let mut value = value_result?;
+    if entity_type == "problems" {
+        value["problemRevision"] = json!(connection
+            .query_row(
+                "SELECT current_revision FROM problems WHERE id=?",
+                [entity_id],
+                |row| row.get::<_, i64>(0)
+            )
+            .map_err(|error| error.to_string())?);
+    }
     value["sourceRevision"]=json!(connection.query_row("SELECT revision FROM work_tracking_entity_versions WHERE entity_type=? AND entity_id=?",params![entity_type,entity_id],|row|row.get::<_,i64>(0)).optional().map_err(|error|error.to_string())?.unwrap_or(0));
     value["trackedSessionId"]=connection.query_row("SELECT s.id FROM work_tracking_links l JOIN work_tracking_sessions s ON s.id=l.session_id WHERE l.entity_type=? AND l.entity_id=? AND s.state!='completed' ORDER BY s.updated_at DESC LIMIT 1",params![entity_type,entity_id],|row|row.get::<_,String>(0)).optional().map_err(|error|error.to_string())?.map(Value::from).unwrap_or(Value::Null);
     Ok(value)

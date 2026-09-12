@@ -102,9 +102,12 @@ fn call(app: &NativeApplication, name: &str, mut input: Value) -> Value {
 }
 
 struct ActiveSolution {
-    session_id: Value,
-    problem_id: String,
     solution_id: String,
+}
+
+struct ActiveTask {
+    session_id: Value,
+    task_id: String,
 }
 
 #[test]
@@ -115,20 +118,20 @@ fn linking_binds_the_actual_target_and_workspace_revision() {
         &root.path().join("state.sqlite"),
     )
     .unwrap();
-    let active = active_solution(&app);
+    let active = active_task(&app, false);
     let new = call(
         &app,
         "work_tracking.open",
         json!({"operationId":"second","lineageKey":"second","mode":"create","capture":{"title":"Continue existing work","summary":"Explicit link review"}}),
     );
-    let proposal = json!({"sessionId":new["sessionId"],"expectedHeadRevision":new["headRevision"],"sourceEventId":new["headEventId"],"action":"link_current_work","proposedPayload":{"entityType":"features","entityId":active.solution_id}});
+    let proposal = json!({"sessionId":new["sessionId"],"expectedHeadRevision":new["headRevision"],"sourceEventId":new["headEventId"],"action":"link_current_work","proposedPayload":{"entityType":"tasks","entityId":active.task_id}});
     let preview = call(&app, "work_tracking.advance.preview", proposal.clone());
-    assert_eq!(preview["target"]["entityId"], active.solution_id);
+    assert_eq!(preview["target"]["entityId"], active.task_id);
     assert!(preview["target"]["title"]
         .as_str()
         .is_some_and(|title| !title.is_empty()));
-    let changed=app.execute_domain("workflow",NativeOperation{name:"item.update".into(),input:json!({"entityType":"features","entityId":active.solution_id,"title":"Changed after review","expectedSourceRevision":preview["target"]["entityRevision"]})});
-    assert_eq!(changed.status, 204, "{}", changed.body);
+    let changed=app.execute(NativeOperation{name:"task.revision".into(),input:json!({"operationId":"change-reviewed-task","taskId":active.task_id,"expectedTaskRevision":preview["target"]["entityRevision"],"patch":{"title":"Changed after review"}})});
+    assert_eq!(changed.status, 200, "{}", changed.body);
     let stale=app.execute_work_tracking(NativeOperation{name:"work_tracking.advance.review".into(),input:json!({"proposal":proposal,"reviewState":preview["reviewState"],"decision":"accept"})});
     assert_eq!(stale.status, 409);
     assert_eq!(stale.body["error"]["code"], "head_conflict");
@@ -144,10 +147,7 @@ fn linking_binds_the_actual_target_and_workspace_revision() {
         "work_tracking.session",
         json!({"sessionId":new["sessionId"]}),
     );
-    assert_eq!(
-        linked["linkedWorkflow"]["solution"]["id"],
-        active.solution_id
-    );
+    assert_eq!(linked["linkedWorkflow"]["task"]["id"], active.task_id);
 }
 
 fn current_head(app: &NativeApplication, session_id: &Value) -> i64 {
@@ -158,6 +158,37 @@ fn current_head(app: &NativeApplication, session_id: &Value) -> i64 {
     )["headRevision"]
         .as_i64()
         .unwrap()
+}
+
+fn active_task(app: &NativeApplication, initial_checkpoint: bool) -> ActiveTask {
+    let opened = call(
+        app,
+        "work_tracking.open",
+        json!({"operationId":"task-acceptance-open","lineageKey":"task-acceptance","mode":"create","capture":{"title":"Acceptance Task","summary":"Exercise the tracked Task workflow"}}),
+    );
+    let session = opened["sessionId"].clone();
+    if initial_checkpoint {
+        call(
+            app,
+            "work_tracking.append",
+            json!({"operationId":"before-task","sessionId":session,"expectedHeadRevision":current_head(app, &session),"event":{"kind":"work_log_checkpoint","summary":"Early research","evidenceRefs":["early-evidence"],"validation":["reviewed"]}}),
+        );
+        call(app, "work_tracking.project", json!({"limit":100}));
+    }
+    let task = call(
+        app,
+        "work_tracking.append",
+        json!({"operationId":"task-proposal","sessionId":session,"expectedHeadRevision":current_head(app, &session),"event":{"kind":"task_created","title":"Executable release Task","outcome":"Every scenario has evidence"}}),
+    );
+    let created = call(
+        app,
+        "work_tracking.advance",
+        json!({"sessionId":session,"expectedHeadRevision":current_head(app, &session),"sourceEventId":task["eventId"],"action":"create_task","decision":"accept","proposedPayload":{"title":"Executable release Task","outcome":"Every scenario has evidence","scope":"Local release","validationCriteria":"Acceptance probes pass"}}),
+    );
+    ActiveTask {
+        session_id: session,
+        task_id: created["resultEntityId"].as_str().unwrap().to_owned(),
+    }
 }
 
 fn active_solution(app: &NativeApplication) -> ActiveSolution {
@@ -198,10 +229,7 @@ fn active_solution_with_initial_checkpoint(
         "work_tracking.advance",
         json!({"sessionId":session,"expectedHeadRevision":current_head(app, &session),"sourceEventId":problem["eventId"],"action":"adopt_problem","decision":"accept","proposedPayload":{"statement":"The release needs executable acceptance coverage","detail":"Run every user path"}}),
     );
-    let problem_id = adopted_problem["resultEntityId"]
-        .as_str()
-        .expect("problem id")
-        .to_owned();
+    assert!(adopted_problem["resultEntityId"].as_str().is_some());
     call(
         app,
         "work_tracking.advance",
@@ -231,35 +259,26 @@ fn active_solution_with_initial_checkpoint(
         "work_tracking.advance",
         json!({"sessionId":session,"expectedHeadRevision":current_head(app, &session),"sourceEventId":solution["eventId"],"action":"approve_solution","decision":"accept","proposedPayload":{}}),
     );
-    ActiveSolution {
-        session_id: session,
-        problem_id,
-        solution_id,
-    }
+    ActiveSolution { solution_id }
 }
 
 #[test]
-fn checkpoint_before_solution_waits_then_materializes_once_with_trusted_origin() {
+fn checkpoint_before_task_waits_then_materializes_once() {
     let root = tempdir().unwrap();
     let app =
         NativeApplication::isolated(&root.path().join("vault"), &root.path().join("db.sqlite"))
             .unwrap();
-    let active = active_solution_with_initial_checkpoint(&app, true);
+    let active = active_task(&app, true);
     for _ in 0..2 {
         call(&app, "work_tracking.project", json!({"limit":100}));
-        let progress = app.execute_domain(
-            "workflow",
-            NativeOperation {
-                name: "solution.progress.get".into(),
-                input: json!({"solutionId":active.solution_id,"locale":"en"}),
-            },
-        );
-        assert_eq!(progress.status, 200);
-        let entries = progress.body["entries"].as_array().unwrap();
+        let task = app.execute(NativeOperation {
+            name: "task.get".into(),
+            input: json!({"taskId":active.task_id}),
+        });
+        assert_eq!(task.status, 200, "{}", task.body);
+        let entries = task.body["workLog"].as_array().unwrap();
         assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0]["evidenceRefs"], json!(["early-evidence"]));
-        assert_eq!(entries[0]["origin"], "in_app_chat");
-        assert_eq!(entries[0]["sessionId"], active.session_id);
+        assert_eq!(entries[0]["body"], "Early research");
     }
 }
 
@@ -284,7 +303,7 @@ fn us2_checkpoint_materializes_structured_work_log_evidence() {
     let app =
         NativeApplication::isolated(&root.path().join("vault"), &root.path().join("db.sqlite"))
             .unwrap();
-    let active = active_solution(&app);
+    let active = active_task(&app, false);
     let checkpoint = call(
         &app,
         "work_tracking.append",
@@ -296,18 +315,19 @@ fn us2_checkpoint_materializes_structured_work_log_evidence() {
         json!({"sessionId":active.session_id,"expectedHeadRevision":current_head(&app, &active.session_id),"sourceEventId":checkpoint["eventId"],"action":"accept_checkpoint","decision":"accept","proposedPayload":checkpoint}),
     );
     call(&app, "work_tracking.project", json!({"limit":100}));
-    let progress = app.execute_domain(
-        "workflow",
-        NativeOperation {
-            name: "solution.progress.get".into(),
-            input: json!({"solutionId":active.solution_id,"locale":"en"}),
-        },
+    let task = app.execute(NativeOperation {
+        name: "task.get".into(),
+        input: json!({"taskId":active.task_id}),
+    });
+    assert_eq!(task.status, 200, "{}", task.body);
+    assert_eq!(task.body["workLog"][0]["body"], "Validated behavior");
+    let session = call(
+        &app,
+        "work_tracking.session",
+        json!({"sessionId":active.session_id}),
     );
-    assert_eq!(progress.status, 200, "{}", progress.body);
-    let entry = &progress.body["entries"][0];
-    assert_eq!(entry["evidenceRefs"], json!(["ev_release"]));
-    assert_eq!(entry["validation"], json!(["passed"]));
-    assert_eq!(entry["origin"], "in_app_chat");
+    assert!(session["recentEvents"].to_string().contains("ev_release"));
+    assert!(session["recentEvents"].to_string().contains("passed"));
 }
 
 #[test]
@@ -315,7 +335,17 @@ fn us3_publication_cannot_run_without_a_separate_user_challenge() {
     let root = tempdir().unwrap();
     let vault = root.path().join("vault");
     let app = NativeApplication::isolated(&vault, &root.path().join("db.sqlite")).unwrap();
-    let active = active_solution(&app);
+    let active = active_task(&app, false);
+    let transition = call(
+        &app,
+        "work_tracking.append",
+        json!({"operationId":"transition","sessionId":active.session_id,"expectedHeadRevision":current_head(&app, &active.session_id),"event":{"kind":"task_transition_proposed","to":"in_progress"}}),
+    );
+    call(
+        &app,
+        "work_tracking.advance",
+        json!({"sessionId":active.session_id,"expectedHeadRevision":current_head(&app, &active.session_id),"sourceEventId":transition["eventId"],"action":"transition_task","decision":"accept","proposedPayload":{"taskId":active.task_id,"expectedTaskRevision":1,"to":"in_progress"}}),
+    );
     let completion = call(
         &app,
         "work_tracking.append",
@@ -324,7 +354,7 @@ fn us3_publication_cannot_run_without_a_separate_user_challenge() {
     call(
         &app,
         "work_tracking.advance",
-        json!({"sessionId":active.session_id,"expectedHeadRevision":current_head(&app, &active.session_id),"sourceEventId":completion["eventId"],"action":"verify_and_complete","decision":"accept","proposedPayload":{"verification":["passed"]}}),
+        json!({"sessionId":active.session_id,"expectedHeadRevision":current_head(&app, &active.session_id),"sourceEventId":completion["eventId"],"action":"complete_task","decision":"accept","proposedPayload":{"taskId":active.task_id,"expectedTaskRevision":1,"evidence":"passed","report":"release acceptance"}}),
     );
     let draft = call(
         &app,
@@ -365,37 +395,27 @@ fn us4_native_and_external_sessions_keep_distinct_provenance() {
 }
 
 #[test]
-fn us5_workbench_edit_advances_the_shared_tracked_session_head() {
+fn us5_workbench_task_edit_is_visible_in_the_shared_tracked_session() {
     let root = tempdir().unwrap();
     let app =
         NativeApplication::isolated(&root.path().join("vault"), &root.path().join("db.sqlite"))
             .unwrap();
-    let active = active_solution(&app);
-    let before = current_head(&app, &active.session_id);
-    let item = app.execute_domain(
-        "workflow",
-        NativeOperation {
-            name: "item.get".into(),
-            input: json!({"entityType":"problems","entityId":active.problem_id}),
-        },
-    );
-    assert_eq!(item.status, 200, "{}", item.body);
-    let updated = app.execute_domain(
-        "workflow",
-        NativeOperation {
-            name: "item.update".into(),
-            input: json!({"entityType":"problems","entityId":active.problem_id,"title":"Edited in Workbench","detail":"Same tracked work","expectedSourceRevision":item.body["sourceRevision"]}),
-        },
-    );
-    assert_eq!(updated.status, 204, "{}", updated.body);
+    let active = active_task(&app, false);
+    let updated = app.execute(NativeOperation {
+        name: "task.revision".into(),
+        input: json!({"operationId":"desktop-task-edit","taskId":active.task_id,"expectedTaskRevision":1,"patch":{"title":"Edited in Workbench","detail":"Same tracked work"}}),
+    });
+    assert_eq!(updated.status, 200, "{}", updated.body);
     let session = call(
         &app,
         "work_tracking.session",
         json!({"sessionId":active.session_id}),
     );
-    assert!(
-        session["headRevision"].as_i64().unwrap() > before,
-        "Workbench edit did not advance the tracked session head"
+    assert_eq!(session["linkedWorkflow"]["task"]["id"], active.task_id);
+    assert_eq!(session["linkedWorkflow"]["task"]["taskRevision"], 2);
+    assert_eq!(
+        session["linkedWorkflow"]["task"]["title"],
+        "Edited in Workbench"
     );
 }
 

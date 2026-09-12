@@ -1,3 +1,6 @@
+> **Partially superseded for schema 8+**: Queue/retry/cancel behavior remains; workflow targets and
+> review currentness follow [012](../../012-task-centered-workbench/contracts/application-api.md).
+
 # Durable Jobs API Contract
 
 ## Migration compatibility

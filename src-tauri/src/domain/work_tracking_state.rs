@@ -32,6 +32,10 @@ impl ProjectionStatus {
 #[serde(rename_all = "snake_case")]
 pub enum EventKind {
     Capture,
+    TaskCreated,
+    TaskRevisionProposed,
+    TaskTransitionProposed,
+    ProblemResolutionProposed,
     ProblemDraft,
     SolutionDraft,
     WorkLogCheckpoint,
@@ -48,6 +52,10 @@ impl EventKind {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Capture => "capture",
+            Self::TaskCreated => "task_created",
+            Self::TaskRevisionProposed => "task_revision_proposed",
+            Self::TaskTransitionProposed => "task_transition_proposed",
+            Self::ProblemResolutionProposed => "problem_resolution_proposed",
             Self::ProblemDraft => "problem_draft",
             Self::SolutionDraft => "solution_draft",
             Self::WorkLogCheckpoint => "work_log_checkpoint",

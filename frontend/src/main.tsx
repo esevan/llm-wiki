@@ -26,4 +26,4 @@ flushSync(() => {
     </StrictMode>,
   );
 });
-if (!isFirstRunIntro) installDesktopScenario();
+installDesktopScenario();

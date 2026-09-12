@@ -1,3 +1,7 @@
+> **Partially superseded for schema 8+**: Scoped Vault evidence and inspectable citations remain.
+> Feature-only identity and gate semantics are replaced by exact Capture-draft/Task subjects and
+> nonblocking eight-state review in [012](../012-task-centered-workbench/spec.md).
+
 # Feature Specification: Evidence-Rich Vault Conflict Review
 
 **Feature Branch**: `008-vault-conflict-evidence`

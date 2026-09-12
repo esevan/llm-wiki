@@ -32,3 +32,25 @@ jobs:
       - run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
       - run: cargo test --manifest-path src-tauri/Cargo.toml
       - run: npm run tauri:build -- --no-bundle
+      - name: Packaged desktop E2E (macOS)
+        if: runner.os == 'macOS'
+        env:
+          LLM_WIKI_E2E_EXECUTABLE: ${{ github.workspace }}/src-tauri/target/release/llm-wiki-desktop
+          LLM_WIKI_E2E_ARTIFACT_DIR: ${{ github.workspace }}/.tmp/desktop-e2e-artifacts
+        run: npm run test:desktop
+      - name: Packaged desktop E2E (Windows)
+        if: runner.os == 'Windows'
+        env:
+          LLM_WIKI_E2E_EXECUTABLE: ${{ github.workspace }}\src-tauri\target\release\llm-wiki-desktop.exe
+          LLM_WIKI_E2E_ARTIFACT_DIR: ${{ github.workspace }}\.tmp\desktop-e2e-artifacts
+        run: npm run test:desktop
+      - name: Packaged desktop E2E unavailable (Linux)
+        if: runner.os == 'Linux'
+        run: echo "Packaged desktop E2E unavailable on this Linux runner; this job only validates the no-bundle build."
+      - name: Upload desktop E2E failure artifacts
+        if: failure() && (runner.os == 'macOS' || runner.os == 'Windows')
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-e2e-${{ runner.os }}
+          path: ${{ github.workspace }}/.tmp/desktop-e2e-artifacts
+          if-no-files-found: ignore

@@ -3,474 +3,1040 @@ import {
   desktopE2eMode,
   reportDesktopE2eProgress,
   type DesktopE2eResult,
-} from '../services/tauriApplicationClient';
-import { getVaultSetupStatus } from '../services/vaultSetupClient';
-import { invoke } from '@tauri-apps/api/core';
+} from "../services/tauriApplicationClient";
+import { invoke } from "@tauri-apps/api/core";
+import {
+  runLegacyChatTrackingScenario,
+  runLegacyPreviewWarningRetryScenario,
+  prepareRefinementRelaunchScenario,
+  runRefinementClosePendingScenario,
+  runRefinementCloseRetryScenario,
+  runRefinementProviderRecoveryScenario,
+  runTaskChatScenario,
+} from "./chatScenarios";
+import {
+  runLegacyProblemRefinementScenario,
+  runTaskControlMatrixScenario,
+  runWorkbenchRetryScenario,
+  type WorkbenchTask,
+} from "./workbenchScenarios";
+import { createInteractionCoverage } from "./productionInteractiveSources";
+import {
+  runCompassGoalScenario,
+  runFirstRunIntroNavigationScenario,
+  runFirstRunIntroRetryScenario,
+  runMcpSettingsScenario,
+  runMigrationRestoreScenario,
+  runMigrationRetryScenario,
+  runNoticeScenario,
+  runProviderSettingsScenario,
+  runQueueNotificationActionsScenario,
+  runSearchScenario,
+  runShellNavigationScenario,
+  runVaultChooseScenario,
+  runVaultRetryScenario,
+} from "./globalScenarios";
 
-const waitFor = async (condition: () => boolean, description: string) => {
-  if (condition()) return;
-  await new Promise<void>((resolve, reject) => {
-    const observer = new MutationObserver(() => {
-      if (!condition()) return;
-      window.clearTimeout(timeout);
-      observer.disconnect();
-      resolve();
-    });
-    const timeout = window.setTimeout(() => {
-      observer.disconnect();
-      reject(new Error(`Timed out waiting for ${description}`));
-    }, 10_000);
-    observer.observe(document.documentElement, {
-      attributes: true,
-      characterData: true,
-      childList: true,
-      subtree: true,
-    });
-  });
-  if (!condition()) throw new Error(`Did not observe ${description}`);
+type Task = {
+  id: string;
+  title: string;
+  detail?: string;
+  outcome?: string;
+  scope?: string;
+  nonGoals?: string;
+  validationCriteria?: string;
+  taskRevision: number;
+  state: string;
+  workLog?: Array<{
+    id: string;
+    body?: string;
+    attachment?: { name?: string };
+    comments?: Array<{ body: string }>;
+  }>;
+  checklist?: Array<{ checked: boolean }>;
+  decisions?: Array<{ body?: string }>;
+  problemLinks?: Array<{ problemId: string; problemRevision: number }>;
+  relationships?: Array<{ targetTaskId: string }>;
+  completion?: unknown;
+  publication?: { state?: string; draftRevision?: number };
 };
-
-/**
- * A packaged desktop check must prove both that a control can receive a pointer
- * event at its rendered position and that its click handler changes observable
- * application state.  `HTMLElement.click()` alone can mask a covered or
- * zero-sized control, so check the centre point before dispatching it.
- */
-const clickRenderedButton = (selector: string, description: string) => {
-  const button = document.querySelector<HTMLButtonElement>(selector);
-  if (!button) throw new Error(`Missing ${description} (${selector})`);
-  if (button.disabled) throw new Error(`${description} was unexpectedly disabled`);
-  button.scrollIntoView({ block: 'center', inline: 'center' });
-  const box = button.getBoundingClientRect();
-  if (box.width <= 0 || box.height <= 0) throw new Error(`${description} has no clickable area`);
-  const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
-  if (!hit || (hit !== button && !button.contains(hit))) {
-    throw new Error(`${description} is covered at its click target`);
+type RefinementSnapshot = {
+  inputDraft?: string;
+  activeTab?: string;
+  messages?: Array<{ id: string }>;
+};
+const pause = (ms: number) =>
+  new Promise((resolve) => window.setTimeout(resolve, ms));
+async function waitFor(check: () => boolean, label: string) {
+  for (let i = 0; i < 200; i += 1) {
+    if (check()) return;
+    await pause(50);
   }
-  button.click();
-  return button;
-};
-
-interface CreatedRecord {
-  id: string;
+  throw new Error(`Timed out waiting for ${label}`);
 }
-
-interface BoardRecord {
-  id: string;
-  text?: string;
-  state?: string;
-  localized_versions?: Record<string, { text?: string }>;
-}
-
-interface BoardResponse {
-  captures: BoardRecord[];
-  problems: BoardRecord[];
-}
-
-const waitForJobKind = async (taskKind: string, entityId: string) => {
-  for (let attempt = 0; attempt < 200; attempt += 1) {
-    const result = await applicationJson<{ jobs: Array<JobResponse & { entity_id?: string }> }>('/jobs');
-    const job = result.jobs.find((item) => item.task_kind === taskKind && item.entity_id === entityId);
-    if (job) return job;
-    await new Promise((resolve) => window.setTimeout(resolve, 50));
+async function waitForAsync(check: () => Promise<boolean>, label: string) {
+  for (let i = 0; i < 200; i += 1) {
+    if (await check()) return;
+    await pause(50);
   }
-  throw new Error(`${taskKind} was not queued for ${entityId}`);
-};
-
-interface CompletionResponse {
-  path: null;
-  publication_state: 'offered';
-  closed: {
-    solutions: string[];
-    problem: string;
-    capture: string | null;
-  };
+  throw new Error(`Timed out waiting for ${label}`);
 }
-
-interface LineageResponse {
-  lineage: { stages: Array<{ kind: string }> };
-}
-
-interface JobResponse {
-  id: string;
-  status: string;
-  task_kind?: string;
-}
-
-const applicationJson = async <T>(
+async function api<T>(
   path: string,
-  method: 'GET' | 'POST' | 'PUT' | 'DELETE' = 'GET',
-  body?: object,
-) => {
+  method: "GET" | "POST" | "PUT" | "DELETE" = "GET",
+  body?: Record<string, unknown>,
+) {
   const response = await window.llmWikiApplication.request({
     path,
     method,
-    headers: { 'Content-Type': 'application/json', 'X-LLM-Wiki-Locale': 'en' },
-    body: body === undefined ? undefined : JSON.stringify(body),
+    headers: {
+      "Content-Type": "application/json",
+      "X-LLM-Wiki-Locale": document.documentElement.lang || "en",
+    },
+    body: body
+      ? JSON.stringify({ operationId: crypto.randomUUID(), ...body })
+      : undefined,
   });
-  if (!response.ok) throw new Error(`${method} ${path} failed (${response.status}): ${await response.text()}`);
+  if (!response.ok)
+    throw new Error(`${method} ${path}: ${await response.text()}`);
   return response.status === 204 ? (undefined as T) : response.json<T>();
-};
+}
+function enter(element: HTMLInputElement | HTMLTextAreaElement, value: string) {
+  element.focus();
+  const setter = Object.getOwnPropertyDescriptor(
+    Object.getPrototypeOf(element),
+    "value",
+  )?.set;
+  if (!setter) throw new Error("Input value setter is unavailable");
+  setter.call(element, value);
+  element.dispatchEvent(new Event("input", { bubbles: true }));
+  element.dispatchEvent(new Event("change", { bubbles: true }));
+}
+/** Webview automation has no native pointer adapter. Synthetic click remains accepted only after a visible centre-point hit test. */
+function clickElement(el: HTMLElement, label: string) {
+  if (el instanceof HTMLButtonElement && el.disabled)
+    throw new Error(`${label} is disabled`);
+  el.scrollIntoView({ block: "center" });
+  const rect = el.getBoundingClientRect();
+  if (rect.width < 1 || rect.height < 1)
+    throw new Error(`${label} has no hit area`);
+  const hit = document.elementFromPoint(
+    rect.left + rect.width / 2,
+    rect.top + rect.height / 2,
+  );
+  if (!hit || (hit !== el && !el.contains(hit)))
+    throw new Error(`${label} is covered`);
+  el.click();
+}
+function click(selector: string, label: string) {
+  const el = document.querySelector<HTMLElement>(selector);
+  if (!el) throw new Error(`Missing ${label}`);
+  clickElement(el, label);
+}
+const report = (result: DesktopE2eResult) => completeDesktopE2e(result);
+let e2eProviderUrl = "";
 
-const waitForJobResult = async <T>(jobId: string) => {
-  for (let attempt = 0; attempt < 200; attempt += 1) {
-    const job = await applicationJson<JobResponse>(`/jobs/${jobId}`);
-    if (['completed', 'awaiting_review'].includes(job.status)) {
-      return applicationJson<{ result: T }>(`/jobs/${jobId}/result`).then((value) => value.result);
-    }
-    if (['failed', 'cancelled', 'stale'].includes(job.status)) {
-      throw new Error(`Desktop job ${jobId} ended as ${job.status}`);
-    }
-    await new Promise((resolve) => window.setTimeout(resolve, 50));
+async function workbench() {
+  await waitFor(
+    () => document.documentElement.dataset.applicationReady === "true",
+    "application initialization",
+  );
+  const locale = document.querySelector<HTMLSelectElement>("#locale-select");
+  if (locale && document.documentElement.lang !== "en") {
+    locale.value = "en";
+    locale.dispatchEvent(new Event("change", { bubbles: true }));
+    await waitFor(() => document.documentElement.lang === "en", "English setup");
   }
-  throw new Error(`Desktop job ${jobId} did not finish`);
-};
-
-const waitForIdleJobs = async () => {
-  for (let attempt = 0; attempt < 200; attempt += 1) {
-    const result = await applicationJson<{ jobs: JobResponse[] }>('/jobs');
-    const failedJob = result.jobs.find((job) => job.status === 'failed');
-    if (failedJob) throw new Error(`${failedJob.task_kind ?? 'Background job'} ${failedJob.id} failed`);
-    if (!result.jobs.some((job) => ['queued', 'running', 'retryable', 'cancelling'].includes(job.status))) return;
-    await new Promise((resolve) => window.setTimeout(resolve, 50));
+  click('[data-view="workbench"]', "Workbench navigation");
+  await waitFor(
+    () =>
+      document.getElementById("workbench")?.classList.contains("active") ??
+      false,
+    "Task Workbench",
+  );
+}
+async function taskDetailIdle(label: string) {
+  await waitFor(
+    () => document.querySelector(".task-detail")?.getAttribute("aria-busy") !== "true",
+    `idle Task detail before ${label}`,
+  );
+}
+async function create(title: string, kind: "capture" | "task" = "task") {
+  const mode = [
+    ...document.querySelectorAll<HTMLInputElement>('input[name="entry-mode"]'),
+  ].find((input) => input.value === kind);
+  if (!mode) throw new Error(`Missing ${kind} mode`);
+  clickElement(mode, `${kind} mode`);
+  await pause(50);
+  const field = document.querySelector<HTMLTextAreaElement>("#task-input-text");
+  if (!field) throw new Error("Missing Workbench entry");
+  enter(field, title);
+  await waitFor(
+    () => field.value === title && !document.querySelector<HTMLButtonElement>('#workbench form button[type="submit"]')?.disabled,
+    `committed ${kind} entry`,
+  );
+  click('#workbench form button[type="submit"]', "Save entry");
+  await waitForAsync(
+    async () => {
+      const snapshot = await api<{
+        categories: Array<{
+          items: Array<{ kind: string; text?: string; title?: string }>;
+        }>;
+      }>("/workbench");
+      return snapshot.categories
+        .flatMap((category) => category.items)
+        .some(
+          (item) =>
+            item.kind === kind && (item.kind === "task" ? item.title : item.text) === title,
+        );
+    },
+    `canonical ${kind}`,
+  );
+  await waitFor(
+    () =>
+      [...document.querySelectorAll<HTMLElement>(".canonical-card")].some((card) =>
+        card.textContent?.includes(title),
+      ),
+    `rendered ${kind}`,
+  );
+}
+async function task(title: string) {
+  const snapshot = await api<{
+    categories: Array<{
+      items: Array<{ id: string; kind: string; title?: string }>;
+    }>;
+  }>("/workbench");
+  const item = snapshot.categories
+    .flatMap((group) => group.items)
+    .find((item) => item.kind === "task" && item.title === title);
+  if (!item) throw new Error(`Task ${title} missing from canonical projection`);
+  return api<Task>(`/tasks/${item.id}`);
+}
+async function detail(title: string) {
+  const card = [
+    ...document.querySelectorAll<HTMLElement>(".canonical-card"),
+  ].find((card) => card.querySelector("h3")?.textContent?.trim() === title);
+  const button = card?.querySelector<HTMLButtonElement>("button");
+  if (!button) throw new Error(`No detail control for ${title}`);
+  clickElement(button, `Open ${title}`);
+  await waitFor(
+    () =>
+      document.querySelector(".task-detail")?.textContent?.includes(title) ??
+      false,
+    "Task detail",
+  );
+}
+function field(label: string) {
+  const control = [
+    ...document.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>(
+      ".task-detail input, .task-detail textarea",
+    ),
+  ].find((item) => item.getAttribute("aria-label") === label);
+  if (!control) {
+    const detailState = document.querySelector(".task-detail")?.innerHTML ?? "absent";
+    const completion = document.getElementById("task-completion-evidence");
+    throw new Error(
+      `Missing ${label}; completion=${completion?.outerHTML ?? "absent"}; controls=${document.querySelectorAll(".task-detail input, .task-detail textarea").length}; Task detail DOM: ${detailState.slice(-1600)}`,
+    );
   }
-  throw new Error('Desktop background jobs did not quiesce');
-};
+  return control;
+}
+async function clickAfter(label: string, description: string) {
+  await taskDetailIdle(description);
+  const control = field(label);
+  const button =
+    control.parentElement?.querySelector<HTMLElement>("button") ??
+    (control.nextElementSibling as HTMLElement | null);
+  if (!button) throw new Error(`Missing ${description}`);
+  clickElement(button, description);
+}
 
-const waitForSemanticStartupIndex = async () => {
-  for (let attempt = 0; attempt < 200; attempt += 1) {
-    const search = await applicationJson<{
-      results: Array<{ semantic_score: number | null }>;
-      semantic_available: boolean;
-    }>('/search?q=startup&semantic=true');
-    if (search.semantic_available && typeof search.results[0]?.semantic_score === 'number') return;
-    await new Promise((resolve) => window.setTimeout(resolve, 50));
-  }
-  throw new Error('Startup Vault indexing did not prepare bundled semantic Search');
-};
-
-const applicationText = async (path: string, body: object) => {
-  const response = await window.llmWikiApplication.request({
-    path,
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'X-LLM-Wiki-Locale': 'en' },
-    body: JSON.stringify(body),
+async function capture(step: Step) {
+  const c = `capture ${Date.now()}`,
+    t = `direct task ${Date.now()}`;
+  await create(c, "capture");
+  await create(t);
+  const saved = await task(t);
+  if (saved.state !== "task")
+    throw new Error("Direct Task state was not persisted");
+  await step(
+    "Rendered Capture and direct-Task controls created canonical records; the Task was independently read back.",
+  );
+}
+async function log(step: Step) {
+  const title = `work log ${Date.now()}`;
+  await create(title);
+  await detail(title);
+  enter(field("Work Log entry"), "visible work evidence");
+  await clickAfter("Work Log entry", "Add Work Log");
+  await waitFor(
+    () =>
+      document
+        .querySelector(".log-entry")
+        ?.textContent?.includes("visible work evidence") ?? false,
+    "Work Log",
+  );
+  const comment = document.querySelector<HTMLInputElement>(".log-entry input")!;
+  enter(comment, "reviewed");
+  clickElement(
+    comment.parentElement!.querySelector<HTMLButtonElement>("button")!,
+    "Add Work Log comment",
+  );
+  await waitForAsync(async () =>
+    (await task(title)).workLog?.some((item) => item.comments?.some((savedComment) => savedComment.body === "reviewed")) ?? false,
+  "persisted Work Log comment");
+  await taskDetailIdle("adding an attachment");
+  const file = document.querySelector<HTMLInputElement>(
+    '[aria-label="Attach image or file"]',
+  )!;
+  const files = new DataTransfer();
+  files.items.add(
+    new File(["desktop evidence"], "evidence.txt", { type: "text/plain" }),
+  );
+  Object.defineProperty(file, "files", { value: files.files });
+  file.dispatchEvent(new Event("change", { bubbles: true }));
+  enter(field("Work Log entry"), "attached evidence");
+  await clickAfter("Work Log entry", "Add attachment");
+  await waitForAsync(async () => (await task(title)).workLog?.some((item) => item.attachment?.name === "evidence.txt") ?? false, "persisted attachment");
+  enter(field("Checklist item"), "verify result");
+  await clickAfter("Checklist item", "Add checklist");
+  await waitFor(
+    () => !!document.querySelector('.task-detail input[type="checkbox"]'),
+    "checklist",
+  );
+  clickElement(
+    document.querySelector<HTMLInputElement>(
+      '.task-detail input[type="checkbox"]',
+    )!,
+    "Check checklist item",
+  );
+  await waitForAsync(
+    async () => (await task(title)).checklist?.some((item) => item.checked) ?? false,
+    "checked checklist item",
+  );
+  enter(field("Decision"), "ship deliberately");
+  await clickAfter("Decision", "Add decision");
+  await waitForAsync(
+    async () =>
+      (await task(title)).decisions?.some(
+        (item) => item.body === "ship deliberately",
+      ) ?? false,
+    "saved decision",
+  );
+  const saved = await task(title);
+  if (
+    !saved.workLog?.[0]?.comments?.some((item) => item.body === "reviewed") ||
+    !saved.workLog?.some((item) => item.attachment?.name === "evidence.txt") ||
+    !saved.checklist?.some((item) => item.checked) ||
+    !saved.decisions?.some((item) => item.body === "ship deliberately")
+  )
+    throw new Error(
+      "Work Log, attachment, comment, checklist, or decision did not persist",
+    );
+  await step(
+    "Rendered Work Log, file attachment, comment, checklist, and decision controls persisted their evidence.",
+  );
+}
+async function refinement(step: Step) {
+  const a = `refine A ${Date.now()}`,
+    b = `refine B ${Date.now()}`;
+  await create(a);
+  await create(b);
+  await detail(a);
+  click(".task-actions button", "Refine A");
+  await waitFor(
+    () => !!document.querySelector(".refinement-panel"),
+    "A refinement",
+  );
+  enter(
+    document.querySelector<HTMLTextAreaElement>(
+      '[aria-label="Saved refinement note"]',
+    )!,
+    "A unsent note",
+  );
+  const messages = document.querySelector<HTMLDivElement>(
+    ".refinement-messages",
+  )!;
+  messages.scrollTop = 0;
+  messages.dispatchEvent(new Event("scroll", { bubbles: true }));
+  const proposalsTab = document.querySelectorAll<HTMLButtonElement>(
+    ".refinement-panel .panel-tabs button",
+  )[1];
+  if (!proposalsTab) throw new Error("Missing refinement Proposals tab");
+  clickElement(proposalsTab, "Select A proposals tab");
+  await pause(650);
+  click(".refinement-panel header button", "Close A refinement");
+  click('[aria-label="Close Task detail"]', "Close A detail");
+  await detail(b);
+  click(".task-actions button", "Refine B");
+  await waitFor(
+    () => !!document.querySelector(".refinement-panel"),
+    "B refinement",
+  );
+  click(".refinement-panel header button", "Close B refinement");
+  click('[aria-label="Close Task detail"]', "Close B detail");
+  await detail(a);
+  click(".task-actions button", "Resume A refinement");
+  await waitFor(
+    () =>
+      document
+        .querySelectorAll<HTMLButtonElement>(
+          ".refinement-panel .panel-tabs button",
+        )[1]
+        ?.getAttribute("aria-pressed") === "true",
+    "A refinement tab restore",
+  );
+  clickElement(
+    document.querySelectorAll<HTMLButtonElement>(
+      ".refinement-panel .panel-tabs button",
+    )[0],
+    "Return to A conversation",
+  );
+  await waitFor(
+    () =>
+      document.querySelector<HTMLTextAreaElement>(
+        '[aria-label="Saved refinement note"]',
+      )?.value === "A unsent note",
+    "A workspace restore",
+  );
+  await step(
+    "A→B→A refinement restored the unsent note, active tab, and scroll workspace after UI close/reopen.",
+  );
+}
+async function relationships(step: Step) {
+  const a = `relationship A ${Date.now()}`,
+    b = `relationship B ${Date.now()}`;
+  await create(a);
+  await create(b);
+  const target = await task(b);
+  await detail(a);
+  clickElement(
+    document.querySelector<HTMLDetailsElement>(".connection-details > summary")!,
+    "Open connection details",
+  );
+  enter(
+    field("New Problem statement"),
+    "Known Problem with a preserved solution",
+  );
+  await clickAfter("New Problem statement", "Create and link Problem");
+  await waitFor(
+    () =>
+      !!document
+        .querySelector(".task-detail")
+        ?.textContent?.includes("revision 1"),
+    "linked Problem",
+  );
+  enter(field("Problem revision statement"), "Known Problem revised");
+  await clickAfter("Problem revision statement", "Revise Problem");
+  await waitFor(
+    () =>
+      document.querySelector<HTMLInputElement>(
+        '[aria-label="Problem revision"]',
+      )?.value === "2",
+    "Problem revision 2",
+  );
+  await clickAfter("Problem ID", "Link revised Problem");
+  await waitForAsync(async () => (await task(a)).problemLinks?.some((link) => link.problemRevision === 2) ?? false, "persisted revised Problem link");
+  await taskDetailIdle("linking prerequisite");
+  enter(field("Related Task ID"), target.id);
+  const kind = document.querySelector<HTMLSelectElement>(
+    '[aria-label="Relationship kind"]',
+  )!;
+  kind.value = "prerequisite";
+  kind.dispatchEvent(new Event("change", { bubbles: true }));
+  clickElement(
+    kind.parentElement!.querySelector<HTMLButtonElement>("button")!,
+    "Link prerequisite",
+  );
+  await waitForAsync(async () => {
+    const saved = await task(a);
+    return Boolean(
+      saved.problemLinks?.some((link) => link.problemRevision === 1) &&
+        saved.problemLinks?.some((link) => link.problemRevision === 2) &&
+        saved.relationships?.some((link) => link.targetTaskId === target.id),
+    );
+  }, "exact Problem revisions and prerequisite");
+  await taskDetailIdle("starting Task");
+  click(".task-actions button:nth-child(2)", "Start Task");
+  await waitFor(
+    () =>
+      document
+        .querySelector(".task-detail")
+        ?.getAttribute("data-task-state") === "in_progress",
+    "Task start",
+  );
+  await step(
+    "Rendered Problem r1/r2 links, prerequisite, and start controls persisted exact identities without a readiness gate.",
+  );
+}
+async function review(step: Step) {
+  const title = `Startup indexing review ${Date.now()}`;
+  await api("/index", "POST", {});
+  await api("/provider/config", "PUT", {
+    base_url: e2eProviderUrl,
+    model: "deterministic-timeout",
+    api_key: "desktop-e2e-key",
   });
-  const text = await response.text();
-  if (!response.ok) throw new Error(`POST ${path} failed (${response.status}): ${text}`);
-  return text;
-};
-
-const report = async (result: DesktopE2eResult) => completeDesktopE2e(result);
-
-const run = async (providerUrl: string) => {
-  const steps: string[] = [];
-  const step = async (message: string) => {
-    steps.push(message);
-    await reportDesktopE2eProgress(steps);
+  await create(title);
+  await detail(title);
+  click(".review-panel button", "Run review");
+  await waitFor(
+    () =>
+      !!document.querySelector(
+        '.review-panel [data-review-status="queued"], .review-panel [data-review-status="running"]',
+      ),
+    "queued review",
+  );
+  enter(field("Work Log entry"), "continued during review");
+  await clickAfter("Work Log entry", "Concurrent Work Log");
+  await waitForAsync(
+    async () => (await task(title)).workLog?.some((item) => item.body === "continued during review") ?? false,
+    "concurrent Work Log readback",
+  );
+  await taskDetailIdle("cancelling review");
+  click(".review-panel button", "Cancel review");
+  await waitFor(
+    () =>
+      !!document.querySelector(
+        '.review-panel [data-review-status="cancelled"]',
+      ),
+    "cancelled review",
+  );
+  click(".review-panel button", "Retry delayed review");
+  await waitFor(
+    () =>
+      !!document.querySelector(
+        '.review-panel [data-review-status="queued"], .review-panel [data-review-status="running"]',
+      ),
+    "second queued review",
+  );
+  const titleField = document.querySelector<HTMLInputElement>(
+    ".task-detail section:nth-of-type(2) label:first-of-type input",
+  );
+  if (!titleField) throw new Error("Missing Task title editor");
+  enter(titleField, `${title} revised`);
+  const save = titleField.closest("section")?.querySelector<HTMLButtonElement>(
+    "button",
+  );
+  if (!save) throw new Error("Missing Task revision action");
+  clickElement(save, "Save Task revision");
+  await waitFor(
+    () =>
+      !!document.querySelector('.review-panel [data-review-status="stale"]'),
+    "stale review after Task revision",
+  );
+  await api("/provider/config", "PUT", {
+    base_url: e2eProviderUrl,
+    model: "deterministic-test-model",
+    api_key: "desktop-e2e-key",
+  });
+  const retriedAt = performance.now();
+  click(".review-panel button", "Retry cited review");
+  await waitFor(
+    () =>
+      !!document.querySelector(
+        '.review-panel [role="status"] [data-review-status="findings"]',
+      ),
+    "retried review result",
+  );
+  if (performance.now() - retriedAt > 10_000)
+    throw new Error(
+      "Cited review exceeded the deterministic 10s latency budget",
+    );
+  if (
+    !document.querySelector(
+      '.review-panel [role="status"] [data-review-status="findings"]',
+    )
+  )
+    throw new Error("Seeded evidence did not produce findings");
+  if (!document.querySelector(".review-panel .citation[data-citation-path]"))
+    throw new Error("Finding omitted its Vault citation");
+  await step(
+    "Delayed review was cancelled, stale after a rendered Task revision, retried, and remained nonblocking with cited findings when evidence existed.",
+  );
+}
+async function publication(step: Step) {
+  const title = `publish ${Date.now()}`;
+  await create(title);
+  await detail(title);
+  const authoredTaskFields = {
+    detail: "Context: verify the signed desktop package through its rendered controls.",
+    outcome: "A reviewable Knowledge record preserves the packaged acceptance evidence.",
+    scope: "Task Workbench publication and exact provenance readback.",
+    nonGoals: "Replacing the installed app or changing the deferred architecture.",
+    validationCriteria: "The final Markdown contains these authored Task fields and cited evidence.",
   };
-  const selectLocale = async (locale: 'en' | 'ko') => {
-    const select = document.querySelector<HTMLSelectElement>('#locale-select');
-    if (!select) throw new Error('Locale selector was not rendered');
-    select.value = locale;
-    select.dispatchEvent(new Event('change', { bubbles: true }));
-    await waitFor(() => document.documentElement.lang === locale, `${locale} locale selection`);
-  };
-  try {
-    await waitFor(() => document.documentElement.dataset.applicationReady === 'true', 'application initialization');
-    await step('application launched and initialized through the native command path');
-    const vaultSetup = await getVaultSetupStatus();
-    if (vaultSetup.required || !vaultSetup.path) throw new Error('Configured Vault was not restored');
-    await step('the configured Vault was restored without reopening first-run setup');
-    await waitForSemanticStartupIndex();
-    await step('startup indexing prepared the Vault with the bundled embedding model');
-    await selectLocale('en');
-    await applicationJson('/provider/config', 'PUT', {
-      base_url: providerUrl,
-      model: 'deterministic-test-model',
-      async_worker_count: 1,
-      api_key: 'desktop-e2e-key',
-    });
-
-    clickRenderedButton('[data-view="ai-setup"]', 'AI setup navigation');
-    await waitFor(() => document.getElementById('ai-setup')?.classList.contains('active') ?? false, 'AI setup navigation');
-    clickRenderedButton('#provider-test', 'Test provider connection');
-    await waitFor(
-      () => document.getElementById('provider-status')?.textContent?.includes('deterministic-test-model') ?? false,
-      'provider test result',
-    );
-    await step('AI setup navigation and provider test passed rendered hit-testing with a deterministic local provider');
-
-    clickRenderedButton('[data-view="search"]', 'Search navigation');
-    await waitFor(
-      () => document.getElementById('search')?.classList.contains('active') ?? false,
-      'React Search navigation',
-    );
-    await step('primary navigation changed the visible React screen');
-
-    clickRenderedButton('[data-view="workbench"]', 'Workbench navigation');
-    await waitFor(
-      () => document.getElementById('workbench')?.classList.contains('active') ?? false,
-      'React Workbench navigation',
-    );
-    const value = `Native desktop capture ${Date.now()}`;
-    const capture = document.getElementById('capture-text') as HTMLInputElement | null;
-    if (!capture) throw new Error('Capture input was not rendered');
-    capture.value = value;
-    capture.dispatchEvent(new Event('input', { bubbles: true }));
-    clickRenderedButton('#capture button[aria-label="Save Capture"]', 'Save Capture');
-    await waitFor(() => document.getElementById('board')?.textContent?.includes(value) ?? false, 'persisted Capture');
-    await step('Capture was created and rendered through React, Tauri, and the real application runtime');
-
-    clickRenderedButton('#flow-toggle', 'Workbench flow toggle');
-    await waitFor(() => !(document.getElementById('flow-view')?.hidden ?? true), 'opened Workbench flow');
-    clickRenderedButton('#flow-toggle', 'Workbench flow close toggle');
-    await waitFor(() => document.getElementById('flow-view')?.hidden ?? false, 'closed Workbench flow');
-    clickRenderedButton('#archive-more', 'Archive pagination toggle');
-    await waitFor(() => document.getElementById('archive-more')?.getAttribute('aria-label') === 'Show fewer archived documents', 'expanded archive pagination');
-    clickRenderedButton('#archive-more', 'Archive pagination reset');
-    await waitFor(() => document.getElementById('archive-more')?.getAttribute('aria-label') === 'Show more archived documents', 'reset archive pagination');
-    clickRenderedButton('#queue-toggle', 'AI Queue toggle');
-    await waitFor(() => !(document.getElementById('queue-panel')?.hidden ?? true), 'opened AI Queue');
-    clickRenderedButton('#queue-panel header button', 'AI Queue close');
-    await waitFor(() => document.getElementById('queue-panel')?.hidden ?? false, 'closed AI Queue');
-    clickRenderedButton('#alert-toggle', 'Notifications toggle');
-    await waitFor(() => !(document.getElementById('alert-panel')?.hidden ?? true), 'opened Notifications');
-    clickRenderedButton('#alert-panel header button', 'Notifications close');
-    await waitFor(() => document.getElementById('alert-panel')?.hidden ?? false, 'closed Notifications');
-    await step('rendered Workbench, archive, Queue, and notification controls passed hit-testing and click-state checks');
-
-    const workflowCapture = await applicationJson<CreatedRecord>('/captures', 'POST', {
-      text: 'Native desktop workflow Capture',
-    });
-    const chat = await applicationText(`/captures/${workflowCapture.id}/chat`, {
-      message: 'Verify native desktop streaming',
-    });
-    if (!chat.includes('Deterministic') || !chat.includes('event: done')) {
-      throw new Error('Native streamed Chat did not complete');
-    }
-    const draftJob = await applicationJson<JobResponse>(`/captures/${workflowCapture.id}/draft`, 'POST');
-    const draft = await waitForJobResult<{ title: string }>(draftJob.id);
-    if (draft.title !== 'Clear problem') throw new Error('Native deterministic draft was not returned');
-    await step('streamed Chat and durable AI draft passed through Tauri and deterministic provider boundaries');
-
-    const problem = await applicationJson<CreatedRecord>(`/captures/${workflowCapture.id}/promote`, 'POST', {
-      statement: 'Native desktop workflow Problem',
-      detail: 'Exercise the final Tauri application boundary.',
-    });
-    const refinementJob = await applicationJson<JobResponse>(`/problems/${problem.id}/refine`, 'POST');
-    const refinement = await waitForJobResult<{ title: string }>(refinementJob.id);
-    if (refinement.title !== 'Refined problem') throw new Error('Native refinement result was not returned');
-    await window.loadBoard();
-    await waitFor(() => Boolean(document.querySelector(`[data-approve-problem="${problem.id}"]`)), 'Problem approval action');
-    clickRenderedButton(`[data-approve-problem="${problem.id}"]`, 'Approve Problem');
-    await waitFor(
-      () => window.workbenchBoard?.problems?.some((item: { id: string; state: string }) => item.id === problem.id && item.state === 'approved') ?? false,
-      'Problem approval from its Workbench action',
-    );
-    await step('Problem approval responded to the packaged Workbench click and refreshed its state');
-    clickRenderedButton(`[data-next-chat-id="${problem.id}"]`, 'Explore next Solution');
-    await waitFor(
-      () => document.querySelector<HTMLDialogElement>('#chat-modal')?.open ?? false,
-      'next Solution exploration from its Workbench action',
-    );
-    clickRenderedButton('#chat-close', 'Explore Chat close');
-    await waitFor(
-      () => !(document.querySelector<HTMLDialogElement>('#chat-modal')?.open ?? true),
-      'Explore Chat close action',
-    );
-    const solution = await applicationJson<CreatedRecord>(`/problems/${problem.id}/features`, 'POST', {
-      title: 'Native desktop Solution',
-      outcome: 'The packaged command path preserves workflow behavior.',
-      non_goals: 'No external provider call.',
-      validation_criteria: '- [ ] Native command state persists',
-    });
-    const hiddenConflict = await window.llmWikiApplication.request({path:`/features/${solution.id}/conflict-review`,method:'POST'});
-    if (hiddenConflict.ok) throw new Error('Hidden conflict model job was allowed');
-    await applicationJson('/work-tracking/vault/lexical','POST',{scope:'workbench',query:'startup',limit:4});
-    await applicationJson('/work-tracking/vault/semantic','POST',{scope:'workbench',query:'startup',limit:4});
-    await window.loadBoard();
-    await selectLocale('ko');
-    // The report is synthetic because hidden provider conflict jobs are forbidden;
-    // the decision button still uses the production renderer and persists through Tauri.
-    (window as any).showConflictReviewResult({
-      feature_id: solution.id,
-      run_id: 'desktop-zero-conflict',
-      conflicts: [],
-      recommended_state: 'clear',
-      summary: 'No deterministic conflicts.',
-      reviewed_count: 1,
-      retained_count: 1,
-      candidate_count: 1,
-      scope: { semantic_ready: 1, documents: 1, embedding_coverage: 1 },
-    });
-    await waitFor(
-      () => document.querySelector<HTMLButtonElement>('[data-conflict-decision="clear"]')?.textContent?.includes('충돌 없음') ?? false,
-      'Korean no-conflict decision',
-    );
-    clickRenderedButton('[data-conflict-decision="clear"]', 'Korean no-conflict decision');
-    await waitFor(
-      () => (window.workbenchBoard?.features as Array<{ id: string; conflict_state: string }> | undefined)
-        ?.some(item => item.id === solution.id && item.conflict_state === 'clear') ?? false,
-      'native no-conflict decision persistence',
-    );
-    await selectLocale('en');
-    await applicationJson<void>(`/features/${solution.id}/approve`, 'POST');
-    const progress = await applicationJson<CreatedRecord>(`/features/${solution.id}/progress`, 'POST', {
-      body: 'Native command evidence',
-    });
-    await applicationJson<CreatedRecord>(`/progress/${progress.id}/comments`, 'POST', {
-      body: 'Native comment persisted',
-    });
-    const checklist = await applicationJson<CreatedRecord>(`/features/${solution.id}/checklist`, 'POST', {
-      body: 'Native command state persists',
-    });
-    await applicationJson<void>(`/checklist/${checklist.id}`, 'PUT', {
-      body: 'Native command state persists',
-      checked: true,
-    });
-    const restoredProgress = await applicationJson<{ checklist: Array<{ checked: number }> }>(
-      `/features/${solution.id}/progress`,
-    );
-    if (!restoredProgress.checklist.some((item) => Boolean(item.checked))) {
-      throw new Error('Native checklist persistence was not restored');
-    }
-    await applicationJson<CreatedRecord>(`/features/${solution.id}/progress`, 'POST', {
-      body: 'Native image evidence',
-      image_data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
-      image_media_type: 'image/png',
-    });
-    await window.loadBoard();
-    document.querySelector<HTMLElement>(`[data-progress-id="${solution.id}"]`)?.click();
-    await waitFor(
-      () => !(document.querySelector<HTMLButtonElement>('#preview-work-tab')?.hidden ?? true),
-      'visible Work tab',
-    );
-    clickRenderedButton('#preview-work-tab', 'Solution Work tab');
-    await waitFor(
-      () => !(document.getElementById('explore-preview-work')?.hidden ?? true),
-      'opened Solution Work tab',
-    );
-    await waitFor(
-      () => Boolean(document.querySelector('#explore-preview-work [data-summarize-entry]')),
-      'rendered Work-tab image summary action',
-    );
-    clickRenderedButton('#explore-preview-work [data-summarize-entry]', 'Summarize Work-tab image');
-    await waitFor(
-      () => document.getElementById('explore-preview-work')?.textContent?.includes('Deterministic image summary') ?? false,
-      'completed Work-tab image summary',
-    );
-    clickRenderedButton('#chat-close', 'Work workspace close');
-    await waitFor(() => !(document.querySelector<HTMLDialogElement>('#chat-modal')?.open ?? true), 'closed Work workspace');
-    await waitForIdleJobs();
-    await step('refinement, conflict review, workflow, Work Log, comments, checklist, and image summary buttons passed');
-
-    await window.loadBoard();
-    document.querySelector<HTMLButtonElement>(`[data-solution-action="review"][data-solution-id="${solution.id}"]`)?.click();
-    const reviewJob = await waitForJobKind('completion_review', solution.id);
-    const review = await waitForJobResult<{ report: { resolution: string } }>(reviewJob.id);
-    if (review.report.resolution !== 'complete') throw new Error('Native completion review was not deterministic');
-    const notifications = await applicationJson<{ unread_count: number }>('/notifications?unread_only=true');
-    if (notifications.unread_count < 1) throw new Error('Completion review notification was not published');
-    await step('completion review and persisted notification passed through the real desktop worker');
-
-    const completed = await applicationJson<CompletionResponse>(`/problems/${problem.id}/complete`, 'POST', {
-      reason: 'Native desktop E2E verification',
-    });
-    if (completed.path !== null || completed.publication_state !== 'offered') {
-      throw new Error('Completion unexpectedly published Knowledge');
-    }
-    if (
-      completed.closed.problem !== problem.id ||
-      completed.closed.capture !== workflowCapture.id ||
-      !completed.closed.solutions.includes(solution.id)
-    ) {
-      throw new Error('Completion did not close the full Capture, Problem, and Solution chain');
-    }
-    const published = await applicationJson<{ path: string }>(`/problems/${problem.id}/completion-playbook`, 'POST', {
-      reason: 'Native desktop E2E verification',
-    });
-    if (!published.path.endsWith('.md')) throw new Error('Explicit Knowledge publication did not create a document');
-    const lineage = await applicationJson<LineageResponse>(`/features/${solution.id}/lineage`);
-    if (lineage.lineage.stages.map((stage) => stage.kind).join(',') !== 'capture,problem,solution,complete') {
-      throw new Error('Completed Lineage did not preserve all workflow stages');
-    }
-    const followUp = await applicationJson<CreatedRecord>(`/features/${solution.id}/follow-up-problem`, 'POST');
-    await applicationJson<void>(`/items/problems/${followUp.id}`, 'DELETE');
-    let board = await applicationJson<BoardResponse>('/board');
-    if (board.problems.some((item) => item.id === followUp.id)) throw new Error('Soft delete did not hide follow-up');
-    await applicationJson<void>(`/items/problems/${followUp.id}/restore`, 'POST');
-    board = await applicationJson<BoardResponse>('/board');
-    if (!board.problems.some((item) => item.id === followUp.id)) throw new Error('Restore did not recover follow-up');
-    await step('completion, filesystem projection, Lineage, delete, restore, and follow-up behavior passed');
-
-    await applicationJson<object>('/index', 'POST', {});
-    const search = await applicationJson<{
-      results: Array<{ path: string; semantic_score: number | null }>;
-      semantic_available: boolean;
-    }>('/search?q=Native&limit=20&semantic=true');
-    if (!search.results.length) throw new Error('Filesystem-backed Search returned no completed-work evidence');
-    if (!search.semantic_available || typeof search.results[0].semantic_score !== 'number') {
-      throw new Error('Bundled embedding model did not serve native semantic Search');
-    }
-    const locale = await applicationJson<{ locale: string }>('/settings/locale?browser_locale=en-US');
-    await applicationJson('/settings/locale', 'PUT', { locale: locale.locale === 'ko' ? 'en' : 'ko' });
-    await applicationJson('/settings/locale', 'PUT', { locale: locale.locale });
-    const provider = await applicationJson<Record<string, unknown>>('/provider/config');
-    if ('api_key' in provider) throw new Error('Provider configuration exposed the API key');
-    await step('bundled offline embeddings, Search, locale restoration, and secret-safe configuration passed through Tauri');
-
-    const connection=await applicationJson<{id:string}>('/work-tracking/connections','POST',{name:'Packaged E2E only',scopes:['session:read','session:write'],topicIds:[],checkpointPolicy:'confirm_each'});
-    const external=await invoke<{sessionId:string}>('desktop_e2e_mcp_probe',{connectionId:connection.id,revoked:false});
-    const same=await applicationJson<{sessionId:string;capture:{summary:string}}>('/work-tracking/sessions/'+external.sessionId);
-    if(same.sessionId!==external.sessionId)throw Error('GUI and MCP did not share persistence');
-    window.dispatchEvent(new CustomEvent('llm-wiki:tracked-resume',{detail:{sessionId:external.sessionId}}));
-    await waitFor(()=>!!document.querySelector('#chat-modal[open]'),'external work resumed in Chat');
-    await waitFor(()=>!!document.querySelector('#chat-column nav[aria-label] button'),'tracked continuation actions');
-    clickRenderedButton('#chat-column nav[aria-label] button', 'tracked Chat proposal');
-    await waitFor(()=>!!document.querySelector('#work-tracking-cards article'),'real Problem review card');
-    clickRenderedButton('#work-tracking-cards article footer button:last-child', 'tracked Chat acceptance');
-    await waitFor(()=>!document.querySelector('#work-tracking-cards article'),'accepted Problem card');
-    const adopted=await applicationJson<{linkedWorkflow:{problem:{id:string}}}>('/work-tracking/sessions/'+external.sessionId);
-    if(!adopted.linkedWorkflow.problem?.id)throw Error('Real Chat acceptance did not adopt the Problem');
-    (document.querySelector('#chat-modal') as HTMLDialogElement).close();
-    await applicationJson('/work-tracking/connections/'+connection.id,'DELETE');
-    await invoke('desktop_e2e_mcp_probe',{connectionId:connection.id,revoked:true});
-    await step('packaged stdio child → GUI owner → Chat Problem acceptance → connection revocation passed');
-
-    const persistedBoard = await applicationJson<BoardResponse>('/board');
-    const persistedCapture = persistedBoard.captures.find(
-      (item) =>
-        item.text === value ||
-        Object.values(item.localized_versions ?? {}).some((localized) => localized.text === value),
-    );
-    if (!persistedCapture?.text) throw new Error('Authored Capture was not preserved across locale changes');
-    await report({ status: 'relaunch', steps, error: null, capture: persistedCapture.text });
-  } catch (error) {
-    await report({ status: 'failed', steps, error: error instanceof Error ? error.message : String(error) });
+  for (const [controlName, value] of Object.entries({
+    "task-revision-detail": authoredTaskFields.detail,
+    "task-revision-outcome": authoredTaskFields.outcome,
+    "task-revision-scope": authoredTaskFields.scope,
+    "task-revision-non-goals": authoredTaskFields.nonGoals,
+    "task-revision-criteria": authoredTaskFields.validationCriteria,
+  })) {
+    enter(document.querySelector<HTMLInputElement | HTMLTextAreaElement>(`[data-control="${controlName}"]`)!, value);
+    await pause(25);
   }
-};
-
-const verifyRestored = async (value: string, steps: string[]) => {
-  try {
-    steps.push('desktop process relaunched and restoration scenario started');
-    await reportDesktopE2eProgress(steps);
-    await waitFor(() => document.documentElement.dataset.applicationReady === 'true', 'application restoration');
-    steps.push('relaunched application initialized');
-    await reportDesktopE2eProgress(steps);
-    await waitFor(() => document.getElementById('board')?.textContent?.includes(value) ?? false, 'restored Capture');
-    steps.push('persisted state was restored after a full desktop process relaunch');
-    await report({ status: 'passed', steps, error: null });
-  } catch (error) {
-    await report({ status: 'failed', steps, error: error instanceof Error ? error.message : String(error) });
+  click('[data-control="task-revision-save"]', "Save authored publication fields");
+  await waitForAsync(async () => {
+    const revised = await task(title);
+    return revised.detail === authoredTaskFields.detail && revised.outcome === authoredTaskFields.outcome &&
+      revised.scope === authoredTaskFields.scope && revised.nonGoals === authoredTaskFields.nonGoals &&
+      revised.validationCriteria === authoredTaskFields.validationCriteria;
+  }, "authored publication fields");
+  await waitFor(
+    () => document.querySelector<HTMLElement>(".task-detail")?.dataset.taskRevision === "2",
+    "rendered authored publication revision",
+  );
+  const workLogText = document.querySelector<HTMLTextAreaElement>('[data-control="task-worklog-text"]');
+  if (!workLogText) throw new Error("Missing publication Work Log field");
+  enter(workLogText, "Validated the signed desktop release");
+  await waitFor(
+    () => !document.querySelector<HTMLButtonElement>('[data-control="task-worklog-add"]')?.disabled,
+    "enabled publication Work Log action",
+  );
+  click('[data-control="task-worklog-add"]', "Add publication Work Log");
+  await waitForAsync(async () =>
+    Boolean((await task(title)).workLog?.some((item) => item.body === "Validated the signed desktop release")),
+  "persisted publication Work Log");
+  await waitFor(
+    () =>
+      document
+        .querySelector(".log-entry")
+        ?.textContent?.includes("Validated the signed desktop release") ?? false,
+    "publication Work Log",
+  );
+  enter(field("Checklist item"), "Verify packaged acceptance scenarios");
+  await clickAfter("Checklist item", "Add publication checklist");
+  await waitFor(
+    () => !!document.querySelector('.task-detail input[type="checkbox"]'),
+    "publication checklist",
+  );
+  clickElement(
+    document.querySelector<HTMLInputElement>(
+      '.task-detail input[type="checkbox"]',
+    )!,
+    "Check publication evidence",
+  );
+  enter(field("Decision"), "Publish only the reviewed revision");
+  await clickAfter("Decision", "Add publication decision");
+  await waitForAsync(async () => (await task(title)).decisions?.some((item) => item.body === "Publish only the reviewed revision") ?? false, "publication decision readback");
+  await taskDetailIdle("opening publication connections");
+  clickElement(
+    document.querySelector<HTMLDetailsElement>(".connection-details > summary")!,
+    "Open publication connection details",
+  );
+  enter(
+    field("New Problem statement"),
+    "Release evidence must remain traceable",
+  );
+  await clickAfter("New Problem statement", "Create publication Problem");
+  await waitFor(
+    () =>
+      document
+        .querySelector(".task-detail")
+        ?.textContent?.includes("revision 1") ?? false,
+    "publication Problem revision",
+  );
+  click(".task-actions button:nth-child(2)", "Start Task");
+  await waitFor(
+    () =>
+      document
+        .querySelector(".task-detail")
+        ?.getAttribute("data-task-state") === "in_progress",
+    "Task start",
+  );
+  enter(field("Completion evidence"), "verified in packaged E2E");
+  click("#task-completion-evidence + button", "Complete Task");
+  await waitFor(
+    () =>
+      document
+        .querySelector(".task-detail")
+        ?.getAttribute("data-task-state") === "completed",
+    "completion",
+  );
+  const buttons = [
+    ...document.querySelectorAll<HTMLButtonElement>(".task-detail button"),
+  ];
+  const draft = buttons.find((button) =>
+    /create draft/i.test(button.textContent ?? ""),
+  );
+  if (!draft) throw new Error("Missing Knowledge draft action");
+  clickElement(draft, "Create Knowledge draft");
+  await waitFor(
+    () => !!document.querySelector(".knowledge-draft"),
+    "Knowledge preview",
+  );
+  const correction = field("Knowledge draft body") as HTMLTextAreaElement;
+  for (const expected of [
+    "Validated the signed desktop release",
+    "Verify packaged acceptance scenarios",
+    "Publish only the reviewed revision",
+    "Release evidence must remain traceable",
+    "source `",
+  ]) {
+    if (!correction.value.includes(expected))
+      throw new Error(`Knowledge draft omitted rich evidence: ${expected}`);
   }
-};
+  const initialHash = document
+    .querySelector(".knowledge-draft")
+    ?.getAttribute("data-content-hash");
+  if (!initialHash) throw new Error("Knowledge draft omitted its exact hash");
+  const correctedBody = `${correction.value}\n\nCorrected by packaged desktop E2E.`;
+  enter(correction, correctedBody);
+  const correctionButton = document.querySelector<HTMLButtonElement>(
+    ".knowledge-draft button",
+  )!;
+  clickElement(correctionButton, "Save Knowledge draft correction");
+  await waitFor(
+    () =>
+      !correctionButton.disabled &&
+      document
+        .querySelector(".knowledge-draft")
+        ?.getAttribute("data-content-hash") !== initialHash &&
+      document.querySelector<HTMLTextAreaElement>(
+        "[aria-label='Knowledge draft body']",
+      )?.value === correctedBody,
+    "persisted Knowledge correction",
+  );
+  const publishDraft = [
+    ...document.querySelectorAll<HTMLButtonElement>(".knowledge-draft button"),
+  ].find((button) => /publish/i.test(button.textContent ?? ""));
+  if (!publishDraft)
+    throw new Error("Missing corrected Knowledge publish action");
+  clickElement(publishDraft, "Publish corrected Knowledge draft");
+  await waitFor(
+    () =>
+      document
+        .querySelector(".publication-controls")
+        ?.getAttribute("data-publication-state") === "published",
+    "published Knowledge controls",
+  );
+  const regenerate = [
+    ...document.querySelectorAll<HTMLButtonElement>(".task-detail button"),
+  ].find((button) => /regenerate draft/i.test(button.textContent ?? ""));
+  if (!regenerate) throw new Error("Missing regenerate action");
+  clickElement(regenerate, "Regenerate Knowledge draft");
+  await waitFor(
+    () => !!document.querySelector(".knowledge-draft"),
+    "regenerated Knowledge preview",
+  );
+  const regeneratedRevision = document
+    .querySelector(".knowledge-draft h4")
+    ?.textContent?.match(/r(\d+)/)?.[1];
+  if (!regeneratedRevision)
+    throw new Error("Regenerated Knowledge omitted its draft revision");
+  const publish = [
+    ...document.querySelectorAll<HTMLButtonElement>(".knowledge-draft button"),
+  ].find((button) => /publish/i.test(button.textContent ?? ""));
+  if (!publish) throw new Error("Missing regenerated publish action");
+  clickElement(publish, "Publish regenerated Knowledge draft");
+  await waitFor(
+    () =>
+      !document.querySelector(".knowledge-draft") &&
+      document
+        .querySelector(".publication-controls")
+        ?.getAttribute("data-publication-revision") === regeneratedRevision &&
+      document
+        .querySelector(".publication-controls")
+        ?.getAttribute("data-publication-state") === "published",
+    "republished Knowledge",
+  );
+  const withdraw = [
+    ...document.querySelectorAll<HTMLButtonElement>(".task-detail button"),
+  ].find((button) => /withdraw knowledge/i.test(button.textContent ?? ""));
+  if (!withdraw) throw new Error("Missing withdraw action");
+  clickElement(withdraw, "Withdraw Knowledge");
+  await waitFor(
+    () =>
+      document
+        .querySelector(".publication-controls")
+        ?.getAttribute("data-publication-state") === "withdrawn",
+    "withdrawn Knowledge",
+  );
+  const saved = await task(title);
+  if (!saved.completion || saved.publication?.state === "published")
+    throw new Error(
+      "Completion, regenerate, publish, and withdraw did not persist separately",
+    );
+  await step(
+    "Rendered completion, exact draft correction, explicit publish, regenerate, and withdraw actions persisted as separate decisions.",
+  );
+}
+async function problemResolution(step: Step) {
+  const title = `problem resolution ${Date.now()}`;
+  await create(title);
+  await detail(title);
+  clickElement(
+    document.querySelector<HTMLDetailsElement>(".connection-details > summary")!,
+    "Open Problem connection details",
+  );
+  enter(field("New Problem statement"), "Resolution must remain explicit");
+  await clickAfter("New Problem statement", "Create resolution Problem");
+  await waitForAsync(
+    async () => Boolean((await task(title)).problemLinks?.some(candidate => candidate.problemRevision === 1)),
+    "exact first Problem revision link",
+  );
+  const linked = await task(title);
+  const link = linked.problemLinks?.[0];
+  if (!link || link.problemRevision !== 1)
+    throw new Error("Problem link was not persisted at its exact first revision");
+  click(".task-actions button:nth-child(2)", "Start Task");
+  await waitFor(
+    () => document.querySelector(".task-detail")?.getAttribute("data-task-state") === "in_progress",
+    "Task start before completion",
+  );
+  enter(field("Completion evidence"), "Task evidence does not resolve its Problem");
+  click("#task-completion-evidence + button", "Complete Task");
+  await waitFor(
+    () => document.querySelector(".task-detail")?.getAttribute("data-task-state") === "completed",
+    "Task completion without Problem resolution",
+  );
+  if ((await task(title)).state !== "completed")
+    throw new Error("Task completion was not persisted independently");
+  const resolve = [...document.querySelectorAll<HTMLButtonElement>(".task-detail button")].find(
+    (button) => button.textContent === "Resolve Problem",
+  );
+  if (!resolve) throw new Error("Missing explicit Problem resolution action");
+  clickElement(resolve, "Resolve Problem at exact revision");
+  await pause(200);
+  if (document.querySelector(".task-detail [role='alert']"))
+    throw new Error("Exact explicit Problem resolution was rejected");
+  const revised = await api<{ problemRevision: number }>(
+    `/problems/${link.problemId}/revisions`,
+    "POST",
+    { statement: "Resolution must remain explicit, revised" },
+  );
+  if (revised.problemRevision !== 2)
+    throw new Error("Problem revision did not preserve the explicit resolution history");
+  const stale = await window.llmWikiApplication.request({
+    path: `/problems/${link.problemId}/resolutions`,
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      operationId: crypto.randomUUID(),
+      expectedProblemRevision: 1,
+      rationale: "stale evidence must be rejected",
+      evidenceRefs: ["Task completion evidence"],
+    }),
+  });
+  if (stale.ok || stale.status !== 409)
+    throw new Error("Stale Problem resolution was accepted");
+  const stalePayload = await stale.json<{ detail?: string }>();
+  if (!stalePayload.detail?.includes("head_conflict"))
+    throw new Error("Stale Problem resolution omitted its conflict detail");
+  const exact = await api<{ state: string; problemRevision: number }>(
+    `/problems/${link.problemId}/resolutions`,
+    "POST",
+    {
+      expectedProblemRevision: 2,
+      rationale: "Evidence remains attached to the explicit decision",
+      evidenceRefs: ["Task completion evidence"],
+    },
+  );
+  if (exact.state !== "resolved" || exact.problemRevision !== 2)
+    throw new Error("Exact Problem resolution did not preserve its expected revision");
+  await step(
+    "Task completion left its Problem separate; the rendered exact-resolution control succeeded, explicit evidence resolved revision 2, and stale revision 1 was rejected.",
+  );
+}
+async function persistence() {
+  const title = `persist ${Date.now()}`;
+  await create(title);
+  const saved = await task(title);
+  await report({
+    status: "relaunch",
+    steps: [`Created Task ${saved.id} before relaunch.`],
+    error: null,
+    capture: saved.id,
+  });
+}
+async function restored(id: string, steps: string[]) {
+  try {
+    await workbench();
+    if (!(await api<Task>(`/tasks/${id}`)).title.startsWith("persist "))
+      throw new Error("Task identity did not survive relaunch");
+    await report({
+      status: "passed",
+      steps: [...steps, "Task persisted across a full packaged-app relaunch."],
+      error: null,
+    });
+  } catch (error) {
+    await report({ status: "failed", steps, error: String(error) });
+  }
+}
+async function restoredRefinement(token: string, steps: string[]) {
+  try {
+    await workbench();
+    const restored = JSON.parse(token) as { captureId: string; noteText: string; messageIds: string[] };
+    if (!restored.captureId || !restored.noteText || restored.messageIds.length !== 2)
+      throw new Error("Invalid refinement relaunch state");
+    const snapshot = await api<RefinementSnapshot>(`/captures/${encodeURIComponent(restored.captureId)}/refinement`);
+    if (snapshot.inputDraft !== restored.noteText || snapshot.activeTab !== "proposals")
+      throw new Error("Refinement workspace did not survive the packaged-app relaunch");
+    if (JSON.stringify(snapshot.messages?.map(message => message.id) ?? []) !== JSON.stringify(restored.messageIds))
+      throw new Error("Refinement message identities changed across the packaged-app relaunch");
+    click(`[data-entity-id="${CSS.escape(restored.captureId)}"][data-control="task-card-refine"]`, "Reopen persisted refinement after relaunch");
+    await waitFor(() => Boolean(document.querySelector(".refinement-panel")), "restored refinement panel");
+    await waitFor(() => document.querySelector('[data-control="refinement-tab-proposals"]')?.getAttribute("aria-pressed") === "true", "rendered relaunch tab");
+    click('[data-control="refinement-tab-conversation"]', "Read restored note after confirming saved Proposals tab");
+    await waitFor(() => document.querySelector<HTMLTextAreaElement>('[data-control="refinement-note"]')?.value === snapshot.inputDraft, "rendered relaunch note");
+    await report({ status: "passed", steps: [...steps, "The note and active Proposals tab restored in a second packaged-app process."], error: null });
+  } catch (error) {
+    await report({ status: "failed", steps, error: String(error) });
+  }
+}
+async function localization(step: Step) {
+  const locale = document.querySelector<HTMLSelectElement>("#locale-select");
+  if (!locale) throw new Error("Missing locale selector");
+  locale.value = "ko";
+  locale.dispatchEvent(new Event("change", { bubbles: true }));
+  await waitFor(() => document.documentElement.lang === "ko", "Korean");
+  const view = document.getElementById("workbench")!;
+  view.style.width = "340px";
+  if (view.getBoundingClientRect().width < 1)
+    throw new Error("Narrow Workbench failed to render");
+  locale.value = "en";
+  locale.dispatchEvent(new Event("change", { bubbles: true }));
+  await waitFor(() => document.documentElement.lang === "en", "English");
+  view.style.width = "";
+  await step(
+    "English/Korean locale and narrow rendered Workbench controls were exercised.",
+  );
+}
 
+type Step = (message: string) => Promise<void>;
 export function installDesktopScenario() {
   if (!window.__TAURI_INTERNALS__) return;
-  void desktopE2eMode().then((state) => {
+  void desktopE2eMode().then(async (state) => {
     if (!state) return;
-    if (state.restoreCapture) void verifyRestored(state.restoreCapture, state.restoreSteps);
-    else void run(state.providerUrl);
+    const introSurface = new URLSearchParams(window.location.search).get("surface") === "first-run-intro";
+    const introScenario = state.scenario.startsWith("global-intro-");
+    if (introSurface !== introScenario) return;
+    e2eProviderUrl = state.providerUrl;
+    if (state.restoreCapture)
+      return state.scenario === "task-refinement-relaunch"
+        ? restoredRefinement(state.restoreCapture, state.restoreSteps)
+        : restored(state.restoreCapture, state.restoreSteps);
+    const steps: string[] = [];
+    const step: Step = async (message) => {
+      steps.push(message);
+      await reportDesktopE2eProgress(steps);
+    };
+    const coverage = createInteractionCoverage();
+    try {
+      const startupScenario = introScenario || state.scenario.startsWith("global-vault-") || state.scenario.startsWith("global-migration-");
+      if (!startupScenario) await workbench();
+      const scenarioHarness = {
+        coverage,
+        create,
+        detail,
+        task: async (title: string) => (await task(title)) as WorkbenchTask,
+        api,
+        waitFor,
+        waitForAsync,
+        click: clickElement,
+        enter,
+        step,
+        request: api,
+      };
+      const activateView = async (view: string) => {
+        click(`[data-control="sidebar-view-${view}"]`, `Open ${view}`);
+        await waitFor(() => document.getElementById(view)?.classList.contains("active") ?? false, `${view} view`);
+      };
+      const closeLegacyChat = async (label: string) => {
+        coverage.observe(document.getElementById("chat-modal")!, state.scenario);
+        const close = document.getElementById("chat-close")!;
+        coverage.interact("chat-close", () => clickElement(close, label));
+        await waitFor(() => !(document.getElementById("chat-modal") as HTMLDialogElement).open, "closed legacy chat");
+        coverage.assertEffect("chat-close", () => !(document.getElementById("chat-modal") as HTMLDialogElement).open);
+      };
+      const cases: Record<string, (step: Step) => Promise<void>> = {
+        "task-capture": capture,
+        "task-worklog": log,
+        "task-refinement": refinement,
+        "task-relationships": relationships,
+        "task-review": review,
+        "task-publication": publication,
+        "task-problem-resolution": problemResolution,
+        "task-persistence": persistence,
+        "task-localization": localization,
+        "task-controls": () => runTaskControlMatrixScenario(scenarioHarness),
+        "task-workbench-retry": () => runWorkbenchRetryScenario(scenarioHarness),
+        "task-legacy-refinement": async () => {
+          await runLegacyProblemRefinementScenario(scenarioHarness);
+          await closeLegacyChat("Close migrated Problem refinement");
+        },
+        "task-legacy-chat-controls": async () => {
+          await runLegacyProblemRefinementScenario(scenarioHarness);
+          await runLegacyChatTrackingScenario({ ...scenarioHarness, providerUrl: e2eProviderUrl });
+          await closeLegacyChat("Close migrated Problem chat");
+        },
+        "task-legacy-preview-retry": async () => {
+          await invoke("desktop_e2e_arm_one_shot_failure", { operation: "refinement.context" });
+          await runLegacyProblemRefinementScenario(scenarioHarness);
+          await runLegacyPreviewWarningRetryScenario(scenarioHarness);
+          await closeLegacyChat("Close recovered migrated Problem refinement");
+        },
+        "task-chat-controls": () =>
+          runTaskChatScenario({ ...scenarioHarness, providerUrl: e2eProviderUrl }),
+        "task-refinement-provider-recovery": () =>
+          runRefinementProviderRecoveryScenario({ ...scenarioHarness, providerUrl: e2eProviderUrl }),
+        "task-refinement-close-retry": () =>
+          runRefinementCloseRetryScenario({ ...scenarioHarness, providerUrl: e2eProviderUrl }),
+        "task-refinement-close-pending": () =>
+          runRefinementClosePendingScenario({ ...scenarioHarness, providerUrl: e2eProviderUrl }),
+        "task-refinement-relaunch": async () => {
+          const captureId = await prepareRefinementRelaunchScenario({ ...scenarioHarness, providerUrl: e2eProviderUrl });
+          await report({ status: "relaunch", steps, error: null, capture: captureId, coverage: coverage.report() });
+        },
+        "global-shell": () => runShellNavigationScenario(scenarioHarness),
+        "global-search": async () => {
+          await activateView("search");
+          await invoke("desktop_e2e_arm_one_shot_failure", { operation: "knowledge.read" });
+          await runSearchScenario(scenarioHarness, "Startup indexing");
+        },
+        "global-compass": async () => {
+          await activateView("compass");
+          await runCompassGoalScenario(scenarioHarness, `Coverage goal ${Date.now()}`);
+        },
+        "global-provider": async () => {
+          await activateView("ai-setup");
+          await runProviderSettingsScenario(scenarioHarness, {
+            url: e2eProviderUrl,
+            model: "deterministic-test-model",
+            advancedModel: "deterministic-test-model",
+            key: "desktop-e2e-key",
+          });
+        },
+        "global-mcp": async () => {
+          await activateView("ai-setup");
+          await runMcpSettingsScenario(scenarioHarness, `coverage-${Date.now()}`, "coverage-topic");
+        },
+        "global-queue-notifications": () =>
+          runQueueNotificationActionsScenario(scenarioHarness, () =>
+            invoke("desktop_e2e_seed_queue_notifications"),
+          ),
+        "global-notice": () => runNoticeScenario(scenarioHarness),
+        "global-intro-navigation": () => runFirstRunIntroNavigationScenario(scenarioHarness),
+        "global-intro-retry": () => runFirstRunIntroRetryScenario(scenarioHarness),
+        "global-vault-choose": () => runVaultChooseScenario(scenarioHarness),
+        "global-vault-retry": () => runVaultRetryScenario(scenarioHarness),
+        "global-migration-restore": () => runMigrationRestoreScenario(scenarioHarness),
+        "global-migration-retry": () => runMigrationRetryScenario(scenarioHarness),
+      };
+      const run = cases[state.scenario];
+      if (!run)
+        throw new Error(`Unknown Task desktop scenario ${state.scenario}`);
+      await run(step);
+      if (!["task-persistence", "task-refinement-relaunch"].includes(state.scenario))
+        await report({ status: "passed", steps, error: null, coverage: coverage.report() });
+    } catch (error) {
+      await report({
+        status: "failed",
+        steps,
+        error: error instanceof Error ? error.message : String(error),
+        coverage: coverage.report(),
+      });
+    }
   });
 }

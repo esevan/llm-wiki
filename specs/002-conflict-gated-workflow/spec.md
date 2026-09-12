@@ -1,3 +1,8 @@
+> **Superseded for schema 8+**: This document is historical delivery evidence. Its Problem approval,
+> required Solution parent, and clear-before-start rules are replaced by
+> [012 Task-Centered Workbench](../012-task-centered-workbench/spec.md). Task work is independent and
+> Conflict Review is nonblocking.
+
 # Feature Specification: Conflict-Gated Workflow
 
 **Created**: 2026-08-18

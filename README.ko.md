@@ -16,7 +16,7 @@ LLM Wiki는 여섯 가지 타협할 수 없는 원칙에서 출발합니다.
 1. **You talk. The work organizes itself.** 대화와 Refinement가 구조화를 담당합니다.
 2. **Reduce cognitive load.** Capture는 가볍게 유지하고, 지금 진행 중인 일을 가장 선명하게 보여줍니다.
 3. **Resume where you left off.** Work Log 스크린샷, Refinement 맥락, Knowledge 기반 충돌 검토로 바로 이어갑니다.
-4. **Organize around problems, not tasks.** 지속되는 흐름은 **Capture → Problem → Solution**입니다. 실행 정보는 Solution Work Log와 검증 체크리스트에 남습니다.
+4. **사람이 선택한 작업을 중심으로 정리합니다.** Capture에서 이미 찾은 Solution을 다시 찾게 하지 않습니다. Task를 바로 만들거나 선택적인 Refinement로 Problem과 하나 이상의 Task를 구성합니다. 각 작업은 독립적으로 이어갈 수 있습니다.
 5. **Private process, portable knowledge.** 초안과 작업 맥락은 로컬에 두고, 사람이 승인한 완료 결과만 Markdown Knowledge가 됩니다.
 6. **Understand the work, never score the worker.** 근거·위험·방향은 이해하되 사람의 생산성을 점수화하지 않습니다.
 
@@ -27,15 +27,15 @@ LLM Wiki는 여섯 가지 타협할 수 없는 원칙에서 출발합니다.
 | 필요 | LLM Wiki의 방식 |
 | --- | --- |
 | 생각을 빠르게 꺼내기 | Capture는 처음부터 구조를 요구하지 않습니다. |
-| 진짜 Problem 이해하기 | AI Refinement가 맥락을 보존하고 검토 가능한 Problem을 제안합니다. |
-| 해결 방향 선택하기 | 승인된 Problem에서 Solution을 만들고 Knowledge 기반 충돌 검토가 clear일 때 시작합니다. |
-| 진행 중인 일 이어가기 | In Progress Solution을 강조하고 Work Log에 텍스트·스크린샷·댓글·검증 기준을 남깁니다. |
+| 진짜 Problem 이해하기 | 선택적인 AI Refinement가 맥락을 보존하고 검토 가능한 Problem을 제안합니다. |
+| 해결 방향 선택하기 | Task를 바로 만들거나 Problem을 검토한 뒤 하나 이상의 Task를 선택합니다. 충돌 검토는 사용자의 결정을 돕는 근거로 남습니다. |
+| 진행 중인 일 이어가기 | 독립적인 진행 중 Task를 강조하고 각 Work Log에 텍스트·이미지·파일·댓글·체크리스트·결정을 남깁니다. |
 | 다른 Chat에서 작업하기 | 로컬 Codex와 ChatGPT 데스크톱이 범위가 지정된 stdio MCP를 통해 같은 Workbench를 이어서 읽고 업데이트합니다. |
 | 근거로 완료하기 | AI가 기록된 근거를 검토하되 완료 결정은 사람이 내립니다. |
 | 결과 재사용하기 | 완료된 결과만 Obsidian 호환 Playbook과 검색 가능한 Knowledge가 됩니다. |
 | AI 작업 중에도 빠르게 반응하기 | 숨겨진 Fast Queue는 상호작용 요청을 제한하고 지속 작업은 백그라운드 Queue에서 조회·복구합니다. |
 
-Task 단계는 없습니다. 실행을 Solution에 붙여 두어 일이 존재하는 이유인 Problem과 분리되지 않게 합니다.
+Task는 독립적인 일급 작업 기록입니다. 간단한 Task는 즉시 시작할 수 있고, Refinement한 Problem에서 여러 버전의 Problem과 Task를 만들 수 있습니다. 한 Task를 완료해도 다른 Problem이 자동으로 해결되지는 않습니다. 기존 Capture와 그 출처는 workflow 전체에서 보존됩니다.
 
 ## 빠른 시작
 
@@ -110,7 +110,7 @@ Markdown으로 유지하고, 한국어 열람본은 휴대 가능한 원본을 �
 - [실행 화면으로 보는 기능 둘러보기](docs/features/visual-guide.ko.md)
 - [빠른 Vault 검색](docs/features/fast-vault-search.ko.md)
 - [Codex·ChatGPT 데스크톱 작업 추적](docs/features/mcp-workbench-bridge.ko.md)
-- [Problem 중심 Workbench](docs/features/conflict-gated-workflow.ko.md)
+- [Task 중심 Workbench](docs/features/conflict-gated-workflow.ko.md)
 - [완료·Knowledge·아카이브](docs/features/completion-writeback-archive.ko.md)
 - [Compass](docs/features/direction-dashboard.ko.md)
 - [맥락을 보존하는 Refinement Preview](docs/features/refinement-preview-status.ko.md)
@@ -139,4 +139,10 @@ npm run tauri:build
 npm run test:desktop
 ```
 
+전체·개별 시나리오 재실행, 시나리오 목록, 실패 결과 확인은 [데스크톱 E2E 실행 안내](docs/testing/desktop-e2e-runbook.ko.md)를 참고하세요.
+
 Spec Kit 산출물은 [specs/](specs/)에 있습니다.
+
+## 기여
+
+[CONTRIBUTING.ko.md](CONTRIBUTING.ko.md)에서 기여 레슨, 변경 경계, 검증 절차를 확인하세요.

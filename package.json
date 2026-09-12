@@ -9,7 +9,7 @@
     "dev": "vite",
     "lint": "eslint frontend/src --max-warnings=0",
     "macos:signing:register": "node scripts/register_macos_signing_identity.mjs",
-    "test": "vitest run && npm run test:provider-fake && npm run test:macos-signing && npm run verify:runtime && npm run verify:native-only && npm run verify:work-tracking-boundaries",
+    "test": "vitest run && node --test tests/desktop_e2e_helpers.test.mjs && npm run test:provider-fake && npm run test:macos-signing && npm run verify:runtime && npm run verify:native-only && npm run verify:work-tracking-boundaries",
     "typecheck": "tsc --noEmit",
     "prepare:embedding": "node scripts/prepare_embedding_model.mjs",
     "prepare:fonts": "node scripts/prepare_fonts.mjs",

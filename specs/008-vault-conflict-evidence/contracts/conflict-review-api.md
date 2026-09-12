@@ -1,3 +1,6 @@
+> **Retired for schema 8+**: The feature-only route is replaced by exact Capture-draft/Task subjects,
+> eight statuses, and nonblocking behavior in [012](../../012-task-centered-workbench/contracts/application-api.md).
+
 # Conflict Review API Contract
 
 - `POST /api/features/{feature_id}/conflict-review` returns `202` with a run snapshot; unchanged completed inputs may return a reused ready snapshot.

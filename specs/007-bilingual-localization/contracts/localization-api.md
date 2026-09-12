@@ -1,3 +1,6 @@
+> **Partially superseded for schema 8+**: Locale guarantees remain; Problem/Solution workflow paths
+> are replaced by localized Task-centered paths in [012](../../012-task-centered-workbench/contracts/application-api.md).
+
 # Localization Interface Contract
 
 ## Locale preference

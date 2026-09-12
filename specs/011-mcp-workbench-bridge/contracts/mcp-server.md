@@ -1,3 +1,7 @@
+> **Partially superseded for schema 8+**: Transport, scopes, cursors, review expiry, and replay remain;
+> Task events/actions/resources in [012](../../012-task-centered-workbench/contracts/mcp-task-contract.md)
+> replace Problem/Solution workflow semantics.
+
 # MCP Server Contract: In-Chat Work Tracking
 
 ## Launch, trust, and protocol

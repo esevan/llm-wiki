@@ -1,3 +1,7 @@
+> **Superseded for schema 8+**: Findings and resolution history remain immutable evidence, but no
+> resolution changes a workflow gate. Exact Task/Capture review and separate decisions in
+> [012](../012-task-centered-workbench/spec.md) are authoritative.
+
 # Feature Specification: Conflict Resolution Workflow
 
 **Feature Branch**: `feat/conflict-resolution-workflow`

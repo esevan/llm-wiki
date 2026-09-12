@@ -11,6 +11,7 @@ mod projection;
 mod refinement;
 pub(crate) mod semantic;
 pub mod settings;
+pub(crate) mod task_assistance;
 pub(crate) mod vault;
 pub(crate) mod work_tracking;
 pub(crate) mod work_tracking_projector;
@@ -30,6 +31,7 @@ pub struct NativeApplication {
     semantic: semantic::SemanticEngine,
     jobs: jobs::JobRegistry,
     work_tracking: crate::application::work_tracking_service::WorkTrackingApplicationService,
+    task_service: crate::application::task_service::TaskApplicationService,
 }
 
 #[derive(Debug, Deserialize)]
@@ -88,16 +90,23 @@ impl NativeApplication {
         if let Some(parent) = db_path.parent() {
             std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
         }
-        database::initialize(&db_path)?;
+        // A failed migration leaves a verified recovery marker. Construct only
+        // recovery-capable state until the person explicitly restores or retries.
+        let recovery_pending = database::migration_failure(&db_path)?.is_some();
+        if !recovery_pending {
+            database::initialize(&db_path)?;
+        }
         let semantic = semantic::SemanticEngine::new(embedding_model_dir);
         let store = crate::adapters::sqlite::SqliteWorkTrackingStore::new(&db_path);
-        store
-            .ensure_native_connection()
-            .map_err(|error| error.message.clone())?;
+        if !recovery_pending {
+            store
+                .ensure_native_connection()
+                .map_err(|error| error.message.clone())?;
+        }
         let vault_adapter =
             crate::adapters::vault::MarkdownVaultAdapter::new(&db_path, &vault, semantic.clone());
         Ok(Self {
-            db_path,
+            db_path: db_path.clone(),
             settings_path,
             vault,
             vault_setup_required,
@@ -108,10 +117,14 @@ impl NativeApplication {
                     store,
                     vault_adapter,
                 ),
+            task_service: crate::application::task_service::TaskApplicationService::new(&db_path),
         })
     }
 
     pub fn execute_work_tracking(&self, operation: NativeOperation) -> NativeResponse {
+        if let Some(response) = self.recovery_block() {
+            return response;
+        }
         work_tracking::execute(&self.work_tracking, operation)
     }
 
@@ -174,6 +187,52 @@ impl NativeApplication {
         }))
     }
 
+    pub fn migration_recovery_status(&self) -> Result<Value, String> {
+        Ok(json!({"recovery": database::migration_failure(&self.db_path)?}))
+    }
+
+    fn recovery_block(&self) -> Option<NativeResponse> {
+        match database::migration_failure(&self.db_path) {
+            Ok(Some(recovery)) => Some(NativeResponse {
+                status: 503,
+                body: json!({"detail":"migration_recovery_required","recovery":recovery}),
+            }),
+            Ok(None) => None,
+            Err(error) => Some(NativeResponse {
+                status: 503,
+                body: json!({"detail":"migration_recovery_unavailable","error":error}),
+            }),
+        }
+    }
+
+    pub fn restore_migration_backup(&self, manifest_file: &str) -> Result<Value, String> {
+        let marker = database::migration_failure(&self.db_path)?
+            .ok_or("No migration recovery is pending")?;
+        let expected = marker
+            .get("manifestFile")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .ok_or("No verified migration backup is available")?;
+        let requested = Path::new(manifest_file);
+        if requested.components().count() != 1
+            || requested.file_name().and_then(|name| name.to_str()) != Some(expected)
+        {
+            return Err("Invalid migration recovery manifest".into());
+        }
+        let parent = self.db_path.parent().unwrap_or_else(|| Path::new("."));
+        database::restore_verified_backup(&self.db_path, &parent.join(expected))?;
+        database::initialize(&self.db_path)?;
+        Ok(json!({"recovered":true,"action":"restore"}))
+    }
+
+    pub fn retry_migration(&self) -> Result<Value, String> {
+        if database::migration_failure(&self.db_path)?.is_none() {
+            return Err("No migration recovery is pending".into());
+        }
+        database::initialize(&self.db_path)?;
+        Ok(json!({"recovered":true,"action":"retry"}))
+    }
+
     pub fn complete_first_run_intro(&self) -> Result<(), String> {
         settings::complete_intro(&self.settings_path)
     }
@@ -186,7 +245,35 @@ impl NativeApplication {
         settings::save_vault_path(&self.settings_path, &selected)
     }
 
+    fn desktop_e2e_failure(&self, operation_name: &str) -> Option<NativeResponse> {
+        if std::env::var_os("LLM_WIKI_E2E_RESULT").is_some()
+            && crate::native::database::open(&self.db_path)
+                .and_then(|connection| {
+                    connection
+                        .execute(
+                            "DELETE FROM desktop_e2e_failures WHERE operation=?",
+                            [operation_name],
+                        )
+                        .map_err(|error| error.to_string())
+                })
+                .unwrap_or(0)
+                > 0
+        {
+            return Some(NativeResponse {
+                status: 503,
+                body: json!({"detail":"deterministic one-shot desktop E2E failure"}),
+            });
+        }
+        None
+    }
+
     pub fn execute(&self, operation: NativeOperation) -> NativeResponse {
+        if let Some(response) = self
+            .recovery_block()
+            .or_else(|| self.desktop_e2e_failure(&operation.name))
+        {
+            return response;
+        }
         match self.dispatch(&operation.name, &operation.input) {
             Ok((status, body)) => NativeResponse { status, body },
             Err(error) => NativeResponse {
@@ -211,6 +298,8 @@ impl NativeApplication {
             "workflow" => matches!(
                 operation.name.split('.').next().unwrap_or_default(),
                 "capture"
+                    | "task"
+                    | "work-log"
                     | "board"
                     | "problem"
                     | "solution"
@@ -235,6 +324,9 @@ impl NativeApplication {
     }
 
     pub async fn enqueue_job(&self, input: Value) -> NativeResponse {
+        if let Some(response) = self.recovery_block() {
+            return response;
+        }
         match jobs::enqueue(
             self.db_path.clone(),
             self.settings_path.clone(),
@@ -254,8 +346,36 @@ impl NativeApplication {
     }
 
     pub async fn execute_workflow(&self, operation: NativeOperation) -> NativeResponse {
+        if let Some(response) = self
+            .recovery_block()
+            .or_else(|| self.desktop_e2e_failure(&operation.name))
+        {
+            return response;
+        }
         let name = operation.name.clone();
         let input = operation.input.clone();
+        if name.starts_with("task-refinement.")
+            || name.starts_with("task-review.")
+            || name.starts_with("task-knowledge.")
+            || name == "task.lineage"
+        {
+            return match task_assistance::execute(
+                &self.db_path,
+                &self.settings_path,
+                &self.vault,
+                self.semantic.clone(),
+                &name,
+                &input,
+            )
+            .await
+            {
+                Ok(body) => NativeResponse { status: 200, body },
+                Err(error) => NativeResponse {
+                    status: error_status(&error),
+                    body: json!({"detail":error}),
+                },
+            };
+        }
         let response = self.execute_domain("workflow", operation);
         if !(200..300).contains(&response.status) {
             return response;
@@ -291,6 +411,27 @@ impl NativeApplication {
     }
 
     fn dispatch(&self, name: &str, input: &Value) -> Result<(u16, Value), String> {
+        if matches!(
+            name,
+            "board.get"
+                | "capture.promote"
+                | "problem.approve"
+                | "solution.create"
+                | "solution.approve"
+                | "solution.stage.save"
+                | "solution.progress.get"
+                | "solution.progress.add"
+                | "solution.comment.add"
+                | "solution.checklist.add"
+                | "solution.checklist.update"
+                | "solution.follow_up"
+                | "problem.complete"
+                | "solution.completion.create"
+                | "solution.completion.verify"
+                | "solution.conflict.resolve"
+        ) {
+            return Err(format!("Native operation is not implemented: {name}"));
+        }
         let id = |key: &str| {
             input
                 .get(key)
@@ -298,6 +439,28 @@ impl NativeApplication {
                 .ok_or_else(|| format!("{key} is required"))
         };
         let result = match name {
+            "workbench.get"
+            | "capture.create"
+            | "task.create"
+            | "task.get"
+            | "task.revision"
+            | "task.transition"
+            | "task.problem-link.create"
+            | "task.problem-link.delete"
+            | "task.relationship.create"
+            | "task.relationship.delete"
+            | "task.readiness.get"
+            | "task.readiness.decision"
+            | "task.work-log.get"
+            | "task.work-log.create"
+            | "work-log.comment.create"
+            | "task.checklist.create"
+            | "task.checklist.update"
+            | "task.decision.create"
+            | "task.completion.create"
+            | "problem.create"
+            | "problem.revision"
+            | "problem.resolution.create" => self.task_service.execute(name, input)?,
             "health.get" => vault::health(&self.db_path, &self.semantic)?,
             "vault.index" => vault::index(
                 &self.db_path,
@@ -335,7 +498,6 @@ impl NativeApplication {
             "i18n.get" => settings::resources(id("locale")?)?,
             "provider.get" => settings::provider(&self.settings_path)?,
             "provider.save" => settings::save_provider(&self.settings_path, input)?,
-            "capture.create" => workflow::create_capture(&self.db_path, input)?,
             "board.get" => workflow::board_for_locale(
                 &self.db_path,
                 input.get("locale").and_then(Value::as_str).unwrap_or("en"),
@@ -530,7 +692,8 @@ fn error_status(error: &str) -> u16 {
     let normalized = error.to_ascii_lowercase();
     if normalized.contains("not found") || normalized.contains("no longer available") {
         404
-    } else if normalized.contains("changed")
+    } else if normalized.contains("conflict")
+        || normalized.contains("changed")
         || normalized.contains("modified outside")
         || normalized.contains("modified externally")
         || normalized.contains("cannot be")
@@ -542,5 +705,38 @@ fn error_status(error: &str) -> u16 {
         502
     } else {
         400
+    }
+}
+
+#[cfg(test)]
+mod recovery_tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn failed_migration_starts_read_only_until_an_explicit_retry() {
+        let root = tempdir().unwrap();
+        let db = root.path().join("state.sqlite3");
+        std::fs::write(
+            root.path().join("state.sqlite3.migration-failure.json"),
+            json!({"stage":"schema_migration","safeError":"migration_failed","manifestFile":null,"retryAvailable":true,"restoreAvailable":false,"createdAt":"2026-09-05T00:00:00Z"}).to_string(),
+        ).unwrap();
+        let app = NativeApplication::isolated(&root.path().join("vault"), &db).unwrap();
+        assert!(app.migration_recovery_status().unwrap()["recovery"].is_object());
+        assert_eq!(
+            app.execute(NativeOperation {
+                name: "task.create".into(),
+                input: json!({"operationId":"blocked","inputText":"blocked","title":"blocked"})
+            })
+            .status,
+            503
+        );
+        assert_eq!(app.retry_migration().unwrap()["recovered"], true);
+        let ready = app.execute(NativeOperation {
+            name: "task.create".into(),
+            input: json!({"operationId":"ready","inputText":"ready","title":"ready"}),
+        });
+        assert_eq!(ready.status, 200);
+        assert_eq!(ready.body["state"], "task");
     }
 }

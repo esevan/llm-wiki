@@ -1,3 +1,6 @@
+> **Partially superseded for schema 8+**: Provider routing remains; targets use Capture draft, Task
+> revision, and Task-owned artifact kinds from [012](../../012-task-centered-workbench/contracts/application-api.md).
+
 # Provider Configuration Contract
 
 ## Public configuration

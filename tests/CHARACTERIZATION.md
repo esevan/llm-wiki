@@ -15,6 +15,27 @@ is mapped in `docs/migrations/react-tauri-inventory.md` and `src-tauri/tests/`.
 - Test names should describe the same Given/When/Then outcome and avoid asserting private payloads,
   helper calls, or framework-specific behavior unless those details form a public contract.
 
+## Spec 012 Task-centered acceptance matrix
+
+All 29 acceptance scenarios across US1–US8 have executable or fixed-rubric evidence:
+
+| Requirements | Story | Evidence |
+| --- | --- | --- |
+| FR-001–FR-005 | US1 | `WorkbenchView.test.tsx`, application command capture/direct-Task tests, packaged capture/persistence/localization |
+| FR-006–FR-008 | US2 | Task domain/service/repository tests, `TaskDetail.test.tsx`, packaged Work Log |
+| FR-009–FR-013 | US4 | Task relationship domain/application tests and packaged exact-revision relationships |
+| FR-014–FR-017 | US3 | `RefinementPanel.test.tsx`, native refinement tests, packaged A→B→A restoration |
+| FR-018–FR-025 | US5 | `ConflictReviewPanel.test.tsx`, native review tests, packaged cancel/stale/retry/result |
+| FR-026–FR-029 | US7 | Task assistance/application tests, packaged publication, inspected rich Markdown provenance |
+| FR-030–FR-031 | US8 | `task_tracking_v8`, work-tracking acceptance, stdio, parity, and native-only checks |
+| FR-032–FR-036 | US6 | schema-8 migration, backup/restore, and recovery-view tests |
+| FR-037–FR-038 | Cross-cutting | localization scenario, wide/narrow captures, complete npm/Rust suites |
+| FR-039 | Artifact reuse | one recorded artifact passed all eight packaged scenarios and `review:ui -- --reuse-build` |
+| FR-040 | External corpus | deterministic provider evidence passed; real corpus is explicitly blocked by absent provider readiness |
+
+The artifact identity, commands, visual paths, provider gate, and documentation audit are recorded
+in `specs/012-task-centered-workbench/acceptance-verification.md`.
+
 ## Current behavior characterization
 
 ### CB-001 — Structural search remains provider-independent

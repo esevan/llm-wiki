@@ -1,3 +1,7 @@
+> **Partially superseded for schema 8+**: Provider/model routing behavior remains. Legacy Solution or
+> feature target kinds are replaced by Capture draft, Task revision, and Task-owned artifact targets
+> defined by [012](../012-task-centered-workbench/spec.md).
+
 # Feature Specification: Task-Level AI Model Routing
 
 **Feature Branch**: `006-ai-task-model-routing`

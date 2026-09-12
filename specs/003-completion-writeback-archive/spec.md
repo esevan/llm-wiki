@@ -1,3 +1,8 @@
+> **Partially superseded for schema 8+**: Historical completion evidence and reversible external-change
+> protection remain. Problem-wide completion and automatic writeback semantics are replaced by separate
+> Task completion, Problem resolution, and exact Knowledge publication in
+> [012](../012-task-centered-workbench/spec.md).
+
 # Feature Specification: Completion, Writeback, and Archive
 
 **Created**: 2026-08-18

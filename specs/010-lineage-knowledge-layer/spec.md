@@ -1,3 +1,7 @@
+> **Partially superseded for schema 8+**: Evidence corrections and portable output remain. Completed-
+> Solution lineage and publication routes are replaced by Task graph lineage and exact, separate
+> Knowledge publication in [012](../012-task-centered-workbench/spec.md).
+
 # Feature Specification: Lineage Knowledge Layer
 
 **Feature Branch**: `010-lineage-knowledge-layer`

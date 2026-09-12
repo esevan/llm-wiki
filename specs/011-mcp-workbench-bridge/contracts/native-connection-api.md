@@ -1,3 +1,7 @@
+> **Partially superseded for schema 8+**: Connection security and exact review remain; Task snapshots
+> and decisions in [012](../../012-task-centered-workbench/contracts/mcp-task-contract.md) replace
+> Problem/Solution payloads and actions.
+
 # Native Chat, Workbench, and Connection Contract
 
 These allowlisted Tauri operations are available only to the LLM Wiki desktop UI. They support the

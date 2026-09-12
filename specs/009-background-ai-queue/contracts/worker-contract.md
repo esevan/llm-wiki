@@ -1,3 +1,6 @@
+> **Partially superseded for schema 8+**: Worker lifecycle remains; Task/refinement/review identity,
+> cancellation, late-result rejection, and recency exclusion follow [012](../../012-task-centered-workbench/contracts/application-api.md).
+
 # Worker and Handler Contract
 
 ## Roles

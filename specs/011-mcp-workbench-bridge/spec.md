@@ -1,3 +1,7 @@
+> **Partially superseded for schema 8+**: Append-only events, scopes, cursors, expiring reviews, and
+> replay remain. Problem/Solution proposal and gate semantics are replaced by the shared Task aggregate
+> and Task events in [012](../012-task-centered-workbench/spec.md).
+
 # Feature Specification: Dual-Chat Work Tracking
 
 **Feature Branch**: `feat/mcp-support`

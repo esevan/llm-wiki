@@ -1,3 +1,6 @@
+> **Retired for schema 8+**: Resolution no longer changes a gate. Use immutable findings, separate
+> decisions, and nonblocking review in [012](../../012-task-centered-workbench/contracts/application-api.md).
+
 # Contract: Conflict Review API
 
 ## Structured job result

@@ -1,35 +1,48 @@
-# Problem 중심 Workbench
+# Task 중심 Workbench
 
 [English](conflict-gated-workflow.md) | **한국어**
 
-> **You talk. The work organizes itself. Organize around problems, not tasks.**
+## Capture와 작업 정제
 
-![가벼운 Capture, Problem, Solution과 강조된 In Progress 영역을 보여주는 Workbench](images/02-workbench.png)
+생각·문제·이미 찾은 해결책을 Capture에 기록하며, 정해진 단계를 반드시 거칠 필요는 없습니다.
+단순한 업무는 바로 **Task**로 만들 수 있습니다. 맥락이나 검토 가능한 제안이 더 필요할 때
+[Refinement](refinement-preview-status.ko.md)를 사용하고, Capture에 이미 기록한 해결책은 보존합니다.
 
-## 흐름
+하나의 Capture에서 여러 Problem과 Task가 나올 수 있습니다. Problem은 변경 이력을 리비전으로
+보존하며, Task는 해결하려는 정확한 리비전에 연결됩니다. 다른 Task를 선행 작업이나 관련 작업으로
+연결할 수도 있습니다. 이 연결은 작업 흐름을 보존하지만 1:1 관계를 강제하지 않습니다.
+관련 작업은 양쪽 Task에서 조회하고 연결을 해제할 수 있으며, 선행 작업 연결은 방향을 유지합니다.
 
-**검토 결과 확인**은 AI 작업을 중복 생성하지 않고 가장 최근에 완료된 보고서를 엽니다.
-검토가 진행 중이면 Queue를 보여 줍니다. 솔루션이나 Vault 근거가 변경됐다면 Solution 카드의
-**더보기 → 새 검토 실행**을 사용하세요. 이는 명시적인 새 요청이며 자동 승인이 아닙니다.
-저장된 결과가 없을 때 결과 버튼은 작업을 시작하지 않고 더보기 메뉴를 안내합니다.
-이전 네이티브 버전에서 저장한 보고서도 Queue에서 열 수 있습니다.
-완료된 보고서의 충돌 항목이 0개이면 AI가 근거 부족으로 판단했더라도 사용자가 직접
-**충돌 없음**을 결정할 수 있습니다. 충돌 항목이 있는 보고서는 각 항목을 해결해야 하며
-이 단축 결정을 사용할 수 없습니다. **충돌 없음**을 선택하면 clear 결정이 저장되고
-Workbench로 돌아갑니다.
+## 보드에서 이어가기
 
-1. 분류하지 않고 생각을 **Capture**합니다.
-2. AI 대화와 Refinement로 **Problem**을 이해하고 검토합니다.
-3. Problem을 승인하고 **Solution**의 결과·경계·검증 기준을 검토합니다.
-4. Knowledge 기반 충돌 근거를 확인합니다. 인용된 `clear` 결과만 Solution을 시작할 수 있습니다.
-5. Solution Work Log와 완료 흐름 안에서 계속 작업합니다.
+Workbench는 진행 중인 작업의 바로가기를 먼저 보여 주고, 그 아래에 저장된 정제 작업을 보여 줍니다.
+바로가기는 카테고리별 본문 목록의 같은 기록을 열며 Task를 중복 생성하지 않습니다.
+카테고리 재설계는 이번 변경 범위에 포함하지 않습니다.
 
-Task 단계는 없습니다. Explore는 상태를 바꾸지 않고 AI 초안은 편집 가능하며, 모든 전이는 사람이
-결정합니다. Soft delete는 개인 기록이나 vault 파일을 삭제하지 않습니다.
+Task와 진행 중인 Task는 구분됩니다. 사용자가 작업을 시작하고 근거와 함께 완료하며, 완료한 Task를
+다시 열 수도 있습니다. 정제 준비 상태는 어떤 준비 항목이 채워졌고 무엇이 더 필요한지 보여 줍니다.
+적용되지 않는 항목에는 이유를 남길 수 있습니다. 이 정보는 작업 재개를 돕고 별도의 필수 승인 단계가
+되지는 않습니다.
 
-Problem 승인은 카드에서 바로 반응합니다. 처리 중 상태를 표시하고 성공하면 Workbench를 새로
-반영하며, 승인을 저장할 수 없으면 사용자가 확인할 수 있는 오류 메시지를 남깁니다.
-같은 위임 상호작용 경로로 다음 Solution 탐색을 열고 Conflict Review와 Completion Review를
-enqueue하며, Solution을 제안 및 진행 중 상태 사이에서 이동합니다.
+## 작업 기록 유지하기
 
-관련 Spec Kit: [002 — Conflict-Gated Workflow](../../specs/002-conflict-gated-workflow/spec.md)
+Task 상세에서 범위와 검증 기준을 수정하고 Work Log·첨부·댓글·체크리스트·결정을 함께 기록합니다.
+변경을 저장하고 최신 리비전을 불러오는 동안 후속 조작을 사용할 수 없으므로, 다음 동작이 오래된
+Task 리비전을 사용하지 않습니다. 오류는 화면에 남고 성공한 변경은 같은 기록에 반영됩니다.
+
+Task를 완료해도 연결된 Problem이나 다른 Task가 자동으로 해결·완료되지는 않습니다. Problem은
+현재 리비전과 근거를 기준으로 별도 해결합니다. 과거에 연결한 리비전을 현재 리비전처럼 해결할 수는
+없습니다. 비공개 Knowledge 초안 생성과 발행도 각각 명시적인 결정입니다.
+[완료와 Knowledge 안내](completion-writeback-archive.ko.md)를 참고하세요.
+
+## 작업을 막지 않는 충돌 검토
+
+충돌 검토는 비동기로 실행하며 시도와 근거를 보존합니다. 검토 동작에서 취소하거나 재시도할 수
+있습니다. 관련 Task·Capture, Vault 근거, 검토 범위가 바뀌면 결과는 오래된 것으로 표시됩니다.
+실패나 부족한 근거를 충돌 없음으로 간주하지 않으며, 충돌이 Task를 자동 승인하거나 차단하지 않습니다.
+
+Queue에서는 이전 흐름에서 보존한 보고서도 열 수 있습니다. 이 화면에 표시된 충돌 결정 동작은
+사용자의 결정과 메모를 저장하며, 폐기된 Problem 승인 흐름을 다시 요구하지 않습니다.
+
+관련 Spec Kit: [012 — Task 중심 Workbench](../../specs/012-task-centered-workbench/spec.md).
+이전 계약: [002 — Conflict-Gated Workflow](../../specs/002-conflict-gated-workflow/spec.md).

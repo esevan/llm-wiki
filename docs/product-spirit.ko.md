@@ -12,8 +12,8 @@ Capture는 자연스러운 생각을 그대로 받습니다. AI 대화와 Refine
 
 ## 2. Reduce cognitive load.
 
-Capture는 의도적으로 작고 가볍습니다. Workbench에는 Capture·Problem·Solution만 보이며, In Progress
-Solution은 별도 영역에서 강조됩니다. 상세·검증·완료 제어는 현재 결정에 필요할 때만 나타납니다.
+Capture는 의도적으로 작고 가볍습니다. Workbench는 현재 Task를 보여주고 진행 중인 작업을 별도
+강조합니다. 상세·검증·완료 제어는 현재 결정에 필요할 때만 나타납니다.
 
 ![Capture는 가볍게 유지하고 현재 Solution을 우선 표시하는 Workbench](features/images/02-workbench.png)
 
@@ -31,11 +31,12 @@ Solution Work Log는 텍스트·스크린샷·댓글·검증 체크를 지원합
 
 ![현재 대화 옆에 이전 맥락을 유지하는 Refinement Preview](features/images/05-refinement-preview.png)
 
-## 4. Organize around problems, not tasks.
+## 4. 선택한 작업을 중심으로 정리합니다.
 
-지속되는 흐름은 **Capture → Problem → Solution**입니다. Solution이 Work Log와 검증 체크리스트를
-소유합니다. 실행 정보가 별도 계층으로 분리되지 않으므로 모든 행동은 왜 중요한지를 설명하는
-Problem에 연결됩니다.
+Capture에서 이미 찾은 Solution은 보존합니다. 간단한 Task는 즉시 시작할 수 있고, 선택적인
+Refinement는 검토 가능한 Problem과 여러 버전의 Task를 만들 수 있습니다. Task는 proposed,
+in-progress, completed 상태를 독립적으로 가집니다. Work Log에는 텍스트·이미지·파일·댓글·체크리스트·
+결정을 남기며, Task를 완료해도 Problem이 자동으로 해결되지는 않습니다.
 
 ## 5. Private process, portable knowledge.
 

@@ -23,13 +23,13 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 
+type OverviewPage<'a> = (usize, Option<&'a str>, Option<i64>);
+
 const WORKBENCH_OVERVIEW_URI: &str = "llm-wiki://workbench/overview";
 const WORKBENCH_OVERVIEW_TEMPLATE: &str =
     "llm-wiki://workbench/overview{?snapshotRevision,cursor,limit}";
 
-fn overview_resource_page(
-    uri: &str,
-) -> Result<Option<(usize, Option<&str>, Option<i64>)>, AppError> {
+fn overview_resource_page(uri: &str) -> Result<Option<OverviewPage<'_>>, AppError> {
     let Some(query) = uri.strip_prefix(WORKBENCH_OVERVIEW_URI) else {
         return Ok(None);
     };
@@ -109,27 +109,43 @@ struct OpenInput {
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 enum AppendEvent {
-    ProblemDraft {
-        statement: String,
+    TaskCreated {
+        title: String,
         #[serde(default)]
         detail: String,
         #[serde(default)]
-        assumptions: Vec<String>,
-        #[serde(default, rename = "openQuestions")]
-        open_questions: Vec<String>,
-        #[serde(default)]
-        claims: Vec<Value>,
-    },
-    SolutionDraft {
-        title: String,
-        #[serde(default)]
         outcome: String,
+        #[serde(default)]
+        scope: String,
         #[serde(default, rename = "nonGoals")]
         non_goals: String,
         #[serde(default, rename = "validationCriteria")]
         validation_criteria: String,
+    },
+    TaskRevisionProposed {
+        #[serde(rename = "taskId")]
+        task_id: String,
+        #[serde(rename = "expectedTaskRevision")]
+        expected_task_revision: i64,
+        patch: Value,
+    },
+    TaskTransitionProposed {
+        #[serde(rename = "taskId")]
+        task_id: String,
+        #[serde(rename = "expectedTaskRevision")]
+        expected_task_revision: i64,
+        to: String,
         #[serde(default)]
-        claims: Vec<Value>,
+        reason: String,
+    },
+    ProblemResolutionProposed {
+        #[serde(rename = "problemId")]
+        problem_id: String,
+        #[serde(rename = "problemRevision")]
+        problem_revision: i64,
+        rationale: String,
+        #[serde(default, rename = "evidenceRefs")]
+        evidence_refs: Vec<String>,
     },
     WorkLogCheckpoint {
         summary: String,

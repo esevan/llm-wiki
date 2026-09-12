@@ -1,3 +1,7 @@
+> **Superseded for schema 8+**: Problem/Solution preview and refinement contracts are historical.
+> [012](../012-task-centered-workbench/spec.md) replaces them with one resumable Capture-or-Task
+> session, multiple proposals, exact draft decisions, and optional nonblocking refinement.
+
 # Feature Specification: Refinement Preview Status
 
 **Feature Branch**: `005-refinement-preview-status`

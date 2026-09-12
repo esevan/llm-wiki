@@ -7,7 +7,7 @@
 ![Solution Work preserves checklist state, progress evidence, and review comments before completion](images/06-work-log.png)
 
 When a Solution is completed, LLM Wiki automatically builds the current
-**Capture → Problem → Solution → Complete** snapshot. The completed-work report is generated only
+**Capture → Problem → Task → Complete** snapshot when those records exist. The completed-work report is generated only
 after this snapshot exists and uses the Lineage projection plus its referenced evidence as input.
 The final Markdown contains Detail, Lineage, Decision Changes, Conflicts & Addresses, and Completion
 Evidence.

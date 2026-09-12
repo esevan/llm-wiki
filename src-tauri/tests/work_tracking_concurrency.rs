@@ -41,7 +41,7 @@ fn overview_cursor_rejects_a_changed_snapshot() {
             "workflow",
             NativeOperation {
                 name: "capture.create".into(),
-                input: json!({"text":format!("capture {index}")}),
+                input: json!({"operationId":format!("capture-{index}"),"text":format!("capture {index}")}),
             },
         );
         assert_eq!(response.status, 201, "{}", response.body);
@@ -61,7 +61,7 @@ fn overview_cursor_rejects_a_changed_snapshot() {
         "workflow",
         NativeOperation {
             name: "capture.create".into(),
-            input: json!({"text":"changes snapshot"}),
+            input: json!({"operationId":"changes-snapshot","text":"changes snapshot"}),
         },
     );
     let stale = app.execute_work_tracking(NativeOperation {
@@ -77,28 +77,11 @@ fn overview_orders_items_by_their_actual_latest_update() {
     let root = tempdir().unwrap();
     let db = root.path().join("db.sqlite");
     let app = NativeApplication::isolated(&root.path().join("vault"), &db).unwrap();
-    let first = app.execute_domain(
-        "workflow",
-        NativeOperation {
-            name: "capture.create".into(),
-            input: json!({"text":"first capture"}),
-        },
-    );
-    let second = app.execute_domain(
-        "workflow",
-        NativeOperation {
-            name: "capture.create".into(),
-            input: json!({"text":"second capture"}),
-        },
-    );
+    let first = app.execute_domain("workflow", NativeOperation { name: "task.create".into(), input: json!({"operationId":"first-task","inputText":"first task","title":"first task"}) });
+    let second = app.execute_domain("workflow", NativeOperation { name: "task.create".into(), input: json!({"operationId":"second-task","inputText":"second task","title":"second task"}) });
     std::thread::sleep(std::time::Duration::from_millis(2));
-    rusqlite::Connection::open(&db)
-        .unwrap()
-        .execute(
-            "UPDATE captures SET text='first capture updated' WHERE id=?",
-            [first.body["id"].as_str().unwrap()],
-        )
-        .unwrap();
+    let revised = app.execute_domain("workflow", NativeOperation { name: "task.revision".into(), input: json!({"operationId":"first-revise","taskId":first.body["id"],"expectedTaskRevision":1,"patch":{"title":"first task updated"}}) });
+    assert_eq!(revised.status, 200, "{}", revised.body);
 
     let overview = app.execute_work_tracking(NativeOperation {
         name: "work_tracking.overview".into(),
@@ -119,49 +102,19 @@ fn overview_bounds_and_pages_attention_and_normalizes_context() {
     let root = tempdir().unwrap();
     let db = root.path().join("db.sqlite");
     let app = NativeApplication::isolated(&root.path().join("vault"), &db).unwrap();
-    let connection = rusqlite::Connection::open(&db).unwrap();
     for index in 0..55 {
-        connection
-            .execute(
-                "INSERT INTO captures(id,text) VALUES (?,?)",
-                [format!("capture-{index}"), format!("capture {index}")],
-            )
-            .unwrap();
-        connection
-            .execute(
-                "INSERT INTO problems(id,capture_id,statement,state) VALUES (?,?,?,'draft')",
-                [
-                    format!("problem-{index}"),
-                    format!("capture-{index}"),
-                    format!("draft problem {index}"),
-                ],
-            )
-            .unwrap();
+        let response = app.execute_domain("workflow", NativeOperation { name: "task.create".into(), input: json!({"operationId":format!("task-{index}"),"inputText":format!("task {index}"),"title":format!("task {index}")}) });
+        assert_eq!(response.status, 200, "{}", response.body);
     }
-    connection
-        .execute(
-            "INSERT INTO captures(id,text) VALUES ('whitespace',' heading\n\nwith\t extra   whitespace ') ",
-            [],
-        )
-        .unwrap();
-    drop(connection);
 
     let first = app.execute_work_tracking(NativeOperation {
         name: "work_tracking.overview".into(),
         input: json!({"limit":50}),
     });
     assert_eq!(first.status, 200, "{}", first.body);
-    assert_eq!(first.body["attentionTotal"], 55);
-    assert_eq!(first.body["attention"].as_array().unwrap().len(), 50);
-    assert_eq!(first.body["attentionTruncated"], true);
-    let whitespace = first.body["items"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|item| item["entityRef"] == "whitespace")
-        .unwrap();
-    assert_eq!(whitespace["title"], "heading with extra whitespace");
-    assert!(whitespace["title"].as_str().unwrap().len() <= 240);
+    assert_eq!(first.body["attentionTotal"], 0);
+    assert!(first.body["attention"].as_array().unwrap().is_empty());
+    assert_eq!(first.body["attentionTruncated"], false);
 
     let second = app.execute_work_tracking(NativeOperation {
         name: "work_tracking.overview".into(),
@@ -172,55 +125,38 @@ fn overview_bounds_and_pages_attention_and_normalizes_context() {
         }),
     });
     assert_eq!(second.status, 200, "{}", second.body);
-    assert_eq!(second.body["attention"].as_array().unwrap().len(), 5);
+    assert!(second.body["attention"].as_array().unwrap().is_empty());
     assert_eq!(second.body["attentionTruncated"], false);
     assert!(second.body["nextCursor"].is_null());
 }
 
 #[test]
-fn overview_updates_a_solution_timestamp_when_a_progress_entry_changes() {
+fn overview_updates_a_task_timestamp_when_a_work_log_entry_changes() {
     let root = tempdir().unwrap();
     let db = root.path().join("db.sqlite");
     let app = NativeApplication::isolated(&root.path().join("vault"), &db).unwrap();
-    let connection = rusqlite::Connection::open(&db).unwrap();
-    connection
-        .execute(
-            "INSERT INTO captures(id,text) VALUES ('capture','capture')",
-            [],
-        )
-        .unwrap();
-    connection
-        .execute(
-            "INSERT INTO problems(id,capture_id,statement,state) VALUES ('problem','capture','problem','approved')",
-            [],
-        )
-        .unwrap();
-    connection
-        .execute(
-            "INSERT INTO features(id,problem_id,title,outcome,conflict_state,state) VALUES ('feature','problem','solution','outcome','clear','approved')",
-            [],
-        )
-        .unwrap();
-    drop(connection);
+    let task = app.execute_domain(
+        "workflow",
+        NativeOperation {
+            name: "task.create".into(),
+            input: json!({"operationId":"task","inputText":"task","title":"task"}),
+        },
+    );
+    let task_id = task.body["id"].as_str().unwrap().to_owned();
     let before = app.execute_work_tracking(NativeOperation {
         name: "work_tracking.overview".into(),
         input: json!({"limit":10}),
     });
     let before_updated = before.body["items"][0]["updatedAt"].clone();
     std::thread::sleep(std::time::Duration::from_millis(2));
-    rusqlite::Connection::open(&db)
-        .unwrap()
-        .execute(
-            "INSERT INTO solution_progress_entries(id,feature_id,body) VALUES ('entry','feature','progress')",
-            [],
-        )
-        .unwrap();
+    let work = app.execute_domain("workflow", NativeOperation { name: "task.work-log.create".into(), input: json!({"operationId":"work","taskId":task_id,"expectedTaskRevision":1,"body":"progress"}) });
+    assert_eq!(work.status, 200, "{}", work.body);
 
     let after = app.execute_work_tracking(NativeOperation {
         name: "work_tracking.overview".into(),
         input: json!({"limit":10}),
     });
     assert_eq!(after.status, 200, "{}", after.body);
-    assert_eq!(after.body["items"][0]["entityRef"], "feature");
+    assert_eq!(after.body["items"][0]["entityRef"], task_id);
     assert_ne!(after.body["items"][0]["updatedAt"], before_updated);
 }

@@ -13,8 +13,8 @@ performing it up front.
 
 ## 2. Reduce cognitive load.
 
-Capture remains deliberately small. The Workbench shows only Capture, Problem, and Solution, while
-In Progress Solutions receive a dedicated highlight. Detail, validation, and completion controls
+Capture remains deliberately small. The Workbench keeps current Tasks visible and gives in-progress
+work a dedicated highlight. Detail, validation, and completion controls
 appear only when the current decision needs them.
 
 ![The Workbench keeps Capture light and gives current Solutions visual priority](features/images/02-workbench.png)
@@ -33,11 +33,12 @@ the Work Log's authored evidence and legacy content remain readable in their ori
 
 ![Refinement Preview keeps prior context beside the active conversation](features/images/05-refinement-preview.png)
 
-## 4. Organize around problems, not tasks.
+## 4. Organize around chosen work.
 
-The durable workflow is **Capture → Problem → Solution**. A Solution owns its Work Log and validation
-checklist. Execution never becomes a separate planning hierarchy, so every action remains attached
-to the Problem that explains why it matters.
+Capture preserves the solution already found. A simple Task may begin immediately, while optional
+Refinement can produce a reviewable Problem and multiple revisioned Tasks. Tasks have independent
+proposed, in-progress, and completed states. Work Logs hold authored text, images, files, comments,
+checklists, and decisions; completing a Task does not silently resolve a Problem.
 
 ## 5. Private process, portable knowledge.
 

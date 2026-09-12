@@ -23,7 +23,6 @@ fn now() -> String {
 }
 
 const OVERVIEW_TEXT_LIMIT: usize = 240;
-const OVERVIEW_PROGRESS_LIMIT: usize = 160;
 const OVERVIEW_ATTENTION_LIMIT: usize = 50;
 
 fn hash_text(value: &str) -> String {
@@ -75,6 +74,9 @@ fn require_text<'a>(value: &'a Value, field: &str, max: usize) -> Result<&'a str
 
 fn action_result_type(action: &str) -> Option<&'static str> {
     match action {
+        "create_task" | "revise_task" | "transition_task" | "link_task" => Some("tasks"),
+        "complete_task" => Some("task_completions"),
+        "resolve_problem" => Some("problems"),
         "adopt_problem" | "approve_problem" => Some("problems"),
         "adopt_solution" | "resolve_conflict" | "approve_solution" => Some("features"),
         "accept_completion_proposal" => Some("completion_reviews"),
@@ -767,6 +769,9 @@ impl SqliteWorkTrackingStore {
     fn link_snapshot(connection: &Connection, payload: &Value) -> Result<Value, AppError> {
         let kind = require_text(payload, "entityType", 40)?;
         let id = require_text(payload, "entityId", 80)?;
+        if kind == "tasks" {
+            return connection.query_row("SELECT r.title,t.current_revision,w.revision FROM tasks t JOIN task_revisions r ON r.task_id=t.id AND r.revision=t.current_revision CROSS JOIN work_tracking_workspace w WHERE t.id=? AND w.id=1",[id],|row|Ok(json!({"entityType":kind,"entityId":id,"title":row.get::<_,String>(0)?,"entityRevision":row.get::<_,i64>(1)?,"workspaceRevision":row.get::<_,i64>(2)?}))).optional().map_err(storage_error)?.ok_or_else(||AppError::new("not_found_or_not_visible","Workbench target is unavailable"));
+        }
         let field = match kind {
             "problems" => "statement",
             "features" => "title",
@@ -812,6 +817,7 @@ impl SqliteWorkTrackingStore {
             "captures" => "captures",
             "problems" => "problems",
             "features" => "features",
+            "tasks" => "tasks",
             _ => return Err(AppError::new("invalid_input", "Unsupported topic member")),
         };
         let key = if kind == "vault" { "path" } else { "id" };
@@ -1013,6 +1019,79 @@ impl SqliteWorkTrackingStore {
             tx.query_row("SELECT entity_id FROM work_tracking_links WHERE session_id=? AND relationship=? ORDER BY created_at DESC LIMIT 1",params![session_id,relationship],|row|row.get(0)).optional().map_err(storage_error)
         };
         match action {
+            "create_task" => {
+                let capture: String = tx
+                    .query_row(
+                        "SELECT capture_id FROM work_tracking_sessions WHERE id=?",
+                        [session_id],
+                        |r| r.get(0),
+                    )
+                    .map_err(storage_error)?;
+                let service =
+                    crate::application::task_service::TaskApplicationService::new(&self.path);
+                let task = service
+                    .create_task_tx(tx, payload, Some(&capture), None, timestamp)
+                    .map_err(storage_error)?;
+                let id = task["id"]
+                    .as_str()
+                    .ok_or_else(|| storage_error("Task result missing identity"))?;
+                if let Some(problem_id) = payload.get("problemId").and_then(Value::as_str) {
+                    let revision = payload
+                        .get("problemRevision")
+                        .and_then(Value::as_i64)
+                        .ok_or_else(|| {
+                            AppError::new(
+                                "invalid_input",
+                                "Task proposal requires an exact Problem revision",
+                            )
+                        })?;
+                    let exists: bool = tx.query_row(
+                        "SELECT EXISTS(SELECT 1 FROM problem_revisions WHERE problem_id=? AND revision=?)",
+                        params![problem_id, revision],
+                        |row| row.get(0),
+                    ).map_err(storage_error)?;
+                    if !exists {
+                        return Err(AppError::new(
+                            "not_found_or_not_visible",
+                            "Problem revision is unavailable",
+                        ));
+                    }
+                    tx.execute(
+                        "INSERT INTO task_problem_links(id,task_id,problem_id,problem_revision,relationship,note,created_at) VALUES(?,?,?,?,?,'',?)",
+                        params![Uuid::new_v4().to_string(), id, problem_id, revision, "context", timestamp],
+                    ).map_err(storage_error)?;
+                }
+                tx.execute("INSERT INTO work_tracking_links(id,session_id,source_event_id,entity_type,entity_id,relationship,decision_id,created_at) VALUES (?,?,?,'tasks',?,'adopted_task',?,?)",params![Uuid::new_v4().to_string(),session_id,event_id,id,decision_id,timestamp]).map_err(storage_error)?;
+                Ok(Some(id.to_owned()))
+            }
+            "revise_task" | "transition_task" | "complete_task" | "resolve_problem" => {
+                let mut input = payload.clone();
+                input["operationId"] = json!(format!("review:{decision_id}"));
+                if action != "resolve_problem" && input.get("taskId").is_none() {
+                    input["taskId"] =
+                        json!(linked("adopted_task")?.ok_or_else(|| AppError::new(
+                            "workflow_precondition",
+                            "Select a Task first"
+                        ))?);
+                }
+                let name = match action {
+                    "revise_task" => "task.revision",
+                    "transition_task" => "task.transition",
+                    "complete_task" => "task.completion.create",
+                    _ => "problem.resolution.create",
+                };
+                let result =
+                    crate::application::task_service::TaskApplicationService::new(&self.path)
+                        .execute_tx(tx, name, &input)
+                        .map_err(storage_error)?;
+                if action == "complete_task" {
+                    tx.execute("UPDATE work_tracking_sessions SET state='completed',publication_state='offered',publication_offer_revision=head_revision,updated_at=? WHERE id=?",params![timestamp,session_id]).map_err(storage_error)?;
+                }
+                Ok(result["id"]
+                    .as_str()
+                    .map(str::to_owned)
+                    .or_else(|| input["taskId"].as_str().map(str::to_owned)))
+            }
             "adopt_problem" => {
                 let id = linked("adopted_problem")?.unwrap_or_else(|| Uuid::new_v4().to_string());
                 let capture_id: String = tx
@@ -1251,6 +1330,11 @@ impl SqliteWorkTrackingStore {
                 let entity_type = require_text(payload, "entityType", 40)?;
                 let entity_id = require_text(payload, "entityId", 80)?;
                 match entity_type {
+                    "tasks" => {
+                        Self::link_snapshot(tx, payload)?;
+                        tx.execute("INSERT OR IGNORE INTO work_tracking_links(id,session_id,source_event_id,entity_type,entity_id,relationship,decision_id,created_at) VALUES (?,?,?,'tasks',?,'adopted_task',?,?)",params![Uuid::new_v4().to_string(),session_id,event_id,entity_id,decision_id,timestamp]).map_err(storage_error)?;
+                        Ok(Some(entity_id.to_owned()))
+                    }
                     "problems" => {
                         let exists: i64 = tx
                             .query_row(
@@ -1332,12 +1416,13 @@ impl SqliteWorkTrackingStore {
             .map_err(storage_error)?
             .collect::<Result<Vec<_>, _>>()
             .map_err(storage_error)?);
-        let mut pending_statement=connection.prepare("SELECT e.id,e.kind,e.payload_json FROM work_tracking_events e WHERE e.session_id=? AND e.kind IN ('problem_draft','solution_draft','conflict_proposal','completion_proposal') AND NOT EXISTS(SELECT 1 FROM work_tracking_decisions d WHERE d.event_id=e.id) AND NOT EXISTS(SELECT 1 FROM work_tracking_events replacement WHERE replacement.supersedes_event_id=e.id) ORDER BY e.revision DESC LIMIT 8").map_err(storage_error)?;
+        let mut pending_statement=connection.prepare("SELECT e.id,e.kind,e.payload_json FROM work_tracking_events e WHERE e.session_id=? AND e.kind IN ('task_created','task_revision_proposed','task_transition_proposed','problem_resolution_proposed','problem_draft','solution_draft','conflict_proposal','completion_proposal') AND NOT EXISTS(SELECT 1 FROM work_tracking_decisions d WHERE d.event_id=e.id) AND NOT EXISTS(SELECT 1 FROM work_tracking_events replacement WHERE replacement.supersedes_event_id=e.id) ORDER BY e.revision DESC LIMIT 8").map_err(storage_error)?;
         value["pendingProposals"]=json!(pending_statement.query_map([session_id],|row|Ok(json!({"eventId":row.get::<_,String>(0)?,"kind":row.get::<_,String>(1)?,"payload":serde_json::from_str::<Value>(&row.get::<_,String>(2)?).unwrap_or(Value::Null)}))).map_err(storage_error)?.collect::<Result<Vec<_>,_>>().map_err(storage_error)?);
-        value["acceptedCompletion"]=connection.query_row("SELECT e.id,e.payload_json FROM work_tracking_events e JOIN work_tracking_decisions d ON d.event_id=e.id WHERE e.session_id=? AND d.result_entity_type='completions' AND d.decision='accepted' ORDER BY e.revision DESC LIMIT 1",[session_id],|row|Ok(json!({"eventId":row.get::<_,String>(0)?,"payload":serde_json::from_str::<Value>(&row.get::<_,String>(1)?).unwrap_or(Value::Null)}))).optional().map_err(storage_error)?.unwrap_or(Value::Null);
+        value["acceptedCompletion"]=connection.query_row("SELECT e.id,e.payload_json FROM work_tracking_events e JOIN work_tracking_decisions d ON d.event_id=e.id WHERE e.session_id=? AND d.result_entity_type IN ('task_completions','completions') AND d.decision='accepted' ORDER BY e.revision DESC LIMIT 1",[session_id],|row|Ok(json!({"eventId":row.get::<_,String>(0)?,"payload":serde_json::from_str::<Value>(&row.get::<_,String>(1)?).unwrap_or(Value::Null)}))).optional().map_err(storage_error)?.unwrap_or(Value::Null);
         let problem=connection.query_row("SELECT p.id,p.statement,p.state,l.source_event_id FROM work_tracking_links l JOIN problems p ON p.id=l.entity_id WHERE l.session_id=? AND l.relationship='adopted_problem' ORDER BY l.created_at DESC LIMIT 1",[session_id],|row|Ok(json!({"id":row.get::<_,String>(0)?,"title":row.get::<_,String>(1)?,"state":row.get::<_,String>(2)?,"sourceEventId":row.get::<_,String>(3)?}))).optional().map_err(storage_error)?;
         let solution=connection.query_row("SELECT f.id,f.title,f.state,f.conflict_state,l.source_event_id FROM work_tracking_links l JOIN features f ON f.id=l.entity_id WHERE l.session_id=? AND l.relationship='adopted_solution' ORDER BY l.created_at DESC LIMIT 1",[session_id],|row|Ok(json!({"id":row.get::<_,String>(0)?,"title":row.get::<_,String>(1)?,"state":row.get::<_,String>(2)?,"conflictState":row.get::<_,String>(3)?,"sourceEventId":row.get::<_,String>(4)?}))).optional().map_err(storage_error)?;
-        value["linkedWorkflow"] = json!({"problem":problem,"solution":solution});
+        let task = connection.query_row("SELECT t.id,r.title,t.state,t.current_revision,l.source_event_id FROM work_tracking_links l JOIN tasks t ON t.id=l.entity_id JOIN task_revisions r ON r.task_id=t.id AND r.revision=t.current_revision WHERE l.session_id=? AND l.relationship='adopted_task' ORDER BY l.created_at DESC LIMIT 1",[session_id],|row|Ok(json!({"id":row.get::<_,String>(0)?,"title":row.get::<_,String>(1)?,"state":row.get::<_,String>(2)?,"taskRevision":row.get::<_,i64>(3)?,"sourceEventId":row.get::<_,String>(4)?}))).optional().map_err(storage_error)?;
+        value["linkedWorkflow"] = json!({"problem":problem,"solution":solution,"task":task});
         let mut decisions_statement=connection.prepare("SELECT id,event_id,decision,decision_channel,created_at FROM work_tracking_decisions WHERE session_id=? ORDER BY created_at DESC LIMIT 8").map_err(storage_error)?;
         let decisions=decisions_statement.query_map([session_id],|row|Ok(json!({"decisionId":row.get::<_,String>(0)?,"eventId":row.get::<_,String>(1)?,"decision":row.get::<_,String>(2)?,"channel":row.get::<_,String>(3)?,"createdAt":row.get::<_,String>(4)?}))).map_err(storage_error)?.collect::<Result<Vec<_>,_>>().map_err(storage_error)?;
         value["recentDecisions"] = json!(decisions);
@@ -1367,21 +1452,12 @@ impl SqliteWorkTrackingStore {
             json!(["review_publication_withdrawal"])
         } else if state == "completed" {
             json!([])
-        } else if solution
-            .as_ref()
-            .is_some_and(|s| s["conflictState"] != "clear")
-        {
-            json!(["resolve_conflict"])
-        } else if solution.as_ref().is_some_and(|s| s["state"] == "proposed") {
-            json!(["approve_solution"])
-        } else if solution.is_some() {
-            json!(["accept_checkpoint", "accept_completion_proposal"])
-        } else if problem.as_ref().is_some_and(|p| p["state"] != "approved") {
-            json!(["approve_problem"])
-        } else if problem.is_some() {
-            json!(["adopt_solution"])
+        } else if task.as_ref().is_some_and(|t| t["state"] == "task") {
+            json!(["transition_task", "accept_checkpoint"])
+        } else if task.is_some() {
+            json!(["accept_checkpoint", "complete_task"])
         } else {
-            json!(["adopt_problem"])
+            json!(["create_task"])
         };
         Ok(value)
     }
@@ -1389,6 +1465,12 @@ impl SqliteWorkTrackingStore {
     pub fn select_work(&self, input: &Value) -> Result<Value, AppError> {
         let kind = require_text(input, "entityType", 40)?;
         let id = require_text(input, "entityId", 80)?;
+        if kind == "tasks" {
+            let connection = database::open(&self.path).map_err(storage_error)?;
+            let selected = Self::link_snapshot(&connection, input)?;
+            connection.execute("UPDATE work_tracking_workspace SET selection_json=?,revision=revision+1 WHERE id=1",[selected.to_string()]).map_err(storage_error)?;
+            return Ok(selected);
+        }
         let field = match kind {
             "captures" => "text",
             "problems" => "statement",
@@ -1679,7 +1761,7 @@ impl SqliteWorkTrackingStore {
             ));
         }
         let completion_event_id = require_text(input, "completionEventId", 80)?;
-        let completed:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM work_tracking_decisions WHERE session_id=? AND event_id=? AND result_entity_type='completions' AND decision='accepted')",params![session_id,completion_event_id],|row|row.get(0)).map_err(storage_error)?;
+        let completed:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM work_tracking_decisions WHERE session_id=? AND event_id=? AND result_entity_type IN ('task_completions','completions') AND decision='accepted')",params![session_id,completion_event_id],|row|row.get(0)).map_err(storage_error)?;
         if !completed {
             return Err(AppError::new(
                 "workflow_precondition",
@@ -1790,7 +1872,7 @@ impl SqliteWorkTrackingStore {
         // Waiting for a Solution is a workflow dependency, not a failed attempt.
         // Wake these events only after a link exists, without spinning/retrying.
         if wake_dependencies {
-            transaction.execute("UPDATE work_tracking_projection_jobs SET state='pending',attempts=0,updated_at=? WHERE state='waiting_solution' AND EXISTS (SELECT 1 FROM work_tracking_events e JOIN work_tracking_links l ON l.session_id=e.session_id WHERE e.id=work_tracking_projection_jobs.event_id AND l.relationship='adopted_solution')", [&timestamp]).map_err(storage_error)?;
+            transaction.execute("UPDATE work_tracking_projection_jobs SET state='pending',attempts=0,updated_at=? WHERE state='waiting_solution' AND EXISTS (SELECT 1 FROM work_tracking_events e JOIN work_tracking_links l ON l.session_id=e.session_id WHERE e.id=work_tracking_projection_jobs.event_id AND l.relationship='adopted_task')", [&timestamp]).map_err(storage_error)?;
         }
         let event_id = transaction.query_row(
             "SELECT event_id FROM work_tracking_projection_jobs WHERE state IN ('pending','claimed') AND (state='pending' OR lease_expires_at<?) AND attempts<5 AND (next_attempt_at IS NULL OR next_attempt_at<=?) ORDER BY created_at LIMIT 1",
@@ -1848,16 +1930,16 @@ impl SqliteWorkTrackingStore {
         };
         let mut result_entity_id: Option<String> = None;
         if state == "applied" && kind == "work_log_checkpoint" {
-            let feature_id=transaction.query_row("SELECT entity_id FROM work_tracking_links WHERE session_id=? AND relationship='adopted_solution' ORDER BY created_at DESC LIMIT 1",[&session_id],|row|row.get::<_,String>(0)).optional().map_err(storage_error)?;
+            let feature_id=transaction.query_row("SELECT entity_id FROM work_tracking_links WHERE session_id=? AND relationship='adopted_task' ORDER BY created_at DESC LIMIT 1",[&session_id],|row|row.get::<_,String>(0)).optional().map_err(storage_error)?;
             if let Some(feature_id) = feature_id {
                 let progress_id = Uuid::new_v4().to_string();
                 let body = serde_json::from_str::<Value>(&payload)
                     .ok()
                     .and_then(|v| v.get("summary").and_then(Value::as_str).map(str::to_owned))
                     .unwrap_or_else(|| "Checkpoint".into());
-                let inserted=transaction.execute("INSERT OR IGNORE INTO work_tracking_links(id,session_id,source_event_id,entity_type,entity_id,relationship,created_at) VALUES (?,?,?,'solution_progress_entries',?,'accepted_progress',?)",params![Uuid::new_v4().to_string(),session_id,event_id,progress_id,timestamp]).map_err(storage_error)?;
+                let inserted=transaction.execute("INSERT OR IGNORE INTO work_tracking_links(id,session_id,source_event_id,entity_type,entity_id,relationship,created_at) VALUES (?,?,?,'task_work_log_entries',?,'accepted_progress',?)",params![Uuid::new_v4().to_string(),session_id,event_id,progress_id,timestamp]).map_err(storage_error)?;
                 if inserted == 1 {
-                    transaction.execute("INSERT OR IGNORE INTO solution_progress_entries(id,feature_id,body,created_at) VALUES (?,?,?,?)",params![progress_id,feature_id,body,timestamp]).map_err(storage_error)?;
+                    transaction.execute("INSERT OR IGNORE INTO task_work_log_entries(id,task_id,body,created_at) VALUES (?,?,?,?)",params![progress_id,feature_id,body,timestamp]).map_err(storage_error)?;
                     result_entity_id = Some(progress_id);
                 }
             } else {
@@ -1917,6 +1999,7 @@ impl WorkflowRepository for SqliteWorkTrackingStore {
             )?;
             row["problem"] = session["linkedWorkflow"]["problem"].clone();
             row["solution"] = session["linkedWorkflow"]["solution"].clone();
+            row["task"] = session["linkedWorkflow"]["task"].clone();
             row["recentProgress"] = json!(session["recentEvents"]
                 .as_array()
                 .into_iter()
@@ -1967,89 +2050,81 @@ impl WorkflowRepository for SqliteWorkTrackingStore {
         offset: usize,
         attention_offset: usize,
     ) -> Result<Value, AppError> {
-        let connection = database::open(&self.path).map_err(storage_error)?;
-        let connection = connection.unchecked_transaction().map_err(storage_error)?;
-        let captures:i64=connection.query_row("SELECT count(*) FROM captures c WHERE NOT EXISTS (SELECT 1 FROM problems p WHERE p.capture_id=c.id)",[],|row|row.get(0)).map_err(storage_error)?;
-        let problems: i64 = connection
-            .query_row(
-                "SELECT count(*) FROM problems WHERE state!='archived'",
-                [],
-                |row| row.get(0),
-            )
+        let board = crate::application::task_service::TaskApplicationService::new(&self.path)
+            .execute("workbench.get", &json!({}))
             .map_err(storage_error)?;
-        let solutions: i64 = connection
-            .query_row(
-                "SELECT count(*) FROM features WHERE state!='archived'",
-                [],
-                |row| row.get(0),
-            )
-            .map_err(storage_error)?;
-        let tracked: i64 = connection
-            .query_row("SELECT count(*) FROM work_tracking_sessions", [], |row| {
-                row.get(0)
-            })
-            .map_err(storage_error)?;
-        let total = captures + problems + solutions;
-        let revision: i64 = connection
-            .query_row(
-                "SELECT revision FROM work_tracking_workspace WHERE id=1",
-                [],
-                |row| row.get(0),
-            )
-            .map_err(storage_error)?;
-        let mut statement=connection.prepare("SELECT id,kind,title,state,updated_at,outcome_or_context FROM (SELECT c.id,'capture' kind,substr(c.text,1,200) title,'captured' state,COALESCE(NULLIF((SELECT updated_at FROM work_tracking_entity_versions v WHERE v.entity_type='captures' AND v.entity_id=c.id),''),c.created_at) updated_at,substr(c.text,1,500) outcome_or_context FROM captures c WHERE NOT EXISTS (SELECT 1 FROM problems p WHERE p.capture_id=c.id) UNION ALL SELECT p.id,'problem',p.statement,p.state,COALESCE(NULLIF((SELECT updated_at FROM work_tracking_entity_versions v WHERE v.entity_type='problems' AND v.entity_id=p.id),''),p.created_at),substr(p.detail,1,500) FROM problems p WHERE p.state!='archived' UNION ALL SELECT f.id,'solution',f.title,f.state,COALESCE(NULLIF((SELECT updated_at FROM work_tracking_entity_versions v WHERE v.entity_type='features' AND v.entity_id=f.id),''),f.created_at),substr(f.outcome,1,500) FROM features f WHERE f.state!='archived') ORDER BY updated_at DESC,id LIMIT ? OFFSET ?").map_err(storage_error)?;
-        let mut items=statement.query_map(params![limit as i64,offset as i64],|row|Ok(json!({"entityRef":row.get::<_,String>(0)?,"kind":row.get::<_,String>(1)?,"title":bounded_overview_text(&row.get::<_,String>(2)?,OVERVIEW_TEXT_LIMIT),"category":Value::Null,"state":row.get::<_,String>(3)?,"updatedAt":row.get::<_,String>(4)?,"outcomeOrContext":bounded_overview_text(&row.get::<_,String>(5)?,OVERVIEW_TEXT_LIMIT)}))).map_err(storage_error)?.collect::<Result<Vec<_>,_>>().map_err(storage_error)?;
-        for item in &mut items {
-            let kind = match item["kind"].as_str() {
-                Some("problem") => "problems",
-                Some("solution") => "features",
-                _ => "captures",
-            };
-            let id = item["entityRef"].as_str().unwrap_or_default();
-            if kind == "features" {
-                item["conflictState"] = connection
-                    .query_row(
-                        "SELECT conflict_state FROM features WHERE id=?",
-                        [id],
-                        |row| row.get::<_, String>(0),
-                    )
-                    .map_err(storage_error)?
-                    .into();
-            }
-            let session:Option<String>=connection.query_row("SELECT session_id FROM work_tracking_links WHERE entity_type=? AND entity_id=? ORDER BY created_at DESC LIMIT 1",params![kind,item["entityRef"].as_str().unwrap_or_default()],|row|row.get(0)).optional().map_err(storage_error)?;
-            if let Some(session) = session {
-                let context = Self::session_value_on(&connection, "native-in-app-chat", &session)?;
-                item["trackedSessionId"] = json!(session);
-                item["nextActions"] = context["nextActions"].clone();
-                item["recentProgress"] = json!(context["recentEvents"]
+        let mut items: Vec<Value> = board["categories"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .flat_map(|category| {
+                category["items"]
                     .as_array()
                     .into_iter()
                     .flatten()
-                    .filter(|event| event["kind"] == "work_log_checkpoint")
-                    .take(2)
-                    .collect::<Vec<_>>());
-                item["latestProgress"] = item["recentProgress"]
-                    .as_array()
-                    .and_then(|events| events.first())
-                    .and_then(|event| event["payload"]["summary"].as_str())
-                    .map(|summary| bounded_overview_text(summary, OVERVIEW_PROGRESS_LIMIT))
-                    .into();
-                item["nextAction"] = context["nextActions"]
-                    .as_array()
-                    .and_then(|actions| actions.first())
-                    .cloned()
-                    .unwrap_or(Value::Null);
-            }
-        }
-        let lifecycle=connection.query_row("SELECT COALESCE(sum(state='proposed'),0),COALESCE(sum(state='approved'),0),COALESCE(sum(conflict_state!='clear' AND state NOT IN ('completed','archived')),0),COALESCE(sum(state='completed'),0) FROM features",[],|row|Ok((row.get::<_,i64>(0)?,row.get::<_,i64>(1)?,row.get::<_,i64>(2)?,row.get::<_,i64>(3)?))).map_err(storage_error)?;
-        let pending_decisions:i64=connection.query_row("SELECT (SELECT count(*) FROM problems WHERE state='draft')+(SELECT count(*) FROM features WHERE state='proposed')",[],|row|row.get(0)).map_err(storage_error)?;
-        let attention_total:i64=connection.query_row("SELECT count(*) FROM (SELECT p.id FROM problems p WHERE p.state='draft' UNION ALL SELECT f.id FROM features f WHERE f.state NOT IN ('completed','archived') AND (f.conflict_state!='clear' OR f.state='proposed'))",[],|row|row.get(0)).map_err(storage_error)?;
-        let mut attention_statement=connection.prepare("SELECT entity_ref,kind,title,reason FROM (SELECT p.id entity_ref,'problem' kind,p.statement title,'pending_decision' reason FROM problems p WHERE p.state='draft' UNION ALL SELECT f.id,'solution',f.title,CASE WHEN f.conflict_state!='clear' THEN 'conflict_review' ELSE 'pending_decision' END FROM features f WHERE f.state NOT IN ('completed','archived') AND (f.conflict_state!='clear' OR f.state='proposed')) ORDER BY kind,title,entity_ref LIMIT ? OFFSET ?").map_err(storage_error)?;
-        let attention=attention_statement.query_map(params![OVERVIEW_ATTENTION_LIMIT as i64,attention_offset as i64],|row|Ok(json!({"entityRef":row.get::<_,String>(0)?,"kind":row.get::<_,String>(1)?,"title":bounded_overview_text(&row.get::<_,String>(2)?,OVERVIEW_TEXT_LIMIT),"reason":row.get::<_,String>(3)?}))).map_err(storage_error)?.collect::<Result<Vec<_>,_>>().map_err(storage_error)?;
-        let mut completed_statement=connection.prepare("SELECT f.title,f.outcome,COALESCE(NULLIF((SELECT updated_at FROM work_tracking_entity_versions v WHERE v.entity_type='features' AND v.entity_id=f.id),''),f.created_at) completed_at FROM features f WHERE f.state='completed' ORDER BY completed_at DESC,f.id LIMIT 10").map_err(storage_error)?;
-        let recently_completed=completed_statement.query_map([],|row|Ok(json!({"title":bounded_overview_text(&row.get::<_,String>(0)?,OVERVIEW_TEXT_LIMIT),"outcome":bounded_overview_text(&row.get::<_,String>(1)?,OVERVIEW_TEXT_LIMIT),"completedAt":row.get::<_,String>(2)?}))).map_err(storage_error)?.collect::<Result<Vec<_>,_>>().map_err(storage_error)?;
+                    .map(move |item| {
+                        let title = item["title"]
+                            .as_str()
+                            .or_else(|| item["text"].as_str())
+                            .unwrap_or_default();
+                        json!({"entityRef":item["id"],"kind":item["kind"],
+                    "title":bounded_overview_text(title,OVERVIEW_TEXT_LIMIT),
+                    "state":item["state"],"taskRevision":item["taskRevision"],
+                    "category":category["label"],"readiness":item["readiness"],
+                    "updatedAt":item["lastUserActivityAt"]})
+                    })
+            })
+            .collect();
+        items.sort_by(|a, b| {
+            b["updatedAt"]
+                .as_str()
+                .cmp(&a["updatedAt"].as_str())
+                .then_with(|| a["entityRef"].as_str().cmp(&b["entityRef"].as_str()))
+        });
+        let total = items.len();
+        let captures = items.iter().filter(|x| x["kind"] == "capture").count();
+        let tasks = items.iter().filter(|x| x["kind"] == "task").count();
+        let in_progress = items.iter().filter(|x| x["state"] == "in_progress").count();
+        let completed = items.iter().filter(|x| x["state"] == "completed").count();
+        let recently_completed: Vec<_> = items
+            .iter()
+            .filter(|x| x["state"] == "completed")
+            .take(10)
+            .cloned()
+            .collect();
+        let connection = database::open(&self.path).map_err(storage_error)?;
+        let mut statement = connection.prepare("SELECT e.id,e.session_id,e.kind,e.payload_json,e.ingested_at FROM work_tracking_events e WHERE e.kind IN ('task_created','task_revision_proposed','task_transition_proposed','problem_resolution_proposed','completion_proposal') AND NOT EXISTS(SELECT 1 FROM work_tracking_decisions d WHERE d.event_id=e.id) AND NOT EXISTS(SELECT 1 FROM work_tracking_events x WHERE x.supersedes_event_id=e.id) ORDER BY e.ingested_at DESC,e.id").map_err(storage_error)?;
+        let attention=statement.query_map([],|row|Ok(json!({"eventId":row.get::<_,String>(0)?,"sessionId":row.get::<_,String>(1)?,"kind":row.get::<_,String>(2)?,"summary":bounded_overview_text(&row.get::<_,String>(3)?,OVERVIEW_TEXT_LIMIT),"createdAt":row.get::<_,String>(4)?}))).map_err(storage_error)?.collect::<Result<Vec<_>,_>>().map_err(storage_error)?;
+        let attention_total = attention.len();
+        let attention_page: Vec<_> = attention
+            .iter()
+            .skip(attention_offset)
+            .take(OVERVIEW_ATTENTION_LIMIT)
+            .cloned()
+            .collect();
+        let next_attention = if attention_offset + attention_page.len() < attention_total {
+            Some(attention_offset + attention_page.len())
+        } else {
+            None
+        };
+        let digest = Sha256::digest(
+            json!({"board":board,"attention":attention})
+                .to_string()
+                .as_bytes(),
+        );
+        let revision =
+            i64::from_be_bytes(digest[..8].try_into().expect("hash length")) & ((1_i64 << 53) - 1);
+        let page: Vec<_> = items.into_iter().skip(offset).take(limit).collect();
+        let next = if offset + page.len() < total {
+            Some(offset + page.len())
+        } else {
+            None
+        };
         Ok(
-            json!({"snapshotRevision":revision,"summary":{"captures":captures,"problems":problems,"proposedSolutions":lifecycle.0,"inProgressSolutions":lifecycle.1,"blockedOrConflicted":lifecycle.2,"pendingDecisions":pending_decisions,"solutions":solutions,"trackedSessions":tracked,"total":total,"completedSolutions":lifecycle.3},"attention":attention,"attentionTotal":attention_total,"attentionTruncated":attention_offset+attention.len()<attention_total as usize,"items":items,"recentlyCompleted":recently_completed,"nextOffset":if offset+items.len()<total as usize{Some(offset+items.len())}else{None},"nextAttentionOffset":if attention_offset+attention.len()<attention_total as usize{Some(attention_offset+attention.len())}else{None},"ttlMs":15000,"cacheScope":"private"}),
+            json!({"snapshotRevision":revision,"summary":{"captures":captures,"tasks":tasks,"inProgressTasks":in_progress,"completedTasks":completed,"total":total},
+            "activeShortcuts":board["activeShortcuts"],"refiningShortcuts":board["refiningShortcuts"],
+            "items":page,"attention":attention_page,"attentionTotal":attention_total,"attentionTruncated":next_attention.is_some(),"recentlyCompleted":recently_completed,
+            "nextOffset":next,"nextAttentionOffset":next_attention,"ttlMs":15000,"cacheScope":"private"}),
         )
     }
 
@@ -2061,7 +2136,7 @@ impl WorkflowRepository for SqliteWorkTrackingStore {
             ));
         }
         let connection = database::open(&self.path).map_err(storage_error)?;
-        let mut statement=connection.prepare("SELECT o.entity_type,o.entity_id,CASE o.entity_type WHEN 'problems' THEN (SELECT statement FROM problems WHERE id=o.entity_id) WHEN 'features' THEN (SELECT title FROM features WHERE id=o.entity_id) WHEN 'vault' THEN (SELECT title FROM vault_documents WHERE path=o.entity_id) ELSE (SELECT text FROM captures WHERE id=o.entity_id) END FROM work_tracking_topic_memberships o WHERE o.topic_id=? ORDER BY o.entity_type,o.entity_id LIMIT ?").map_err(storage_error)?;
+        let mut statement=connection.prepare("SELECT o.entity_type,o.entity_id,CASE o.entity_type WHEN 'problems' THEN (SELECT statement FROM problems WHERE id=o.entity_id) WHEN 'tasks' THEN (SELECT r.title FROM tasks t JOIN task_revisions r ON r.task_id=t.id AND r.revision=t.current_revision WHERE t.id=o.entity_id) WHEN 'features' THEN (SELECT title FROM features WHERE id=o.entity_id) WHEN 'vault' THEN (SELECT title FROM vault_documents WHERE path=o.entity_id) ELSE (SELECT text FROM captures WHERE id=o.entity_id) END FROM work_tracking_topic_memberships o WHERE o.topic_id=? ORDER BY o.entity_type,o.entity_id LIMIT ?").map_err(storage_error)?;
         let mut items=statement.query_map(params![topic_id,limit as i64+1],|row|Ok(json!({"kind":row.get::<_,String>(0)?,"entityRef":row.get::<_,String>(1)?,"title":row.get::<_,Option<String>>(2)?}))).map_err(storage_error)?.collect::<Result<Vec<_>,_>>().map_err(storage_error)?;
         let truncated = items.len() > limit;
         items.truncate(limit);
@@ -2070,3 +2145,4 @@ impl WorkflowRepository for SqliteWorkTrackingStore {
         )
     }
 }
+pub mod task_repository;

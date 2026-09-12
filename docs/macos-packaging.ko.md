@@ -48,6 +48,12 @@ directory와 함께 실행합니다. 검토 process는 사용자의 선택한 Va
 쓰지 않습니다. 검토자가 닫을 때까지 열려 있으며 임시
 state 경로는 terminal에 표시됩니다.
 
+release artifact를 이미 build하고 검증했다면 build를 다시 실행하지 않고 같은 artifact를 재사용하세요.
+
+```text
+npm run review:ui -- --reuse-build
+```
+
 ## 검증된 교체본 설치
 
 서명된 build가 성공한 뒤에는 guarded installer로만 설치합니다.
@@ -75,11 +81,17 @@ node scripts/install_macos_app.mjs --replace --accept-designated-requirement-cha
 
 ## Release 확인
 
-각 release candidate에서 signed build 뒤에 일반 packaged scenario를 실행합니다.
+각 release candidate에서 signed build 뒤에 Task 중심 packaged scenario 행렬을 실행합니다.
+Capture, Work Log, refinement, 관계, review, publication, 재실행 지속성, locale/layout은 각각
+별도 임시 home, SQLite database, Vault에서 실행됩니다. 한 case를 조사하려면
+`npm run test:desktop -- --scenario task-refinement`을 사용하세요.
+
+시나리오 목록, 집중 실행, 아티팩트 보존 및 전체 커버리지 명령은 [데스크톱 E2E 실행 안내](testing/desktop-e2e-runbook.ko.md)를 참고하세요.
 
 ```text
 npm run tauri:build
 npm run test:desktop
+npm run review:ui -- --reuse-build
 codesign -dvvv "/Applications/LLM Wiki.app"
 codesign -d -r- "/Applications/LLM Wiki.app"
 ```

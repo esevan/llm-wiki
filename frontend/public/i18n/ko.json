@@ -57,6 +57,7 @@
   "work_tracking.state.completion_proposed": "완료 검토",
   "work_tracking.action.review_publication_withdrawal": "지식 발행 취소 검토",
   "work_tracking.action.link_current_work": "검토 후 이 기존 작업 연결",
+  "work_tracking.action.create_task": "Task 제안 검토",
   "work_tracking.chat.actions": "다음 작업",
   "work_tracking.chat.invalidObject": "객체 형식으로 입력하세요.",
   "work_tracking.chat.edit": "검토할 내용 수정",

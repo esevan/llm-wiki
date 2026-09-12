@@ -1,78 +1,56 @@
-# Context-preserving Refinement Preview
+# Context-preserving Refinement
 
 **English** | [한국어](refinement-preview-status.ko.md)
 
-> **Resume where you left off.** Refinement must not erase the context that made the work meaningful.
+Refinement helps turn a Capture or Task into reviewable work while preserving its original context.
+A Capture that already contains a solution does not have to discover that solution again. Simple work
+can become a Task directly; refinement and Problem approval are not mandatory gates.
 
-![Problem Refinement keeps lineage, prior decisions, evidence, and constraints beside the conversation](images/05-refinement-preview.png)
+## Work in the refinement panel
 
-Selecting a Capture, Problem, or Solution card opens its conversation and Preview in one workspace;
-there is no separate Explore action on the card. While you talk with AI, Preview keeps the current
-detail, recent conversation, prior drafts, and the Capture → Problem → Solution lineage visible. AI
-keeps organizing the proposal; only the user can apply it.
+Open **Refine** from a Capture or Task, or resume the saved refinement shortcut in Workbench.
+The conversation and proposals have separate tabs. Keep working notes alongside the conversation;
+the saved notes, selected tab, scroll position, and conversation history support returning later.
 
-## How Refinement works
+**Send**, `Ctrl+Enter`, and `Cmd+Enter` submit a message. Plain Enter writes another line. Send is
+unavailable while the current submission or response is being processed. Every provider turn includes
+the original Capture and ordered conversation history, even after a transient draft is cleared.
 
-1. Select a Capture, Problem, or Solution card.
-2. Read **Context** to recover the current item and its lineage.
-3. Answer one focused, open-ended AI question about the most important gap.
-4. The workspace shows that it is generating the latest structured draft: Preview shows its working
-   status and chat shows an animated `...` indicator.
-5. Compare **Context** and **Detail** when the Preview switches to the ready draft. Only then does
-   chat show `✅ Ready. Your AI refinement is ready to review.`
-6. Select **Apply Refinement** only when the proposal is accurate enough.
+A response can produce proposals. Review each proposal separately: edit, accept, or reject it.
+Accepting one proposal does not accept its siblings. Response processing includes loading the
+resulting proposals; a delayed proposal read must not silently discard the result.
 
-Problem Detail covers context, impact, evidence, desired outcome, boundaries, and open questions.
-Solution Detail covers intended outcome, scope, non-goals, prior evidence, trade-offs, dependencies,
-validation criteria, risks, and open questions. Unknown values remain explicitly unknown.
+## Interruptions and errors
 
-## Context that survives
+- Provider or proposal-loading errors remain visible. Previously saved context is preserved.
+- Closing saves the current workspace notes and position. If saving fails, the panel stays open
+  with the error and the notes so closing can be retried.
+- Closing during a provider job does not cancel that durable server job. Its late response must not
+  overwrite a different open item; reopening the original item can recover the saved result.
+- Returning after a successful save, including an app restart, restores the saved refinement workspace.
 
-Preview is built deterministically from locally stored records rather than another summarization
-request. It includes the current title and detail, recent Explore conversation and drafts, the
-originating Capture for a Problem, and the parent Problem for a Solution. The bounded view favors
-recent context so old history does not overwhelm current work. Reopening Explore restores the latest
-draft and marks already applied content as **APPLIED**.
+## Continue a migrated Problem
 
-## Background status and failure behavior
+Problem-only records from the previous workflow remain discoverable through **Refine**. Their
+conversation uses the existing Context/Detail Preview. The Preview status opens Context; a loading
+error leaves a visible retry action. Apply a generated Preview only after reviewing it.
 
-| Status | Meaning |
-| --- | --- |
-| `LIVE CONTEXT` | Context is ready and conversation can begin. |
-| `REFINING…` | A new draft is being prepared; chat remains usable. |
-| `DRAFT READY` | Detail is ready to compare and review. |
-| `APPLIED` | The displayed draft has already been applied. |
-| `NEEDS ATTENTION` | Generation failed; existing context and drafts remain intact. |
+Applying changes creates a new Problem revision. The active conversation follows that revision,
+and a later reviewed Task proposal retains its exact Problem provenance. A stale change is rejected
+instead of silently overwriting newer work. Tracking the conversation and accepting a Task remain
+explicit user decisions; no retired Problem approval or Solution-creation step is required.
 
-If Context cannot load, the empty Preview closes and an accessible warning remains on the usable
-conversation. Moving to another item discards stale requests so a late response cannot overwrite the
-new Preview.
+The previous **Explore next Solution** and **Create Problem** modal routes are not entrypoints in the
+current Task Workbench. They do not define required stages for new work.
 
-Clicking the Preview status control opens Context; in an error state it also retries
-loading the Preview. Closing Explore cancels its active refinement request and clears
-the warning. **Track this chat** remains a separate action and does not close Explore.
-If a failed Context load hides the Preview, the warning button beside the conversation
-also retries loading it.
+## Verification scope
 
-The Ready message is a completion signal, not the beginning of draft generation: it appears only
-after the generated draft is rendered in Preview for review.
+Automated scenarios cover ordered multi-turn requests, preserved Capture context, proposal decisions,
+retry, interruptions, and exact Problem provenance. Deterministic local provider tests verify request
+contents and workflow behavior; they do not establish real-model answer quality or latency.
 
-## Explore the next Solution
+See the [interactive coverage record](../testing/interactive-coverage.md) for actual packaged results
+and exclusions, and the [Task-centered Workbench guide](conflict-gated-workflow.md) for the full flow.
 
-An approved Problem uses the same workspace to explore another Solution—without introducing a Task
-stage or a separate review modal.
-
-![Explore next Solution prepares a reviewable Detail beside the preserved Problem context](images/06-next-solution-preview.png)
-
-After each response, AI refreshes a proposal with a title, intended outcome, non-goals, and validation
-criteria. **Create Solution** is the explicit human action that creates it. Reopening the workspace
-restores the last proposal and marks an already used proposal as **CREATED**. After creation succeeds,
-the Explore modal closes automatically; it remains open while creation is pending or if creation fails.
-
-A Capture opens an **Explore Problem** workspace with Preview before it becomes a Problem. Conversation
-and Refinement can shape the proposal without changing the Capture's state; **Create Problem** is the
-explicit human action that promotes it and preserves the conversation as lineage.
-The Explore modal closes automatically only after that promotion succeeds, so validation and creation
-errors remain visible and retryable in place.
-
-Related Spec Kit: [005 — Refinement Preview Status](../../specs/005-refinement-preview-status/spec.md)
+Related Spec Kit: [012 — Task-centered Workbench](../../specs/012-task-centered-workbench/spec.md),
+[005 — Refinement Preview Status](../../specs/005-refinement-preview-status/spec.md).

@@ -13,7 +13,16 @@ mod provider;
 
 pub use native::{NativeApplication, NativeOperation, NativeResponse};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::Manager;
+
+static E2E_INTRO_RETRY_FAILURE: AtomicBool = AtomicBool::new(true);
+static E2E_VAULT_RETRY_FAILURE: AtomicBool = AtomicBool::new(true);
+
+fn e2e_scenario(name: &str) -> bool {
+    std::env::var("LLM_WIKI_E2E_SCENARIO").ok().as_deref() == Some(name)
+        && std::env::var_os("LLM_WIKI_E2E_RESULT").is_some()
+}
 
 struct VaultResolution {
     path: PathBuf,
@@ -96,12 +105,34 @@ fn application_paths() -> Result<(VaultResolution, PathBuf, PathBuf), String> {
         .or_else(|| dirs::home_dir().map(|path| path.join(".llm-workbench")))
         .ok_or("The user home directory is unavailable")?;
     let settings_path = settings_dir.join("settings.json");
-    if db.is_file() {
-        native::database::initialize(&db)
-            .map_err(|error| format!("Could not migrate the application database: {error}"))?;
+    if std::env::var("LLM_WIKI_E2E_SCENARIO")
+        .ok()
+        .is_some_and(|value| value.starts_with("global-migration-"))
+        && std::env::var_os("LLM_WIKI_E2E_RESULT").is_some()
+        && !db.exists()
+    {
+        native::database::initialize(&db)?;
+        let connection = native::database::open(&db)?;
+        connection
+            .pragma_update(None, "user_version", 7)
+            .map_err(|error| error.to_string())?;
+        connection.execute("INSERT INTO captures(id,text,created_at,source_mode,last_user_activity_at) VALUES('desktop-e2e-capture','migration fixture','now','capture','now')",[]).map_err(|error| error.to_string())?;
+        connection.execute("INSERT INTO problems(id,capture_id,statement,state,created_at,current_revision) VALUES('desktop-e2e-problem','desktop-e2e-capture','migration fixture','open','now',1)",[]).map_err(|error| error.to_string())?;
+        connection.execute("INSERT INTO features(id,problem_id,title,outcome,state,created_at) VALUES('desktop-e2e-invalid','desktop-e2e-problem','migration fixture','migration fixture','invalid','now')",[]).map_err(|error| error.to_string())?;
     }
-    native::settings::migrate_legacy(&db, &settings_path)
-        .map_err(|error| format!("Could not import legacy application settings: {error}"))?;
+    if db.is_file() && native::database::migration_failure(&db)?.is_none() {
+        if let Err(error) = native::database::initialize(&db) {
+            if native::database::migration_failure(&db)?.is_none() {
+                return Err(format!(
+                    "Could not migrate the application database: {error}"
+                ));
+            }
+        }
+    }
+    if native::database::migration_failure(&db)?.is_none() {
+        native::settings::migrate_legacy(&db, &settings_path)
+            .map_err(|error| format!("Could not import legacy application settings: {error}"))?;
+    }
     let forced = std::env::var_os("LLM_WIKI_VAULT").map(PathBuf::from);
     Ok((
         resolve_vault(default_vault, &db, &settings_path, forced)?,
@@ -193,7 +224,42 @@ fn work_tracking_command(
 fn vault_setup_status(
     application: tauri::State<'_, NativeApplication>,
 ) -> Result<serde_json::Value, String> {
+    if e2e_scenario("global-vault-retry") && E2E_VAULT_RETRY_FAILURE.swap(false, Ordering::SeqCst) {
+        return Err("deterministic desktop E2E Vault status failure".into());
+    }
     application.vault_setup_status()
+}
+
+#[tauri::command]
+fn migration_recovery_status(
+    application: tauri::State<'_, NativeApplication>,
+) -> Result<serde_json::Value, String> {
+    application.migration_recovery_status()
+}
+
+#[tauri::command]
+fn migration_recovery_restore(
+    app: tauri::AppHandle,
+    application: tauri::State<'_, NativeApplication>,
+    manifest_file: String,
+) -> Result<serde_json::Value, String> {
+    let result = application.restore_migration_backup(&manifest_file)?;
+    if result["recovered"].as_bool().unwrap_or(false) && !e2e_scenario("global-migration-restore") {
+        app.restart();
+    }
+    Ok(result)
+}
+
+#[tauri::command]
+fn migration_recovery_retry(
+    app: tauri::AppHandle,
+    application: tauri::State<'_, NativeApplication>,
+) -> Result<serde_json::Value, String> {
+    let result = application.retry_migration()?;
+    if result["recovered"].as_bool().unwrap_or(false) && !e2e_scenario("global-migration-retry") {
+        app.restart();
+    }
+    Ok(result)
 }
 
 #[tauri::command]
@@ -201,6 +267,13 @@ async fn complete_first_run_intro(
     app: tauri::AppHandle,
     application: tauri::State<'_, NativeApplication>,
 ) -> Result<bool, String> {
+    if e2e_scenario("global-intro-retry") && E2E_INTRO_RETRY_FAILURE.swap(false, Ordering::SeqCst) {
+        return Err("deterministic desktop E2E intro completion failure".into());
+    }
+    if e2e_scenario("global-intro-retry") || e2e_scenario("global-intro-navigation") {
+        application.complete_first_run_intro()?;
+        return Ok(false);
+    }
     if first_run::complete_intro_and_choose_vault(&app, &application)? {
         app.restart();
     }
@@ -261,21 +334,29 @@ pub fn run() {
                 setup_required,
             )
             .map_err(|error| format!("Could not initialize native application state: {error}"))?;
+            let recovery_pending = application
+                .migration_recovery_status()?
+                .get("recovery")
+                .is_some_and(|recovery| !recovery.is_null());
             let background_index = application.clone();
             let background_projector = application.work_tracking_service();
             let mcp_service = application.work_tracking_service();
             let mcp_listener_shutdown = mcp_ipc::McpListenerShutdown::default();
-            let should_index = !setup_required;
+            let should_index = !setup_required && !recovery_pending;
             app.manage(application);
             app.manage(mcp_listener_shutdown.clone());
-            tauri::async_runtime::spawn(native::work_tracking_projector::run(background_projector));
-            tauri::async_runtime::spawn(async move {
-                if let Err(error) =
-                    mcp_ipc::run_gui_listener(mcp_service, mcp_listener_shutdown).await
-                {
-                    eprintln!("MCP local IPC listener stopped: {error}");
-                }
-            });
+            if !recovery_pending {
+                tauri::async_runtime::spawn(native::work_tracking_projector::run(
+                    background_projector,
+                ));
+                tauri::async_runtime::spawn(async move {
+                    if let Err(error) =
+                        mcp_ipc::run_gui_listener(mcp_service, mcp_listener_shutdown).await
+                    {
+                        eprintln!("MCP local IPC listener stopped: {error}");
+                    }
+                });
+            }
             if intro_required {
                 first_run::create_intro_window(app)?;
             }
@@ -301,6 +382,9 @@ pub fn run() {
             work_tracking_command,
             enqueue_ai_job,
             vault_setup_status,
+            migration_recovery_status,
+            migration_recovery_restore,
+            migration_recovery_retry,
             complete_first_run_intro,
             choose_vault,
             conversation::conversation_stream,
@@ -308,6 +392,11 @@ pub fn run() {
             desktop_e2e::desktop_e2e_mode,
             desktop_e2e::desktop_e2e_complete,
             desktop_e2e::desktop_e2e_mcp_probe,
+            desktop_e2e::desktop_e2e_seed_legacy_refinement,
+            desktop_e2e::desktop_e2e_arm_one_shot_failure,
+            desktop_e2e::desktop_e2e_seed_completed_tracking,
+            desktop_e2e::desktop_e2e_seed_queue_notifications,
+            desktop_e2e::desktop_e2e_provider_requests,
             provider::provider_request
         ])
         .build(tauri::generate_context!())
@@ -504,10 +593,10 @@ mod tests {
         .unwrap();
         let created = app.execute(NativeOperation {
             name: "capture.create".into(),
-            input: json!({"text":"Native state"}),
+            input: json!({"operationId":"native-state","text":"Native state"}),
         });
         let board = app.execute(NativeOperation {
-            name: "board.get".into(),
+            name: "workbench.get".into(),
             input: json!({}),
         });
         assert_eq!(created.status, 201);
@@ -516,7 +605,7 @@ mod tests {
     }
 
     #[test]
-    fn native_board_preserves_bilingual_versions_and_legacy_fallback() {
+    fn task_workbench_keeps_capture_canonical() {
         let state = tempdir().unwrap();
         let app = NativeApplication::isolated(
             &state.path().join("vault"),
@@ -525,49 +614,15 @@ mod tests {
         .unwrap();
         let capture = app.execute(NativeOperation {
             name: "capture.create".into(),
-            input: json!({"text":"원문 캡처"}),
+            input: json!({"operationId":"capture-ko","text":"원문 캡처"}),
         });
-        let problem = app.execute(NativeOperation {
-            name: "capture.promote".into(),
-            input: json!({
-                "captureId": capture.body["id"],
-                "statement": "한글 문제",
-                "detail": "한글 맥락",
-                "localized_versions": {
-                    "ko": {"statement":"한글 문제","detail":"한글 맥락"},
-                    "en": {"statement":"English problem","detail":"English context"}
-                }
-            }),
+        assert_eq!(capture.status, 201, "{}", capture.body);
+        let workbench = app.execute(NativeOperation {
+            name: "workbench.get".into(),
+            input: json!({}),
         });
-        assert_eq!(problem.status, 201, "{}", problem.body);
-
-        let english = app.execute(NativeOperation {
-            name: "board.get".into(),
-            input: json!({"locale":"en-US"}),
-        });
-        assert_eq!(english.body["problems"][0]["statement"], "English problem");
-        assert_eq!(english.body["problems"][0]["fallback_used"], false);
-        assert_eq!(
-            english.body["problems"][0]["available_locales"],
-            json!(["ko", "en"])
-        );
-
-        let supplemented = app.execute(NativeOperation {
-            name: "item.localization.save".into(),
-            input: json!({
-                "entityType":"problems",
-                "entityId":problem.body["id"],
-                "locale":"en",
-                "fields":{"statement":"Updated English"}
-            }),
-        });
-        assert_eq!(supplemented.status, 204, "{}", supplemented.body);
-        let english = app.execute(NativeOperation {
-            name: "board.get".into(),
-            input: json!({"locale":"en"}),
-        });
-        assert_eq!(english.body["problems"][0]["statement"], "Updated English");
-        assert_eq!(english.body["problems"][0]["detail"], "English context");
+        assert_eq!(workbench.status, 200, "{}", workbench.body);
+        assert!(workbench.body.to_string().contains("원문 캡처"));
     }
 
     #[test]

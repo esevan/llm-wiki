@@ -99,12 +99,12 @@ describe('production Workbench button templates', () => {
 
     const manual = document.querySelector<HTMLButtonElement>('[data-manual-type="problems"]')!;
     const openManualItem = vi.fn();
-    const manualClickBinding = manualSource.split('\n').find(line => line.startsWith("$('#board').addEventListener"))!;
+    const manualClickBinding = manualSource.split('\n').find(line => line.includes("$('#board').addEventListener"))!;
     new Function('$', 'openManualItem', manualClickBinding)($, openManualItem);
     manual.click();
     expect(openManualItem).toHaveBeenCalledWith('problems', 'p1');
 
-    const boardClickBinding = conflictsSource.split('\n').find(line => line.startsWith("$('#board').onclick"))!;
+    const boardClickBinding = conflictsSource.split('\n').find(line => line.includes("$('#board').onclick"))!;
     new Function('$', 'approveProblem', 'openNextChat', 'runConflictReview', 'reviewCompletion', 'moveSolution', 'deleteItem', 'openItemDetail', boardClickBinding)($, calls.approve, calls.next, calls.conflict, vi.fn(), calls.move, calls.remove, calls.detail);
     document.querySelector<HTMLButtonElement>('[data-approve-problem]')!.click();
     document.querySelector<HTMLButtonElement>('[data-next-chat-id]')!.click();
@@ -258,7 +258,7 @@ describe('production Explore controls', () => {
       loadBoard,
     }, ['openChat', 'renderRefinementDraft', 'setPreviewJobState']);
 
-    runtime.openChat('problems', 'p');
+    runtime.openChat('problems', 'p', { problemRevision: 2 });
     await flush();
     expect($('#explore-preview-content').textContent).toContain('Saved');
 
@@ -274,7 +274,7 @@ describe('production Explore controls', () => {
     $('#preview-detail-tab').click();
     $('#apply-refinement-preview').click();
     await flush();
-    expect(api).toHaveBeenCalledWith('/items/problems/p', expect.objectContaining({ method: 'PUT' }));
+    expect(api).toHaveBeenCalledWith('/problems/p/revisions', expect.objectContaining({ method: 'POST', body: expect.stringContaining('"expectedProblemRevision":2') }));
     expect($('#explore-preview-status').textContent).toBe('APPLIED');
     expect(loadBoard).toHaveBeenCalled();
 

@@ -16,7 +16,7 @@ LLM Wiki is designed from six non-negotiable principles:
 1. **You talk. The work organizes itself.** Conversation and Refinement do the structuring.
 2. **Reduce cognitive load.** Capture stays light; current work receives the strongest emphasis.
 3. **Resume where you left off.** Work Log screenshots, preserved Refinement context, and Knowledge-backed conflict review make work resumable.
-4. **Organize around problems, not tasks.** The durable workflow is **Capture → Problem → Solution**. Execution stays inside the Solution Work Log and validation checklist.
+4. **Organize around work that people choose.** Capture preserves the solution already found; a Task can be created directly, or an optional Refinement can shape a Problem and one or more Tasks. Work remains independently resumable.
 5. **Private process, portable knowledge.** Drafts and working context remain local; only a human-approved completed result becomes Markdown Knowledge.
 6. **Understand the work, never score the worker.** Signals explain evidence, risk, and direction—not individual productivity.
 
@@ -27,16 +27,17 @@ See [Product Spirit in the product](docs/product-spirit.md) for the design impli
 | Need | LLM Wiki response |
 | --- | --- |
 | Get a thought out quickly | Capture accepts a lightweight starting thought without demanding structure. |
-| Understand the real problem | AI-guided Refinement preserves context and proposes a reviewable Problem. |
-| Choose a way forward | A human-approved Problem can produce a Solution; Knowledge-backed conflict review must be clear before work starts. |
-| Resume active work | In Progress Solutions are highlighted; Work Log stores text, screenshots, comments, and validation checks. |
+| Understand the real problem | Optional AI-guided Refinement preserves context and proposes a reviewable Problem. |
+| Choose a way forward | Create a Task immediately or review a Problem and choose one or more Tasks; conflict checks remain evidence for human decisions. |
+| Resume active work | Independent in-progress Tasks are highlighted; each Work Log stores text, images, files, comments, checklists, and decisions. |
 | Work from another Chat | Local Codex and ChatGPT desktop can resume and update the same Workbench through scoped stdio MCP. |
 | Complete with evidence | AI reviews recorded evidence, while the human retains the completion decision. |
 | Reuse the result | Only completed work becomes an Obsidian-compatible Playbook and searchable Knowledge. |
 | Stay responsive during AI work | One hidden Fast Queue throttles interaction; durable work remains visible and recoverable in the background Queue. |
 
-There is no Task stage. LLM Wiki keeps execution attached to the Solution so work never loses the
-Problem that explains why it exists.
+Tasks are first-class work records. A simple Task can begin immediately; a refined Problem can have
+multiple revisioned Problems and Tasks, and completing one Task never automatically resolves another
+Problem. Existing Capture content and its provenance stay available throughout the workflow.
 
 ## Quick start
 
@@ -121,7 +122,7 @@ default. Every choice remains user-configurable in Advanced options.
 - [Visual feature tour](docs/features/visual-guide.md)
 - [Fast vault search](docs/features/fast-vault-search.md)
 - [Work tracking from Codex and ChatGPT desktop](docs/features/mcp-workbench-bridge.md)
-- [Problem-centered Workbench](docs/features/conflict-gated-workflow.md)
+- [Task-centered Workbench](docs/features/conflict-gated-workflow.md)
 - [Completion, Knowledge, and archive](docs/features/completion-writeback-archive.md)
 - [Compass](docs/features/direction-dashboard.md)
 - [Context-preserving Refinement Preview](docs/features/refinement-preview-status.md)
@@ -150,4 +151,10 @@ npm run tauri:build
 npm run test:desktop
 ```
 
+See the [desktop E2E runbook](docs/testing/desktop-e2e-runbook.md) for repeatable full and focused runs, scenario discovery, and failure artifacts.
+
 Spec Kit artifacts live under [specs/](specs/).
+
+## Contribution
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution lessons, change-boundary guidance, and verification workflow.

@@ -34,5 +34,11 @@ If a previously selected directory is no longer available, the application retur
 screen instead of creating a replacement directory at the stored path. This avoids silently
 indexing an empty path when an external or synchronized Vault is disconnected.
 
+If a local SQLite migration fails, LLM Wiki opens a recovery screen before any Workbench or Vault
+writer runs. It keeps the failed database as a recovery copy and offers only **Restore verified
+backup** or **Retry migration**. Restore accepts only the verified manifest created beside the
+application database; it never accepts a path from the screen. Either successful choice restarts
+the app before indexing, background work, or MCP services resume.
+
 Changing the Vault after onboarding is intentionally outside this first-run flow because switching
 a live Vault also needs conflict, indexing, and in-flight job policy.

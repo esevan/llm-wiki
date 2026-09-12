@@ -57,6 +57,7 @@
   "work_tracking.state.completion_proposed": "Completion review",
   "work_tracking.action.review_publication_withdrawal": "Review publication withdrawal",
   "work_tracking.action.link_current_work": "Link this existing work after review",
+  "work_tracking.action.create_task": "Review Task proposal",
   "work_tracking.chat.actions": "Next work actions",
   "work_tracking.chat.invalidObject": "Enter a JSON object.",
   "work_tracking.chat.edit": "Edit review content",

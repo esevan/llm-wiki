@@ -1,7 +1,10 @@
-use rusqlite::{params, Connection, Transaction, TransactionBehavior};
-use serde_json::Value;
+use rusqlite::{
+    params, types::ValueRef, Connection, OptionalExtension, Transaction, TransactionBehavior,
+};
+use serde_json::{json, Map, Value};
+use std::collections::BTreeMap;
 
-pub const CURRENT_SCHEMA_VERSION: i64 = 7;
+pub const CURRENT_SCHEMA_VERSION: i64 = 8;
 
 type MigrationFunction = for<'connection> fn(&Transaction<'connection>) -> Result<(), String>;
 type LegacyLocalizationRow = (String, String, String, String, String, String, String);
@@ -48,7 +51,426 @@ const MIGRATIONS: &[Migration] = &[
         name: "propagate solution child updates to overview timestamps",
         run: propagate_solution_child_update_timestamps,
     },
+    Migration {
+        version: 8,
+        name: "migrate legacy work into task aggregates",
+        run: migrate_task_centered_workbench,
+    },
 ];
+
+fn migrate_task_centered_workbench(tx: &Transaction<'_>) -> Result<(), String> {
+    if !table_exists(tx, "problems")? || !table_exists(tx, "captures")? {
+        return Ok(());
+    }
+    drop_legacy_workbench_triggers(tx)?;
+    if table_exists(tx, "features")? {
+        for (column, declaration) in [
+            ("problem_id", "TEXT NOT NULL DEFAULT ''"),
+            ("title", "TEXT NOT NULL DEFAULT ''"),
+            ("outcome", "TEXT NOT NULL DEFAULT ''"),
+            ("non_goals", "TEXT NOT NULL DEFAULT ''"),
+            ("validation_criteria", "TEXT NOT NULL DEFAULT ''"),
+            ("state", "TEXT NOT NULL DEFAULT 'proposed'"),
+            ("created_at", "TEXT NOT NULL DEFAULT ''"),
+        ] {
+            add_missing_column(tx, "features", column, declaration)?;
+        }
+    }
+    for (column, declaration) in [
+        ("statement", "TEXT NOT NULL DEFAULT ''"),
+        ("detail", "TEXT NOT NULL DEFAULT ''"),
+        ("state", "TEXT NOT NULL DEFAULT 'open'"),
+        ("created_at", "TEXT NOT NULL DEFAULT ''"),
+    ] {
+        add_missing_column(tx, "problems", column, declaration)?;
+    }
+    add_missing_column(tx, "problems", "capture_id", "TEXT")?;
+    add_missing_column(
+        tx,
+        "captures",
+        "source_mode",
+        "TEXT NOT NULL DEFAULT 'capture'",
+    )?;
+    add_missing_column(
+        tx,
+        "captures",
+        "last_user_activity_at",
+        "TEXT NOT NULL DEFAULT ''",
+    )?;
+    rebuild_problems_without_capture_uniqueness(tx)?;
+    tx.execute_batch(include_str!("task_schema.sql"))
+        .map_err(|error| error.to_string())?;
+    tx.execute_batch(include_str!("task_assistance_schema.sql"))
+        .map_err(|error| error.to_string())?;
+    let snapshot = MigrationSnapshot::capture(tx)?;
+
+    tx.execute(
+        "UPDATE problems SET current_revision=1 WHERE current_revision=0",
+        [],
+    )
+    .map_err(|error| error.to_string())?;
+    tx.execute("UPDATE problems SET state=CASE WHEN state='completed' THEN 'resolved' WHEN state='archived' THEN 'archived' ELSE 'open' END", [])
+        .map_err(|error| error.to_string())?;
+    let problems = read_rows(tx, "SELECT id,statement,detail,created_at FROM problems")?;
+    for row in problems {
+        let id = string_field(&row, "id")?;
+        let statement = string_field(&row, "statement")?;
+        let detail = string_field(&row, "detail")?;
+        let created = string_field(&row, "created_at")?;
+        let hash = crate::domain::task::content_hash(&[&statement, &detail]);
+        tx.execute("INSERT OR IGNORE INTO problem_revisions(problem_id,revision,statement,detail,content_hash,created_at) VALUES(?,1,?,?,?,?)", params![id,statement,detail,hash,created])
+            .map_err(|error| error.to_string())?;
+    }
+
+    if !table_exists(tx, "features")? {
+        return snapshot.validate(tx);
+    }
+    for (column, declaration) in [
+        ("problem_id", "TEXT NOT NULL DEFAULT ''"),
+        ("title", "TEXT NOT NULL DEFAULT ''"),
+        ("outcome", "TEXT NOT NULL DEFAULT ''"),
+        ("non_goals", "TEXT NOT NULL DEFAULT ''"),
+        ("validation_criteria", "TEXT NOT NULL DEFAULT ''"),
+        ("state", "TEXT NOT NULL DEFAULT 'proposed'"),
+        ("created_at", "TEXT NOT NULL DEFAULT ''"),
+    ] {
+        add_missing_column(tx, "features", column, declaration)?;
+    }
+    let features = read_rows(tx, "SELECT id,problem_id,title,outcome,non_goals,validation_criteria,state,created_at FROM features")?;
+    for row in features {
+        let id = string_field(&row, "id")?;
+        let problem = string_field(&row, "problem_id")?;
+        let title = string_field(&row, "title")?;
+        let outcome = string_field(&row, "outcome")?;
+        let non_goals = string_field(&row, "non_goals")?;
+        let criteria = string_field(&row, "validation_criteria")?;
+        let state = string_field(&row, "state")?;
+        let created = string_field(&row, "created_at")?;
+        let new_state = match state.as_str() {
+            "proposed" => "task",
+            "approved" | "in_progress" => "in_progress",
+            "completed" | "archived" => "completed",
+            _ => return Err(format!("unknown legacy feature state: {state}")),
+        };
+        let (origin, category): (Option<String>, String) = tx.query_row(
+            "SELECT p.capture_id,COALESCE((SELECT category FROM workbench_category_overrides WHERE entity_type='features' AND entity_id=?),(SELECT category FROM workbench_priorities WHERE entity_type='features' AND entity_id=?),'General') FROM problems p WHERE p.id=?",
+            params![id,id,problem], |record| Ok((record.get(0)?,record.get(1)?)),
+        ).map_err(|error| error.to_string())?;
+        let deleted_at: Option<String> = tx.query_row("SELECT deleted_at FROM deleted_entities WHERE entity_type='features' AND entity_id=?", [&id], |record| record.get(0)).optional().map_err(|error| error.to_string())?;
+        let archived_at = if state == "archived" {
+            Some(created.clone())
+        } else {
+            deleted_at
+        };
+        tx.execute("INSERT OR IGNORE INTO tasks(id,origin_capture_id,current_revision,state,archived_at,category,created_at,last_user_activity_at,started_at,completed_at) VALUES(?,?,1,?,?,?,?,?,CASE WHEN ? IN ('approved','in_progress') THEN ? ELSE NULL END,CASE WHEN ? IN ('completed','archived') THEN ? ELSE NULL END)",params![id,origin,new_state,archived_at,category,created,created,state,created,state,created]).map_err(|error|error.to_string())?;
+        let hash =
+            crate::domain::task::content_hash(&[&title, "", &outcome, "", &non_goals, &criteria]);
+        tx.execute("INSERT OR IGNORE INTO task_revisions(task_id,revision,title,detail,outcome,scope,non_goals,validation_criteria,content_hash,source_reference,created_at) VALUES(?,1,?,'',?,'',?,?,?,?,?)",params![id,title,outcome,non_goals,criteria,hash,format!("legacy:features:{id}"),created]).map_err(|error|error.to_string())?;
+        tx.execute("INSERT OR IGNORE INTO task_problem_links(id,task_id,problem_id,problem_revision,relationship,note,created_at) VALUES(?,?,?,1,'context','legacy feature problem link',?)",params![format!("legacy-link-{id}"),id,problem,created]).map_err(|error|error.to_string())?;
+        tx.execute("INSERT OR IGNORE INTO task_work_log_entries(id,task_id,body,image_data,image_media_type,image_summary,source_legacy_id,created_at) SELECT id,?,body,image_data,image_media_type,image_summary,id,created_at FROM solution_progress_entries WHERE feature_id=?",params![id,id]).map_err(|error|error.to_string())?;
+        let attachments = read_rows_bound(tx, "SELECT id,image_data,image_media_type,created_at FROM solution_progress_entries WHERE feature_id=? AND image_data<>''", &id)?;
+        for attachment in attachments {
+            let entry_id = string_field(&attachment, "id")?;
+            let data = string_field(&attachment, "image_data")?;
+            let media = string_field(&attachment, "image_media_type")?;
+            let attachment_created = string_field(&attachment, "created_at")?;
+            let byte_hash = crate::domain::task::content_hash(&[&data]);
+            tx.execute("INSERT OR IGNORE INTO task_attachments(id,task_id,entry_id,name,media_type,data,byte_hash,created_at) VALUES(?,?,?,?,?,?,?,?)",params![format!("legacy-attachment-{entry_id}"),id,entry_id,"legacy-work-log-image",media,data,byte_hash,attachment_created]).map_err(|error|error.to_string())?;
+        }
+        tx.execute("INSERT OR IGNORE INTO task_checklist_items(id,task_id,body,checked,created_at,updated_at) SELECT id,?,body,checked,created_at,updated_at FROM solution_checklist_items WHERE feature_id=?",params![id,id]).map_err(|error|error.to_string())?;
+        tx.execute("INSERT OR IGNORE INTO task_completions(id,task_id,task_revision,evidence,report,operation_id,created_at) SELECT id,?,1,evidence,report,?,created_at FROM completions WHERE feature_id=?",params![id,format!("legacy-completion-{id}"),id]).map_err(|error|error.to_string())?;
+    }
+    for table in LEGACY_LEDGER_TABLES {
+        preserve_legacy_table(tx, table)?;
+    }
+    tx.execute_batch("INSERT OR IGNORE INTO task_work_log_comments(id,entry_id,body,created_at) SELECT c.id,c.entry_id,c.body,c.created_at FROM solution_progress_comments c JOIN task_work_log_entries e ON e.id=c.entry_id;
+      INSERT OR IGNORE INTO problem_resolution_decisions(id,problem_id,problem_revision,rationale,evidence_refs_json,operation_id,created_at) SELECT id,problem_id,1,reason,json_array(review_id),'legacy-problem-resolution-'||id,created_at FROM problem_completion_decisions;
+      INSERT OR IGNORE INTO problem_resolution_decisions(id,problem_id,problem_revision,rationale,evidence_refs_json,operation_id,created_at) SELECT 'legacy-group-resolution-'||p.id,p.id,1,'legacy_group_completion','[]','legacy-group-resolution-'||p.id,p.created_at FROM problems p WHERE p.state='resolved' AND NOT EXISTS(SELECT 1 FROM problem_resolution_decisions d WHERE d.problem_id=p.id);
+      INSERT OR IGNORE INTO task_decisions(id,task_id,task_revision,kind,payload_json,operation_id,created_at) SELECT 'legacy-approval-'||id,entity_id,1,'legacy_approval',json_object('sourceId',id,'action',action),'legacy-approval-'||id,created_at FROM approvals WHERE entity_type='features';
+      INSERT OR IGNORE INTO task_decisions(id,task_id,task_revision,kind,payload_json,operation_id,created_at) SELECT 'legacy-conflict-resolution-'||id,feature_id,1,'legacy_conflict_resolution',json_object('sourceId',id,'runId',run_id,'conflictId',conflict_id,'action',action,'rationale',rationale),'legacy-conflict-resolution-'||id,resolved_at FROM conflict_resolutions;
+      INSERT OR IGNORE INTO task_decisions(id,task_id,task_revision,kind,payload_json,operation_id,created_at) SELECT 'legacy-lineage-'||id,feature_id,1,'legacy_lineage_snapshot',json_object('sourceId',id,'version',version,'sourceHash',source_hash,'status',status),'legacy-lineage-'||id,created_at FROM lineage_snapshots;
+      INSERT OR IGNORE INTO refinement_items(id,problem_id,capture_id,problem_revision,source_kind,created_at) SELECT 'legacy-problem-'||p.id,p.id,p.capture_id,1,'legacy_problem',p.created_at FROM problems p WHERE NOT EXISTS(SELECT 1 FROM task_problem_links l WHERE l.problem_id=p.id AND l.unlinked_at IS NULL);
+      UPDATE captures SET last_user_activity_at=COALESCE(NULLIF(last_user_activity_at,''),created_at);
+      INSERT OR IGNORE INTO localized_content(entity_type,entity_id,field_name,locale,value,origin,source_hash,created_at,updated_at) SELECT 'tasks',entity_id,field_name,locale,value,origin,source_hash,created_at,updated_at FROM localized_content WHERE entity_type='features';
+      INSERT OR IGNORE INTO workbench_priority_overrides(entity_type,entity_id,manual_priority) SELECT 'tasks',entity_id,manual_priority FROM workbench_priority_overrides WHERE entity_type='features';
+      INSERT OR IGNORE INTO workbench_category_overrides(entity_type,entity_id,category) SELECT 'tasks',entity_id,category FROM workbench_category_overrides WHERE entity_type='features';
+      INSERT OR IGNORE INTO workbench_priorities(entity_type,entity_id,category,attention_rank,rationale,updated_at) SELECT 'tasks',entity_id,category,attention_rank,rationale,updated_at FROM workbench_priorities WHERE entity_type='features';
+      INSERT OR IGNORE INTO mirror_files(entity_type,entity_id,path,source_hash) SELECT 'tasks',entity_id,path,source_hash FROM mirror_files WHERE entity_type='features';
+      INSERT OR IGNORE INTO deleted_entities(entity_type,entity_id,deleted_at) SELECT 'tasks',entity_id,deleted_at FROM deleted_entities WHERE entity_type='features';
+      UPDATE work_tracking_links SET entity_type='tasks' WHERE entity_type='features';
+      INSERT OR IGNORE INTO work_tracking_entity_versions(entity_type,entity_id,revision,updated_at) SELECT 'tasks',entity_id,revision,updated_at FROM work_tracking_entity_versions WHERE entity_type='features';")
+        .map_err(|error| error.to_string())?;
+    snapshot.validate(tx)
+}
+
+const LEGACY_LEDGER_TABLES: &[&str] = &[
+    "approvals",
+    "conflict_reports",
+    "conflict_review_runs",
+    "conflict_review_conflicts",
+    "conflict_resolutions",
+    "completion_reviews",
+    "completion_playbooks",
+    "lineage_snapshots",
+    "lineage_claims",
+    "lineage_evidence",
+    "lineage_revisions",
+    "importance_assessments",
+    "mirror_files",
+    "patch_proposals",
+    "deleted_entities",
+    "workbench_priorities",
+    "workbench_priority_overrides",
+    "workbench_category_overrides",
+    "localized_content",
+    "work_tracking_sessions",
+    "work_tracking_events",
+    "work_tracking_decisions",
+    "work_tracking_links",
+    "work_tracking_idempotency_records",
+];
+
+fn drop_legacy_workbench_triggers(tx: &Transaction<'_>) -> Result<(), String> {
+    let mut statement = tx.prepare("SELECT name FROM sqlite_master WHERE type='trigger' AND tbl_name IN ('problems','features','solution_progress_entries','solution_progress_comments','solution_checklist_items','completions')").map_err(|error|error.to_string())?;
+    let names = statement
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+    drop(statement);
+    for name in names {
+        tx.execute_batch(&format!(
+            "DROP TRIGGER IF EXISTS \"{}\"",
+            name.replace('"', "\"\"")
+        ))
+        .map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
+fn rebuild_problems_without_capture_uniqueness(tx: &Transaction<'_>) -> Result<(), String> {
+    tx.execute_batch(
+        "PRAGMA defer_foreign_keys=ON;
+         CREATE TABLE problems_task_v8 (
+           id TEXT PRIMARY KEY, capture_id TEXT REFERENCES captures(id), statement TEXT NOT NULL,
+           detail TEXT NOT NULL DEFAULT '', state TEXT NOT NULL DEFAULT 'open',
+           created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, current_revision INTEGER NOT NULL DEFAULT 1
+         );
+         INSERT INTO problems_task_v8(id,capture_id,statement,detail,state,created_at,current_revision)
+           SELECT id,capture_id,statement,detail,state,created_at,1 FROM problems;
+         DROP TABLE problems;
+         ALTER TABLE problems_task_v8 RENAME TO problems;
+         CREATE INDEX IF NOT EXISTS problems_capture_lookup ON problems(capture_id);",
+    )
+    .map_err(|error| error.to_string())
+}
+
+fn json_value(value: ValueRef<'_>) -> Value {
+    match value {
+        ValueRef::Null => Value::Null,
+        ValueRef::Integer(value) => json!(value),
+        ValueRef::Real(value) => json!(value),
+        ValueRef::Text(value) => Value::String(String::from_utf8_lossy(value).into_owned()),
+        ValueRef::Blob(value) => Value::String(format!(
+            "hex:{}",
+            value
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>()
+        )),
+    }
+}
+
+fn read_rows(tx: &Transaction<'_>, sql: &str) -> Result<Vec<Map<String, Value>>, String> {
+    let mut statement = tx.prepare(sql).map_err(|error| error.to_string())?;
+    let names = statement
+        .column_names()
+        .iter()
+        .map(|name| (*name).to_owned())
+        .collect::<Vec<_>>();
+    let rows = statement
+        .query_map([], |row| {
+            let mut value = Map::new();
+            for (index, name) in names.iter().enumerate() {
+                value.insert(name.clone(), json_value(row.get_ref(index)?));
+            }
+            Ok(value)
+        })
+        .map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+    Ok(rows)
+}
+
+fn read_rows_bound(
+    tx: &Transaction<'_>,
+    sql: &str,
+    parameter: &str,
+) -> Result<Vec<Map<String, Value>>, String> {
+    let mut statement = tx.prepare(sql).map_err(|error| error.to_string())?;
+    let names = statement
+        .column_names()
+        .iter()
+        .map(|name| (*name).to_owned())
+        .collect::<Vec<_>>();
+    let rows = statement
+        .query_map([parameter], |row| {
+            let mut value = Map::new();
+            for (index, name) in names.iter().enumerate() {
+                value.insert(name.clone(), json_value(row.get_ref(index)?));
+            }
+            Ok(value)
+        })
+        .map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+    Ok(rows)
+}
+
+fn string_field(row: &Map<String, Value>, field: &str) -> Result<String, String> {
+    row.get(field)
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .ok_or_else(|| format!("legacy row missing {field}"))
+}
+
+fn preserve_legacy_table(tx: &Transaction<'_>, table: &str) -> Result<(), String> {
+    if !table_exists(tx, table)? {
+        return Ok(());
+    }
+    for row in read_rows(tx, &format!("SELECT * FROM {table}"))? {
+        let payload = Value::Object(row.clone()).to_string();
+        let source_id = row
+            .get("id")
+            .or_else(|| row.get("storage_id"))
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .unwrap_or_else(|| crate::domain::task::content_hash(&[&payload]));
+        let task_id = row.get("feature_id").and_then(Value::as_str).or_else(|| {
+            if row.get("entity_type").and_then(Value::as_str) == Some("features") {
+                row.get("entity_id").and_then(Value::as_str)
+            } else {
+                None
+            }
+        });
+        let problem_id = row.get("problem_id").and_then(Value::as_str);
+        let created = row
+            .get("created_at")
+            .or_else(|| row.get("updated_at"))
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        let hash = crate::domain::task::content_hash(&[&payload]);
+        tx.execute("INSERT OR IGNORE INTO legacy_task_migration_records(source_table,source_id,task_id,problem_id,payload_json,source_hash,created_at) VALUES(?,?,?,?,?,?,?)", params![table,source_id,task_id,problem_id,payload,hash,created]).map_err(|error|error.to_string())?;
+    }
+    Ok(())
+}
+
+#[derive(Default)]
+struct MigrationSnapshot {
+    counts: BTreeMap<String, i64>,
+}
+
+impl MigrationSnapshot {
+    fn capture(tx: &Transaction<'_>) -> Result<Self, String> {
+        let mut counts = BTreeMap::new();
+        for table in [
+            "features",
+            "solution_progress_entries",
+            "solution_progress_comments",
+            "solution_checklist_items",
+            "completions",
+        ] {
+            counts.insert(table.to_owned(), table_count(tx, table)?);
+        }
+        for table in LEGACY_LEDGER_TABLES {
+            if table_exists(tx, table)? {
+                counts.insert((*table).to_owned(), table_count(tx, table)?);
+            }
+        }
+        Ok(Self { counts })
+    }
+
+    fn validate(&self, tx: &Transaction<'_>) -> Result<(), String> {
+        for (source, target) in [
+            ("features", "tasks"),
+            ("solution_progress_entries", "task_work_log_entries"),
+            ("solution_progress_comments", "task_work_log_comments"),
+            ("solution_checklist_items", "task_checklist_items"),
+            ("completions", "task_completions"),
+        ] {
+            if table_count(tx, target)? < self.counts.get(source).copied().unwrap_or(0) {
+                return Err(format!("migration_invariant_count:{source}:{target}"));
+            }
+        }
+        let missing: i64 = tx.query_row("SELECT count(*) FROM features f LEFT JOIN tasks t ON t.id=f.id LEFT JOIN task_revisions r ON r.task_id=f.id AND r.revision=1 LEFT JOIN task_problem_links l ON l.task_id=f.id AND l.problem_id=f.problem_id AND l.problem_revision=1 WHERE t.id IS NULL OR r.task_id IS NULL OR l.id IS NULL OR r.title<>f.title OR r.outcome<>f.outcome OR r.non_goals<>f.non_goals OR r.validation_criteria<>f.validation_criteria", [], |row| row.get(0)).map_err(|error|error.to_string())?;
+        if missing != 0 {
+            return Err("migration_invariant_task_mapping".into());
+        }
+        let changed_work_log:i64=tx.query_row("SELECT count(*) FROM solution_progress_entries s LEFT JOIN task_work_log_entries t ON t.id=s.id WHERE t.id IS NULL OR t.body<>s.body OR t.image_data<>s.image_data OR t.image_media_type<>s.image_media_type OR t.image_summary<>s.image_summary OR t.created_at<>s.created_at",[],|row|row.get(0)).map_err(|error|error.to_string())?;
+        if changed_work_log != 0 {
+            return Err("migration_invariant_work_log_hash".into());
+        }
+        for (name, sql) in [
+            ("problem_revision", "SELECT count(*) FROM problems p LEFT JOIN problem_revisions r ON r.problem_id=p.id AND r.revision=1 WHERE r.problem_id IS NULL OR r.statement<>p.statement OR r.detail<>p.detail"),
+            ("comment", "SELECT count(*) FROM solution_progress_comments s LEFT JOIN task_work_log_comments t ON t.id=s.id WHERE t.id IS NULL OR t.entry_id<>s.entry_id OR t.body<>s.body OR t.created_at<>s.created_at"),
+            ("checklist", "SELECT count(*) FROM solution_checklist_items s LEFT JOIN task_checklist_items t ON t.id=s.id WHERE t.id IS NULL OR t.task_id<>s.feature_id OR t.body<>s.body OR t.checked<>s.checked OR t.created_at<>s.created_at OR t.updated_at<>s.updated_at"),
+            ("completion", "SELECT count(*) FROM completions s LEFT JOIN task_completions t ON t.id=s.id WHERE t.id IS NULL OR t.task_id<>s.feature_id OR t.evidence<>s.evidence OR t.report<>s.report OR t.created_at<>s.created_at"),
+            ("attachment", "SELECT count(*) FROM solution_progress_entries s LEFT JOIN task_attachments t ON t.entry_id=s.id WHERE s.image_data<>'' AND (t.id IS NULL OR t.data<>s.image_data OR t.media_type<>s.image_media_type)"),
+            ("completed_evidence", "SELECT count(*) FROM tasks t WHERE t.state='completed' AND (SELECT count(*) FROM task_work_log_entries w WHERE w.task_id=t.id)<>(SELECT count(*) FROM solution_progress_entries w WHERE w.feature_id=t.id)"),
+        ] {
+            let mismatches: i64 = tx
+                .query_row(sql, [], |row| row.get(0))
+                .map_err(|error| error.to_string())?;
+            if mismatches != 0 {
+                return Err(format!("migration_invariant_{name}"));
+            }
+        }
+        for (table, count) in &self.counts {
+            if LEGACY_LEDGER_TABLES.contains(&table.as_str()) {
+                let ledger: i64 = tx
+                    .query_row(
+                        "SELECT count(*) FROM legacy_task_migration_records WHERE source_table=?",
+                        [table],
+                        |row| row.get(0),
+                    )
+                    .map_err(|error| error.to_string())?;
+                if ledger != *count {
+                    return Err(format!("migration_invariant_ledger:{table}"));
+                }
+            }
+        }
+        let foreign_key_errors: i64 = tx
+            .query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |row| {
+                row.get(0)
+            })
+            .map_err(|error| error.to_string())?;
+        if foreign_key_errors != 0 {
+            return Err("migration_invariant_foreign_keys".into());
+        }
+        let problem_sql: String = tx
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name='problems'",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|error| error.to_string())?;
+        if problem_sql
+            .to_ascii_lowercase()
+            .replace(' ', "")
+            .contains("capture_idtextunique")
+        {
+            return Err("migration_invariant_problem_capture_unique".into());
+        }
+        Ok(())
+    }
+}
+
+fn table_count(tx: &Transaction<'_>, table: &str) -> Result<i64, String> {
+    tx.query_row(&format!("SELECT count(*) FROM {table}"), [], |row| {
+        row.get(0)
+    })
+    .map_err(|error| error.to_string())
+}
 
 fn propagate_solution_child_update_timestamps(tx: &Transaction<'_>) -> Result<(), String> {
     for (table, feature_id) in [
@@ -247,7 +669,7 @@ fn validate_plan(migrations: &[Migration], target_version: i64) -> Result<(), St
     Ok(())
 }
 
-fn schema_version(connection: &Connection) -> Result<i64, String> {
+pub(crate) fn schema_version(connection: &Connection) -> Result<i64, String> {
     connection
         .pragma_query_value(None, "user_version", |row| row.get(0))
         .map_err(|error| error.to_string())
@@ -589,6 +1011,134 @@ mod tests {
                 })
                 .unwrap(),
             "Keep me"
+        );
+    }
+
+    #[test]
+    fn schema_eight_preserves_rich_legacy_records_and_is_idempotent() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        apply_plan(&mut connection, &MIGRATIONS[..7], 7).unwrap();
+        connection.execute_batch("INSERT INTO captures(id,text,created_at) VALUES('c1','solution already stated','2026-01-01');
+          INSERT INTO problems(id,capture_id,statement,detail,state,created_at) VALUES('p1','c1','Problem','Detail','completed','2026-01-02');
+          INSERT INTO problems(id,capture_id,statement,detail,state,created_at) VALUES('orphan-problem',NULL,'Unassigned','Detail','draft','2026-01-02');
+          INSERT INTO features(id,problem_id,title,outcome,non_goals,validation_criteria,state,created_at) VALUES('f1','p1','Task title','Outcome','No scope creep','Evidence exists','archived','2026-01-03');
+          INSERT INTO solution_progress_entries(id,feature_id,body,image_data,image_media_type,image_summary,created_at) VALUES('e1','f1','work','aGVsbG8=','image/png','screen','2026-01-04');
+          INSERT INTO solution_progress_comments(id,entry_id,body,created_at) VALUES('comment1','e1','note','2026-01-05');
+          INSERT INTO solution_checklist_items(id,feature_id,body,checked,created_at,updated_at) VALUES('check1','f1','verified',1,'2026-01-05','2026-01-06');
+          INSERT INTO completions(id,feature_id,evidence,report,created_at) VALUES('complete1','f1','evidence','report','2026-01-07');
+          INSERT INTO approvals(id,entity_type,entity_id,action,created_at) VALUES('approval1','features','f1','approve','2026-01-03');
+          INSERT INTO conflict_reports(id,feature_id,state,citation,created_at) VALUES('report1','f1','conflicted','Doc.md','2026-01-04');
+          INSERT INTO lineage_snapshots(id,feature_id,version,schema_version,source_hash,status,document_json,created_at) VALUES('lineage1','f1',1,1,'hash','ready','{}','2026-01-07');
+          INSERT INTO localized_content(entity_type,entity_id,field_name,locale,value,origin,source_hash,created_at,updated_at) VALUES('features','f1','title','ko','작업','user','lh','2026-01-03','2026-01-03');
+          INSERT INTO workbench_category_overrides(entity_type,entity_id,category) VALUES('features','f1','Delivery');
+          INSERT INTO workbench_priority_overrides(entity_type,entity_id,manual_priority) VALUES('features','f1',7);
+          INSERT INTO deleted_entities(entity_type,entity_id,deleted_at) VALUES('features','f1','2026-01-08');").unwrap();
+
+        apply(&mut connection).unwrap();
+        apply(&mut connection).unwrap();
+
+        assert_eq!(schema_version(&connection).unwrap(), 8);
+        let task: (String, String, Option<String>) = connection
+            .query_row(
+                "SELECT state,category,archived_at FROM tasks WHERE id='f1'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(task.0, "completed");
+        assert_eq!(task.1, "Delivery");
+        assert!(task.2.is_some());
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT image_data FROM task_work_log_entries WHERE id='e1'",
+                    [],
+                    |row| row.get::<_, String>(0)
+                )
+                .unwrap(),
+            "aGVsbG8="
+        );
+        assert_eq!(connection.query_row("SELECT count(*) FROM legacy_task_migration_records WHERE source_id IN ('report1','lineage1')",[],|row|row.get::<_,i64>(0)).unwrap(),2);
+        assert_eq!(connection.query_row("SELECT value FROM localized_content WHERE entity_type='tasks' AND entity_id='f1' AND field_name='title' AND locale='ko'",[],|row|row.get::<_,String>(0)).unwrap(),"작업");
+        assert_eq!(connection.query_row("SELECT problem_id FROM refinement_items WHERE id='legacy-problem-orphan-problem'",[],|row|row.get::<_,String>(0)).unwrap(),"orphan-problem");
+        connection.execute("INSERT INTO problems(id,capture_id,statement,created_at,current_revision) VALUES('p2','c1','Second independent problem','2026-01-09',1)",[]).unwrap();
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT count(*) FROM problems WHERE capture_id='c1'",
+                    [],
+                    |row| row.get::<_, i64>(0)
+                )
+                .unwrap(),
+            2
+        );
+    }
+
+    #[test]
+    fn invalid_schema_eight_mapping_rolls_back_every_table_and_version() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        apply_plan(&mut connection, &MIGRATIONS[..7], 7).unwrap();
+        connection.execute_batch("INSERT INTO captures(id,text,created_at) VALUES('c1','x','2026-01-01');
+          INSERT INTO problems(id,capture_id,statement,state,created_at) VALUES('p1','c1','P','draft','2026-01-01');
+          INSERT INTO features(id,problem_id,title,outcome,state,created_at) VALUES('bad','p1','Bad','Bad','unknown-state','2026-01-01');").unwrap();
+        let error = apply(&mut connection).unwrap_err();
+        assert!(error.contains("unknown legacy feature state"));
+        assert_eq!(schema_version(&connection).unwrap(), 7);
+        assert!(!table_exists(&connection, "tasks").unwrap());
+        assert_eq!(
+            connection
+                .query_row("SELECT state FROM features WHERE id='bad'", [], |row| {
+                    row.get::<_, String>(0)
+                })
+                .unwrap(),
+            "unknown-state"
+        );
+    }
+
+    #[test]
+    fn large_attachment_fixture_preserves_every_id_and_byte() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        apply_plan(&mut connection, &MIGRATIONS[..7], 7).unwrap();
+        connection.execute_batch("INSERT INTO captures(id,text,created_at) VALUES('large-capture','large','2026-01-01'); INSERT INTO problems(id,capture_id,statement,state,created_at) VALUES('large-problem','large-capture','Large','draft','2026-01-01');").unwrap();
+        let image = "A".repeat(32 * 1024);
+        let transaction = connection.transaction().unwrap();
+        for index in 0..128 {
+            let feature = format!("large-task-{index}");
+            let entry = format!("large-entry-{index}");
+            transaction.execute("INSERT INTO features(id,problem_id,title,outcome,state,created_at) VALUES(?,'large-problem',?,'outcome','proposed','2026-01-02')",params![feature,feature]).unwrap();
+            transaction.execute("INSERT INTO solution_progress_entries(id,feature_id,body,image_data,image_media_type,image_summary,created_at) VALUES(?,?,?,?,'image/png','large','2026-01-03')",params![entry,feature,format!("body-{index}"),image]).unwrap();
+        }
+        transaction.commit().unwrap();
+        apply(&mut connection).unwrap();
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT count(*) FROM tasks WHERE id LIKE 'large-task-%'",
+                    [],
+                    |row| row.get::<_, i64>(0)
+                )
+                .unwrap(),
+            128
+        );
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT count(*) FROM task_attachments WHERE length(data)=32768",
+                    [],
+                    |row| row.get::<_, i64>(0)
+                )
+                .unwrap(),
+            128
+        );
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT count(*) FROM task_work_log_entries WHERE image_data<>?",
+                    [image],
+                    |row| row.get::<_, i64>(0)
+                )
+                .unwrap(),
+            0
         );
     }
 

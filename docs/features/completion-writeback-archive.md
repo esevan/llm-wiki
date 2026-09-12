@@ -1,35 +1,35 @@
-# Completion, Knowledge, and archive
+# Completion and Knowledge
 
 **English** | [한국어](completion-writeback-archive.ko.md)
 
-> **Private process, deliberate publication.** Completion stays private until the user separately publishes Knowledge.
+A Task keeps Work Log entries, attachments, comments, checklist items, and decisions together.
+Complete the Task explicitly with evidence when its work is done. Completion changes that Task's
+state; it does not resolve linked Problems, complete sibling Tasks, or publish a Vault document.
+The Capture and exact linked Problem revisions remain available as provenance.
 
-![Completion review presents evidence and leaves the final decision with the human](images/03-completion-archive.png)
+## Review and publish separately
 
-An In Progress Solution owns a Work Log with text, screenshots, comments, and a validation checklist.
-AI can summarize a screenshot and assess each validation criterion, but it cannot complete the work.
+Create a private Knowledge draft from completed work, review its content, and make corrections
+before publishing. The generated Markdown includes the Task's recorded outcome, context, scope,
+non-goals, validation, work evidence, checklist, decisions, completion evidence, and exact provenance.
+Unrecorded fields are identified as unrecorded rather than filled with invented claims.
 
-![The Solution Work Log keeps visual progress and validation evidence together](images/06-work-log.png)
+Publishing is a separate explicit action on the reviewed draft. It writes Markdown to the Vault,
+where it remains usable outside LLM Wiki. A draft revision and source hash identify the content
+being published; publication must not silently use an unreviewed revision.
 
-Human-approved completion closes the work chain and preserves its decision without writing a Vault
-file. LLM Wiki then offers a separate Knowledge publication action. Only explicit publication creates
-the Obsidian-compatible Playbook and raw evidence. Regeneration, structured Markdown patches, and
-archive moves use source hashes to block accidental overwrites of external edits. Published Knowledge
-remains portable and searchable without LLM Wiki.
-Saved-document action labels remain available on hover or keyboard focus, including when a row is near the panel edge.
-If a tracked completed-work file is missing, its Solution remains visible: regeneration queues a
-replacement in the background, while deletion clears the stale generated-file record. Once no
-tracked path remains, the unavailable delete action is no longer shown.
+## Correct, regenerate, or withdraw
 
-Completing from a Solution closes the whole linked work chain in one database transaction. Every
-open Solution belonging to the origin Problem and the Problem itself receive the explicit
-`completed` state; an already archived Solution keeps its archival state. The originating Capture
-remains preserved for Lineage but, because it has been refined into that Problem, is no longer an
-open inbox item. The command result reports the closed Solution, Problem, and Capture identifiers
-so clients do not need to infer whether the cascade succeeded.
+Correct the draft deliberately. Regeneration refreshes the draft from the current recorded work and
+provenance. If a published file has changed externally, exact file/hash checks prevent silently
+overwriting that edit.
 
-At explicit publication time, LLM Wiki rebuilds the current Lineage and uses its referenced evidence
-as the report input. Regeneration refreshes Lineage and the document together. See
-[Lineage Knowledge Layer](lineage-knowledge-layer.md).
+Withdrawal is also explicit and preserves a recoverable local copy. It does not erase the completed
+Task or its private work evidence. Publishing, regeneration, and withdrawal have their own results
+and errors; none is implied by merely completing or reopening a Task.
 
-Related Spec Kit: [003 — Completion, Writeback, and Archive](../../specs/003-completion-writeback-archive/spec.md)
+See [Lineage Knowledge Layer](lineage-knowledge-layer.md) for provenance and the
+[interactive coverage record](../testing/interactive-coverage.md) for actual verification evidence.
+
+Related Spec Kit: [012 — Task-centered Workbench](../../specs/012-task-centered-workbench/spec.md).
+Historical contract: [003 — Completion, Writeback, and Archive](../../specs/003-completion-writeback-archive/spec.md).

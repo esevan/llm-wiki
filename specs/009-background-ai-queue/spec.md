@@ -1,3 +1,7 @@
+> **Partially superseded for schema 8+**: Durable queue, retry, cancellation, and notification behavior
+> remain. Job target kinds, per-subject supersession/currentness, and background recency rules follow
+> [012](../012-task-centered-workbench/spec.md).
+
 # Feature Specification: Background AI Queue
 
 **Feature Branch**: `009-background-ai-queue`

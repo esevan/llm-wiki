@@ -48,6 +48,26 @@ function load(api: ReturnType<typeof vi.fn>) {
 afterEach(() => { vi.restoreAllMocks(); document.body.innerHTML = ''; delete (window as any).boardItems; delete (window as any).workbenchBoard; delete (window as any).completedSolutions; });
 
 describe('production completed-work button bindings', () => {
+  it('forwards migrated Problem revision context through the completed-work chat override', async () => {
+    fixture();
+    const selected = vi.fn(async () => undefined);
+    (window as any).selectTrackedWork = selected;
+    const runtime = load(vi.fn(async (path: string) => {
+      if (path.startsWith('/workbench/recent-archive')) return { documents: [] };
+      if (path.startsWith('/workbench/completed-solutions')) return { solutions: [] };
+      return { entries: [] };
+    }));
+    runtime.openChat('problems', 'problem-1', { problemRevision: 3, sourceTitle: 'Preserved Problem' });
+    expect(selected).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'problems',
+      id: 'problem-1',
+      problemRevision: 3,
+      sourceTitle: 'Preserved Problem',
+    }));
+    await flush();
+    delete (window as any).selectTrackedWork;
+  });
+
   it('resolves the production confirmation notice on both cancel and confirm clicks', async () => {
     fixture();
     const api = vi.fn(async (path: string) => path.startsWith('/workbench/recent-archive') ? { documents: [] } : { solutions: [] });
