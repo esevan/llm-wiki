@@ -5,6 +5,8 @@
 ## Capture와 작업 정제
 
 생각·문제·이미 찾은 해결책을 Capture에 기록하며, 정해진 단계를 반드시 거칠 필요는 없습니다.
+Workbench의 간결한 두 줄 입력에서는 텍스트 아래에서 Capture와 Task를 선택하고 저장하며, 사용할 수
+있는 폭이 좁으면 이 행은 자연스럽게 줄바꿈합니다.
 단순한 업무는 바로 **Task**로 만들 수 있습니다. 맥락이나 검토 가능한 제안이 더 필요할 때
 [Refinement](refinement-preview-status.ko.md)를 사용하고, Capture에 이미 기록한 해결책은 보존합니다.
 

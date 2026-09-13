@@ -118,28 +118,6 @@ export function WorkbenchView({ active }: { active: boolean }) {
         <form onSubmit={save}>
           <fieldset disabled={busy}>
             <legend className="sr-only">{text.entryMode}</legend>
-            <label>
-              <input
-                data-control="task-entry-capture-mode"
-                type="radio"
-                name="entry-mode"
-                value="capture"
-                checked={mode === "capture"}
-                onChange={() => setMode("capture")}
-              />
-              {text.capture}
-            </label>
-            <label>
-              <input
-                data-control="task-entry-task-mode"
-                type="radio"
-                name="entry-mode"
-                value="task"
-                checked={mode === "task"}
-                onChange={() => setMode("task")}
-              />
-              {text.task}
-            </label>
             <textarea
               data-control="task-entry-text"
               id="task-input-text"
@@ -147,16 +125,43 @@ export function WorkbenchView({ active }: { active: boolean }) {
               value={input}
               onChange={(event) => setInput(event.target.value)}
               placeholder={text.placeholder}
+              rows={2}
               required
             />
-            <button
-              className="primary"
-              type="submit"
-              data-control="task-entry-save"
-              disabled={busy || !input.trim()}
-            >
-              {busy ? "…" : text.save}
-            </button>
+            <div className="task-entry-actions">
+              <div className="task-entry-modes">
+                <label>
+                  <input
+                    data-control="task-entry-capture-mode"
+                    type="radio"
+                    name="entry-mode"
+                    value="capture"
+                    checked={mode === "capture"}
+                    onChange={() => setMode("capture")}
+                  />
+                  {text.capture}
+                </label>
+                <label>
+                  <input
+                    data-control="task-entry-task-mode"
+                    type="radio"
+                    name="entry-mode"
+                    value="task"
+                    checked={mode === "task"}
+                    onChange={() => setMode("task")}
+                  />
+                  {text.task}
+                </label>
+              </div>
+              <button
+                className="primary"
+                type="submit"
+                data-control="task-entry-save"
+                disabled={busy || !input.trim()}
+              >
+                {busy ? "…" : text.save}
+              </button>
+            </div>
           </fieldset>
         </form>
         {error && (

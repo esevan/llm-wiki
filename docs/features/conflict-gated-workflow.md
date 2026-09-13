@@ -5,6 +5,8 @@
 ## Capture and shape work
 
 Capture a thought, problem, or existing solution without choosing a mandatory sequence of stages.
+The compact two-line Workbench entry keeps the Capture and Task choices with its save action below
+the text, where the row wraps when the available width is narrow.
 Simple work can become a **Task** immediately. Use [Refinement](refinement-preview-status.md) when
 more context or a reviewable proposal is useful; preserve solutions already recorded in the Capture.
 

@@ -23,12 +23,20 @@
 }
 .task-capture fieldset {
   display: grid;
-  grid-template-columns: auto auto 1fr auto;
   gap: var(--space-3);
-  align-items: center;
   border: 0;
   padding: 0;
   margin: 0;
+}
+.task-entry-actions,
+.task-entry-modes {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+.task-entry-actions {
+  justify-content: space-between;
 }
 .task-capture label {
   font-weight: 700;
@@ -36,7 +44,10 @@
   white-space: nowrap;
 }
 .task-capture textarea {
-  min-height: 48px;
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 64px;
+  height: 64px;
   resize: vertical;
   padding: 11px;
   border: var(--border-default);
@@ -419,15 +430,6 @@
   list-style: none;
 }
 @media (max-width: 760px) {
-  .task-capture fieldset {
-    grid-template-columns: 1fr 1fr;
-  }
-  .task-capture textarea {
-    grid-column: 1/-1;
-  }
-  .task-capture .primary {
-    grid-column: 1/-1;
-  }
   .shortcut-list {
     grid-template-columns: 1fr;
   }
