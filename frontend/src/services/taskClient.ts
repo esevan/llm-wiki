@@ -242,11 +242,8 @@ export const taskClient = {
     request(`/conflict-reviews/${encodeURIComponent(id)}/cancel`, "POST"),
   knowledgeDraft: (id: string, expectedTaskRevision: number) =>
     request<{
-      draftRevision: number;
-      bodyMarkdown: string;
-      contentHash: string;
-      sourceHash?: string;
-      state: string;
+      id: string;
+      status: "queued" | "running" | "completed" | "failed" | "cancelled";
     }>(`/tasks/${encodeURIComponent(id)}/knowledge/drafts`, "POST", {
       expectedTaskRevision,
     }),

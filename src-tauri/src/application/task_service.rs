@@ -694,9 +694,9 @@ impl TaskApplicationService {
         let checklist = c.prepare("SELECT id,body,checked FROM task_checklist_items WHERE task_id=? ORDER BY created_at").map_err(|e|e.to_string())?.query_map([id],|r|Ok(json!({"id":r.get::<_,String>(0)?,"body":r.get::<_,String>(1)?,"checked":r.get::<_,i64>(2)? != 0}))).map_err(|e|e.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|e|e.to_string())?;
         let decisions = c.prepare("SELECT id,kind,payload_json,created_at FROM task_decisions WHERE task_id=? ORDER BY created_at").map_err(|e|e.to_string())?.query_map([id],|r|Ok(json!({"id":r.get::<_,String>(0)?,"kind":r.get::<_,String>(1)?,"body":serde_json::from_str::<Value>(&r.get::<_,String>(2)?).ok().and_then(|v|v.get("body").cloned()).unwrap_or(Value::Null),"createdAt":r.get::<_,String>(3)?}))).map_err(|e|e.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|e|e.to_string())?;
         let completion = c.query_row("SELECT id,evidence,report,created_at FROM task_completions WHERE task_id=? ORDER BY created_at DESC LIMIT 1",[id],|r|Ok(json!({"id":r.get::<_,String>(0)?,"evidence":r.get::<_,String>(1)?,"report":r.get::<_,String>(2)?,"createdAt":r.get::<_,String>(3)?}))).optional().map_err(|e|e.to_string())?;
-        let publication = c.query_row("SELECT revision,state,content_hash,lineage_json FROM task_knowledge_drafts WHERE task_id=? ORDER BY revision DESC LIMIT 1",[id],|r| {
+        let publication = c.query_row("SELECT revision,state,content_hash,lineage_json,body_markdown FROM task_knowledge_drafts WHERE task_id=? ORDER BY revision DESC LIMIT 1",[id],|r| {
             let lineage: Value = serde_json::from_str(&r.get::<_,String>(3)?).unwrap_or(Value::Null);
-            Ok(json!({"draftRevision":r.get::<_,i64>(0)?,"state":r.get::<_,String>(1)?,"contentHash":r.get::<_,String>(2)?,"sourceHash":lineage["sourceHash"]}))
+            Ok(json!({"draftRevision":r.get::<_,i64>(0)?,"state":r.get::<_,String>(1)?,"contentHash":r.get::<_,String>(2)?,"sourceHash":lineage["sourceHash"],"bodyMarkdown":r.get::<_,String>(4)?}))
         }).optional().map_err(|e|e.to_string())?;
         let problem_links=c.prepare("SELECT id,problem_id,problem_revision,relationship,note FROM task_problem_links WHERE task_id=? AND unlinked_at IS NULL").map_err(|e|e.to_string())?.query_map([id],|r|Ok(json!({"id":r.get::<_,String>(0)?,"problemId":r.get::<_,String>(1)?,"problemRevision":r.get::<_,i64>(2)?,"relationship":r.get::<_,String>(3)?,"note":r.get::<_,String>(4)?}))).map_err(|e|e.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|e|e.to_string())?;
         let relationships=c.prepare("SELECT id,CASE WHEN source_task_id=? THEN target_task_id ELSE source_task_id END,kind,note FROM task_relationships WHERE (source_task_id=? OR (kind='related' AND target_task_id=?)) AND unlinked_at IS NULL").map_err(|e|e.to_string())?.query_map(params![id,id,id],|r|Ok(json!({"id":r.get::<_,String>(0)?,"targetTaskId":r.get::<_,String>(1)?,"kind":r.get::<_,String>(2)?,"note":r.get::<_,String>(3)?}))).map_err(|e|e.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|e|e.to_string())?;
@@ -850,6 +850,29 @@ mod tests {
         assert_eq!(state, "open");
         service.execute("task.revision",&json!({"operationId":"revise","taskId":id,"expectedTaskRevision":1,"patch":{"title":"Shipped"}})).unwrap();
         assert!(service.execute("task.revision",&json!({"operationId":"stale","taskId":id,"expectedTaskRevision":1,"patch":{"title":"Again"}})).unwrap_err().contains("head_conflict"));
+    }
+
+    #[test]
+    fn task_get_includes_the_latest_private_knowledge_draft_body() {
+        let root = tempdir().unwrap();
+        let db = root.path().join("state.db");
+        crate::native::database::initialize(&db).unwrap();
+        let service = TaskApplicationService::new(&db);
+        let task = service.execute("task.create", &json!({"operationId":"create","inputText":"input","title":"Review saved draft"})).unwrap();
+        let task_id = task["id"].as_str().unwrap();
+        service.execute("task.transition", &json!({"operationId":"start","taskId":task_id,"expectedTaskRevision":1,"to":"in_progress"})).unwrap();
+        service.execute("task.completion.create", &json!({"operationId":"complete","taskId":task_id,"expectedTaskRevision":1,"evidence":"done"})).unwrap();
+        let repo = SqliteTaskRepository::new(&db);
+        repo.transaction(|tx| crate::native::task_assistance::save_supplied_knowledge_draft_tx(
+            tx,
+            &json!({"operationId":"saved-draft","taskId":task_id,"expectedTaskRevision":1}),
+            "# Saved Knowledge\n\nReview this private draft.",
+            "supplied",
+        )).unwrap();
+
+        let loaded = service.execute("task.get", &json!({"taskId":task_id})).unwrap();
+        assert_eq!(loaded["publication"]["state"], "draft");
+        assert_eq!(loaded["publication"]["bodyMarkdown"], "# Saved Knowledge\n\nReview this private draft.");
     }
 
     #[test]

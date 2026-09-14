@@ -19,6 +19,10 @@ describe('Task contract routing', () => {
     expect(taskOperation('POST', '/tasks/t%201/knowledge/drafts/2/publish', { expectedContentHash: 'hash' }, 'en'))
       .toEqual({ name: 'task-knowledge.publish', input: { taskId: 't 1', draftRevision: 2, expectedContentHash: 'hash', locale: 'en' } });
   });
+  it('queues Knowledge draft generation with the URL task identity and expected revision', () => {
+    expect(taskOperation('POST', '/tasks/t%201/knowledge/drafts', { expectedTaskRevision: 4 }, 'en'))
+      .toEqual({ name: 'jobs.enqueue', input: expect.objectContaining({ taskKind: 'knowledge_draft', entityType: 'tasks', entityId: 't 1', taskId: 't 1', expectedTaskRevision: 4, locale: 'en' }) });
+  });
   it('does not swallow unrelated routes or unsupported verbs', () => {
     expect(taskOperation('GET', '/provider/config', {}, 'en')).toBeUndefined();
     expect(taskOperation('DELETE', '/tasks/t1/completions', {}, 'en')).toBeUndefined();

@@ -4,7 +4,7 @@ import { expect, it, vi } from 'vitest';
 type Job = { id: string; status: string; task_kind: string; entity_type: string; entity_id: string; result_interface: string; error?: { message: string } };
 
 function renderShell() {
-  document.body.innerHTML = '<button id="queue-toggle"></button><section id="queue-panel" hidden><header><button></button></header></section><section id="queue-list"></section><button data-view="ai-setup"></button><aside id="queue-toast" hidden><button></button><strong id="queue-toast-title"></strong></aside><button id="alert-toggle"></button><section id="alert-panel" hidden><header><button></button></header></section><span id="alert-badge"></span><section id="alert-list"></section><span id="organize-status"></span>';
+  document.body.innerHTML = '<button id="queue-toggle"></button><section id="queue-panel" hidden><header><button></button></header></section><section id="queue-list"></section><button data-view="ai-setup"></button><button data-view="workbench"></button><aside id="queue-toast" hidden><button></button><strong id="queue-toast-title"></strong></aside><button id="alert-toggle"></button><section id="alert-panel" hidden><header><button></button></header></section><span id="alert-badge"></span><section id="alert-list"></section><span id="organize-status"></span>';
 }
 
 function startRuntime(api: (path: string, options?: { method?: string }) => Promise<unknown>, options: { t?: (key: string) => string; showNotice?: ReturnType<typeof vi.fn>; onJobEvent?: (refresh: () => void) => void } = {}) {
@@ -73,6 +73,27 @@ it('CB-038 localizes the known native missing-key recovery copy in Korean', asyn
   await tick();
   expect(document.querySelector('.queue-provider-help')).toHaveTextContent(translations['queue.provider_missing']);
   expect(document.querySelector('[data-job-action="setup"]')).toHaveTextContent(translations['queue.open_ai_setup']);
+});
+
+it('CB-038 opens the exact completed Knowledge draft returned by its Queue job', async () => {
+  renderShell();
+  const navigate = vi.fn();
+  document.querySelector('[data-view="workbench"]')!.addEventListener('click', navigate);
+  const openDraft = vi.fn();
+  window.llmWikiOpenKnowledgeDraft = openDraft;
+  startRuntime(async (path: string) => {
+    if (path === '/jobs') return { jobs: [{ id: 'knowledge-1', status: 'completed', task_kind: 'knowledge_draft', entity_type: 'tasks', entity_id: 'task-1', result_interface: 'task_knowledge_draft' }] };
+    if (path === '/notifications') return { unread_count: 0, notifications: [] };
+    if (path === '/jobs/knowledge-1/result') return { result: { taskId: 'task-1', draftRevision: 2, bodyMarkdown: '# Exact draft', contentHash: 'body-2', sourceHash: 'source-2', state: 'draft' } };
+    return {};
+  });
+  await tick();
+  expect(document.querySelector('[data-job-action="result"]')).toHaveTextContent('Open result page');
+  document.querySelector<HTMLButtonElement>('[data-job-action="result"]')!.click();
+  await tick();
+  expect(navigate).toHaveBeenCalledOnce();
+  expect(document.querySelector<HTMLButtonElement>('#queue-panel')!.hidden).toBe(true);
+  expect(openDraft).toHaveBeenCalledWith(expect.objectContaining({ taskId: 'task-1', draftRevision: 2, bodyMarkdown: '# Exact draft' }));
 });
 
 it('CB-038 prevents duplicate retry while a job-event repaint occurs', async () => {

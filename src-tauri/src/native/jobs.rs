@@ -50,6 +50,7 @@ fn result_interface(task: &str, stored: String) -> String {
         "conflict_review" => "conflict_review",
         "completion_review" => "completion_review",
         "completion_report" => "completed_knowledge",
+        "knowledge_draft" => "task_knowledge_draft",
         "image_summary" => "solution_work_summary",
         "knowledge_translation" => "knowledge_document",
         "embedding_refresh" => "embedding_coverage",
@@ -178,7 +179,7 @@ pub async fn enqueue(
     vault: PathBuf,
     registry: JobRegistry,
     semantic: crate::native::semantic::SemanticEngine,
-    input: Value,
+    mut input: Value,
 ) -> Result<Value, String> {
     let required = |key: &str| {
         input
@@ -207,6 +208,7 @@ pub async fn enqueue(
             | "workbench_organization"
             | "lineage_inference"
             | "completion_report"
+            | "knowledge_draft"
     ) {
         return Err("Unsupported AI job type".into());
     }
@@ -226,6 +228,9 @@ pub async fn enqueue(
         return get(&db_path, &existing);
     }
     let job_id = id();
+    if task_kind == "knowledge_draft" && input.get("operationId").is_none() {
+        input["operationId"] = Value::String(format!("knowledge-job-{job_id}"));
+    }
     connection.execute(
         "INSERT INTO ai_jobs_v2(
            id,task_kind,entity_type,entity_id,status,input_json,execution_mode,idempotency_key,
@@ -359,6 +364,15 @@ async fn run_inner(
             .map_err(|e| e.to_string())?
     };
     let input = serde_json::from_str::<Value>(&input).unwrap_or_else(|_| json!({}));
+    if task == "knowledge_draft" {
+        let prepared = tokio::select! {
+            biased;
+            _ = token.cancelled() => return Ok(()),
+            prepared = crate::native::task_assistance::prepare_knowledge_draft(db_path, settings_path, &input) => prepared?,
+        };
+        if token.is_cancelled() { return Ok(()); }
+        return finalize_knowledge_draft(db_path, job_id, &input, &prepared);
+    }
     let model_task = match (task.as_str(), entity_type.as_str()) {
         ("workflow_draft", "captures") => "problem_drafting",
         ("workflow_draft", "problems") => "solution_drafting",
@@ -613,5 +627,24 @@ fn complete_without_provider(db_path: &Path, job_id: &str, result: Value) -> Res
         "UPDATE ai_jobs_v2 SET status='completed',result_json=?,progress_completed=1,finished_at=CURRENT_TIMESTAMP WHERE id=? AND status='running'",
         params![result.to_string(),job_id],
     ).map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+/// Commits the draft and its durable Queue result together.  A cancellation that
+/// wins before this transaction starts leaves neither a private draft nor a result.
+pub(crate) fn finalize_knowledge_draft(db_path: &Path, job_id: &str, input: &Value, prepared: &Value) -> Result<(), String> {
+    let body = prepared.get("bodyMarkdown").and_then(Value::as_str).ok_or("Prepared Knowledge body is unavailable")?;
+    let expected_source = prepared.get("sourceHash").and_then(Value::as_str).ok_or("Prepared Knowledge source is unavailable")?;
+    let model_status = prepared.get("modelStatus").and_then(Value::as_str).unwrap_or("deterministic");
+    let mut connection = database::open(db_path)?;
+    let tx = connection.transaction().map_err(|error| error.to_string())?;
+    let running = tx.execute("UPDATE ai_jobs_v2 SET source_hash=? WHERE id=? AND status='running'", params![expected_source, job_id]).map_err(|error| error.to_string())?;
+    if running == 0 { return Err("Knowledge draft job was cancelled before it could be saved".into()); }
+    let result = crate::native::task_assistance::save_supplied_knowledge_draft_tx(&tx, input, body, model_status)?;
+    if result.get("sourceHash").and_then(Value::as_str) != Some(expected_source) {
+        return Err("Task evidence changed while the Knowledge draft was running".into());
+    }
+    tx.execute("UPDATE ai_jobs_v2 SET status='completed',result_json=?,progress_completed=1,finished_at=CURRENT_TIMESTAMP WHERE id=? AND status='running'", params![result.to_string(),job_id]).map_err(|error| error.to_string())?;
+    tx.commit().map_err(|error| error.to_string())?;
     Ok(())
 }

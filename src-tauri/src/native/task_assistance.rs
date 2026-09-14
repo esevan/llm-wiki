@@ -2846,6 +2846,38 @@ mod tests {
     }
 
     #[test]
+    fn queued_knowledge_finalize_is_atomic_and_revision_bound() {
+        let (_root, db, _vault, _settings) = fixture();
+        let task = completed_task(&db);
+        let input = json!({"operationId":"queued-draft","taskId":task,"expectedTaskRevision":1});
+        let lineage = {
+            let mut connection = database::open(&db).unwrap();
+            let tx = connection.transaction().unwrap();
+            knowledge_lineage_tx(&tx, &task, Some(1)).unwrap()
+        };
+        let prepared = json!({"bodyMarkdown":"# Queued exact draft","sourceHash":lineage["sourceHash"],"modelStatus":"deterministic"});
+        let connection = database::open(&db).unwrap();
+        connection.execute("INSERT INTO ai_jobs_v2(id,task_kind,entity_type,entity_id,status,input_json,idempotency_key) VALUES('cancelled','knowledge_draft','tasks',?,'cancelled',?,?)",params![task,input.to_string(),"cancelled"]).unwrap();
+        drop(connection);
+        assert!(crate::native::jobs::finalize_knowledge_draft(&db, "cancelled", &input, &prepared).is_err());
+        let connection = database::open(&db).unwrap();
+        let count:i64=connection.query_row("SELECT count(*) FROM task_knowledge_drafts",[],|r|r.get(0)).unwrap();
+        assert_eq!(count,0);
+        connection.execute("INSERT INTO ai_jobs_v2(id,task_kind,entity_type,entity_id,status,input_json,idempotency_key) VALUES('ready','knowledge_draft','tasks',?,'running',?,?)",params![task,input.to_string(),"ready"]).unwrap();
+        drop(connection);
+        crate::native::jobs::finalize_knowledge_draft(&db, "ready", &input, &prepared).unwrap();
+        assert!(crate::native::jobs::finalize_knowledge_draft(&db, "ready", &input, &prepared).is_err());
+        let connection = database::open(&db).unwrap();
+        let (count,status,result):(i64,String,String)=connection.query_row("SELECT (SELECT count(*) FROM task_knowledge_drafts),status,result_json FROM ai_jobs_v2 WHERE id='ready'",[],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).unwrap();
+        assert_eq!(count,1); assert_eq!(status,"completed"); assert_eq!(serde_json::from_str::<Value>(&result).unwrap()["bodyMarkdown"],"# Queued exact draft");
+        connection.execute("INSERT INTO ai_jobs_v2(id,task_kind,entity_type,entity_id,status,input_json,idempotency_key) VALUES('stale','knowledge_draft','tasks',?,'running',?,?)",params![task,input.to_string(),"stale"]).unwrap();
+        drop(connection);
+        let stale=json!({"bodyMarkdown":"# stale","sourceHash":"changed","modelStatus":"deterministic"});
+        assert!(crate::native::jobs::finalize_knowledge_draft(&db, "stale", &json!({"operationId":"stale","taskId":task,"expectedTaskRevision":1}), &stale).is_err());
+        let connection=database::open(&db).unwrap(); let count:i64=connection.query_row("SELECT count(*) FROM task_knowledge_drafts",[],|r|r.get(0)).unwrap(); assert_eq!(count,1);
+    }
+
+    #[test]
     fn stored_lineage_remains_publishable_after_active_links_change() {
         let (_root, db, vault, _settings) = fixture();
         let task = completed_task(&db);

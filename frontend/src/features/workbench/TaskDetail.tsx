@@ -11,6 +11,14 @@ import { acknowledgeSave, baseline, definitionOf, editDraft, keepEdits, mergeSna
 export type TaskDetailHandle = { requestLeave: (proceed: () => void) => void };
 
 type DetailTab = "work" | "details" | "review";
+type KnowledgeDraft = {
+  draftRevision: number;
+  bodyMarkdown: string;
+  savedBodyMarkdown?: string;
+  contentHash: string;
+  sourceHash?: string;
+  state: string;
+};
 
 const orderedWorkLog = (workLog: TaskAggregate["workLog"] = []) =>
   workLog
@@ -47,7 +55,7 @@ export type DetailSession = {
   relatedTaskId: string;
   relationshipKind: "prerequisite" | "split_from" | "related";
   readinessReasons: Record<string, string>;
-  knowledgeDraft?: { draftRevision: number; bodyMarkdown: string; contentHash: string; sourceHash?: string; state: string };
+  knowledgeDraft?: KnowledgeDraft;
   tab: DetailTab;
   editing: boolean;
   scrollTop: number;
@@ -62,6 +70,7 @@ export function TaskDetail({
   refreshKey,
   suppressInitialFocus,
   sessions,
+  queueKnowledgeDraft,
   ref,
 }: {
   taskId: string;
@@ -72,6 +81,7 @@ export function TaskDetail({
   refreshKey?: number;
   suppressInitialFocus?: boolean;
   sessions?: Map<string, DetailSession>;
+  queueKnowledgeDraft?: KnowledgeDraft;
   ref?: Ref<TaskDetailHandle>;
 }) {
   const text = useTaskWorkbenchText();
@@ -102,17 +112,21 @@ export function TaskDetail({
   const [readinessReasons, setReadinessReasons] = useState<
     Record<string, string>
   >(session?.readinessReasons ?? {});
-  const [knowledgeDraft, setKnowledgeDraft] = useState<{
-    draftRevision: number;
-    bodyMarkdown: string;
-    contentHash: string;
-    sourceHash?: string;
-    state: string;
-  } | undefined>(session?.knowledgeDraft);
+  const [knowledgeDraft, setKnowledgeDraft] = useState<KnowledgeDraft | undefined>(() =>
+    session?.knowledgeDraft && {
+      ...session.knowledgeDraft,
+      savedBodyMarkdown: session.knowledgeDraft.savedBodyMarkdown ?? session.knowledgeDraft.bodyMarkdown,
+    },
+  );
   const [tab, setTab] = useState<DetailTab>(session?.tab ?? "work");
   const [editing, setEditing] = useState(session?.editing ?? false);
   const [showCompletedChecklist, setShowCompletedChecklist] = useState(false);
-  const [knowledgeBusy, setKnowledgeBusy] = useState(false);
+  const [knowledgeAction, setKnowledgeAction] = useState<"create" | "correct" | "publish">();
+  const knowledgeBusy = Boolean(knowledgeAction);
+  const [knowledgeStatus, setKnowledgeStatus] = useState<keyof typeof text | "">("");
+  const [knowledgeError, setKnowledgeError] = useState("");
+  const [knowledgeRetry, setKnowledgeRetry] = useState<"create" | "correct" | "publish">();
+  const [knowledgeQueued, setKnowledgeQueued] = useState(false);
   const [mutationBusy, setMutationBusy] = useState(false);
   const [lineage, setLineage] = useState<LineageSnapshot>();
   const [closePrompt, setClosePrompt] = useState(false);
@@ -153,6 +167,18 @@ export function TaskDetail({
       if (sequence === loadSequence.current) {
         setError("");
         setDetailState((current) => current ? mergeSnapshot(current, next) : baseline(next));
+        const publication = next.publication;
+        if (publication?.state === "draft" && publication.draftRevision && publication.contentHash && publication.bodyMarkdown) {
+          const persistedDraft = {
+            draftRevision: publication.draftRevision,
+            bodyMarkdown: publication.bodyMarkdown,
+            savedBodyMarkdown: publication.bodyMarkdown,
+            contentHash: publication.contentHash,
+            sourceHash: publication.sourceHash,
+            state: publication.state,
+          };
+          setKnowledgeDraft((current) => current ?? persistedDraft);
+        }
         if (!hadSession.current) {
           setTab(next.state === "completed" ? "review" : next.state === "task" ? "details" : "work");
           hadSession.current = true;
@@ -168,6 +194,15 @@ export function TaskDetail({
     void load();
     return () => { ++sequences.current; };
   }, [load, refreshKey]);
+  useEffect(() => {
+    if (!queueKnowledgeDraft) return;
+    setKnowledgeQueued(false);
+    setKnowledgeStatus("");
+    setKnowledgeDraft((current) => current?.draftRevision === queueKnowledgeDraft.draftRevision && current.contentHash === queueKnowledgeDraft.contentHash
+      ? current
+      : { ...queueKnowledgeDraft, savedBodyMarkdown: queueKnowledgeDraft.bodyMarkdown });
+    setTab("review");
+  }, [queueKnowledgeDraft]);
   const update = (operation: () => Promise<TaskAggregate>) => {
     if (mutationBusyRef.current) return Promise.resolve();
     mutationBusyRef.current = true;
@@ -212,6 +247,22 @@ export function TaskDetail({
   useEffect(() => {
     if (loaded && !suppressInitialFocus && !panelRef.current?.closest(".view:not(.active)")) headingRef.current?.focus({ preventScroll: true });
   }, [loaded, suppressInitialFocus]);
+  const focusedQueueResult = useRef<KnowledgeDraft | undefined>(undefined);
+  useEffect(() => {
+    if (!queueKnowledgeDraft || !loaded || tab !== "review"
+        || knowledgeDraft?.draftRevision !== queueKnowledgeDraft.draftRevision
+        || focusedQueueResult.current === queueKnowledgeDraft) return;
+    const frame = requestAnimationFrame(() => {
+      const panel = panelRef.current;
+      const preview = panel?.querySelector<HTMLElement>(".knowledge-draft-preview");
+      if (!panel || !preview) return;
+      const headerHeight = panel.querySelector<HTMLElement>(".task-detail-header")?.offsetHeight ?? 0;
+      panel.scrollTop += preview.getBoundingClientRect().top - panel.getBoundingClientRect().top - headerHeight - 12;
+      preview.focus({ preventScroll: true });
+      focusedQueueResult.current = queueKnowledgeDraft;
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [knowledgeDraft?.draftRevision, loaded, queueKnowledgeDraft, tab]);
   const encodeAttachment = async () => {
     if (!attachment) return undefined;
     const bytes = new Uint8Array(await attachment.arrayBuffer());
@@ -231,21 +282,27 @@ export function TaskDetail({
       setError("This Knowledge draft has no source hash. Refresh it before saving a correction.");
       return;
     }
-    setKnowledgeBusy(true);
+    setKnowledgeAction("correct");
+    setKnowledgeError("");
+    setKnowledgeRetry(undefined);
+    setKnowledgeStatus("savingDraft");
     try {
-      setKnowledgeDraft(
-        await taskClient.correctKnowledge(
+      const corrected = await taskClient.correctKnowledge(
           taskId,
           knowledgeDraft.draftRevision,
           knowledgeDraft.contentHash,
           knowledgeDraft.sourceHash,
           knowledgeDraft.bodyMarkdown,
-        ),
-      );
+        );
+      setKnowledgeDraft({ ...corrected, savedBodyMarkdown: corrected.bodyMarkdown });
+      await load();
+      setKnowledgeStatus("draftSaved");
     } catch (e) {
-      setError(String(e instanceof Error ? e.message : e));
+      setKnowledgeStatus("");
+      setKnowledgeError(String(e instanceof Error ? e.message : e));
+      setKnowledgeRetry("correct");
     } finally {
-      setKnowledgeBusy(false);
+      setKnowledgeAction(undefined);
     }
   };
   const publishKnowledge = async () => {
@@ -254,7 +311,10 @@ export function TaskDetail({
       setError("This Knowledge draft has no source hash. Refresh it before publishing.");
       return;
     }
-    setKnowledgeBusy(true);
+    setKnowledgeAction("publish");
+    setKnowledgeError("");
+    setKnowledgeRetry(undefined);
+    setKnowledgeStatus("publishingDraft");
     try {
       await taskClient.publish(
         taskId,
@@ -264,13 +324,45 @@ export function TaskDetail({
       );
       setKnowledgeDraft(undefined);
       await load();
+      setKnowledgeStatus("draftPublished");
     } catch (e) {
-      setError(String(e instanceof Error ? e.message : e));
+      setKnowledgeStatus("");
+      setKnowledgeError(String(e instanceof Error ? e.message : e));
+      setKnowledgeRetry("publish");
     } finally {
-      setKnowledgeBusy(false);
+      setKnowledgeAction(undefined);
     }
   };
+  const createKnowledgeDraft = async () => {
+    if (!task || task.state !== "completed" || knowledgeBusy) return;
+    setKnowledgeAction("create");
+    setKnowledgeError("");
+    setKnowledgeRetry(undefined);
+    setKnowledgeStatus("creatingDraft");
+    try {
+      await taskClient.knowledgeDraft(task.id, revision);
+      setKnowledgeQueued(true);
+      setKnowledgeStatus("draftQueued");
+    } catch (e) {
+      setKnowledgeStatus("");
+      setKnowledgeError(String(e instanceof Error ? e.message : e));
+      setKnowledgeRetry("create");
+    } finally {
+      setKnowledgeAction(undefined);
+    }
+  };
+  const retryKnowledge = () => {
+    if (knowledgeRetry === "create") void createKnowledgeDraft();
+    if (knowledgeRetry === "correct") void correctKnowledge();
+    if (knowledgeRetry === "publish") void publishKnowledge();
+  };
+  const knowledgeEdited = Boolean(knowledgeDraft && knowledgeDraft.bodyMarkdown !== knowledgeDraft.savedBodyMarkdown);
   const task = detailState && { ...detailState.persisted, ...detailState.draft };
+  const knowledgeDraftIsCurrent = Boolean(
+    knowledgeDraft && task?.publication?.draftRevision === knowledgeDraft.draftRevision
+      && task.publication.contentHash === knowledgeDraft.contentHash
+      && task.publication.state === "draft",
+  );
   const addWorkLog = () => {
     if (!task || (!entry.trim() && !attachment) || mutationBusyRef.current) return;
     void encodeAttachment()
@@ -955,19 +1047,21 @@ export function TaskDetail({
         <button
           type="button"
           data-control="task-knowledge-draft"
-          disabled={task.state !== "completed"}
-          onClick={() =>
-            void taskClient
-              .knowledgeDraft(task.id, revision)
-              .then((draft) => {
-                setKnowledgeDraft(draft);
-                return load();
-              })
-              .catch((e) => setError(String(e.message ?? e)))
-          }
+          disabled={task.state !== "completed" || knowledgeBusy || knowledgeQueued}
+          aria-busy={knowledgeBusy}
+          onClick={() => void createKnowledgeDraft()}
         >
-          {text.createDraft}
+          {knowledgeAction === "create" ? text.creatingDraft : text.createDraft}
         </button>
+        {knowledgeStatus && <p className="knowledge-draft-status" role="status">{text[knowledgeStatus]}</p>}
+        {knowledgeError && (
+          <div className="knowledge-draft-error" role="alert">
+            <p>{knowledgeError}</p>
+            <button type="button" data-control="task-knowledge-draft-retry" disabled={knowledgeBusy || !knowledgeRetry} onClick={retryKnowledge}>
+              {text.retry}
+            </button>
+          </div>
+        )}
         {knowledgeDraft && (
           <article
             className="knowledge-draft"
@@ -976,10 +1070,17 @@ export function TaskDetail({
             <h4>
               {text.draft} · r{knowledgeDraft.draftRevision}
             </h4>
+            <section className="knowledge-draft-preview" aria-label={text.draftPreview} tabIndex={-1}>
+              <header><h5>{text.draftPreview}</h5><p>{text.draftPreviewHint}</p></header>
+              <pre>{knowledgeDraft.bodyMarkdown}</pre>
+            </section>
+            <label className="knowledge-draft-editor">
+              <span>{text.editDraft}</span>
             <textarea
               data-control="task-knowledge-draft-body"
               aria-label={text.knowledgeDraftBody}
               value={knowledgeDraft.bodyMarkdown}
+              readOnly={!knowledgeDraftIsCurrent}
               onChange={(event) =>
                 setKnowledgeDraft({
                   ...knowledgeDraft,
@@ -987,10 +1088,12 @@ export function TaskDetail({
                 })
               }
             />
+            </label>
+            {knowledgeEdited && <p className="knowledge-draft-status">{text.saveDraftBeforePublish}</p>}
             <button
               type="button"
               data-control="task-knowledge-correct"
-              disabled={knowledgeBusy || !knowledgeDraft.sourceHash}
+              disabled={knowledgeBusy || !knowledgeDraft.sourceHash || !knowledgeDraftIsCurrent}
               aria-busy={knowledgeBusy}
               onClick={() => void correctKnowledge()}
             >
@@ -999,14 +1102,14 @@ export function TaskDetail({
             <button
               type="button"
               data-control="task-knowledge-publish"
-              disabled={knowledgeBusy || !knowledgeDraft.sourceHash}
+              disabled={knowledgeBusy || !knowledgeDraft.sourceHash || knowledgeEdited || !knowledgeDraftIsCurrent}
               onClick={() => void publishKnowledge()}
             >
               {text.publish}
             </button>
           </article>
         )}
-        {task.publication?.draftRevision && task.publication.contentHash && (
+        {!knowledgeDraft && task.publication?.draftRevision && task.publication.contentHash && (
           <div
             className="inline-form publication-controls"
             data-publication-revision={task.publication.draftRevision}
@@ -1015,7 +1118,7 @@ export function TaskDetail({
             <button
               type="button"
               data-control="task-knowledge-publish"
-              disabled={knowledgeBusy || !task.publication.sourceHash}
+              disabled={knowledgeBusy || !task.publication.sourceHash || knowledgeEdited}
               onClick={() =>
                 void taskClient
                   .publish(
@@ -1040,9 +1143,11 @@ export function TaskDetail({
                     task.publication!.draftRevision!,
                     task.taskRevision,
                   )
-                  .then((draft) =>
-                    setKnowledgeDraft(draft as typeof knowledgeDraft),
-                  )
+                  .then(async (draft) => {
+                    const regenerated = draft as KnowledgeDraft;
+                    setKnowledgeDraft({ ...regenerated, savedBodyMarkdown: regenerated.bodyMarkdown });
+                    await load();
+                  })
                   .catch((e) => setError(String(e.message ?? e)))
               }
             >

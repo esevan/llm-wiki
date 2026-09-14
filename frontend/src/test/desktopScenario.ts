@@ -809,6 +809,18 @@ async function publication(step: Step) {
   );
   if (!draft) throw new Error("Missing Knowledge draft action");
   clickElement(draft, "Create Knowledge draft");
+  const completedTask = await task(title);
+  let knowledgeJobId = "";
+  await waitForAsync(async () => {
+    const { jobs } = await api<{ jobs: Array<{ id: string; task_kind: string; entity_id: string; status: string }> }>("/jobs");
+    const job = jobs.find(job => job.task_kind === "knowledge_draft" && job.entity_id === completedTask.id);
+    knowledgeJobId = job?.id ?? "";
+    return job?.status === "completed";
+  }, "completed Knowledge Queue job");
+  clickElement(document.querySelector<HTMLButtonElement>("#queue-toggle")!, "Open AI Queue");
+  const resultSelector = `#queue-list [data-job-id="${knowledgeJobId}"] [data-job-action="result"]`;
+  await waitFor(() => Boolean(document.querySelector(resultSelector)), "exact Knowledge Queue result");
+  clickElement(document.querySelector<HTMLButtonElement>(resultSelector)!, "Open exact Knowledge Queue result");
   await waitFor(
     () => !!document.querySelector(".knowledge-draft"),
     "Knowledge preview",

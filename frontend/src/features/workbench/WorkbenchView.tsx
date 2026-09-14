@@ -31,6 +31,7 @@ export function WorkbenchView({ active }: { active: boolean }) {
   const detailRef = useRef<TaskDetailHandle>(null);
   const refinementRef = useRef<RefinementPanelHandle>(null);
   const [detailRefresh, setDetailRefresh] = useState(0);
+  const [queueKnowledgeDraft, setQueueKnowledgeDraft] = useState<({ taskId: string } & NonNullable<DetailSession["knowledgeDraft"]>)>();
   const detailSessions = useRef(new Map<string, DetailSession>());
   const refinementMessages = useRef(new Map<string, string>());
   const detailTrigger = useRef<HTMLElement | null>(null);
@@ -100,6 +101,22 @@ export function WorkbenchView({ active }: { active: boolean }) {
     return () =>
       window.removeEventListener("llm-wiki:task-workbench-refresh", refresh);
   }, [active, load]);
+  useEffect(() => {
+    window.llmWikiOpenKnowledgeDraft = (draft) => {
+      const current = detailSessions.current.get(draft.taskId);
+      if (current?.knowledgeDraft && current.knowledgeDraft.savedBodyMarkdown !== undefined
+          && current.knowledgeDraft.bodyMarkdown !== current.knowledgeDraft.savedBodyMarkdown) {
+        setError(text.saveDraftBeforeQueueResult);
+        return;
+      }
+      closeLegacyDock();
+      setRefining(undefined);
+      setQueueKnowledgeDraft({ ...draft });
+      setDetail(draft.taskId);
+      setDetailRefresh((value) => value + 1);
+    };
+    return () => { delete window.llmWikiOpenKnowledgeDraft; };
+  }, [text.saveDraftBeforeQueueResult]);
   const save = async (event: React.FormEvent) => {
     event.preventDefault();
     if (!input.trim() || busy) return;
@@ -427,6 +444,7 @@ export function WorkbenchView({ active }: { active: boolean }) {
           }}
           onRefine={() => openRefinement({ kind: "task", id: detail })}
           refreshKey={detailRefresh}
+          queueKnowledgeDraft={queueKnowledgeDraft?.taskId === detail ? queueKnowledgeDraft : undefined}
           suppressInitialFocus={Boolean(refining)}
           onChanged={() => void load()}
           sessions={detailSessions.current}

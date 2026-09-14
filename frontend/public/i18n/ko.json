@@ -567,6 +567,7 @@
   "queue.task.image_summary": "이미지 요약",
   "queue.task.completion_review": "완료 검토",
   "queue.task.knowledge_translation": "Knowledge 번역",
+  "queue.task.knowledge_draft": "Knowledge 초안 생성",
   "queue.task.derived_translation": "콘텐츠 번역",
   "queue.task.embedding_refresh": "임베딩 갱신",
   "queue.task.conflict_review": "충돌 검토",

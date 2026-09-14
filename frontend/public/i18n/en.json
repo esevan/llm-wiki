@@ -567,6 +567,7 @@
   "queue.task.image_summary": "Image Summary",
   "queue.task.completion_review": "Completion Review",
   "queue.task.knowledge_translation": "Knowledge translation",
+  "queue.task.knowledge_draft": "Knowledge draft",
   "queue.task.derived_translation": "Content translation",
   "queue.task.embedding_refresh": "Embedding refresh",
   "queue.task.conflict_review": "Conflict Review",

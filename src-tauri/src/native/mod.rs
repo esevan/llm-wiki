@@ -332,7 +332,7 @@ impl NativeApplication {
     }
 
     pub async fn enqueue_job(&self, input: Value) -> NativeResponse {
-        if let Some(response) = self.recovery_block() {
+        if let Some(response) = self.recovery_block().or_else(|| self.desktop_e2e_failure("jobs.enqueue")) {
             return response;
         }
         match jobs::enqueue(

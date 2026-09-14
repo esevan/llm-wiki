@@ -97,6 +97,7 @@ const manifest: readonly ControlSpec[] = [
   task('conflict-review-cancel', 'F25', 'frontend/src/features/workbench/ConflictReviewPanel.tsx', 'review status changes'),
   ...['evidence','complete'].map(name => task(`task-completion-${name}`, 'F26', 'frontend/src/features/workbench/TaskDetail.tsx', 'completion evidence and state persist')),
   ...['draft','correct','publish','regenerate','withdraw'].map(name => task(`task-knowledge-${name}`, name === 'draft' ? 'F27' : name === 'correct' || name === 'publish' ? 'F28' : 'F29', 'frontend/src/features/workbench/TaskDetail.tsx', 'knowledge state changes visibly')),
+  task('task-knowledge-draft-retry', 'F27', 'frontend/src/features/workbench/TaskDetail.tsx', 'failed Knowledge draft generation retries visibly'),
   task('task-knowledge-draft-body', 'F28', 'frontend/src/features/workbench/TaskDetail.tsx', 'corrected Knowledge body persists'),
   task('task-lineage-load', 'F30', 'frontend/src/features/workbench/TaskDetail.tsx', 'ordered lineage renders'),
   task('refinement-close', 'F31', 'frontend/src/features/workbench/RefinementPanel.tsx', 'workspace saves before closing'),

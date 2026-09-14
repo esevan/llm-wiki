@@ -394,6 +394,30 @@ main:has(.task-workbench.active :is(.task-detail, .refinement-panel)) {
   min-height: 76px;
   resize: vertical;
 }
+.knowledge-draft-status {
+  margin: var(--space-3) 0 0;
+  color: var(--color-text-secondary);
+}
+.knowledge-draft-error {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  margin-top: var(--space-3);
+  padding: var(--space-3);
+  border-left: 3px solid var(--color-status-error);
+  background: var(--color-bg-muted);
+}
+.knowledge-draft-error p { margin: 0; flex: 1 1 16rem; color: var(--color-status-error); overflow-wrap: anywhere; }
+.knowledge-draft { display: grid; gap: var(--space-3); margin-top: var(--space-4); }
+.knowledge-draft h4 { margin: 0; }
+.knowledge-draft-preview { border: var(--border-default); border-radius: var(--radius-control); background: var(--color-bg-muted); overflow: hidden; }
+.knowledge-draft-preview header { padding: var(--space-3) var(--space-3) 0; }
+.knowledge-draft-preview h5 { margin: 0; font-size: var(--font-size-sm); }
+.knowledge-draft-preview header p { margin: var(--space-1) 0 0; color: var(--color-text-secondary); font-size: var(--font-size-sm); }
+.knowledge-draft-preview pre { max-height: 20rem; overflow: auto; margin: var(--space-3); padding: var(--space-3); border-radius: var(--radius-control); background: var(--color-bg-surface); color: var(--color-text-primary); font-family: var(--font-family-body); font-size: var(--font-size-sm); line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
+.knowledge-draft-editor { display: grid; gap: var(--space-1); font-weight: 700; font-size: var(--font-size-sm); }
+.knowledge-draft-editor textarea { margin: 0; min-height: 12rem; font-family: var(--font-family-mono); font-size: var(--font-size-sm); line-height: 1.5; }
 .inline-form {
   display: flex;
   gap: var(--space-2);

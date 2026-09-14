@@ -112,3 +112,23 @@ Integration with the database-lock recovery change passed 206 npm tests, typeche
 release build, and six focused packaged scenarios: refinement, localization, provider recovery,
 close retry, close pending, and relaunch. Results: `.tmp/desktop-e2e-artifacts-YF1Gtd/results.json`.
 This focused verification does not replace the full release gate noted above.
+
+## Knowledge draft Queue handoff — 2026-09-14
+
+- Branch `fix/knowledge-draft-feedback` queues private Knowledge generation and opens the exact
+  completed result in Workbench Review, focused and scrolled to its Markdown preview. The Queue
+  result survives closing the Task panel and restarting the app; publication stays explicit.
+- Cancelled jobs cannot save a draft. Draft storage, source validation, and Queue completion are
+  atomic. Older, corrected, or published result snapshots are read-only.
+- Previous feature validation: 213 frontend tests, full Cargo tests, typecheck, lint, whitespace
+  check, signed release build, and packaged `task-controls`, `task-publication`, and `task-review`
+  passed. English and Korean wide/narrow windows and opening a persisted result from Search were
+  visually reviewed.
+- The additional `global-queue-notifications` packaged scenario still times out waiting for the
+  visible click target of an existing completed-job result. It did not pass; do not report the entire
+  desktop suite green. Diagnostics: `.tmp/desktop-e2e-artifacts-BcWWpu/results.json` in this worktree.
+- The primary checkout's existing user edits are excluded from this feature commit.
+- Post-rebase integration validation passed 217 frontend tests, full Cargo tests, typecheck, lint,
+  whitespace checks, and the signed release build. Packaged `task-publication` and `task-review`
+  passed on that build. `task-controls` timed out after lineage loading, so the full desktop gate
+  remains unmet. Diagnostics: `.tmp/desktop-e2e-artifacts-919VQg/results.json` in this worktree.

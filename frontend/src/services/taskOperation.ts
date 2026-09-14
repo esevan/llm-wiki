@@ -80,7 +80,10 @@ export function taskOperation(
       if (p[2] === "checklist" && method === "PUT")
         return op("task.checklist.update", { ...ids, itemId: p[3] });
       if (p[2] === "knowledge" && p[3] === "drafts" && method === "POST")
-        return op("task-knowledge.draft", ids);
+        return {
+          name: "jobs.enqueue",
+          input: { ...body, ...ids, taskKind: "knowledge_draft", entityType: "tasks", entityId: p[1], locale },
+        };
     }
     if (
       p.length === 6 &&

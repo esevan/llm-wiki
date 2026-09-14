@@ -11,6 +11,12 @@ result button when complete. A full progress bar with **Completed** is finished 
 pending phase; open the result to review it. Repeated Conflict Review clicks reopen saved
 results; use **Run fresh review** to request new evidence analysis.
 
+Knowledge draft generation also runs in the durable Queue and continues after its Task panel closes.
+Open the completed result to see the exact generated draft in the Task's Review tab. Later edits,
+publication, or a newer draft make that saved Queue result read-only. Save any current draft edits
+before opening a Queue result. Cancellation before finalization saves no draft; draft storage and
+job completion commit together. Publishing remains a separate user action.
+
 LLM Wiki separates AI execution into two process-level paths so interaction stays responsive
 without losing recoverable work.
 
@@ -27,7 +33,7 @@ The bottom-right Queue names the target item and explains what each durable task
 show readable status, step progress, system-timezone time, safe failures, cancellation, retry, and only the result
 actions that make sense for that task. A task with a result names its destination while running,
 then enables a prominent **Open result page** action when complete. Results open the owning workflow
-surface or a concise summary; raw job JSON is not used as the user-facing result. Draft and Refine
+surface or a concise summary; raw job JSON is not used as the user-facing result. Legacy Draft and Refine
 results stay bound to their originating dialog and are cancelled when that surface closes. Image
 Summary attaches to the exact
 Work Log entry without changing scroll position. Completion Review also creates a temporary toast

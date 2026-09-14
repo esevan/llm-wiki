@@ -471,9 +471,31 @@ export async function runTaskControlMatrixScenario(h: WorkbenchScenarioHarness) 
   await h.waitFor(() => Boolean(document.querySelector(".lineage-flow li")), "lineage nodes");
   effect(h, ["task-lineage-load"], () => Boolean(document.querySelector(".lineage-flow li")));
   await h.step("Task controls: lineage loaded");
+  await invoke("desktop_e2e_arm_one_shot_failure", { operation: "jobs.enqueue" });
   await clickControl(h, "task-knowledge-draft", "Create Knowledge draft");
-  await h.waitFor(() => Boolean(document.querySelector(".knowledge-draft")), "Knowledge draft");
-  effect(h, ["task-knowledge-draft"], () => Boolean(document.querySelector(".knowledge-draft")));
+  await h.waitFor(() => Boolean(document.querySelector('[data-control="task-knowledge-draft-retry"]')), "Knowledge enqueue failure");
+  observe(h, "failed Knowledge draft enqueue");
+  await clickControl(h, "task-knowledge-draft-retry", "Retry Knowledge enqueue");
+  await h.waitFor(() => document.querySelector<HTMLButtonElement>('[data-control="task-knowledge-draft"]')?.disabled === true, "Knowledge draft queued");
+  const knowledgeTask = await h.task(revisedTitle);
+  let knowledgeJobId = "";
+  await h.waitForAsync(async () => {
+    const { jobs } = await h.api<{ jobs: Array<{ id: string; task_kind: string; entity_id: string; status: string }> }>("/jobs");
+    const job = jobs.find(job => job.task_kind === "knowledge_draft" && job.entity_id === knowledgeTask.id);
+    knowledgeJobId = job?.id ?? "";
+    if (job?.status === "failed") throw new Error("Knowledge Queue generation failed");
+    return job?.status === "completed";
+  }, "completed exact Knowledge Queue job");
+  await h.step("Task controls: Knowledge Queue job completed");
+  document.querySelector<HTMLButtonElement>("#queue-toggle")?.click();
+  const resultSelector = `#queue-list [data-job-id="${knowledgeJobId}"] [data-job-action="result"]`;
+  await h.waitFor(() => Boolean(document.querySelector(resultSelector)), "completed Knowledge Queue result button");
+  h.click(document.querySelector<HTMLButtonElement>(resultSelector)!, "Open exact Knowledge Queue result");
+  await h.waitFor(() => Boolean(document.querySelector(".knowledge-draft")), "exact Knowledge draft preview");
+  effect(h, ["task-knowledge-draft", "task-knowledge-draft-retry"], () => Boolean(document.querySelector(".knowledge-draft-preview")));
+  await h.waitFor(() => document.activeElement?.classList.contains("knowledge-draft-preview") === true
+    && document.querySelector<HTMLElement>("#queue-panel")?.hidden === true, "Queue result focuses visible draft preview");
+  await h.step("Task controls: Queue result opened exact Knowledge preview");
   observe(h, "Knowledge draft");
   const body = control<HTMLTextAreaElement>("task-knowledge-draft-body");
   const initialHash = document.querySelector(".knowledge-draft")?.getAttribute("data-content-hash");

@@ -109,6 +109,7 @@ export interface TaskAggregate extends TaskCard {
     draftRevision?: number;
     contentHash?: string;
     sourceHash?: string;
+    bodyMarkdown?: string;
   };
 }
 export interface RefinementSession {
