@@ -1,11 +1,47 @@
 use chrono::{SecondsFormat, Utc};
-use rusqlite::Connection;
+use rusqlite::{Connection, Error as SqliteError, ErrorCode, Transaction, TransactionBehavior};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
+
+const IMMEDIATE_TRANSACTION_ATTEMPTS: usize = 4;
+const IMMEDIATE_TRANSACTION_RETRY_DELAYS: [Duration; IMMEDIATE_TRANSACTION_ATTEMPTS - 1] = [
+    Duration::from_millis(25),
+    Duration::from_millis(50),
+    Duration::from_millis(100),
+];
+
+fn is_transient_lock(error: &SqliteError) -> bool {
+    matches!(
+        error,
+        SqliteError::SqliteFailure(error, _)
+            if matches!(error.code, ErrorCode::DatabaseBusy | ErrorCode::DatabaseLocked)
+    )
+}
+
+/// Acquire the writer slot before an operation reads mutable state.
+///
+/// Retrying is deliberately limited to `BEGIN IMMEDIATE`: no caller-provided operation has run
+/// yet, so a retry cannot replay an external effect or a partially committed database mutation.
+pub(crate) fn immediate_transaction(connection: &mut Connection) -> Result<Transaction<'_>, String> {
+    for attempt in 0..IMMEDIATE_TRANSACTION_ATTEMPTS {
+        // `new_unchecked` accepts the shared reference needed for retrying this acquisition;
+        // this helper still requires a mutable connection, and all callers use a fresh one.
+        match Transaction::new_unchecked(connection, TransactionBehavior::Immediate) {
+            Ok(transaction) => return Ok(transaction),
+            Err(error)
+                if is_transient_lock(&error) && attempt + 1 < IMMEDIATE_TRANSACTION_ATTEMPTS =>
+            {
+                std::thread::sleep(IMMEDIATE_TRANSACTION_RETRY_DELAYS[attempt]);
+            }
+            Err(error) => return Err(error.to_string()),
+        }
+    }
+    unreachable!("the final transaction attempt always returns")
+}
 
 #[derive(Debug, Clone)]
 pub struct MigrationBackup {
@@ -481,6 +517,90 @@ mod tests {
                 ))
                 .unwrap(),
             "before"
+        );
+    }
+
+    #[test]
+    fn immediate_transaction_retries_a_contended_writer_slot() {
+        let root = tempfile::tempdir().unwrap();
+        let path = wal_database(root.path());
+        let (locked, ready) = std::sync::mpsc::channel();
+        let lock_path = path.clone();
+        let holder = std::thread::spawn(move || {
+            let connection = Connection::open(lock_path).unwrap();
+            connection.execute_batch("BEGIN IMMEDIATE").unwrap();
+            locked.send(()).unwrap();
+            std::thread::sleep(Duration::from_millis(75));
+            connection.execute_batch("COMMIT").unwrap();
+        });
+        ready.recv().unwrap();
+
+        let mut contender = open(&path).unwrap();
+        // Make each failed BEGIN return immediately so this test exercises the bounded retry
+        // path instead of only SQLite's longer per-attempt busy handler.
+        contender.busy_timeout(Duration::ZERO).unwrap();
+        let transaction = immediate_transaction(&mut contender).unwrap();
+        transaction
+            .execute("UPDATE records SET value='after' WHERE id='one'", [])
+            .unwrap();
+        transaction.commit().unwrap();
+        holder.join().unwrap();
+
+        assert_eq!(
+            Connection::open(path)
+                .unwrap()
+                .query_row("SELECT value FROM records WHERE id='one'", [], |row| row
+                    .get::<_, String>(0))
+                .unwrap(),
+            "after"
+        );
+    }
+
+    #[test]
+    fn immediate_writer_avoids_a_deferred_snapshot_upgrade_failure() {
+        let root = tempfile::tempdir().unwrap();
+        let path = wal_database(root.path());
+
+        let mut deferred = open(&path).unwrap();
+        let deferred_tx = deferred.transaction().unwrap();
+        let _: String = deferred_tx
+            .query_row("SELECT value FROM records WHERE id='one'", [], |row| row.get(0))
+            .unwrap();
+        open(&path)
+            .unwrap()
+            .execute("UPDATE records SET value='other-writer' WHERE id='one'", [])
+            .unwrap();
+        let upgrade_error = deferred_tx
+            .execute("UPDATE records SET value='deferred' WHERE id='one'", [])
+            .unwrap_err();
+        assert!(is_transient_lock(&upgrade_error));
+        drop(deferred_tx);
+
+        let mut immediate = open(&path).unwrap();
+        let immediate_tx = immediate_transaction(&mut immediate).unwrap();
+        let _: String = immediate_tx
+            .query_row("SELECT value FROM records WHERE id='one'", [], |row| row.get(0))
+            .unwrap();
+        let competing = {
+            let connection = open(&path).unwrap();
+            connection.busy_timeout(Duration::ZERO).unwrap();
+            connection
+                .execute("UPDATE records SET value='competing' WHERE id='one'", [])
+                .unwrap_err()
+        };
+        assert!(is_transient_lock(&competing));
+        immediate_tx
+            .execute("UPDATE records SET value='immediate' WHERE id='one'", [])
+            .unwrap();
+        immediate_tx.commit().unwrap();
+
+        assert_eq!(
+            open(&path)
+                .unwrap()
+                .query_row("SELECT value FROM records WHERE id='one'", [], |row| row
+                    .get::<_, String>(0))
+                .unwrap(),
+            "immediate"
         );
     }
 

@@ -42,9 +42,17 @@ export function RefinementPanel({
   const [saving, setSaving] = useState(false);
   const [polling, setPolling] = useState(false);
   const [error, setError] = useState("");
+  const [loadError, setLoadError] = useState("");
+  const [loading, setLoading] = useState(false);
   const timer = useRef<number | undefined>(undefined);
   const pollTimer = useRef<number | undefined>(undefined);
   const sending = useRef(false);
+  const pollRequesting = useRef(false);
+  const loadingRef = useRef(false);
+  const loadSequence = useRef(0);
+  const hasLoadedSession = useRef(false);
+  const draftTouched = useRef(false);
+  const lastSubmittedMessage = useRef("");
   const workspaceQueue = useRef<Promise<unknown>>(Promise.resolve());
   const skipCleanupFlush = useRef(false);
   const latest = useRef({
@@ -67,34 +75,64 @@ export function RefinementPanel({
     latest.current.message = message;
     latest.current.activeTab = activeTab;
   }, [session, draft, message, activeTab]);
+  const cancelLoad = useCallback(() => {
+    ++loadSequence.current;
+    loadingRef.current = false;
+  }, []);
+  const load = useCallback(async () => {
+    if (loadingRef.current) return;
+    loadingRef.current = true;
+    setLoading(true);
+    setLoadError("");
+    const sequence = ++loadSequence.current;
+    try {
+      const next = await (latest.current.session
+        ? taskClient.refinementStatus(kind, subjectId)
+        : taskClient.refinement(kind, subjectId));
+      if (sequence !== loadSequence.current) return;
+      const nextDraft = hasLoadedSession.current || draftTouched.current
+        ? latest.current.draft
+        : next.inputDraft ?? "";
+      hasLoadedSession.current = true;
+      latest.current = {
+        session: next,
+        draft: nextDraft,
+        message: latest.current.message,
+        activeTab: "conversation",
+        scrollAnchor: next.scrollAnchor ?? "0",
+      };
+      setSession(next);
+      setDraft(nextDraft);
+      requestAnimationFrame(() => {
+        if (scrollRef.current)
+          scrollRef.current.scrollTop = Number(next.scrollAnchor ?? 0);
+      });
+      const nextProposals = await taskClient.proposals(next.id);
+      if (sequence === loadSequence.current) {
+        setProposals(nextProposals);
+        if (next.responseStatus && !["completed", "failed", "cancelled"].includes(next.responseStatus))
+          setPolling(true);
+        if (next.responseStatus === "failed" && !latest.current.message && lastSubmittedMessage.current) {
+          setError(text.assistantFailure);
+          setMessage(lastSubmittedMessage.current);
+          latest.current.message = lastSubmittedMessage.current;
+        }
+      }
+    } catch (e) {
+      if (sequence === loadSequence.current)
+        setLoadError(String(e instanceof Error ? e.message : e));
+    } finally {
+      if (sequence === loadSequence.current) {
+        loadingRef.current = false;
+        setLoading(false);
+      }
+    }
+  }, [kind, subjectId, text.assistantFailure]);
   useEffect(() => {
-    let cancelled = false;
-    void taskClient
-      .refinement(kind, subjectId)
-      .then(async (next) => {
-        if (cancelled) return;
-        const restoredTab = "conversation";
-        latest.current = {
-          session: next,
-          draft: next.inputDraft ?? "",
-          message: "",
-          activeTab: restoredTab,
-          scrollAnchor: next.scrollAnchor ?? "0",
-        };
-        setSession(next);
-        setDraft(next.inputDraft ?? "");
-
-
-        requestAnimationFrame(() => {
-          if (scrollRef.current)
-            scrollRef.current.scrollTop = Number(next.scrollAnchor ?? 0);
-        });
-        const nextProposals = await taskClient.proposals(next.id);
-        if (!cancelled) setProposals(nextProposals);
-      })
-      .catch((e) => !cancelled && setError(String(e.message ?? e)));
+    hasLoadedSession.current = false;
+    void load();
     return () => {
-      cancelled = true;
+      cancelLoad();
       if (timer.current) window.clearTimeout(timer.current);
       if (pollTimer.current) window.clearInterval(pollTimer.current);
       const current = latest.current;
@@ -108,14 +146,16 @@ export function RefinementPanel({
           })
           .catch(() => undefined);
     };
-  }, [kind, subjectId]);
+  }, [cancelLoad, kind, subjectId, load]);
   useEffect(() => {
     if (!polling || !session?.id) return;
     let cancelled = false;
     pollTimer.current = window.setInterval(
-      () =>
+      () => {
+        if (pollRequesting.current) return;
+        pollRequesting.current = true;
         void taskClient
-          .refinement(kind, subjectId)
+          .refinementStatus(kind, subjectId)
           .then(async (next) => {
             if (cancelled) return;
             setSession(next);
@@ -124,21 +164,36 @@ export function RefinementPanel({
                 next.responseStatus ?? "completed",
               )
             ) {
-              const nextProposals = await taskClient.proposals(next.id);
+              let nextProposals: RefinementProposal[];
+              try {
+                nextProposals = await taskClient.proposals(next.id);
+              } catch (e) {
+                if (!cancelled) {
+                  setLoadError(String(e instanceof Error ? e.message : e));
+                  setPolling(false);
+                }
+                return;
+              }
               if (cancelled) return;
               setProposals(nextProposals);
               setPolling(false);
               if (next.responseStatus === "failed")
-                setError(
-                  text.assistantFailure,
-                );
+                {
+                  setError(text.assistantFailure);
+                  if (!latest.current.message && lastSubmittedMessage.current) {
+                    setMessage(lastSubmittedMessage.current);
+                    latest.current.message = lastSubmittedMessage.current;
+                  }
+                }
             }
           })
           .catch((e) => {
             if (cancelled) return;
             setPolling(false);
-            setError(String(e instanceof Error ? e.message : e));
-          }),
+            setLoadError(String(e instanceof Error ? e.message : e));
+          })
+          .finally(() => { pollRequesting.current = false; });
+      },
       700,
     );
     return () => {
@@ -176,6 +231,7 @@ export function RefinementPanel({
     );
   };
   const save = (value: string) => {
+    draftTouched.current = true;
     setDraft(value);
     latest.current.draft = value;
     scheduleSave();
@@ -232,7 +288,7 @@ export function RefinementPanel({
     } finally { setDeciding(undefined); }
   };
   const send = async () => {
-    if (!session || !message.trim() || sending.current || polling) return;
+    if (!session || !message.trim() || sending.current || polling || loadingRef.current || loadError) return;
     sending.current = true;
     setSaving(true);
     setError("");
@@ -240,8 +296,11 @@ export function RefinementPanel({
     try {
       latest.current.scrollAnchor = String(scrollRef.current?.scrollTop ?? 0);
       await persistCurrent();
-      await taskClient.message(session.id, message);
+      const submittedMessage = message.trim();
+      await taskClient.message(session.id, submittedMessage);
+      lastSubmittedMessage.current = submittedMessage;
       setMessage("");
+      latest.current.message = "";
       setPolling(true);
     } catch (e) {
       setError(String(e instanceof Error ? e.message : e));
@@ -279,7 +338,9 @@ export function RefinementPanel({
           <span className="refinement-back">{kind === "task" ? text.backToTask : text.back}</span><span className="refinement-close-icon" aria-hidden="true">×</span>
         </button>
       </header>
-      {error && <p role="alert" className="workbench-error">{error}</p>}
+      {(error || loadError) && <div role="alert" className="workbench-error">{error || loadError}
+        {loadError && <button type="button" data-control="refinement-retry" disabled={loading} onClick={() => void load()}>{text.retry}</button>}
+      </div>}
       <section className="refinement-conversation" aria-label={text.conversation}>
         <div className="refinement-messages" ref={scrollRef} onScroll={event => {
           latest.current.scrollAnchor = String(event.currentTarget.scrollTop); scheduleSave();
@@ -291,10 +352,10 @@ export function RefinementPanel({
         </div>
         <div className="refinement-composer">
           <textarea aria-label={text.refinementMessage} data-control="refinement-message" value={message}
-            onChange={event => setMessage(event.target.value)} onKeyDown={event => {
+            onChange={event => { latest.current.message = event.target.value; setMessage(event.target.value); }} onKeyDown={event => {
               if (event.key === "Enter" && (event.metaKey || event.ctrlKey) && !event.nativeEvent.isComposing) { event.preventDefault(); void send(); }
             }} placeholder={text.refinementPlaceholder} rows={2} />
-          <button type="button" className="primary" disabled={!session || saving || polling || !message.trim()}
+          <button type="button" className="primary" disabled={!session || saving || polling || loading || Boolean(loadError) || !message.trim()}
             onClick={() => void send()} data-chat-control="refinement-send" data-control="refinement-send">{text.send}</button>
         </div>
       </section>

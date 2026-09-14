@@ -208,9 +208,7 @@ fn ensure_refinement_subject_visible(connection: &Connection, session_id: &str) 
 fn refinement_open(db_path: &Path, input: &Value) -> Result<Value, String> {
     let (kind, subject_id) = subject(input)?;
     let mut connection = database::open(db_path)?;
-    let tx = connection
-        .transaction()
-        .map_err(|error| error.to_string())?;
+    let tx = database::immediate_transaction(&mut connection)?;
     if let Some(result) = operation_replay(&tx, input)? {
         return Ok(result);
     }
@@ -356,9 +354,7 @@ fn refinement_prompt(
 fn refinement_workspace(db_path: &Path, input: &Value) -> Result<Value, String> {
     let session_id = required(input, "sessionId")?;
     let mut connection = database::open(db_path)?;
-    let tx = connection
-        .transaction()
-        .map_err(|error| error.to_string())?;
+    let tx = database::immediate_transaction(&mut connection)?;
     if let Some(result) = operation_replay(&tx, input)? {
         return Ok(result);
     }
@@ -414,9 +410,7 @@ async fn refinement_message(
         .filter(|value| !value.is_empty())
         .ok_or("invalid_input: message is required")?;
     let mut connection = database::open(db_path)?;
-    let tx = connection
-        .transaction()
-        .map_err(|error| error.to_string())?;
+    let tx = database::immediate_transaction(&mut connection)?;
     if let Some(result) = operation_replay(&tx, input)? {
         return Ok(result);
     }
@@ -471,12 +465,12 @@ async fn refinement_message(
         )
         .await
         {
-            if let Ok(connection) = database::open(&db) {
-                let _ = connection.execute(
-                    "UPDATE task_assistance_jobs SET status='failed',error=?,finished_at=? WHERE id=? AND status IN ('queued','running')",
-                    params![safe_async_error(&error), now(), job_id],
-                );
-            }
+            let _ = update_refinement_job_status(
+                &db,
+                &job_id,
+                "failed",
+                Some(&safe_async_error(&error)),
+            );
         }
     });
     Ok(result)
@@ -491,13 +485,8 @@ async fn run_refinement_response(
     job_id: &str,
     auto_review: bool,
 ) -> Result<(), String> {
+    update_refinement_job_status(db_path, job_id, "running", None)?;
     let connection = database::open(db_path)?;
-    connection
-        .execute(
-            "UPDATE task_assistance_jobs SET status='running',started_at=? WHERE id=? AND status='queued'",
-            params![now(), job_id],
-        )
-        .map_err(|error| error.to_string())?;
     let session = session_value(&connection, session_id)?;
     let task_kind = if session.get("taskId").is_some_and(|value| !value.is_null()) {
         "solution_assistance"
@@ -519,9 +508,7 @@ async fn run_refinement_response(
             // must be released before the optional asynchronous review is started.
             let revision = {
                 let mut connection = database::open(db_path)?;
-                let tx = connection
-                    .transaction()
-                    .map_err(|error| error.to_string())?;
+                let tx = database::immediate_transaction(&mut connection)?;
                 // The provider response may arrive after the subject was deleted. Retain no new
                 // draft in that case, so the deleted subject cannot be revived by async work.
                 ensure_refinement_subject_visible(&tx, session_id)?;
@@ -588,15 +575,35 @@ async fn run_refinement_response(
             Ok(())
         }
         Err(error) => {
-            database::open(db_path)?
-                .execute(
-                    "UPDATE task_assistance_jobs SET status='failed',error=?,finished_at=? WHERE id=?",
-                    params![error, now(), job_id],
-                )
-                .map_err(|write_error| write_error.to_string())?;
+            update_refinement_job_status(db_path, job_id, "failed", Some(&error))?;
             Ok(())
         }
     }
+}
+
+fn update_refinement_job_status(
+    db_path: &Path,
+    job_id: &str,
+    status: &str,
+    error: Option<&str>,
+) -> Result<(), String> {
+    let mut connection = database::open(db_path)?;
+    let tx = database::immediate_transaction(&mut connection)?;
+    match status {
+        "running" => {
+            tx.execute(
+                "UPDATE task_assistance_jobs SET status='running',started_at=? WHERE id=? AND status='queued'",
+                params![now(), job_id],
+            )
+        }
+        "failed" => tx.execute(
+            "UPDATE task_assistance_jobs SET status='failed',error=?,finished_at=? WHERE id=? AND status IN ('queued','running')",
+            params![error.unwrap_or("refinement_failed"), now(), job_id],
+        ),
+        _ => return Err("Unsupported refinement job status".into()),
+    }
+    .map_err(|write_error| write_error.to_string())?;
+    tx.commit().map_err(|error| error.to_string())
 }
 
 fn validate_proposals(proposals: &[Value]) -> Result<(), String> {
@@ -1032,9 +1039,7 @@ async fn review_create(
         .get("triggerKind")
         .and_then(Value::as_str)
         .unwrap_or("explicit");
-    let tx = connection
-        .transaction()
-        .map_err(|error| error.to_string())?;
+    let tx = database::immediate_transaction(&mut connection)?;
     if let Some(result) = operation_replay(&tx, input)? {
         return Ok(result);
     }
@@ -1432,9 +1437,7 @@ fn review_cancel(db_path: &Path, run_id: &str) -> Result<Value, String> {
 fn review_decision(db_path: &Path, input: &Value) -> Result<Value, String> {
     let finding_id = required(input, "findingId")?;
     let mut connection = database::open(db_path)?;
-    let tx = connection
-        .transaction()
-        .map_err(|error| error.to_string())?;
+    let tx = database::immediate_transaction(&mut connection)?;
     if let Some(result) = operation_replay(&tx, input)? {
         return Ok(result);
     }

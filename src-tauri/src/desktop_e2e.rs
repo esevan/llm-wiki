@@ -75,7 +75,7 @@ pub(crate) fn desktop_e2e_arm_one_shot_failure(
     }
     if !matches!(
         operation.as_str(),
-        "refinement.context" | "knowledge.read" | "workbench.get" | "task-refinement.workspace" | "task.get"
+        "refinement.context" | "knowledge.read" | "workbench.get" | "task-refinement.workspace" | "task-refinement.open" | "task.get"
     ) {
         return Err("Unsupported desktop E2E failure operation".into());
     }

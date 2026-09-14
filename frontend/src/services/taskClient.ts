@@ -201,6 +201,10 @@ export const taskClient = {
       "POST",
       {},
     ),
+  refinementStatus: (kind: "capture" | "task", id: string) =>
+    request<RefinementSession>(
+      `/${kind === "capture" ? "captures" : "tasks"}/${encodeURIComponent(id)}/refinement`,
+    ),
   saveWorkspace: (id: string, data: Record<string, unknown>) =>
     request(`/refinement/${encodeURIComponent(id)}/workspace`, "PUT", data),
   proposals: (id: string) =>

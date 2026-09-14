@@ -235,6 +235,19 @@ export async function runRefinementCloseRetryScenario(harness: ChatScenarioHarne
   const saved = await harness.api<RefinementSnapshot>(refinementPath(captureId));
   if (saved.inputDraft !== noteText) throw new Error("Successful close retry did not persist the exact workspace note");
   await harness.step("A one-shot native workspace-save failure kept the panel and error visible; the rendered Close retry persisted the exact note before closing.");
+  await invoke("desktop_e2e_arm_one_shot_failure", { operation: "task-refinement.open" });
+  harness.click(control<HTMLButtonElement>(`[data-entity-id="${CSS.escape(captureId)}"][data-control="task-card-refine"]`, "Capture refinement entry"), "Reopen refinement with failed read");
+  await harness.waitFor(() => Boolean(document.querySelector('[data-control="refinement-retry"]')), "visible refinement read retry");
+  const messageDraft = "Keep this message while retrying the read";
+  harness.enter(control<HTMLTextAreaElement>('[data-control="refinement-message"]', "refinement message"), messageDraft);
+  observeCoverage(harness, document, "task-refinement-close-retry");
+  coverInteract(harness, "refinement-retry", () => harness.click(control<HTMLButtonElement>('[data-control="refinement-retry"]', "refinement retry"), "Retry failed refinement read"));
+  await harness.waitFor(() => !document.querySelector('[data-control="refinement-retry"]') && Boolean(document.querySelector('.refinement-panel[data-refinement-session]:not([data-refinement-session=""])')), "recovered refinement read");
+  coverEffect(harness, "refinement-retry", () => control<HTMLTextAreaElement>('[data-control="refinement-message"]', "preserved message").value === messageDraft);
+  const recovered = await harness.api<RefinementSnapshot>(refinementPath(captureId));
+  if (recovered.inputDraft !== noteText || recovered.messages?.length) throw new Error("Refinement read retry changed saved notes or submitted a message");
+  await harness.step("The refinement Retry control recovered a native read failure while preserving the message draft and saved note without submitting a message.");
+
 }
 
 /** Prepare a durable workspace for the runner's real second packaged-app process. */

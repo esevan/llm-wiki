@@ -3,6 +3,115 @@ import { describe, expect, it, vi } from "vitest";
 import { RefinementPanel } from "./RefinementPanel";
 
 describe("Refinement panel", () => {
+  it("retries a database-locked refinement read without losing local drafts", async () => {
+    let attempts = 0;
+    const request = vi.fn().mockImplementation(({ path }: { path: string; method?: string }) => {
+      if (path.endsWith("/refinement")) {
+        attempts += 1;
+        if (attempts === 1) return Promise.resolve({ ok: false, status: 503, json: async () => ({ error: "database is locked" }), text: async () => "database is locked", body: null });
+        return Promise.resolve({ ok: true, status: 200, json: async () => ({ id: "lock-retry", inputDraft: "stored note", messages: [] }), text: async () => "", body: null });
+      }
+      return Promise.resolve({ ok: true, status: 200, json: async () => [], text: async () => "", body: null });
+    });
+    window.llmWikiApplication = { request };
+    render(<RefinementPanel kind="task" subjectId="locked-task" onClose={vi.fn()} />);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("database is locked");
+    fireEvent.change(screen.getByLabelText("Refinement message"), { target: { value: "Keep this message draft" } });
+    fireEvent.click(screen.getByText("Saved refinement note"));
+    fireEvent.change(screen.getByLabelText("Saved refinement note"), { target: { value: "Keep this private note" } });
+    fireEvent.click(document.querySelector('[data-control="refinement-retry"]')!);
+
+    await waitFor(() => expect(document.querySelector(".refinement-panel")).toHaveAttribute("data-refinement-session", "lock-retry"));
+    expect(screen.getByLabelText("Refinement message")).toHaveValue("Keep this message draft");
+    expect(screen.getByLabelText("Saved refinement note")).toHaveValue("Keep this private note");
+    expect(request.mock.calls.filter(([input]) => input.path.endsWith("/messages"))).toHaveLength(0);
+  });
+
+  it("resumes a locked in-flight refinement without submitting its message twice", async () => {
+    let refinementReads = 0;
+    let completed = false;
+    const request = vi.fn().mockImplementation(({ path }: { path: string; method?: string }) => {
+      const result = (json: unknown) => Promise.resolve({ ok: true, status: 200, json: async () => json, text: async () => "", body: null });
+      if (path.endsWith("/messages")) return result({});
+      if (path.endsWith("/workspace")) return result({});
+      if (path.endsWith("/proposals")) return result(completed ? [{ id: "recovered-proposal", type: "new_task", payload: { title: "Recovered proposal" }, draftRevision: 1 }] : []);
+      refinementReads += 1;
+      if (refinementReads === 2) return Promise.resolve({ ok: false, status: 503, json: async () => ({ error: "database is locked" }), text: async () => "database is locked", body: null });
+      if (refinementReads === 4) completed = true;
+      return result({ id: "in-flight-lock", draftRevision: 1, responseStatus: refinementReads === 4 ? "completed" : refinementReads === 3 ? "running" : undefined, messages: [] });
+    });
+    window.llmWikiApplication = { request };
+    render(<RefinementPanel kind="task" subjectId="in-flight-lock" onClose={vi.fn()} />);
+    const message = await screen.findByLabelText("Refinement message");
+    fireEvent.click(screen.getByText("Saved refinement note"));
+    fireEvent.change(screen.getByLabelText("Saved refinement note"), { target: { value: "Keep this note while status recovers" } });
+    fireEvent.change(message, { target: { value: "Only submit this once" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(request.mock.calls.filter(([input]) => input.path.endsWith("/messages"))).toHaveLength(1));
+    expect((await screen.findByRole("alert", {}, { timeout: 2_000 }))).toHaveTextContent("database is locked");
+      expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
+      fireEvent.click(document.querySelector('[data-control="refinement-retry"]')!);
+      await waitFor(() => expect(document.querySelector(".refinement-panel")).toHaveAttribute("data-refinement-polling", "true"));
+      expect(request.mock.calls.filter(([input]) => input.path.endsWith("/messages"))).toHaveLength(1);
+      expect(screen.getByLabelText("Saved refinement note")).toHaveValue("Keep this note while status recovers");
+
+    expect(await screen.findByText("Recovered proposal", {}, { timeout: 2_000 })).toBeInTheDocument();
+    expect(request.mock.calls.filter(([input]) => input.path.endsWith("/messages"))).toHaveLength(1);
+    const refinementMethods = request.mock.calls
+      .map(([input]) => input)
+      .filter((input) => input.path.endsWith("/refinement"))
+      .map((input) => input.method);
+    expect(refinementMethods).toEqual(["POST", "GET", "GET", "GET"]);
+  });
+
+  it("restores the submitted message only after a confirmed failed refinement response", async () => {
+    let reads = 0;
+    const request = vi.fn().mockImplementation(({ path }: { path: string }) => {
+      const result = (json: unknown) => Promise.resolve({ ok: true, status: 200, json: async () => json, text: async () => "", body: null });
+      if (path.endsWith("/messages") || path.endsWith("/proposals") || path.endsWith("/workspace")) return result([]);
+      reads += 1;
+      return result({ id: "failed-turn", draftRevision: 1, responseStatus: reads === 2 ? "failed" : undefined, messages: [] });
+    });
+    window.llmWikiApplication = { request };
+    render(<RefinementPanel kind="task" subjectId="failed-turn" onClose={vi.fn()} />);
+    const message = await screen.findByLabelText("Refinement message");
+    fireEvent.change(message, { target: { value: "Let me choose whether to retry" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(request.mock.calls.filter(([input]) => input.path.endsWith("/messages"))).toHaveLength(1));
+    expect(await screen.findByRole("alert", {}, { timeout: 2_000 })).toHaveTextContent("The assistant could not finish. Your draft is still saved.");
+    expect(message).toHaveValue("Let me choose whether to retry");
+    expect(screen.getByRole("button", { name: "Send" })).toBeEnabled();
+  });
+
+  it("retries a locked terminal proposal read without submitting the message again", async () => {
+    let refinementReads = 0;
+    let proposalReads = 0;
+    const request = vi.fn().mockImplementation(({ path }: { path: string }) => {
+      const result = (json: unknown) => Promise.resolve({ ok: true, status: 200, json: async () => json, text: async () => "", body: null });
+      if (path.endsWith("/messages") || path.endsWith("/workspace")) return result({});
+      if (path.endsWith("/proposals")) {
+        proposalReads += 1;
+        if (proposalReads === 2) return Promise.resolve({ ok: false, status: 503, json: async () => ({ error: "database is locked" }), text: async () => "database is locked", body: null });
+        return result(proposalReads > 2 ? [{ id: "proposal-after-retry", type: "new_task", payload: { title: "Recovered terminal proposal" }, draftRevision: 1 }] : []);
+      }
+      refinementReads += 1;
+      return result({ id: "terminal-proposal-lock", draftRevision: 1, responseStatus: refinementReads > 1 ? "completed" : undefined, messages: [] });
+    });
+    window.llmWikiApplication = { request };
+    render(<RefinementPanel kind="task" subjectId="terminal-proposal-lock" onClose={vi.fn()} />);
+    const message = await screen.findByLabelText("Refinement message");
+    fireEvent.change(message, { target: { value: "Generate this result once" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(request.mock.calls.filter(([input]) => input.path.endsWith("/messages"))).toHaveLength(1));
+    expect(await screen.findByRole("alert", {}, { timeout: 2_000 })).toHaveTextContent("database is locked");
+    expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
+
+    fireEvent.click(document.querySelector('[data-control="refinement-retry"]')!);
+    expect(await screen.findByText("Recovered terminal proposal")).toBeInTheDocument();
+    expect(request.mock.calls.filter(([input]) => input.path.endsWith("/messages"))).toHaveLength(1);
+  });
+
   it("keeps an existing Solution draft visible without a Problem approval gate", async () => {
     window.llmWikiApplication = {
       request: vi.fn().mockImplementation(({ path }: { path: string }) => Promise.resolve({
@@ -237,7 +346,8 @@ describe("Refinement panel", () => {
         expect(screen.getByRole("alert")).toHaveTextContent("Proposal readback unavailable");
         expect(document.querySelector(".refinement-panel")).toHaveAttribute("data-refinement-polling", "false");
         fireEvent.change(message, { target: { value: "Retry" } });
-        expect(screen.getByRole("button", { name: "Send" })).toBeEnabled();
+        expect(document.querySelector('[data-control="refinement-retry"]')).toBeInTheDocument();
+        expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
       } else {
         expect(screen.queryByText("Late proposal")).not.toBeInTheDocument();
       }

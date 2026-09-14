@@ -100,6 +100,7 @@ const manifest: readonly ControlSpec[] = [
   task('task-knowledge-draft-body', 'F28', 'frontend/src/features/workbench/TaskDetail.tsx', 'corrected Knowledge body persists'),
   task('task-lineage-load', 'F30', 'frontend/src/features/workbench/TaskDetail.tsx', 'ordered lineage renders'),
   task('refinement-close', 'F31', 'frontend/src/features/workbench/RefinementPanel.tsx', 'workspace saves before closing'),
+  task('refinement-retry', 'F31', 'frontend/src/features/workbench/RefinementPanel.tsx', 'failed refinement reads reload without replaying a write'),
   task('refinement-note-details', 'F34', 'frontend/src/features/workbench/RefinementPanel.tsx', 'saved refinement note disclosure changes'),
   ...['message','send'].map(name => task(`refinement-${name}`, 'F33', 'frontend/src/features/workbench/RefinementPanel.tsx', 'ordered message persists and response completes')),
   task('refinement-note', 'F34', 'frontend/src/features/workbench/RefinementPanel.tsx', 'note autosaves'),

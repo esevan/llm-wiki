@@ -23,6 +23,14 @@ resulting proposals; a delayed proposal read must not silently discard the resul
 ## Interruptions and errors
 
 - Provider or proposal-loading errors remain visible. Previously saved context is preserved.
+- If loading the session, job status, or proposals fails, use **Retry** to reload the saved result
+  without resending the AI request. Message and workspace-note drafts remain in the panel.
+- If an assistant response is confirmed failed, the message submitted in the open panel returns
+  to the composer when it is empty, so the user can choose to send it again.
+- After opening a session, status polling uses read requests and waits for each request to finish
+  before starting another.
+- Refinement writes acquire the database writer slot before reading state, with bounded waiting
+  for contention. This prevents stale read snapshots from failing when promoted to writes.
 - Closing saves the current workspace notes and position. If saving fails, the panel stays open
   with the error and the notes so closing can be retried.
 - Closing during a provider job does not cancel that durable server job. Its late response must not
