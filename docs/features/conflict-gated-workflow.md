@@ -9,6 +9,8 @@ The compact two-line Workbench entry keeps the Capture and Task choices with its
 the text, where the row wraps when the available width is narrow.
 Simple work can become a **Task** immediately. Use [Refinement](refinement-preview-status.md) when
 more context or a reviewable proposal is useful; preserve solutions already recorded in the Capture.
+Press **Enter** in the Workbench entry to save it; use **Shift+Enter** for a line break. Enter during
+IME composition is left to the composition, so the text can be completed safely.
 
 A Capture can lead to multiple Problems and Tasks. Problems have immutable revisions, and Tasks
 link to the exact revisions they address. A Task can also refer to another Task as a prerequisite
@@ -28,8 +30,22 @@ resume work and does not create another mandatory approval gate.
 
 ## Keep the work record
 
+Opening a Task divides the workspace equally between the Workbench and detail when space permits;
+the detail resizes the Workbench instead of covering it. Each side scrolls independently. The detail has
+**Work**, **Details**, and **Review** tabs: Work groups checklist, Work Log, and decisions;
+Details reads the definition first and enters an explicit edit mode; Review groups readiness,
+conflict review, completion, and Knowledge. Narrow windows replace the Workbench with the detail
+until it is closed. Task-local drafts, the selected tab, and panel position remain available while
+the Workbench is open.
+In-progress Tasks initially open Work, Tasks not yet started open Details, and completed Tasks open
+Review. Later openings restore the Task's selected tab. Work shows up to five unfinished checklist
+items initially; expand the list to see all items, including completed ones.
+
 Task detail keeps six editable definition fields—title, detail, outcome, scope, non-goals, and
 validation criteria—beside Work Log entries, attachments, comments, checklists, and decisions.
+Press **Enter** in a Work Log entry to add it; use **Shift+Enter** for a line break.
+Work Log entries appear newest first, and each recorded entry shows its date and time in the local
+locale.
 Edits stay local until **Save changes**. An independent saved mutation or refresh preserves a dirty
 definition draft; it does not silently replace those six fields. Saving sends the draft's expected
 Task revision. If the same field changed elsewhere, compare the latest record with the user's draft
@@ -63,3 +79,5 @@ Each Capture, Task, and migrated Problem card has a Delete action. Task detail a
 
 Related Spec Kit: [012 — Task-centered Workbench](../../specs/012-task-centered-workbench/spec.md).
 Historical contract: [002 — Conflict-Gated Workflow](../../specs/002-conflict-gated-workflow/spec.md).
+
+Refinement also occupies a workspace column rather than floating above the Workbench. Capture refinement shows Workbench and refinement in equal columns; Task refinement keeps the mounted Task detail on the left and refinement on the right, preserving unsaved Task inputs and the selected tab. Narrow windows show refinement with a return action. Conversation and a document-style proposed-result preview are visible together, with the private saved note in a disclosure. Each proposal remains unapplied until explicitly accepted; editing updates its actual fields. Accepted Task changes refresh the retained detail. Workbench-only legacy Problem refinement uses the same dock layout with its existing preview and APIs.

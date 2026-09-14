@@ -65,7 +65,7 @@ declare global {
     openChat?: (
       type: "captures" | "problems" | "features" | "tasks",
       id: string,
-      context?: { problemRevision?: number; sourceTitle?: string },
+      context?: { problemRevision?: number; sourceTitle?: string; workspaceDock?: boolean },
     ) => void;
     __TAURI_INTERNALS__?: object;
   }

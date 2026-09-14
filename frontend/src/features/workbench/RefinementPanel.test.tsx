@@ -5,20 +5,17 @@ import { RefinementPanel } from "./RefinementPanel";
 describe("Refinement panel", () => {
   it("keeps an existing Solution draft visible without a Problem approval gate", async () => {
     window.llmWikiApplication = {
-      request: vi
-        .fn()
-        .mockResolvedValue({
-          ok: true,
-          status: 200,
-          json: async () => ({
-            id: "r-preserved",
-            inputDraft:
-              "Existing Solution: preserve the researched implementation.",
-            messages: [],
-          }),
-          text: async () => "",
-          body: null,
+      request: vi.fn().mockImplementation(({ path }: { path: string }) => Promise.resolve({
+        ok: true,
+        status: 200,
+        json: async () => path.endsWith("/proposals") ? [] : ({
+          id: "r-preserved",
+          inputDraft: "Existing Solution: preserve the researched implementation.",
+          messages: [],
         }),
+        text: async () => "",
+        body: null,
+      })),
     };
     render(
       <RefinementPanel
@@ -27,6 +24,7 @@ describe("Refinement panel", () => {
         onClose={vi.fn()}
       />,
     );
+    fireEvent.click(await screen.findByText("Saved refinement note"));
     expect(await screen.findByLabelText("Saved refinement note")).toHaveValue("Existing Solution: preserve the researched implementation.");
     expect(screen.getByLabelText("Refinement message")).toHaveValue("");
     expect(screen.queryByText(/approve problem/i)).not.toBeInTheDocument();
@@ -50,6 +48,7 @@ describe("Refinement panel", () => {
     render(
       <RefinementPanel kind="task" subjectId="task-1" onClose={onClose} />,
     );
+    fireEvent.click(await screen.findByText("Saved refinement note"));
     fireEvent.change(await screen.findByLabelText("Saved refinement note"), {
       target: { value: "latest private note" },
     });
@@ -58,8 +57,7 @@ describe("Refinement panel", () => {
     )!;
     Object.defineProperty(messages, "scrollTop", { value: 37, writable: true });
     fireEvent.scroll(messages);
-    fireEvent.click(screen.getByRole("button", { name: "Proposals" }));
-    fireEvent.click(screen.getByRole("button", { name: "×" }));
+    fireEvent.click(screen.getByRole("button", { name: "Close refinement" }));
 
     await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
     const saved = request.mock.calls
@@ -71,7 +69,7 @@ describe("Refinement panel", () => {
       );
     expect(JSON.parse(saved.body)).toMatchObject({
       inputDraft: "latest private note",
-      activeTab: "proposals",
+      activeTab: "conversation",
       scrollAnchor: "37",
       baseDraftRevision: 0,
     });
@@ -110,7 +108,7 @@ describe("Refinement panel", () => {
     );
     window.llmWikiApplication = { request };
     render(<RefinementPanel kind="capture" subjectId="c1" onClose={vi.fn()} />);
-    await screen.findByText("Conversation");
+    await screen.findByRole("region", { name: "Conversation" });
     fireEvent.change(screen.getByLabelText("Refinement message"), {
       target: { value: "Help structure this." },
     });
@@ -170,19 +168,43 @@ describe("Refinement panel", () => {
       expect(document.querySelector(".refinement-panel")).toHaveAttribute("data-refinement-polling", "true");
       await act(async () => { releaseProposals!(); });
       expect(document.querySelector(".refinement-panel")).toHaveAttribute("data-refinement-polling", "false");
-      fireEvent.click(screen.getByRole("button", { name: "Proposals" }));
       expect(screen.getByText("Existing Solution")).toBeInTheDocument();
       expect(request.mock.calls.filter(([input]) => input.path.endsWith("/proposal-decisions"))).toHaveLength(0);
       fireEvent.click(screen.getAllByRole("button", { name: "Edit" })[0]);
-      fireEvent.change(screen.getByLabelText("Edit new_task proposal"), { target: { value: "Edited existing Solution" } });
+      fireEvent.change(screen.getByLabelText("Edit Title"), { target: { value: "Edited existing Solution" } });
       fireEvent.click(screen.getAllByRole("button", { name: "Apply" })[0]);
       expect(request).toHaveBeenCalledWith(expect.objectContaining({ path: "/refinement/multi/proposal-decisions", method: "POST" }));
       const decision = request.mock.calls.find(([input]) => input.path.endsWith("/proposal-decisions"))?.[0];
-      expect(JSON.parse(decision.body)).toMatchObject({ proposalId: "accept", decision: "accept", editedPayload: { title: "Existing Solution", detail: "Edited existing Solution" } });
+      expect(JSON.parse(decision.body)).toMatchObject({ proposalId: "accept", decision: "accept", editedPayload: { title: "Edited existing Solution" } });
+      expect(JSON.parse(decision.body).editedPayload).not.toHaveProperty("detail");
       expect(screen.getByText("Do not create")).toBeInTheDocument();
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("keeps the conversation and proposal preview visible together", async () => {
+    const request = vi.fn().mockImplementation(({ path }: { path: string }) =>
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        json: async () => path.endsWith("/proposals")
+          ? [{ id: "preview-1", type: "new_task", payload: { title: "Preview this Task", detail: "Preserve the authored detail" }, draftRevision: 1 }]
+          : { id: "preview-session", messages: [{ id: "assistant-1", role: "assistant", body: "Conversation remains available." }] },
+        text: async () => "",
+        body: null,
+      }),
+    );
+    window.llmWikiApplication = { request };
+    render(<RefinementPanel kind="task" subjectId="preview-task" onClose={vi.fn()} />);
+
+    expect(await screen.findByText("Conversation remains available.")).toBeInTheDocument();
+    expect(screen.getByText("Preview this Task")).toBeInTheDocument();
+    expect(document.querySelector(".refinement-messages")).toBeInTheDocument();
+    expect(document.querySelector(".refinement-preview[aria-label='Proposed result']")).toBeInTheDocument();
+    expect(document.querySelector('[data-control="refinement-note-details"]')).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Conversation" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Proposals" })).not.toBeInTheDocument();
   });
 
   it.each(["reject", "unmount"])("handles a delayed terminal proposal %s without stale updates", async (outcome) => {
@@ -262,7 +284,7 @@ describe("Refinement panel", () => {
 
   it("moves focus to the non-modal heading and restores the opener on Escape after saving", async () => {
     const onClose = vi.fn();
-    const request = vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({ id: 'focus', messages: [] }), text: async () => '', body: null });
+    const request = vi.fn().mockImplementation(({ path }: { path: string }) => Promise.resolve({ ok: true, status: 200, json: async () => path.endsWith("/proposals") ? [] : ({ id: 'focus', messages: [] }), text: async () => '', body: null }));
     window.llmWikiApplication = { request };
     const opener = document.createElement('button');
     opener.textContent = 'Open refinement';
@@ -271,7 +293,7 @@ describe("Refinement panel", () => {
     render(<RefinementPanel kind="task" subjectId="focus-task" onClose={onClose} />);
     const heading = await screen.findByRole('heading', { name: 'Refining' });
     expect(document.activeElement).toBe(heading);
-    fireEvent.keyDown(document, { key: 'Escape' });
+    fireEvent.keyDown(screen.getByRole("region", { name: "Conversation" }), { key: 'Escape' });
     await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
     await waitFor(() => expect(document.activeElement).toBe(opener));
     opener.remove();

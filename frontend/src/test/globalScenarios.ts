@@ -6,6 +6,7 @@ export type GlobalScenarioHarness = {
   waitFor(check: () => boolean, label: string): Promise<void>;
   waitForAsync(check: () => Promise<boolean>, label: string): Promise<void>;
   click(element: HTMLElement, label: string): void;
+  prepareClick(element: HTMLElement, label: string): Promise<void>;
   enter(element: HTMLInputElement | HTMLTextAreaElement, value: string): void;
   request<T>(path: string, method?: 'GET' | 'POST' | 'PUT' | 'DELETE', body?: object): Promise<T>;
 };
@@ -310,8 +311,16 @@ export async function runQueueNotificationActionsScenario(harness: GlobalScenari
   harness.coverage.interact('queue-panel-close', () => harness.click(queueClose, 'close queue panel'));
   harness.coverage.assertEffect('queue-panel-close', () => required<HTMLElement>('#queue-panel', 'queue panel').hidden && queue.getAttribute('aria-expanded') === 'false');
   harness.coverage.interact('queue-toggle', () => harness.click(queue, 'reopen queue for completed result'));
+  await harness.waitFor(() => required<HTMLElement>('#queue-toast', 'queue toast').hidden === false, 'completed result notification toast');
+  harness.coverage.observe(document, 'notification-toast');
+  const toastDismiss = required<HTMLButtonElement>('[data-control="queue-toast-dismiss"]', 'toast dismiss');
+  await harness.prepareClick(toastDismiss, 'dismiss completed result toast');
+  harness.coverage.interact('queue-toast-dismiss', () => harness.click(toastDismiss, 'dismiss completed result toast'));
+  await harness.waitFor(() => required<HTMLElement>('#queue-toast', 'queue toast').hidden, 'dismissed completed result notification toast');
+  harness.coverage.assertEffect('queue-toast-dismiss', () => required<HTMLElement>('#queue-toast', 'queue toast').hidden);
   await harness.waitFor(() => Boolean(document.querySelector(`#queue-list [data-job-id="${ids.completed}"] [data-job-action="result"]`)), 'completed job after reopening queue');
   const resultButton = required<HTMLButtonElement>(`#queue-list [data-job-id="${ids.completed}"] [data-job-action="result"]`, 'completed job result');
+  await harness.prepareClick(resultButton, 'open completed job result');
   harness.coverage.interact('queue-open-result', () => harness.click(resultButton, 'open completed job result'));
   await harness.waitFor(() => Boolean(document.querySelector('#item-detail-modal[open]')), 'completed job result detail');
   harness.coverage.assertEffect('queue-open-result', () => Boolean(document.querySelector('#item-detail-modal[open]')));
@@ -325,11 +334,6 @@ export async function runQueueNotificationActionsScenario(harness: GlobalScenari
   const queueDetailClose = required<HTMLButtonElement>('#item-detail-close', 'queue result detail close');
   harness.coverage.interact('detail-close', () => harness.click(queueDetailClose, 'close queue result'));
   harness.coverage.assertEffect('detail-close', () => !(document.getElementById('item-detail-modal') as HTMLDialogElement).open);
-  await harness.waitFor(() => required<HTMLElement>('#queue-toast', 'queue toast').hidden === false, 'notification toast');
-  harness.coverage.observe(document, 'notification-toast');
-  const toastDismiss = required<HTMLButtonElement>('[data-control="queue-toast-dismiss"]', 'toast dismiss');
-  harness.coverage.interact('queue-toast-dismiss', () => harness.click(toastDismiss, 'dismiss notification toast'));
-  harness.coverage.assertEffect('queue-toast-dismiss', () => required<HTMLElement>('#queue-toast', 'queue toast').hidden);
   harness.coverage.interact('notification-toggle', () => harness.click(alert, 'open notifications'));
   await harness.waitFor(() => Boolean(document.querySelector(`#alert-list [data-notification-id="${ids.notificationOpen}"]`)), 'seeded unread notification');
   harness.coverage.observe(document, 'notification-actions');

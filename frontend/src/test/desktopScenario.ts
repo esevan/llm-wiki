@@ -113,10 +113,33 @@ function enter(element: HTMLInputElement | HTMLTextAreaElement, value: string) {
   element.dispatchEvent(new Event("change", { bubbles: true }));
 }
 /** Webview automation has no native pointer adapter. Synthetic click remains accepted only after a visible centre-point hit test. */
+function positionElement(el: HTMLElement) {
+  const panel = el.closest<HTMLElement>(".task-detail");
+  const header = panel?.querySelector<HTMLElement>(".task-detail-header");
+  if (!header?.contains(el)) el.scrollIntoView({ block: "nearest" });
+  if (panel && header && !header.contains(el)) {
+    const rect = el.getBoundingClientRect();
+    const visibleTop = header.getBoundingClientRect().bottom + 8;
+    const centre = rect.top + rect.height / 2;
+    if (centre < visibleTop) panel.scrollTop -= visibleTop - centre;
+    const next = el.getBoundingClientRect();
+    const visibleBottom = Math.min(window.innerHeight, panel.getBoundingClientRect().bottom) - 8;
+    if (next.top + next.height / 2 > visibleBottom) panel.scrollTop += next.top + next.height / 2 - visibleBottom;
+  }
+}
+async function prepareClick(el: HTMLElement, label: string) {
+  positionElement(el);
+  await waitFor(() => {
+    const rect = el.getBoundingClientRect();
+    const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+    return rect.width > 0 && rect.height > 0 && Boolean(hit && (hit === el || el.contains(hit)));
+  }, `visible click target for ${label}`);
+}
 function clickElement(el: HTMLElement, label: string) {
-  if (el instanceof HTMLButtonElement && el.disabled)
-    throw new Error(`${label} is disabled`);
-  el.scrollIntoView({ block: "center" });
+  if (el instanceof HTMLButtonElement && el.disabled) throw new Error(`${label} is disabled`);
+  positionElement(el);
+  const panel = el.closest<HTMLElement>(".task-detail");
+  const header = panel?.querySelector<HTMLElement>(".task-detail-header");
   const rect = el.getBoundingClientRect();
   if (rect.width < 1 || rect.height < 1)
     throw new Error(`${label} has no hit area`);
@@ -125,7 +148,7 @@ function clickElement(el: HTMLElement, label: string) {
     rect.top + rect.height / 2,
   );
   if (!hit || (hit !== el && !el.contains(hit)))
-    throw new Error(`${label} is covered`);
+    throw new Error(`${label} is covered by ${hit?.tagName}.${hit?.className}; target=${rect.x},${rect.y},${rect.width},${rect.height}; headerBottom=${header?.getBoundingClientRect().bottom}; panelScroll=${panel?.scrollTop}; panel=${JSON.stringify(panel?.getBoundingClientRect())}; viewport=${window.innerHeight}`);
   el.click();
 }
 function click(selector: string, label: string) {
@@ -133,6 +156,52 @@ function click(selector: string, label: string) {
   if (!el) throw new Error(`Missing ${label}`);
   clickElement(el, label);
 }
+function taskTab(name: "Work" | "Details" | "Review") {
+  const key = name.toLowerCase();
+  const candidates = [
+    ...document.querySelectorAll<HTMLButtonElement>(
+      `.task-detail [role="tab"], .task-detail button[data-control*="tab"]`,
+    ),
+  ];
+  const tab = candidates.find((candidate) => {
+    const control = candidate.getAttribute("data-control")?.toLowerCase() ?? "";
+    const label = (candidate.getAttribute("aria-label") ?? candidate.textContent ?? "").trim().toLowerCase();
+    return control.includes(key) || label === key || label.includes(`${key} tab`);
+  });
+  if (!tab) throw new Error(`Missing visible Task ${name} tab`);
+  return tab;
+}
+async function selectTaskTab(name: "Work" | "Details" | "Review", label: string) {
+  const tab = taskTab(name);
+  if (tab.getAttribute("aria-selected") === "true") return;
+  await prepareClick(tab, label);
+  clickElement(tab, label);
+  await waitFor(
+    () => tab.getAttribute("aria-selected") === "true" || tab.getAttribute("aria-pressed") === "true",
+    `selected Task ${name} tab`,
+  );
+}
+async function editTaskDefinition(label = "Edit Task details") {
+  const edit = document.querySelector<HTMLButtonElement>('[data-control="task-definition-edit"]');
+  if (!edit || edit.hidden) return;
+  clickElement(edit, label);
+  await waitFor(() => document.querySelector('[data-control="task-revision-detail"]')?.getAttribute("readonly") === null, "editable Task details");
+}
+async function revealTaskField(label: string) {
+  const work = ["Work Log entry", "Checklist item", "Decision"];
+  const review = ["Completion evidence", "Knowledge draft body"];
+  await selectTaskTab(work.includes(label) ? "Work" : review.includes(label) ? "Review" : "Details", `Open ${label}`);
+  const element = field(label);
+  const parents: HTMLDetailsElement[] = [];
+  for (let parent = element.parentElement; parent; parent = parent.parentElement) {
+    if (parent instanceof HTMLDetailsElement && !parent.open) parents.unshift(parent);
+  }
+  for (const parent of parents) {
+    const summary = parent.querySelector<HTMLElement>(":scope > summary");
+    if (summary) { await prepareClick(summary, `Expand ${label}`); clickElement(summary, `Expand ${label}`); await waitFor(() => parent.open, `expanded ${label}`); }
+  }
+}
+
 const report = (result: DesktopE2eResult) => completeDesktopE2e(result);
 let e2eProviderUrl = "";
 
@@ -270,6 +339,10 @@ async function log(step: Step) {
   const title = `work log ${Date.now()}`;
   await create(title);
   await detail(title);
+  await selectTaskTab("Details", "Open Task Details for Work Log scenario");
+  await editTaskDefinition();
+  await selectTaskTab("Work", "Open Task Work tab");
+  await revealTaskField("Work Log entry");
   enter(field("Work Log entry"), "visible work evidence");
   await clickAfter("Work Log entry", "Add Work Log");
   await waitFor(
@@ -298,9 +371,11 @@ async function log(step: Step) {
   );
   Object.defineProperty(file, "files", { value: files.files });
   file.dispatchEvent(new Event("change", { bubbles: true }));
+  await revealTaskField("Work Log entry");
   enter(field("Work Log entry"), "attached evidence");
   await clickAfter("Work Log entry", "Add attachment");
   await waitForAsync(async () => (await task(title)).workLog?.some((item) => item.attachment?.name === "evidence.txt") ?? false, "persisted attachment");
+  await revealTaskField("Checklist item");
   enter(field("Checklist item"), "verify result");
   await clickAfter("Checklist item", "Add checklist");
   await waitFor(
@@ -317,6 +392,7 @@ async function log(step: Step) {
     async () => (await task(title)).checklist?.some((item) => item.checked) ?? false,
     "checked checklist item",
   );
+  await revealTaskField("Decision");
   enter(field("Decision"), "ship deliberately");
   await clickAfter("Decision", "Add decision");
   await waitForAsync(
@@ -346,7 +422,7 @@ async function refinement(step: Step) {
   await create(a);
   await create(b);
   await detail(a);
-  click(".task-actions button", "Refine A");
+  click('[data-control="task-detail-refine"]', "Refine A");
   await waitFor(
     () => !!document.querySelector(".refinement-panel"),
     "A refinement",
@@ -362,38 +438,24 @@ async function refinement(step: Step) {
   )!;
   messages.scrollTop = 0;
   messages.dispatchEvent(new Event("scroll", { bubbles: true }));
-  const proposalsTab = document.querySelectorAll<HTMLButtonElement>(
-    ".refinement-panel .panel-tabs button",
-  )[1];
-  if (!proposalsTab) throw new Error("Missing refinement Proposals tab");
-  clickElement(proposalsTab, "Select A proposals tab");
   await pause(650);
   click(".refinement-panel header button", "Close A refinement");
+  await waitFor(() => !document.querySelector(".refinement-panel"), "closed A refinement");
   click('[aria-label="Close Task detail"]', "Close A detail");
   await detail(b);
-  click(".task-actions button", "Refine B");
+  click('[data-control="task-detail-refine"]', "Refine B");
   await waitFor(
     () => !!document.querySelector(".refinement-panel"),
     "B refinement",
   );
   click(".refinement-panel header button", "Close B refinement");
+  await waitFor(() => !document.querySelector(".refinement-panel"), "closed B refinement");
   click('[aria-label="Close Task detail"]', "Close B detail");
   await detail(a);
-  click(".task-actions button", "Resume A refinement");
+  click('[data-control="task-detail-refine"]', "Resume A refinement");
   await waitFor(
-    () =>
-      document
-        .querySelectorAll<HTMLButtonElement>(
-          ".refinement-panel .panel-tabs button",
-        )[1]
-        ?.getAttribute("aria-pressed") === "true",
-    "A refinement tab restore",
-  );
-  clickElement(
-    document.querySelectorAll<HTMLButtonElement>(
-      ".refinement-panel .panel-tabs button",
-    )[0],
-    "Return to A conversation",
+    () => Boolean(document.querySelector(".refinement-panel .refinement-messages")),
+    "A refinement conversation restore",
   );
   await waitFor(
     () =>
@@ -413,10 +475,12 @@ async function relationships(step: Step) {
   await create(b);
   const target = await task(b);
   await detail(a);
+  await selectTaskTab("Details", "Open Task Details tab");
   clickElement(
     document.querySelector<HTMLDetailsElement>(".connection-details > summary")!,
     "Open connection details",
   );
+  await revealTaskField("New Problem statement");
   enter(
     field("New Problem statement"),
     "Known Problem with a preserved solution",
@@ -429,6 +493,7 @@ async function relationships(step: Step) {
         ?.textContent?.includes("revision 1"),
     "linked Problem",
   );
+  await revealTaskField("Problem revision statement");
   enter(field("Problem revision statement"), "Known Problem revised");
   await clickAfter("Problem revision statement", "Revise Problem");
   await waitFor(
@@ -441,6 +506,7 @@ async function relationships(step: Step) {
   await clickAfter("Problem ID", "Link revised Problem");
   await waitForAsync(async () => (await task(a)).problemLinks?.some((link) => link.problemRevision === 2) ?? false, "persisted revised Problem link");
   await taskDetailIdle("linking prerequisite");
+  await revealTaskField("Related Task ID");
   enter(field("Related Task ID"), target.id);
   const kind = document.querySelector<HTMLSelectElement>(
     '[aria-label="Relationship kind"]',
@@ -460,7 +526,7 @@ async function relationships(step: Step) {
     );
   }, "exact Problem revisions and prerequisite");
   await taskDetailIdle("starting Task");
-  click(".task-actions button:nth-child(2)", "Start Task");
+  click('[data-control="task-transition-start"]', "Start Task");
   await waitFor(
     () =>
       document
@@ -482,14 +548,16 @@ async function review(step: Step) {
   });
   await create(title);
   await detail(title);
-  click(".review-panel button", "Run review");
+  await selectTaskTab("Review", "Open Task Review tab");
+  click('[data-control="conflict-review-run"], .review-panel button', "Run review");
   await waitFor(
     () =>
       !!document.querySelector(
-        '.review-panel [data-review-status="queued"], .review-panel [data-review-status="running"]',
+        '[data-control="conflict-review-run"] ~ * [data-review-status="queued"], .review-panel [data-review-status="queued"], .review-panel [data-review-status="running"]',
       ),
     "queued review",
   );
+  await revealTaskField("Work Log entry");
   enter(field("Work Log entry"), "continued during review");
   await clickAfter("Work Log entry", "Concurrent Work Log");
   await waitForAsync(
@@ -497,7 +565,8 @@ async function review(step: Step) {
     "concurrent Work Log readback",
   );
   await taskDetailIdle("cancelling review");
-  click(".review-panel button", "Cancel review");
+  await selectTaskTab("Review", "Return to review after recording work");
+  click('[data-control="conflict-review-cancel"], .review-panel button', "Cancel review");
   await waitFor(
     () =>
       !!document.querySelector(
@@ -505,7 +574,7 @@ async function review(step: Step) {
       ),
     "cancelled review",
   );
-  click(".review-panel button", "Retry delayed review");
+  click('[data-control="conflict-review-retry"], .review-panel button', "Retry delayed review");
   await waitFor(
     () =>
       !!document.querySelector(
@@ -513,14 +582,12 @@ async function review(step: Step) {
       ),
     "second queued review",
   );
-  const titleField = document.querySelector<HTMLInputElement>(
-    ".task-detail section:nth-of-type(2) label:first-of-type input",
-  );
+  await selectTaskTab("Details", "Open Task Details for revision");
+  await editTaskDefinition();
+  const titleField = document.querySelector<HTMLInputElement>('[data-control="task-revision-title"]');
   if (!titleField) throw new Error("Missing Task title editor");
   enter(titleField, `${title} revised`);
-  const save = titleField.closest("section")?.querySelector<HTMLButtonElement>(
-    "button",
-  );
+  const save = document.querySelector<HTMLButtonElement>('[data-control="task-revision-save"]');
   if (!save) throw new Error("Missing Task revision action");
   clickElement(save, "Save Task revision");
   await waitFor(
@@ -534,7 +601,8 @@ async function review(step: Step) {
     api_key: "desktop-e2e-key",
   });
   const retriedAt = performance.now();
-  click(".review-panel button", "Retry cited review");
+  await selectTaskTab("Review", "Return to Task Review");
+  click('[data-control="conflict-review-retry"], .review-panel button', "Retry cited review");
   await waitFor(
     () =>
       !!document.querySelector(
@@ -566,14 +634,17 @@ async function taskMcpContinuation(step: Step) {
   await create(relatedTitle);
   const related = await task(relatedTitle);
   await detail(title);
+  await selectTaskTab("Details", "Open Task Details for MCP evidence");
   clickElement(
     document.querySelector<HTMLElement>(".connection-details > summary")!,
     "Open Task connections for MCP evidence",
   );
+  await revealTaskField("New Problem statement");
   enter(field("New Problem statement"), "Exact desktop Problem for MCP continuation");
   await clickAfter("New Problem statement", "Create exact Problem link");
   await waitForAsync(async () => Boolean((await task(title)).problemLinks?.length), "desktop Problem link before MCP discovery");
   await taskDetailIdle("linking related Task for MCP");
+  await revealTaskField("Related Task ID");
   enter(field("Related Task ID"), related.id);
   const relationship = document.querySelector<HTMLSelectElement>('[aria-label="Relationship kind"]');
   if (!relationship) throw new Error("Missing relationship kind for MCP scenario");
@@ -615,6 +686,8 @@ async function publication(step: Step) {
   const title = `publish ${Date.now()}`;
   await create(title);
   await detail(title);
+  await selectTaskTab("Details", "Open Task Details for publication fields");
+  await editTaskDefinition("Edit Task details for publication");
   const authoredTaskFields = {
     detail: "Context: verify the signed desktop package through its rendered controls.",
     outcome: "A reviewable Knowledge record preserves the packaged acceptance evidence.",
@@ -643,9 +716,10 @@ async function publication(step: Step) {
     () => document.querySelector<HTMLElement>(".task-detail")?.dataset.taskRevision === "2",
     "rendered authored publication revision",
   );
-  const workLogText = document.querySelector<HTMLTextAreaElement>('[data-control="task-worklog-text"]');
-  if (!workLogText) throw new Error("Missing publication Work Log field");
-  enter(workLogText, "Validated the signed desktop release");
+  await selectTaskTab("Work", "Open Task Work for publication evidence");
+  const publicationWorkLogText = document.querySelector<HTMLTextAreaElement>('[data-control="task-worklog-text"]');
+  if (!publicationWorkLogText) throw new Error("Missing publication Work Log field");
+  enter(publicationWorkLogText, "Validated the signed desktop release");
   await waitFor(
     () => !document.querySelector<HTMLButtonElement>('[data-control="task-worklog-add"]')?.disabled,
     "enabled publication Work Log action",
@@ -662,6 +736,7 @@ async function publication(step: Step) {
         ?.textContent?.includes("Validated the signed desktop release") ?? false,
     "publication Work Log",
   );
+  await revealTaskField("Checklist item");
   enter(field("Checklist item"), "Verify packaged acceptance scenarios");
   await clickAfter("Checklist item", "Add publication checklist");
   await waitFor(
@@ -674,14 +749,17 @@ async function publication(step: Step) {
     )!,
     "Check publication evidence",
   );
+  await revealTaskField("Decision");
   enter(field("Decision"), "Publish only the reviewed revision");
   await clickAfter("Decision", "Add publication decision");
   await waitForAsync(async () => (await task(title)).decisions?.some((item) => item.body === "Publish only the reviewed revision") ?? false, "publication decision readback");
   await taskDetailIdle("opening publication connections");
+  await selectTaskTab("Details", "Open Task Details for publication connections");
   clickElement(
     document.querySelector<HTMLDetailsElement>(".connection-details > summary")!,
     "Open publication connection details",
   );
+  await revealTaskField("New Problem statement");
   enter(
     field("New Problem statement"),
     "Release evidence must remain traceable",
@@ -694,7 +772,7 @@ async function publication(step: Step) {
         ?.textContent?.includes("revision 1") ?? false,
     "publication Problem revision",
   );
-  click(".task-actions button:nth-child(2)", "Start Task");
+  click('[data-control="task-transition-start"]', "Start Task");
   await waitFor(
     () =>
       document
@@ -702,6 +780,8 @@ async function publication(step: Step) {
         ?.getAttribute("data-task-state") === "in_progress",
     "Task start",
   );
+  await selectTaskTab("Review", "Open Task Review for publication");
+  await revealTaskField("Completion evidence");
   enter(field("Completion evidence"), "verified in packaged E2E");
   click("#task-completion-evidence + button", "Complete Task");
   await waitFor(
@@ -723,6 +803,7 @@ async function publication(step: Step) {
     () => !!document.querySelector(".knowledge-draft"),
     "Knowledge preview",
   );
+  await revealTaskField("Knowledge draft body");
   const correction = field("Knowledge draft body") as HTMLTextAreaElement;
   for (const expected of [
     "Validated the signed desktop release",
@@ -823,10 +904,12 @@ async function problemResolution(step: Step) {
   const title = `problem resolution ${Date.now()}`;
   await create(title);
   await detail(title);
+  await selectTaskTab("Details", "Open Task Details for Problem resolution");
   clickElement(
     document.querySelector<HTMLDetailsElement>(".connection-details > summary")!,
     "Open Problem connection details",
   );
+  await revealTaskField("New Problem statement");
   enter(field("New Problem statement"), "Resolution must remain explicit");
   await clickAfter("New Problem statement", "Create resolution Problem");
   await waitForAsync(
@@ -837,11 +920,13 @@ async function problemResolution(step: Step) {
   const link = linked.problemLinks?.[0];
   if (!link || link.problemRevision !== 1)
     throw new Error("Problem link was not persisted at its exact first revision");
-  click(".task-actions button:nth-child(2)", "Start Task");
+  click('[data-control="task-transition-start"]', "Start Task");
   await waitFor(
     () => document.querySelector(".task-detail")?.getAttribute("data-task-state") === "in_progress",
     "Task start before completion",
   );
+  await selectTaskTab("Review", "Open Task Review before completion");
+  await revealTaskField("Completion evidence");
   enter(field("Completion evidence"), "Task evidence does not resolve its Problem");
   click("#task-completion-evidence + button", "Complete Task");
   await waitFor(
@@ -854,6 +939,7 @@ async function problemResolution(step: Step) {
     (button) => button.textContent === "Resolve Problem",
   );
   if (!resolve) throw new Error("Missing explicit Problem resolution action");
+  await selectTaskTab("Details", "Open explicit Problem resolution");
   clickElement(resolve, "Resolve Problem at exact revision");
   await pause(200);
   if (document.querySelector(".task-detail [role='alert']"))
@@ -928,16 +1014,15 @@ async function restoredRefinement(token: string, steps: string[]) {
     if (!restored.captureId || !restored.noteText || restored.messageIds.length !== 2)
       throw new Error("Invalid refinement relaunch state");
     const snapshot = await api<RefinementSnapshot>(`/captures/${encodeURIComponent(restored.captureId)}/refinement`);
-    if (snapshot.inputDraft !== restored.noteText || snapshot.activeTab !== "proposals")
+    if (snapshot.inputDraft !== restored.noteText)
       throw new Error("Refinement workspace did not survive the packaged-app relaunch");
     if (JSON.stringify(snapshot.messages?.map(message => message.id) ?? []) !== JSON.stringify(restored.messageIds))
       throw new Error("Refinement message identities changed across the packaged-app relaunch");
     click(`[data-entity-id="${CSS.escape(restored.captureId)}"][data-control="task-card-refine"]`, "Reopen persisted refinement after relaunch");
     await waitFor(() => Boolean(document.querySelector(".refinement-panel")), "restored refinement panel");
-    await waitFor(() => document.querySelector('[data-control="refinement-tab-proposals"]')?.getAttribute("aria-pressed") === "true", "rendered relaunch tab");
-    click('[data-control="refinement-tab-conversation"]', "Read restored note after confirming saved Proposals tab");
+    await waitFor(() => Boolean(document.querySelector(".refinement-panel .refinement-messages")), "rendered relaunch conversation");
     await waitFor(() => document.querySelector<HTMLTextAreaElement>('[data-control="refinement-note"]')?.value === snapshot.inputDraft, "rendered relaunch note");
-    await report({ status: "passed", steps: [...steps, "The note and active Proposals tab restored in a second packaged-app process."], error: null });
+    await report({ status: "passed", steps: [...steps, "The note, conversation, and proposal preview restored in a second packaged-app process."], error: null });
   } catch (error) {
     await report({ status: "failed", steps, error: String(error) });
   }
@@ -954,13 +1039,15 @@ async function localization(step: Step) {
   await taskDetailIdle("starting long-title Task");
   click('[data-control="task-transition-start"]', "Start long-title Task");
   await waitFor(() => document.querySelector(".task-detail")?.getAttribute("data-task-state") === "in_progress", "started long-title Task");
-  const titleInput = document.querySelector<HTMLInputElement>('[data-control="task-revision-title"]');
-  const detail = document.querySelector<HTMLElement>(".task-detail");
-  if (!titleInput || !detail || titleInput.getBoundingClientRect().width < detail.getBoundingClientRect().width * 0.7)
+  await selectTaskTab("Details", "Open long-title details");
+  await editTaskDefinition();
+  const titleInput = document.querySelector<HTMLTextAreaElement>('[data-control="task-revision-title"]');
+  const detailPanel = document.querySelector<HTMLElement>(".task-detail");
+  if (!titleInput || !detailPanel || titleInput.getBoundingClientRect().width < detailPanel.getBoundingClientRect().width * 0.7)
     throw new Error("Task title input did not use the available detail width");
-  const detailRect = detail.getBoundingClientRect();
-  const detailHeading = detail.querySelector<HTMLElement>("h2")?.getBoundingClientRect();
-  const detailClose = detail.querySelector<HTMLElement>('[data-control="task-detail-close"]')?.getBoundingClientRect();
+  const detailRect = detailPanel.getBoundingClientRect();
+  const detailHeading = detailPanel.querySelector<HTMLElement>("h2")?.getBoundingClientRect();
+  const detailClose = detailPanel.querySelector<HTMLElement>('[data-control="task-detail-close"]')?.getBoundingClientRect();
   if (!detailHeading || !detailClose || detailHeading.left < detailRect.left || detailHeading.right > detailRect.right || detailClose.left < detailRect.left || detailClose.right > detailRect.right || document.documentElement.scrollWidth > document.documentElement.clientWidth + 1)
     throw new Error("Long unbroken Task title overflowed the detail heading or displaced its close control");
   click('[data-control="task-detail-close"]', "Close long-title Task detail");
@@ -1017,6 +1104,51 @@ async function localization(step: Step) {
   click('[data-view="workbench"]', "Return to Workbench");
   const englishWide = await assertGeometry(1280, 820);
   await step(`Geometry requested native window ${englishWide.nativeSize.windowWidth}×${englishWide.nativeSize.windowHeight}; WebKit viewport ${englishWide.measured.innerWidth}×${englishWide.measured.innerHeight}, browser outer ${englishWide.measured.outerWidth}×${englishWide.measured.outerHeight}.`);
+  await detail(longTitle);
+  for (const width of [1200, 900]) {
+    const size = await invoke<{ windowWidth: number }>("desktop_e2e_resize_window", { width, height: 820 });
+    await waitFor(() => Math.abs(window.innerWidth - size.windowWidth) < 3, "settled split layout resize");
+    await waitFor(() => {
+      const main = document.querySelector<HTMLElement>(".workbench-main");
+      const panel = document.querySelector<HTMLElement>(".task-detail");
+      if (!main || !panel) return false;
+      const left = main.getBoundingClientRect(), right = panel.getBoundingClientRect();
+      if (window.innerWidth <= 1100) return getComputedStyle(main).display === "none" && right.width > 0;
+      return left.width > 0 && Math.abs(left.width - right.width) < 2 && left.right <= right.left && getComputedStyle(panel).position !== "fixed";
+    }, "equal split or narrow replacement layout");
+  }
+  await invoke("desktop_e2e_resize_window", { width: 1280, height: 820 });
+  await taskDetailIdle("opening split Task refinement");
+  const retainedTask = document.querySelector(".task-detail");
+  const refineTask = document.querySelector<HTMLElement>('[data-control="task-detail-refine"]');
+  if (!refineTask) throw new Error("Missing Task refinement action");
+  await prepareClick(refineTask, "Open split Task refinement");
+  clickElement(refineTask, "Open split Task refinement");
+  await waitFor(() => Boolean(document.querySelector(".refinement-panel[data-refinement-session]:not([data-refinement-session=''])")), "loaded split refinement");
+  for (const width of [1200, 900]) {
+    const size = await invoke<{ windowWidth: number }>("desktop_e2e_resize_window", { width, height: 820 });
+    await waitFor(() => Math.abs(window.innerWidth - size.windowWidth) < 3, "refinement window resized");
+    await waitFor(() => {
+      const taskPanel = document.querySelector<HTMLElement>(".task-detail");
+      const refinement = document.querySelector<HTMLElement>(".refinement-panel");
+      const workbench = document.querySelector<HTMLElement>(".workbench-main");
+      if (!taskPanel || !refinement || !workbench || getComputedStyle(workbench).display !== "none") return false;
+      const left = taskPanel.getBoundingClientRect(), right = refinement.getBoundingClientRect();
+      if (window.innerWidth <= 1100) return getComputedStyle(taskPanel).display === "none" && right.width > 0;
+      return Math.abs(left.width - right.width) < 2 && left.right <= right.left && getComputedStyle(refinement).position !== "fixed";
+    }, "Task and refinement split or narrow replacement");
+  }
+  const closeRefinement = document.querySelector<HTMLElement>('[data-control="refinement-close"]');
+  if (!closeRefinement) throw new Error("Missing refinement return action");
+  await waitFor(() => closeRefinement.getAttribute("aria-label") === "Close refinement" && document.querySelector(".refinement-panel")?.getAttribute("data-refinement-polling") === "false", "ready to return from refinement");
+  await prepareClick(closeRefinement, "Return from refinement");
+  clickElement(closeRefinement, "Return from refinement");
+  await waitFor(() => !document.querySelector(".refinement-panel"), "returned from refinement");
+  if (document.querySelector(".task-detail") !== retainedTask) throw new Error("Refinement remounted Task context");
+  await step("Task refinement occupied half the workspace, replaced it at narrow width, and retained the original Task context on return.");
+  click('[data-control="task-detail-close"]', "Close responsive Task detail");
+  await waitFor(() => !document.querySelector(".task-detail"), "returned to responsive Workbench");
+  await step("Task detail resized the Workbench into equal non-overlapping columns at 1200px and replaced it at 900px.");
   await step(
     "Korean and English long-title Workbench shortcuts kept their action inside the card and above All work at the recorded native-window and WebKit viewport sizes; the Task title editor used the panel width and Korean AI privacy copy was exact.",
   );
@@ -1053,6 +1185,7 @@ export function installDesktopScenario() {
         waitFor,
         waitForAsync,
         click: clickElement,
+        prepareClick,
         enter,
         step,
         request: api,

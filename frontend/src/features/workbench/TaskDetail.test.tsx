@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import { TaskDetail } from "./TaskDetail";
+import { TaskDetail, type DetailSession } from "./TaskDetail";
 
 const task = {
   id: "task-1",
@@ -25,6 +25,33 @@ const response = (body: unknown) => ({
 });
 
 describe("Task detail", () => {
+  it("shows Work Log entries newest first with an explicit local date and time", async () => {
+    const loggedTask = {
+      ...task,
+      workLog: [
+        { id: "older", body: "Older evidence", createdAt: "2026-01-15T10:30:00Z" },
+        { id: "newer", body: "Newer evidence", createdAt: "2026-01-16T18:45:00Z" },
+      ],
+    };
+    window.llmWikiApplication = { request: vi.fn().mockResolvedValue(response(loggedTask)) };
+    const { container } = render(<TaskDetail taskId="task-1" onClose={vi.fn()} onChanged={vi.fn()} />);
+
+    await screen.findByText("Newer evidence");
+    const entries = [...container.querySelectorAll<HTMLElement>(".log-entry")];
+    expect(entries.map((entry) => entry.querySelector("p")?.textContent)).toEqual([
+      "Newer evidence",
+      "Older evidence",
+    ]);
+    expect(entries.map((entry) => entry.querySelector("time")?.textContent)).toEqual([
+      expect.stringMatching(/\d/),
+      expect.stringMatching(/\d/),
+    ]);
+    expect(entries.map((entry) => entry.querySelector("time")?.getAttribute("dateTime"))).toEqual([
+      "2026-01-16T18:45:00Z",
+      "2026-01-15T10:30:00Z",
+    ]);
+  });
+
   it("keeps dependent mutations inert until the current revision is rendered", async () => {
     let finishWorkLog!: (value: ReturnType<typeof response>) => void;
     const workLog = new Promise<ReturnType<typeof response>>((resolve) => {
@@ -61,8 +88,9 @@ describe("Task detail", () => {
       <TaskDetail taskId="task-1" onClose={vi.fn()} onChanged={vi.fn()} />,
     );
     await screen.findByText("Independent work");
-    expect(screen.getAllByText("Scope")).toHaveLength(2);
-    expect(screen.getAllByText("Validation criteria")).toHaveLength(2);
+    fireEvent.click(screen.getByRole("tab", { name: "Review" }));
+    expect(screen.getAllByText("Scope")).toHaveLength(1);
+    expect(screen.getAllByText("Validation criteria")).toHaveLength(1);
     expect(screen.getByText("Missing")).toBeVisible();
     expect(screen.queryByText("validationCriteria")).not.toBeInTheDocument();
     expect(
@@ -72,10 +100,11 @@ describe("Task detail", () => {
       target: { value: "Validated in a real workflow" },
     });
     expect(screen.getByRole("button", { name: "Complete Task" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("tab", { name: "Work" }));
     fireEvent.change(screen.getByLabelText("Work Log entry"), {
       target: { value: "Started gathering evidence" },
     });
-    fireEvent.click(screen.getAllByRole("button", { name: "Add" })[0]);
+    fireEvent.click(document.querySelector('[data-control="task-worklog-add"]')!);
     await waitFor(() =>
       expect(request).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -84,6 +113,21 @@ describe("Task detail", () => {
         }),
       ),
     );
+  });
+
+  it("adds Work Log entries on Enter and leaves IME Enter for composition", async () => {
+    const request = vi.fn().mockResolvedValue(response(task));
+    window.llmWikiApplication = { request };
+    render(<TaskDetail taskId="task-1" onClose={vi.fn()} onChanged={vi.fn()} />);
+    const field = await screen.findByLabelText("Work Log entry");
+    fireEvent.change(field, { target: { value: "Keyboard evidence" } });
+    fireEvent.keyDown(field, { key: "Enter" });
+    await waitFor(() => expect(request).toHaveBeenCalledWith(expect.objectContaining({ path: "/tasks/task-1/work-log", method: "POST" })));
+    const workLogsBeforeIme = request.mock.calls.filter(([arg]) => arg.path === "/tasks/task-1/work-log").length;
+    fireEvent.change(field, { target: { value: "Composing text" } });
+    fireEvent.keyDown(field, { key: "Enter", isComposing: true });
+    expect(field).toHaveValue("Composing text");
+    expect(request.mock.calls.filter(([arg]) => arg.path === "/tasks/task-1/work-log")).toHaveLength(workLogsBeforeIme);
   });
 
   it("sends the current Task revision and the checkbox event value", async () => {
@@ -148,6 +192,8 @@ describe("Task detail", () => {
     );
     window.llmWikiApplication = { request };
     render(<TaskDetail taskId="task-1" onClose={vi.fn()} onChanged={vi.fn()} />);
+    fireEvent.click(await screen.findByRole("tab", { name: "Details" }));
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
     const title = await screen.findByLabelText("Title");
     fireEvent.change(title, { target: { value: "Keep this edited title" } });
     fireEvent.change(screen.getByLabelText("Work Log entry"), { target: { value: "Independent evidence" } });
@@ -165,6 +211,8 @@ describe("Task detail", () => {
     const onClose = vi.fn();
     window.llmWikiApplication = { request: vi.fn().mockResolvedValue(response(task)) };
     render(<TaskDetail taskId="task-1" onClose={onClose} onChanged={vi.fn()} />);
+    fireEvent.click(await screen.findByRole("tab", { name: "Details" }));
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
     fireEvent.change(await screen.findByLabelText("Title"), { target: { value: "Unsaved title" } });
     fireEvent.click(screen.getByRole("button", { name: "Close Task detail" }));
     expect(screen.getByRole("alertdialog")).toBeInTheDocument();
@@ -174,7 +222,15 @@ describe("Task detail", () => {
   });
 });
 
-const control = (id: string) => document.querySelector<HTMLElement>(`[data-control="${id}"]`)!;
+const control = (id: string) => {
+  if (id.startsWith("task-revision-")) {
+    const details = document.querySelector('[data-control="task-detail-tab-details"]') as HTMLElement | null;
+    if (details) fireEvent.click(details);
+    const edit = document.querySelector('[data-control="task-definition-edit"]') as HTMLElement | null;
+    if (edit) fireEvent.click(edit);
+  }
+  return document.querySelector<HTMLElement>(`[data-control="${id}"]`)!;
+};
 describe("Task draft protection", () => {
   it("keeps all definition inputs through independent Work Log and comment refresh", async () => {
     let current = { ...task, detail: "Original", workLog: [{ id: "log", body: "Existing", comments: [] }] };
@@ -280,6 +336,7 @@ it("localizes calculated readiness text but preserves authored reasons", async (
       { key: "scope", status: "missing", reason: "User-authored rationale" },
     ] })) };
     render(<TaskDetail taskId={task.id} onClose={vi.fn()} onChanged={vi.fn()} />);
+    fireEvent.click(await screen.findByRole("tab", { name: "검토" }));
     await screen.findByText("명시된 선행 조건 없음");
     expect(screen.getByText("User-authored rationale")).toBeVisible();
     expect(screen.queryByText("No explicit prerequisite")).not.toBeInTheDocument();
@@ -307,7 +364,7 @@ it("rebases a disjoint refresh before save and lets the user discard overlapping
   fireEvent.change(control("task-revision-detail"), { target: { value: "Local" } });
   fireEvent.change(control("task-worklog-text"), { target: { value: "Evidence" } });
   fireEvent.click(control("task-worklog-add"));
-  await screen.findByText("External title");
+  await screen.findAllByText("External title");
   await waitFor(() => expect(document.querySelector(".task-detail")).toHaveAttribute("aria-busy", "false"));
   fireEvent.click(control("task-revision-save"));
   await waitFor(() => expect(control("task-revision-save")).toBeDisabled());
@@ -351,3 +408,128 @@ it("keeps Knowledge publication bound to the persisted source hash", async () =>
       });
     });
   });
+
+describe("Task detail tabs and workbench sessions", () => {
+  it.each([
+    ["task", "Details"],
+    ["completed", "Review"],
+  ] as const)("opens %s Tasks on the %s tab", async (state, tabName) => {
+    window.llmWikiApplication = {
+      request: vi.fn().mockResolvedValue(response({ ...task, state })),
+    };
+
+    render(<TaskDetail taskId={task.id} onClose={vi.fn()} onChanged={vi.fn()} />);
+
+    await waitFor(() =>
+      expect(screen.getByRole("tab", { name: tabName })).toHaveAttribute("aria-selected", "true"),
+    );
+  });
+
+  it("shows definition prose first and only exposes fields while editing", async () => {
+    window.llmWikiApplication = {
+      request: vi.fn().mockResolvedValue(response({
+        ...task,
+        state: "task",
+        detail: "A concise definition for the work.",
+        outcome: "A usable result.",
+      })),
+    };
+
+    render(<TaskDetail taskId={task.id} onClose={vi.fn()} onChanged={vi.fn()} />);
+
+    await screen.findByText("A concise definition for the work.");
+    expect(screen.queryByLabelText("Title")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Detail")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    expect(screen.getByLabelText("Title")).toHaveValue(task.title);
+    expect(screen.getByLabelText("Detail")).toHaveValue("A concise definition for the work.");
+  });
+
+  it("retains the chosen tab after a readiness mutation refreshes the Task", async () => {
+    const request = vi.fn().mockResolvedValue(response(task));
+    window.llmWikiApplication = { request };
+    render(<TaskDetail taskId={task.id} onClose={vi.fn()} onChanged={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("tab", { name: "Review" }));
+    const reason = await screen.findByLabelText("Scope Reason");
+    fireEvent.change(reason, { target: { value: "Not relevant to this discovery task" } });
+    fireEvent.click(screen.getAllByRole("button", { name: "Not applicable" })[0]);
+
+    await waitFor(() =>
+      expect(request).toHaveBeenCalledWith(expect.objectContaining({ method: "POST" })),
+    );
+    await waitFor(() =>
+      expect(screen.getByRole("tab", { name: "Review" })).toHaveAttribute("aria-selected", "true"),
+    );
+  });
+
+  it("restores an unsent work entry and attachment when the same Task remounts", async () => {
+    const sessions = new Map<string, DetailSession>();
+    window.llmWikiApplication = { request: vi.fn().mockResolvedValue(response(task)) };
+    const first = render(<TaskDetail taskId={task.id} onClose={vi.fn()} onChanged={vi.fn()} sessions={sessions} />);
+    const entry = await screen.findByLabelText("Work Log entry");
+    const attachment = new File(["evidence"], "evidence.txt", { type: "text/plain" });
+    fireEvent.change(entry, { target: { value: "Unsent evidence" } });
+    fireEvent.change(screen.getByLabelText("Attach image or file"), { target: { files: [attachment] } });
+    await screen.findByText("Attach image or file: evidence.txt");
+    await waitFor(() => expect(sessions.get(task.id)?.entry).toBe("Unsent evidence"));
+    first.unmount();
+
+    render(<TaskDetail taskId={task.id} onClose={vi.fn()} onChanged={vi.fn()} sessions={sessions} />);
+    expect(await screen.findByLabelText("Work Log entry")).toHaveValue("Unsent evidence");
+    expect(screen.getByText("Attach image or file: evidence.txt")).toBeVisible();
+  });
+
+  it("keeps workbench session drafts isolated by Task", async () => {
+    const sessions = new Map<string, DetailSession>();
+    const secondTask = { ...task, id: "task-2", title: "Separate work" };
+    window.llmWikiApplication = {
+      request: vi.fn().mockImplementation(({ path }: { path: string }) =>
+        Promise.resolve(response(path.endsWith("task-2") ? secondTask : task)),
+      ),
+    };
+    const first = render(<TaskDetail taskId={task.id} onClose={vi.fn()} onChanged={vi.fn()} sessions={sessions} />);
+    fireEvent.change(await screen.findByLabelText("Work Log entry"), { target: { value: "Task one draft" } });
+    await waitFor(() => expect(sessions.get(task.id)?.entry).toBe("Task one draft"));
+    first.unmount();
+
+    render(<TaskDetail taskId={secondTask.id} onClose={vi.fn()} onChanged={vi.fn()} sessions={sessions} />);
+    expect(await screen.findByLabelText("Work Log entry")).toHaveValue("");
+    expect(screen.queryByText("Task one draft")).not.toBeInTheDocument();
+  });
+
+  it("discards a definition draft before closing so reopening starts clean", async () => {
+    const sessions = new Map<string, DetailSession>();
+    const close = vi.fn();
+    window.llmWikiApplication = { request: vi.fn().mockResolvedValue(response({ ...task, detail: "Original detail" })) };
+    const first = render(<TaskDetail taskId={task.id} onClose={close} onChanged={vi.fn()} sessions={sessions} />);
+    fireEvent.click(await screen.findByRole("tab", { name: "Details" }));
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    fireEvent.change(screen.getByLabelText("Detail"), { target: { value: "Discard this edit" } });
+    fireEvent.click(screen.getByRole("button", { name: "Close Task detail" }));
+    fireEvent.click(screen.getByRole("button", { name: "Discard" }));
+    expect(close).toHaveBeenCalledOnce();
+    first.unmount();
+
+    render(<TaskDetail taskId={task.id} onClose={vi.fn()} onChanged={vi.fn()} sessions={sessions} />);
+    await screen.findByText("Original detail");
+    expect(screen.queryByLabelText("Detail")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    expect(screen.getByLabelText("Detail")).toHaveValue("Original detail");
+  });
+
+  it("moves the tab selection with arrow, Home, and End keys", async () => {
+    window.llmWikiApplication = { request: vi.fn().mockResolvedValue(response(task)) };
+    render(<TaskDetail taskId={task.id} onClose={vi.fn()} onChanged={vi.fn()} />);
+
+    const work = await screen.findByRole("tab", { name: "Work" });
+    fireEvent.keyDown(work, { key: "ArrowRight" });
+    await waitFor(() => expect(screen.getByRole("tab", { name: "Details" })).toHaveAttribute("aria-selected", "true"));
+    fireEvent.keyDown(screen.getByRole("tab", { name: "Details" }), { key: "End" });
+    await waitFor(() => expect(screen.getByRole("tab", { name: "Review" })).toHaveAttribute("aria-selected", "true"));
+    fireEvent.keyDown(screen.getByRole("tab", { name: "Review" }), { key: "Home" });
+    await waitFor(() => expect(screen.getByRole("tab", { name: "Work" })).toHaveAttribute("aria-selected", "true"));
+    fireEvent.keyDown(screen.getByRole("tab", { name: "Work" }), { key: "ArrowLeft" });
+    await waitFor(() => expect(screen.getByRole("tab", { name: "Review" })).toHaveAttribute("aria-selected", "true"));
+  });
+});

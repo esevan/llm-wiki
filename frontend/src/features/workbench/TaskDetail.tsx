@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useImperativeHandle, useRef, useState, type Ref } from "react";
+import { useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, type Ref } from "react";
 import { taskClient } from "../../services/taskClient";
+import { formatSystemTime } from "../../services/systemTime";
 import type { LineageSnapshot, TaskAggregate } from "../../types/taskWorkbench";
 import { ConflictReviewPanel } from "./ConflictReviewPanel";
 import { RefinementPanel } from "./RefinementPanel";
@@ -9,47 +10,108 @@ import { acknowledgeSave, baseline, definitionOf, editDraft, keepEdits, mergeSna
 
 export type TaskDetailHandle = { requestLeave: (proceed: () => void) => void };
 
+type DetailTab = "work" | "details" | "review";
+
+const orderedWorkLog = (workLog: TaskAggregate["workLog"] = []) =>
+  workLog
+    .map((log, index) => ({ log, index }))
+    .sort((left, right) => {
+      const leftTime = left.log.createdAt ? Date.parse(left.log.createdAt) : Number.NaN;
+      const rightTime = right.log.createdAt ? Date.parse(right.log.createdAt) : Number.NaN;
+      if (Number.isNaN(leftTime) || Number.isNaN(rightTime)) {
+        return Number.isNaN(leftTime) === Number.isNaN(rightTime) ? left.index - right.index : Number.isNaN(leftTime) ? 1 : -1;
+      }
+      return rightTime - leftTime || left.index - right.index;
+    })
+    .map(({ log }) => log);
+
+const workLogTimestamp = (createdAt?: string) =>
+  createdAt
+    ? formatSystemTime(createdAt, document.documentElement.lang || navigator.language, {
+        dateStyle: "medium",
+        timeStyle: "short",
+      })
+    : "";
+export type DetailSession = {
+  detailState?: DetailState;
+  entry: string;
+  check: string;
+  decision: string;
+  attachment?: File;
+  comments: Record<string, string>;
+  completionEvidence: string;
+  problemId: string;
+  newProblem: string;
+  problemStatement: string;
+  problemRevision: string;
+  relatedTaskId: string;
+  relationshipKind: "prerequisite" | "split_from" | "related";
+  readinessReasons: Record<string, string>;
+  knowledgeDraft?: { draftRevision: number; bodyMarkdown: string; contentHash: string; sourceHash?: string; state: string };
+  tab: DetailTab;
+  editing: boolean;
+  scrollTop: number;
+};
+
 export function TaskDetail({
   taskId,
   onClose,
   onChanged,
   onRequestDelete,
+  onRefine,
+  refreshKey,
+  suppressInitialFocus,
+  sessions,
   ref,
 }: {
   taskId: string;
   onClose: () => void;
   onChanged: () => void;
   onRequestDelete?: (title: string) => void;
+  onRefine?: () => void;
+  refreshKey?: number;
+  suppressInitialFocus?: boolean;
+  sessions?: Map<string, DetailSession>;
   ref?: Ref<TaskDetailHandle>;
 }) {
   const text = useTaskWorkbenchText();
-  const [detailState, setDetailState] = useState<DetailState>();
+  const fallbackSessions = useRef(new Map<string, DetailSession>());
+  const detailSessions = sessions ?? fallbackSessions.current;
+  const session = detailSessions.get(taskId);
+  const initialScrollTop = useRef(session?.scrollTop ?? 0);
+  const restoredScroll = useRef(false);
+  const hadSession = useRef(Boolean(session));
+  const [detailState, setDetailState] = useState<DetailState | undefined>(session?.detailState);
+  const loaded = Boolean(detailState);
   const [error, setError] = useState("");
-  const [entry, setEntry] = useState("");
-  const [check, setCheck] = useState("");
-  const [decision, setDecision] = useState("");
-  const [attachment, setAttachment] = useState<File>();
-  const [comments, setComments] = useState<Record<string, string>>({});
+  const [entry, setEntry] = useState(session?.entry ?? "");
+  const [check, setCheck] = useState(session?.check ?? "");
+  const [decision, setDecision] = useState(session?.decision ?? "");
+  const [attachment, setAttachment] = useState<File | undefined>(session?.attachment);
+  const [comments, setComments] = useState<Record<string, string>>(session?.comments ?? {});
   const [refining, setRefining] = useState(false);
-  const [completionEvidence, setCompletionEvidence] = useState("");
-  const [problemId, setProblemId] = useState("");
-  const [newProblem, setNewProblem] = useState("");
-  const [problemStatement, setProblemStatement] = useState("");
-  const [problemRevision, setProblemRevision] = useState("1");
-  const [relatedTaskId, setRelatedTaskId] = useState("");
+  const [completionEvidence, setCompletionEvidence] = useState(session?.completionEvidence ?? "");
+  const [problemId, setProblemId] = useState(session?.problemId ?? "");
+  const [newProblem, setNewProblem] = useState(session?.newProblem ?? "");
+  const [problemStatement, setProblemStatement] = useState(session?.problemStatement ?? "");
+  const [problemRevision, setProblemRevision] = useState(session?.problemRevision ?? "1");
+  const [relatedTaskId, setRelatedTaskId] = useState(session?.relatedTaskId ?? "");
   const [relationshipKind, setRelationshipKind] = useState<
     "prerequisite" | "split_from" | "related"
-  >("related");
+  >(session?.relationshipKind ?? "related");
   const [readinessReasons, setReadinessReasons] = useState<
     Record<string, string>
-  >({});
+  >(session?.readinessReasons ?? {});
   const [knowledgeDraft, setKnowledgeDraft] = useState<{
     draftRevision: number;
     bodyMarkdown: string;
     contentHash: string;
     sourceHash?: string;
     state: string;
-  }>();
+  } | undefined>(session?.knowledgeDraft);
+  const [tab, setTab] = useState<DetailTab>(session?.tab ?? "work");
+  const [editing, setEditing] = useState(session?.editing ?? false);
+  const [showCompletedChecklist, setShowCompletedChecklist] = useState(false);
   const [knowledgeBusy, setKnowledgeBusy] = useState(false);
   const [mutationBusy, setMutationBusy] = useState(false);
   const [lineage, setLineage] = useState<LineageSnapshot>();
@@ -57,15 +119,44 @@ export function TaskDetail({
   const pendingLeave = useRef<(() => void) | undefined>(undefined);
   const panelRef = useRef<HTMLElement>(null);
   const headingRef = useRef<HTMLHeadingElement>(null);
+  const pendingTabFocus = useRef<string | undefined>(undefined);
+  const focusInTab = (nextTab: DetailTab, selector: string) => {
+    if (tab === nextTab) panelRef.current?.querySelector<HTMLElement>(selector)?.focus();
+    else { pendingTabFocus.current = selector; setTab(nextTab); }
+  };
+  useLayoutEffect(() => {
+    if (!pendingTabFocus.current) return;
+    panelRef.current?.querySelector<HTMLElement>(pendingTabFocus.current)?.focus();
+    pendingTabFocus.current = undefined;
+  }, [tab]);
   const loadSequence = useRef(0);
   const mutationQueue = useRef<Promise<void>>(Promise.resolve());
   const mutationBusyRef = useRef(false);
+  useEffect(() => {
+    detailSessions.set(taskId, { detailState, entry, check, decision, attachment, comments, completionEvidence, problemId, newProblem, problemStatement, problemRevision, relatedTaskId, relationshipKind, readinessReasons, knowledgeDraft, tab, editing, scrollTop: restoredScroll.current ? panelRef.current?.scrollTop ?? 0 : initialScrollTop.current });
+  }, [attachment, check, comments, completionEvidence, decision, detailSessions, detailState, editing, entry, knowledgeDraft, newProblem, problemId, problemRevision, problemStatement, readinessReasons, relatedTaskId, relationshipKind, session?.scrollTop, tab, taskId]);
+  useEffect(() => {
+    const panel = panelRef.current;
+    if (loaded && panel && !restoredScroll.current) {
+      panel.scrollTop = initialScrollTop.current;
+      restoredScroll.current = true;
+    }
+    return () => {
+      const current = detailSessions.get(taskId);
+      if (current) current.scrollTop = panel?.scrollTop ?? current.scrollTop;
+    };
+  }, [detailSessions, loaded, taskId]);
   const load = useCallback(async () => {
     const sequence = ++loadSequence.current;
     try {
       const next = await taskClient.task(taskId);
       if (sequence === loadSequence.current) {
+        setError("");
         setDetailState((current) => current ? mergeSnapshot(current, next) : baseline(next));
+        if (!hadSession.current) {
+          setTab(next.state === "completed" ? "review" : next.state === "task" ? "details" : "work");
+          hadSession.current = true;
+        }
       }
     } catch (e) {
       if (sequence === loadSequence.current)
@@ -76,7 +167,7 @@ export function TaskDetail({
     const sequences = loadSequence;
     void load();
     return () => { ++sequences.current; };
-  }, [load]);
+  }, [load, refreshKey]);
   const update = (operation: () => Promise<TaskAggregate>) => {
     if (mutationBusyRef.current) return Promise.resolve();
     mutationBusyRef.current = true;
@@ -118,10 +209,9 @@ export function TaskDetail({
   useEffect(() => {
     if (closePrompt) panelRef.current?.querySelector<HTMLButtonElement>("[data-control='task-draft-guard-save']")?.focus();
   }, [closePrompt]);
-  const loaded = Boolean(detailState);
   useEffect(() => {
-    if (loaded && !panelRef.current?.closest(".view:not(.active)")) headingRef.current?.focus();
-  }, [loaded]);
+    if (loaded && !suppressInitialFocus && !panelRef.current?.closest(".view:not(.active)")) headingRef.current?.focus({ preventScroll: true });
+  }, [loaded, suppressInitialFocus]);
   const encodeAttachment = async () => {
     if (!attachment) return undefined;
     const bytes = new Uint8Array(await attachment.arrayBuffer());
@@ -181,6 +271,18 @@ export function TaskDetail({
     }
   };
   const task = detailState && { ...detailState.persisted, ...detailState.draft };
+  const addWorkLog = () => {
+    if (!task || !entry.trim() || mutationBusyRef.current) return;
+    void encodeAttachment().then((file) =>
+      update(() =>
+        taskClient.workLog(task.id, revision, entry, file).then((next) => {
+          setEntry("");
+          setAttachment(undefined);
+          return next;
+        }),
+      ),
+    );
+  };
   const saveDraft = async () => {
     if (!detailState || !detailState.dirty.size || detailState.conflicts.length || mutationBusyRef.current) return false;
     mutationBusyRef.current = true;
@@ -217,10 +319,19 @@ export function TaskDetail({
   if (!task)
     return (
       <aside className="task-detail" aria-live="polite">
-        {error || text.loading}
+        <header><h2>{error || text.loading}</h2><button type="button" data-control="task-detail-close" aria-label={text.closeTaskDetail} onClick={onClose}>×</button></header>
+        {error && <button type="button" data-control="task-detail-retry" onClick={() => void load()}>{text.retry}</button>}
       </aside>
     );
   const revision = detailState.persisted.taskRevision;
+  const definitions: Array<{ field: DefinitionField; label: string; control: string; value: string }> = [
+    { field: "title", label: text.title, control: "task-revision-title", value: task.title },
+    { field: "detail", label: text.detail, control: "task-revision-detail", value: task.detail ?? "" },
+    { field: "outcome", label: text.outcome, control: "task-revision-outcome", value: task.outcome ?? "" },
+    { field: "scope", label: text.scope, control: "task-revision-scope", value: task.scope ?? "" },
+    { field: "nonGoals", label: text.nonGoals, control: "task-revision-non-goals", value: task.nonGoals ?? "" },
+    { field: "validationCriteria", label: text.criteria, control: "task-revision-criteria", value: task.validationCriteria ?? "" },
+  ];
   const latestProblemRevisions = new Map<string, number>();
   for (const link of task.problemLinks ?? []) {
     latestProblemRevisions.set(
@@ -245,8 +356,9 @@ export function TaskDetail({
       data-task-revision={revision}
       aria-busy={mutationBusy}
       inert={mutationBusy}
+      onScroll={(event) => { const current = detailSessions.get(taskId); if (current && restoredScroll.current) current.scrollTop = event.currentTarget.scrollTop; }}
     >
-      <header>
+      <div className="task-detail-header"><header>
         <div>
           <small>
             {task.state === "completed"
@@ -255,12 +367,23 @@ export function TaskDetail({
                 ? text.inProgress
                 : text.ready}
           </small>
-          <h2 ref={headingRef} tabIndex={-1}>{task.title}</h2>
+          <h2 ref={headingRef} tabIndex={-1} title={task.title}>{task.title}</h2>
+          <p className="task-goal" title={task.outcome}>{task.outcome || text.goalMissing}</p>
         </div>
         <button type="button" data-control="task-detail-close" aria-label={text.closeTaskDetail} onClick={() => requestLeave(onClose)}>
-          ×
+          <span aria-hidden="true">×</span><span className="task-detail-back">{text.back}</span>
         </button>
       </header>
+      <nav className="task-detail-tabs" aria-label={text.taskDetails} role="tablist" onKeyDown={(event) => {
+        const tabs: DetailTab[] = ["work", "details", "review"];
+        const current = tabs.indexOf(tab);
+        const next = event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : event.key === "ArrowRight" ? (current + 1) % tabs.length : event.key === "ArrowLeft" ? (current + tabs.length - 1) % tabs.length : -1;
+        if (next >= 0) { event.preventDefault(); focusInTab(tabs[next], `[data-control="task-detail-tab-${tabs[next]}"]`); }
+      }}>
+        <button id="task-detail-tab-work" type="button" role="tab" tabIndex={tab === "work" ? 0 : -1} data-control="task-detail-tab-work" aria-controls="task-tab-work" aria-selected={tab === "work"} onClick={() => setTab("work")}>{text.work}</button>
+        <button id="task-detail-tab-details" type="button" role="tab" tabIndex={tab === "details" ? 0 : -1} data-control="task-detail-tab-details" aria-controls="task-tab-details" aria-selected={tab === "details"} onClick={() => setTab("details")}>{text.detailsTab}</button>
+        <button id="task-detail-tab-review" type="button" role="tab" tabIndex={tab === "review" ? 0 : -1} data-control="task-detail-tab-review" aria-controls="task-tab-review" aria-selected={tab === "review"} onClick={() => setTab("review")}>{text.reviewTab}</button>
+      </nav></div>
       {error && <p role="alert">{error}</p>}
       {detailState.conflicts.length > 0 && (
         <section className="task-draft-conflict" role="alert">
@@ -283,18 +406,19 @@ export function TaskDetail({
             if (!detailState.dirty.size) finishLeave();
             else void saveDraft().then((saved) => { if (saved) finishLeave(); });
           }}>{text.guardSave}</button>
-          <button type="button" data-control="task-draft-guard-discard" disabled={mutationBusy} onClick={() => { setDetailState((current) => current && baseline(current.persisted)); finishLeave(); }}>{text.discard}</button>
+          <button type="button" data-control="task-draft-guard-discard" disabled={mutationBusy} onClick={() => { setDetailState((current) => { if (!current) return current; const reset = baseline(current.persisted); const cached = detailSessions.get(taskId); if (cached) detailSessions.set(taskId, { ...cached, detailState: reset, editing: false }); return reset; }); setEditing(false); finishLeave(); }}>{text.discard}</button>
           <button type="button" data-control="task-draft-guard-keep-editing" disabled={mutationBusy} onClick={() => { pendingLeave.current = undefined; setClosePrompt(false); headingRef.current?.focus(); }}>{text.keepEditing}</button>
         </section>
       )}
       <section className="task-actions">
-        <button type="button" data-control="task-detail-refine" onClick={() => setRefining(true)}>
+        <button type="button" data-control="task-detail-refine" onClick={() => onRefine ? onRefine() : setRefining(true)}>
           {text.refine}
         </button>
         {task.state === "task" && (
           <button
             type="button"
             data-control="task-transition-start"
+            className="primary"
             onClick={() =>
               void update(() =>
                 taskClient.transition(task.id, revision, "in_progress"),
@@ -308,12 +432,11 @@ export function TaskDetail({
           <button
             type="button"
             data-control="task-transition-complete-focus"
+            className="primary"
             aria-label={text.addCompletionEvidence}
-            onClick={() =>
-              document.getElementById("task-completion-evidence")?.focus()
-            }
+            onClick={() => focusInTab("review", "#task-completion-evidence")}
           >
-          {text.addCompletionEvidence}
+          {text.reviewCompletion}
           </button>
         )}
         {task.state === "completed" && (
@@ -340,64 +463,81 @@ export function TaskDetail({
           onClose={() => setRefining(false)}
         />
       )}
-      <section className="task-panel">
+      <div id="task-tab-details" aria-labelledby="task-detail-tab-details" className="task-tab-panel" role="tabpanel" data-task-tab="details" hidden={tab !== "details"}>
+      <section className="task-panel task-definition-panel">
         <h3>{text.taskDetails}</h3>
-        <label>
-          {text.title}
-          <input
-            data-control="task-revision-title"
-            value={task.title}
-            onChange={(event) => editDefinition("title", event.target.value)}
-          />
-        </label>
-        <label>
-          {text.detail}
-          <textarea
-            data-control="task-revision-detail"
-            value={task.detail ?? ""}
-            onChange={(event) => editDefinition("detail", event.target.value)}
-          />
-        </label>
-        <label>
-          {text.outcome}
-          <textarea
-            data-control="task-revision-outcome"
-            value={task.outcome ?? ""}
-            onChange={(event) => editDefinition("outcome", event.target.value)}
-          />
-        </label>
-        <label>
-          {text.scope}
-          <textarea
-            data-control="task-revision-scope"
-            value={task.scope ?? ""}
-            onChange={(event) => editDefinition("scope", event.target.value)}
-          />
-        </label>
-        <label>
-          {text.nonGoals}
-          <textarea
-            data-control="task-revision-non-goals"
-            value={task.nonGoals ?? ""}
-            onChange={(event) => editDefinition("nonGoals", event.target.value)}
-          />
-        </label>
-        <label>
-          {text.criteria}
-          <textarea
-            data-control="task-revision-criteria"
-            value={task.validationCriteria ?? ""}
-            onChange={(event) => editDefinition("validationCriteria", event.target.value)}
-          />
-        </label>
+        <div className="task-definition-actions">
+          <button type="button" data-control="task-definition-edit" onClick={() => setEditing(true)} hidden={editing}>{text.edit}</button>
+          {editing && <button type="button" data-control="task-definition-cancel" onClick={() => { setDetailState((current) => current && baseline(current.persisted)); setEditing(false); }}>{text.cancel}</button>}
+        </div>
+        {editing ? definitions.map(({ field, label, control, value }) => (
+          <label key={field}>{label}<textarea data-control={control} value={value} onChange={(event) => editDefinition(field, event.target.value)} /></label>
+        )) : (
+          <dl className="task-definition-read">
+            {definitions.filter(({ field, value }) => field !== "title" && value.trim()).map(({ field, label, value }) => <div key={field}><dt>{label}</dt><dd>{value}</dd></div>)}
+          </dl>
+        )}
         <button
           type="button"
           data-control="task-revision-save"
-          disabled={!detailState.dirty.size || detailState.conflicts.length > 0 || mutationBusy}
-          onClick={() => void saveDraft()}
+          hidden={!editing}
+          disabled={!editing || !detailState.dirty.size || detailState.conflicts.length > 0 || mutationBusy}
+          onClick={() => void saveDraft().then((saved) => saved && setEditing(false))}
         >
           {text.saveChanges}
         </button>
+      </section>
+      </div>
+      <div id="task-tab-work" aria-labelledby="task-detail-tab-work" className="task-tab-panel" role="tabpanel" data-task-tab="work" hidden={tab !== "work"}>
+      <section className="task-panel">
+        <header><h3>{text.checklist}</h3><small>{task.checklist?.filter((item) => item.checked).length ?? 0} / {task.checklist?.length ?? 0}</small></header>
+        {task.checklist?.filter((item) => showCompletedChecklist || !item.checked).slice(0, showCompletedChecklist ? undefined : 5).map((item) => (
+          <label key={item.id}>
+            <input
+              type="checkbox"
+              data-control="task-checklist-toggle"
+              data-record-id={item.id}
+              checked={item.checked}
+              onChange={(event) => {
+                const checked = event.currentTarget.checked;
+                void update(() =>
+                  taskClient.updateChecklist(
+                    task.id,
+                    revision,
+                    item.id,
+                    checked,
+                    item.body,
+                  ),
+                );
+              }}
+            />
+            {item.body}
+          </label>
+        ))}
+        {(task.checklist?.some((item) => item.checked) || (task.checklist?.length ?? 0) > 5) && <button type="button" data-control="task-checklist-completed-toggle" aria-expanded={showCompletedChecklist} onClick={() => setShowCompletedChecklist((shown) => !shown)}>{(task.checklist?.length ?? 0) > 5 ? showCompletedChecklist ? text.collapseChecklist : text.showAllChecklist : showCompletedChecklist ? text.hideCompleted : text.showCompleted}</button>}
+        <div className="inline-form">
+          <input
+            data-control="task-checklist-text"
+            aria-label={text.checklistItem}
+            value={check}
+            onChange={(event) => setCheck(event.target.value)}
+          />
+          <button
+            type="button"
+            data-control="task-checklist-add"
+            disabled={!check.trim()}
+            onClick={() =>
+              void update(() =>
+                taskClient.checklist(task.id, revision, check).then((next) => {
+                  setCheck("");
+                  return next;
+                }),
+              )
+            }
+          >
+            {text.add}
+          </button>
+        </div>
       </section>
       <section className="task-panel">
         <h3>{text.worklog}</h3>
@@ -406,6 +546,12 @@ export function TaskDetail({
           aria-label={text.worklogEntry}
           value={entry}
           onChange={(event) => setEntry(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+              event.preventDefault();
+              addWorkLog();
+            }
+          }}
         />
         <input
           data-control="task-worklog-file"
@@ -413,28 +559,18 @@ export function TaskDetail({
           type="file"
           onChange={(event) => setAttachment(event.currentTarget.files?.[0])}
         />
+        {attachment && <p className="task-attachment-name">{text.attach}: {attachment.name}</p>}
         <button
           type="button"
           data-control="task-worklog-add"
           disabled={!entry.trim()}
-          onClick={() =>
-            void encodeAttachment().then((file) =>
-              update(() =>
-                taskClient
-                  .workLog(task.id, revision, entry, file)
-                  .then((next) => {
-                    setEntry("");
-                    setAttachment(undefined);
-                    return next;
-                  }),
-              ),
-            )
-          }
+          onClick={addWorkLog}
         >
           {text.add}
         </button>
-        {task.workLog?.map((log) => (
+        {orderedWorkLog(task.workLog).map((log) => (
           <article className="log-entry" key={log.id}>
+            {log.createdAt && <time dateTime={log.createdAt}>{workLogTimestamp(log.createdAt)}</time>}
             <p>{log.body}</p>
             {log.attachment && (
               <small>{log.attachment.name ?? log.attachment.mediaType}</small>
@@ -478,58 +614,10 @@ export function TaskDetail({
             </div>
           </article>
         ))}
+        {!task.workLog?.length && <p className="region-empty">{text.noWorkLog}</p>}
       </section>
-      <section className="task-panel">
-        <h3>{text.checklist}</h3>
-        {task.checklist?.map((item) => (
-          <label key={item.id}>
-            <input
-              type="checkbox"
-              data-control="task-checklist-toggle"
-              data-record-id={item.id}
-              checked={item.checked}
-              onChange={(event) => {
-                const checked = event.currentTarget.checked;
-                void update(() =>
-                  taskClient.updateChecklist(
-                    task.id,
-                    revision,
-                    item.id,
-                    checked,
-                    item.body,
-                  ),
-                );
-              }}
-            />
-            {item.body}
-          </label>
-        ))}
-        <div className="inline-form">
-          <input
-            data-control="task-checklist-text"
-            aria-label={text.checklistItem}
-            value={check}
-            onChange={(event) => setCheck(event.target.value)}
-          />
-          <button
-            type="button"
-            data-control="task-checklist-add"
-            disabled={!check.trim()}
-            onClick={() =>
-              void update(() =>
-                taskClient.checklist(task.id, revision, check).then((next) => {
-                  setCheck("");
-                  return next;
-                }),
-              )
-            }
-          >
-            {text.add}
-          </button>
-        </div>
-      </section>
-      <section className="task-panel">
-        <h3>{text.decisions}</h3>
+      <details className="task-panel" data-control="task-decisions-details">
+        <summary>{text.decisions}</summary>
         <div className="inline-form">
           <input
             data-control="task-decision-text"
@@ -558,7 +646,9 @@ export function TaskDetail({
         {task.decisions?.map((item) => (
           <p key={item.id}>{item.body ?? item.kind}</p>
         ))}
-      </section>
+      </details>
+      </div>
+      <div id="task-tab-review" aria-labelledby="task-detail-tab-review" className="task-tab-panel" role="tabpanel" data-task-tab="review" hidden={tab !== "review"}>
       <section className="task-panel">
         <h3>{text.readiness}</h3>
         {task.readinessEntries?.map((item) => (
@@ -616,7 +706,9 @@ export function TaskDetail({
           </article>
         ))}
       </section>
-      <section className="task-panel">
+      </div>
+      <div className="task-tab-panel" data-task-tab="details" hidden={tab !== "details"}>
+      <section className="task-panel task-relationships-panel">
         <h3>{text.relationships}</h3>
         {task.problemLinks?.map((link) => (
           <p key={link.id}>
@@ -812,6 +904,8 @@ export function TaskDetail({
           </div>
         </details>
       </section>
+      </div>
+      <div className="task-tab-panel" data-task-tab="review" hidden={tab !== "review"}>
       <ConflictReviewPanel taskId={task.id} taskRevision={revision} />
       <section className="task-panel">
         <h3>{text.completion}</h3>
@@ -967,9 +1061,10 @@ export function TaskDetail({
           </div>
         )}
       </section>
-      <section className="task-panel">
+      </div>
+      <div className="task-tab-panel" data-task-tab="details" hidden={tab !== "details"}>
+      <details className="task-panel" data-control="task-lineage-details"><summary>{text.flow}</summary>
         <header>
-          <h3>{text.flow}</h3>
           <button
             type="button"
             data-control="task-lineage-load"
@@ -993,7 +1088,8 @@ export function TaskDetail({
             ))}
           </ol>
         )}
-      </section>
+      </details>
+      </div>
     </aside>
   );
 }

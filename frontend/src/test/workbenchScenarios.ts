@@ -30,6 +30,7 @@ export type WorkbenchScenarioHarness = {
   waitFor: (check: () => boolean, label: string) => Promise<void>;
   waitForAsync: (check: () => Promise<boolean>, label: string) => Promise<void>;
   click: (element: HTMLElement, label: string) => void;
+  prepareClick: (element: HTMLElement, label: string) => Promise<void>;
   enter: (element: HTMLInputElement | HTMLTextAreaElement, value: string) => void;
   step: (message: string) => Promise<void>;
 };
@@ -43,6 +44,8 @@ async function clickControl(h: WorkbenchScenarioHarness, name: string, label: st
     () => document.querySelector(".task-detail")?.getAttribute("aria-busy") !== "true",
     `idle Task detail before ${label}`,
   );
+  await prepareTaskControl(h, name);
+  await h.prepareClick(control(name, recordId), label);
   h.coverage.interact(name, () => h.click(control(name, recordId), label));
 }
 
@@ -51,8 +54,13 @@ async function enterControl(h: WorkbenchScenarioHarness, name: string, value: st
     () => document.querySelector(".task-detail")?.getAttribute("aria-busy") !== "true",
     `idle Task detail before editing ${name}`,
   );
+  await prepareTaskControl(h, name);
   const element = control<HTMLInputElement | HTMLTextAreaElement>(name, recordId);
-  h.coverage.interact(name, () => h.enter(element, value));
+  const edit = () => h.coverage.interact(name, () => h.enter(element, value));
+  if (name.startsWith("task-revision-") && name !== "task-revision-save") {
+    h.coverage.interact("task-revision-dynamic-control", edit);
+    h.coverage.assertEffect("task-revision-dynamic-control", () => element.value === value);
+  } else edit();
   h.coverage.assertEffect(name, () => element.value === value);
 }
 
@@ -65,6 +73,61 @@ function control<T extends HTMLElement>(name: string, recordId?: string): T {
   const element = document.querySelector<T>(`[data-control="${name}"]${suffix}`);
   if (!element) throw new Error(`Missing rendered control ${name}${recordId ? ` for ${recordId}` : ""}`);
   return element;
+}
+
+async function selectTaskTab(h: WorkbenchScenarioHarness, name: "Work" | "Details" | "Review", label: string) {
+  const key = name.toLowerCase();
+  const tabs = [...document.querySelectorAll<HTMLButtonElement>('.task-detail [role="tab"], .task-detail button[data-control*="tab"]')];
+  const tab = tabs.find((candidate) => {
+    const controlName = candidate.getAttribute("data-control")?.toLowerCase() ?? "";
+    const text = (candidate.getAttribute("aria-label") ?? candidate.textContent ?? "").trim().toLowerCase();
+    return controlName.includes(key) || text === key || text.includes(`${key} tab`);
+  });
+  if (!tab) throw new Error(`Missing visible Task ${name} tab`);
+  observe(h, "Task detail tabs");
+  await h.prepareClick(tab, label);
+  h.coverage.interact(`task-detail-tab-${key}`, () => h.click(tab, label));
+  await h.waitFor(() => tab.getAttribute("aria-selected") === "true" || tab.getAttribute("aria-pressed") === "true", `selected Task ${name} tab`);
+  h.coverage.assertEffect(`task-detail-tab-${key}`, () => tab.getAttribute("aria-selected") === "true");
+}
+async function ensureTaskEditing(h: WorkbenchScenarioHarness, label: string) {
+  const edit = document.querySelector<HTMLButtonElement>('[data-control="task-definition-edit"]');
+  if (!edit || edit.hidden) return;
+  observe(h, "read-first Task details");
+  await h.prepareClick(edit, label);
+  h.coverage.interact("task-definition-edit", () => h.click(edit, label));
+  await h.waitFor(() => Boolean(document.querySelector('[data-control="task-revision-detail"]')), "editable Task details");
+  observe(h, "Task definition fields");
+  effect(h, ["task-definition-edit"], () => Boolean(document.querySelector('[data-control="task-revision-detail"]')));
+}
+
+async function prepareTaskControl(h: WorkbenchScenarioHarness, name: string) {
+  if (name.startsWith("task-revision-") && name !== "task-revision-save") {
+    await selectTaskTab(h, "Details", "Open definition editor");
+    await ensureTaskEditing(h, "Edit Task definition");
+  }
+  const element = document.querySelector<HTMLElement>(`[data-control="${name}"]`);
+  const panel = element?.closest<HTMLElement>(".task-tab-panel");
+  if (panel?.hidden) {
+    await selectTaskTab(h, panel.dataset.taskTab === "work" ? "Work" : panel.dataset.taskTab === "review" ? "Review" : "Details", `Open section for ${name}`);
+  }
+  const parents: HTMLDetailsElement[] = [];
+  for (let parent = element?.parentElement; parent; parent = parent.parentElement) {
+    if (parent instanceof HTMLDetailsElement && !parent.open) parents.unshift(parent);
+  }
+  for (const parent of parents) {
+    const summary = parent.querySelector<HTMLElement>(":scope > summary");
+    if (!summary) continue;
+    const id = parent.dataset.control;
+    observe(h, "collapsed Task section");
+    await h.prepareClick(summary, `Expand section for ${name}`);
+    if (id) h.coverage.interact(id, () => h.click(summary, `Expand ${id}`));
+    else h.click(summary, `Expand section for ${name}`);
+    await h.waitFor(() => parent.open, "expanded Task section");
+    observe(h, "expanded Task section");
+    if (id) effect(h, [id], () => parent.open);
+  }
+  observe(h, "prepared Task controls");
 }
 
 function assertDisabled(name: string, expected: boolean) {
@@ -122,7 +185,14 @@ export async function runTaskControlMatrixScenario(h: WorkbenchScenarioHarness) 
   await h.waitFor(() => document.querySelector(".task-detail")?.textContent?.includes(title) ?? false, "Task detail");
   effect(h, ["task-card-open"], () => document.querySelector(".task-detail")?.textContent?.includes(title) ?? false);
   observe(h, "Task detail");
+  await selectTaskTab(h, "Details", "Open Task Details tab");
+  await ensureTaskEditing(h, "Edit Task details");
+  observe(h, "definition editing");
+  await clickControl(h, "task-definition-cancel", "Cancel definition editing");
+  effect(h, ["task-definition-cancel"], () => !document.querySelector('[data-control="task-revision-detail"]'));
+  await ensureTaskEditing(h, "Re-enter definition editing");
   await enterControl(h, "task-revision-detail", "Keep this draft while comparing another Task");
+  await selectTaskTab(h, "Work", "Open Task Work tab");
   await enterControl(h, "task-worklog-text", "Independent Work Log while Task draft is dirty");
   await clickControl(h, "task-worklog-add", "Add Work Log without losing Task draft");
   await h.waitForAsync(async () => Boolean((await h.task(title)).workLog?.some(item => item.body === "Independent Work Log while Task draft is dirty")), "independent Work Log readback beside dirty Task draft");
@@ -133,6 +203,7 @@ export async function runTaskControlMatrixScenario(h: WorkbenchScenarioHarness) 
   "rendered independent Work Log and idle Task detail");
   effect(h, ["task-worklog-add"], () => document.querySelector(".task-detail")?.getAttribute("aria-busy") === "false" &&
     document.querySelector(".task-detail .log-entry")?.textContent?.includes("Independent Work Log while Task draft is dirty") === true);
+  await selectTaskTab(h, "Details", "Return to Task Details tab");
   if (control<HTMLTextAreaElement>("task-revision-detail").value !== "Keep this draft while comparing another Task")
     throw new Error("Work Log refresh lost the dirty Task definition");
   const targetCard = [...document.querySelectorAll<HTMLElement>(".canonical-card")].find(
@@ -154,6 +225,7 @@ export async function runTaskControlMatrixScenario(h: WorkbenchScenarioHarness) 
   h.coverage.interact("task-card-open", () => h.click(taskOpen, `Reopen ${title} after discard`));
   await h.waitFor(() => document.querySelector(".task-detail")?.textContent?.includes(title) ?? false, "reopened Task after discard");
   h.coverage.assertEffect("task-card-open", () => document.querySelector(".task-detail")?.textContent?.includes(title) ?? false);
+  await ensureTaskEditing(h, "Edit Task details before close");
   await enterControl(h, "task-revision-detail", "Save this draft while leaving");
   await clickControl(h, "task-detail-close", "Request save close for dirty Task");
   await h.waitFor(() => Boolean(document.querySelector(".task-draft-guard")), "Task save leave guard");
@@ -165,6 +237,7 @@ export async function runTaskControlMatrixScenario(h: WorkbenchScenarioHarness) 
   h.coverage.interact("task-card-open", () => h.click(taskOpen, `Reopen ${title} after guarded save`));
   await h.waitFor(() => document.querySelector(".task-detail")?.textContent?.includes(title) ?? false, "reopened Task after guarded save");
   h.coverage.assertEffect("task-card-open", () => document.querySelector(".task-detail")?.textContent?.includes(title) ?? false);
+  await ensureTaskEditing(h, "Edit Task details for conflict");
   await enterControl(h, "task-revision-detail", "Keep this local conflict edit");
   const firstConflictBase = await h.task(title);
   await h.api(`/tasks/${encodeURIComponent(firstConflictBase.id)}/revisions`, "POST", {
@@ -180,6 +253,7 @@ export async function runTaskControlMatrixScenario(h: WorkbenchScenarioHarness) 
   effect(h, ["task-draft-keep-mine"], () => control<HTMLTextAreaElement>("task-revision-detail").value === "Keep this local conflict edit");
   await clickControl(h, "task-revision-save", "Save rebased local Task edit");
   await h.waitForAsync(async () => (await h.task(title)).detail === "Keep this local conflict edit", "rebased Task edit readback");
+  await ensureTaskEditing(h, "Edit Task details for latest-value conflict");
   await enterControl(h, "task-revision-detail", "Edit that will use the latest value");
   const secondConflictBase = await h.task(title);
   await h.api(`/tasks/${encodeURIComponent(secondConflictBase.id)}/revisions`, "POST", {
@@ -191,6 +265,7 @@ export async function runTaskControlMatrixScenario(h: WorkbenchScenarioHarness) 
   observe(h, "Task latest-value conflict");
   await clickControl(h, "task-draft-use-latest", "Use latest Task value after conflict");
   effect(h, ["task-draft-use-latest"], () => control<HTMLTextAreaElement>("task-revision-detail").value === "Second external latest detail" && !document.querySelector(".task-draft-conflict"));
+  await selectTaskTab(h, "Review", "Open Task Review tab");
   const before = await h.task(title);
   const initialReadiness = before.readinessEntries?.find(item => item.status === "missing");
   if (!initialReadiness) throw new Error("New Task did not expose a missing readiness field");
@@ -199,6 +274,8 @@ export async function runTaskControlMatrixScenario(h: WorkbenchScenarioHarness) 
   await h.waitForAsync(async () => (await h.task(title)).readinessEntries?.find(item => item.key === initialReadiness.key)?.status === "not_applicable", "initial readiness decision readback");
   const readinessDecision = (await h.task(title)).readinessEntries?.find(item => item.key === initialReadiness.key);
   effect(h, ["task-readiness-not-applicable"], () => readinessDecision?.status === "not_applicable" && readinessDecision.reason === "Not needed for this bounded Task");
+  await selectTaskTab(h, "Details", "Open Task Details for definition revision");
+  await ensureTaskEditing(h, "Edit Task details for revision");
   const revisions: Array<[string, string]> = [
     ["task-revision-title", `${title} revised`],
     ["task-revision-detail", "Detailed current behavior"],
@@ -216,6 +293,7 @@ export async function runTaskControlMatrixScenario(h: WorkbenchScenarioHarness) 
     throw new Error("Task revision fields did not persist together");
   effect(h, ["task-revision-save"], () => revised.detail === revisions[1][1] && revised.validationCriteria === revisions[5][1]);
 
+  await selectTaskTab(h, "Review", "Open Task Review tab");
   await clickControl(h, "conflict-review-run", "Run Conflict Review");
   await h.waitFor(() => Boolean(document.querySelector('[data-control="conflict-review-cancel"]')), "running Conflict Review");
   effect(h, ["conflict-review-run"], () => document.querySelector(".review-panel")?.getAttribute("aria-busy") === "true");
@@ -228,6 +306,7 @@ export async function runTaskControlMatrixScenario(h: WorkbenchScenarioHarness) 
   await h.waitFor(() => Boolean(document.querySelector('[data-review-status="clear"],[data-review-status="findings"],[data-review-status="insufficient_evidence"]')), "retried Conflict Review result");
   effect(h, ["conflict-review-retry"], () => Boolean(document.querySelector(".review-current")));
 
+  await selectTaskTab(h, "Work", "Return to Task Work tab");
   assertDisabled("task-worklog-add", true);
   await enterControl(h, "task-worklog-text", "Matrix work evidence");
   const file = control<HTMLInputElement>("task-worklog-file");
@@ -259,6 +338,8 @@ export async function runTaskControlMatrixScenario(h: WorkbenchScenarioHarness) 
   observe(h, "checklist row");
   await clickControl(h, "task-checklist-toggle", "Toggle checklist item", checklist.id);
   await h.waitForAsync(async () => Boolean((await h.task(revisedTitle)).checklist?.find(item => item.id === checklist.id)?.checked), "checked checklist readback");
+  await clickControl(h, "task-checklist-completed-toggle", "Show completed checklist item");
+  effect(h, ["task-checklist-completed-toggle"], () => control<HTMLInputElement>("task-checklist-toggle", checklist.id).checked);
   await h.waitFor(() => control<HTMLInputElement>("task-checklist-toggle", checklist.id).checked, "rendered checked checklist state");
   effect(h, ["task-checklist-toggle"], () => control<HTMLInputElement>("task-checklist-toggle", checklist.id).checked);
 
@@ -279,9 +360,11 @@ export async function runTaskControlMatrixScenario(h: WorkbenchScenarioHarness) 
     effect(h, ["task-readiness-not-applicable"], () => document.body.textContent?.includes("Not needed for this bounded Task") === true);
   }
 
+  await selectTaskTab(h, "Details", "Open Task Details connections");
   const connections = control<HTMLDetailsElement>("task-connection-details");
   const connectionSummary = connections.querySelector<HTMLElement>("summary");
   if (!connectionSummary) throw new Error("Task connection details summary missing");
+  await h.prepareClick(connectionSummary, "Open connection details");
   h.coverage.interact("task-connection-details", () => h.click(connectionSummary, "Open connection details"));
   await h.waitFor(() => connections.open, "open Task connection details");
   effect(h, ["task-connection-details"], () => connections.open);
@@ -353,32 +436,41 @@ export async function runTaskControlMatrixScenario(h: WorkbenchScenarioHarness) 
     effect(h, ["task-problem-unlink"], () => !document.querySelector(`[data-record-id="${CSS.escape(secondLink.id)}"]`));
   }
 
+  await selectTaskTab(h, "Review", "Return to Task Review transitions");
   await clickControl(h, "task-transition-start", "Start Task");
   await h.waitFor(() => document.querySelector(".task-detail")?.getAttribute("data-task-state") === "in_progress", "in-progress UI");
   effect(h, ["task-transition-start"], () => document.querySelector(".task-detail")?.getAttribute("data-task-state") === "in_progress");
+  await h.step("Task controls: definitions, evidence, connections, and start verified");
   await clickControl(h, "task-detail-close", "Close active Task detail");
   await h.waitFor(() => !document.querySelector(".task-detail"), "closed active Task detail");
   effect(h, ["task-detail-close"], () => !document.querySelector(".task-detail"));
   observe(h, "active Task shortcut");
+  await h.step("Task controls: closed active Task detail");
   await clickControl(h, "task-shortcut-open", "Resume active Task");
   await h.waitFor(() => document.querySelector(".task-detail")?.getAttribute("data-task-state") === "in_progress", "resumed active Task detail");
   effect(h, ["task-shortcut-open"], () => document.querySelector(".task-detail")?.getAttribute("data-task-state") === "in_progress");
   observe(h, "in-progress Task");
+  await h.step("Task controls: resumed active Task");
   await clickControl(h, "task-transition-complete-focus", "Focus completion evidence");
+  await h.waitFor(() => document.activeElement === control("task-completion-evidence"), "focused completion evidence");
   if (document.activeElement !== control("task-completion-evidence")) throw new Error("Complete shortcut did not focus evidence");
   effect(h, ["task-transition-complete-focus"], () => document.activeElement === control("task-completion-evidence"));
+  await h.step("Task controls: completion evidence focused");
   assertDisabled("task-completion-complete", true);
   await enterControl(h, "task-completion-evidence", "Matrix completion evidence");
   assertDisabled("task-completion-complete", false);
+  await h.step("Task controls: authored completion evidence");
   await clickControl(h, "task-completion-complete", "Complete Task with evidence");
   await h.waitForAsync(async () => (await h.task(revisedTitle)).state === "completed", "Task completion readback");
   await h.waitFor(() => document.querySelector(".task-detail")?.getAttribute("data-task-state") === "completed", "rendered completed Task");
   effect(h, ["task-completion-complete"], () => document.querySelector(".task-detail")?.getAttribute("data-task-state") === "completed");
 
+  await h.step("Task controls: completed Task rendered");
   observe(h, "completed Task");
   await clickControl(h, "task-lineage-load", "Load Task lineage");
   await h.waitFor(() => Boolean(document.querySelector(".lineage-flow li")), "lineage nodes");
   effect(h, ["task-lineage-load"], () => Boolean(document.querySelector(".lineage-flow li")));
+  await h.step("Task controls: lineage loaded");
   await clickControl(h, "task-knowledge-draft", "Create Knowledge draft");
   await h.waitFor(() => Boolean(document.querySelector(".knowledge-draft")), "Knowledge draft");
   effect(h, ["task-knowledge-draft"], () => Boolean(document.querySelector(".knowledge-draft")));
@@ -499,4 +591,18 @@ export async function runWorkbenchRetryScenario(h: WorkbenchScenarioHarness) {
   await h.waitFor(() => !document.querySelector('[data-control="task-workbench-retry"]') && Boolean(document.querySelector('[data-task-workbench="true"]')), "recovered Workbench projection");
   effect(h, ["task-workbench-retry"], () => !document.querySelector('[data-control="task-workbench-retry"]'));
   await h.step("A one-shot native Workbench read failure rendered a retry action, and that action restored the canonical projection.");
+  const title = `Task detail retry ${Date.now()}`;
+  await h.create(title);
+  await invoke("desktop_e2e_arm_one_shot_failure", { operation: "task.get" });
+  const card = [...document.querySelectorAll<HTMLElement>(".canonical-card")].find(item => item.querySelector("h3")?.textContent === title);
+  const open = card?.querySelector<HTMLElement>('[data-control="task-card-open"]');
+  if (!open) throw new Error("Missing retry Task card");
+  h.click(open, "Open Task with failed read");
+  await h.waitFor(() => Boolean(document.querySelector('[data-control="task-detail-retry"]')), "failed Task detail");
+  observe(h, "failed Task detail");
+  await clickControl(h, "task-detail-retry", "Retry Task detail");
+  await h.waitFor(() => document.querySelector(".task-detail h2")?.textContent === title, "retried Task detail");
+  effect(h, ["task-detail-retry"], () => document.querySelector(".task-detail h2")?.textContent === title);
+  await clickControl(h, "task-detail-close", "Close recovered Task detail");
+  await h.waitFor(() => !document.querySelector(".task-detail"), "closed recovered Task detail");
 }

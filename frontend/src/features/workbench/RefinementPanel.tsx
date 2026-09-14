@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useImperativeHandle, useRef, useState, type Ref } from "react";
 import { taskClient } from "../../services/taskClient";
 import type {
   RefinementProposal,
@@ -6,14 +6,24 @@ import type {
 } from "../../types/taskWorkbench";
 import { useTaskWorkbenchText } from "./taskWorkbenchText";
 
+export type RefinementPanelHandle = { requestLeave: (proceed: () => void) => void };
+
 export function RefinementPanel({
   kind,
   subjectId,
   onClose,
+  onApplied,
+  subjectTitle,
+  messageDrafts,
+  ref,
 }: {
   kind: "capture" | "task";
   subjectId: string;
   onClose: () => void;
+  onApplied?: () => void;
+  subjectTitle?: string;
+  messageDrafts?: Map<string, string>;
+  ref?: Ref<RefinementPanelHandle>;
 }) {
   const text = useTaskWorkbenchText();
   const [session, setSession] = useState<RefinementSession | undefined>(
@@ -21,17 +31,21 @@ export function RefinementPanel({
   );
   const [proposals, setProposals] = useState<RefinementProposal[]>([]);
   const [draft, setDraft] = useState("");
-  const [message, setMessage] = useState("");
+  const messageKey = `${kind}:${subjectId}`;
+  const [message, setMessage] = useState(messageDrafts?.get(messageKey) ?? "");
+  useEffect(() => { messageDrafts?.set(messageKey, message); }, [messageDrafts, messageKey, message]);
   const [editing, setEditing] = useState<string>();
-  const [activeTab, setActiveTab] = useState<"conversation" | "proposals">(
-    "conversation",
-  );
+  const activeTab = "conversation";
+  const [edits, setEdits] = useState<Record<string, Record<string, unknown>>>({});
+  const [deciding, setDeciding] = useState<string>();
+  const [notice, setNotice] = useState("");
   const [saving, setSaving] = useState(false);
   const [polling, setPolling] = useState(false);
   const [error, setError] = useState("");
   const timer = useRef<number | undefined>(undefined);
   const pollTimer = useRef<number | undefined>(undefined);
   const sending = useRef(false);
+  const workspaceQueue = useRef<Promise<unknown>>(Promise.resolve());
   const skipCleanupFlush = useRef(false);
   const latest = useRef({
     session: undefined as RefinementSession | undefined,
@@ -59,8 +73,7 @@ export function RefinementPanel({
       .refinement(kind, subjectId)
       .then(async (next) => {
         if (cancelled) return;
-        const restoredTab =
-          next.activeTab === "proposals" ? "proposals" : "conversation";
+        const restoredTab = "conversation";
         latest.current = {
           session: next,
           draft: next.inputDraft ?? "",
@@ -70,8 +83,8 @@ export function RefinementPanel({
         };
         setSession(next);
         setDraft(next.inputDraft ?? "");
-        setMessage("");
-        setActiveTab(restoredTab);
+
+
         requestAnimationFrame(() => {
           if (scrollRef.current)
             scrollRef.current.scrollTop = Number(next.scrollAnchor ?? 0);
@@ -133,16 +146,26 @@ export function RefinementPanel({
       if (pollTimer.current) window.clearInterval(pollTimer.current);
     };
   }, [polling, session?.id, kind, subjectId, text.assistantFailure]);
-  const persistCurrent = () => {
-    const current = latest.current;
-    if (!current.session) return Promise.resolve();
-    return taskClient.saveWorkspace(current.session.id, {
-      inputDraft: current.draft,
-      activeTab: current.activeTab,
-      scrollAnchor: current.scrollAnchor,
-      baseDraftRevision: current.session.draftRevision,
+  const persistCurrent = useCallback(() => {
+    const pending = workspaceQueue.current.then(async () => {
+      const current = latest.current;
+      if (!current.session) return;
+      const saveWorkspace = () => taskClient.saveWorkspace(current.session!.id, {
+        inputDraft: current.draft, activeTab: "conversation", scrollAnchor: current.scrollAnchor,
+        baseDraftRevision: current.session!.draftRevision,
+      });
+      try { return await saveWorkspace(); }
+      catch (error) {
+        if (!String(error).includes("draft_conflict")) throw error;
+        const fresh = await taskClient.refinement(kind, subjectId);
+        current.session = fresh;
+        setSession(fresh);
+        return saveWorkspace();
+      }
     });
-  };
+    workspaceQueue.current = pending.catch(() => undefined);
+    return pending;
+  }, [kind, subjectId]);
   const scheduleSave = () => {
     if (timer.current) window.clearTimeout(timer.current);
     timer.current = window.setTimeout(
@@ -157,13 +180,6 @@ export function RefinementPanel({
     latest.current.draft = value;
     scheduleSave();
   };
-  const selectTab = (tab: "conversation" | "proposals") => {
-    if (scrollRef.current)
-      latest.current.scrollAnchor = String(scrollRef.current.scrollTop);
-    latest.current.activeTab = tab;
-    setActiveTab(tab);
-    scheduleSave();
-  };
   const restoreFocus = useCallback(() => {
     const opener = openerRef.current;
     if (opener?.isConnected) {
@@ -172,68 +188,58 @@ export function RefinementPanel({
     }
     document.querySelector<HTMLElement>("#workbench h1")?.focus();
   }, []);
-  const close = useCallback(async () => {
+  const close = useCallback(async (proceed: () => void = onClose) => {
     const current = latest.current;
     if (!current.session) {
-      onClose();
+      proceed();
       return;
     }
     if (timer.current) window.clearTimeout(timer.current);
     try {
       await persistCurrent();
       skipCleanupFlush.current = true;
-      restoreFocus();
-      onClose();
+      proceed();
+      requestAnimationFrame(restoreFocus);
     } catch (e) {
       setError(String(e instanceof Error ? e.message : e));
     }
-  }, [onClose, restoreFocus]);
+  }, [onClose, restoreFocus, persistCurrent]);
+  useImperativeHandle(ref, () => ({ requestLeave: (proceed) => { void close(proceed); } }), [close]);
   useEffect(() => {
     headingRef.current?.focus();
   }, []);
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        void close();
-      }
-    };
-    document.addEventListener("keydown", onKeyDown);
-    return () => document.removeEventListener("keydown", onKeyDown);
-  }, [close]);
   const decide = async (
     proposal: RefinementProposal,
     decision: "accept" | "reject",
   ) => {
-    if (!session) return;
+    if (!session || deciding) return;
+    setDeciding(proposal.id);
+    setError("");
     try {
       await taskClient.proposalDecision(
         session.id,
         proposal.id,
         proposal.draftRevision,
         decision,
-        editing === proposal.id ? proposal.payload : undefined,
+        decision === "accept" ? edits[proposal.id] : undefined,
       );
       setProposals((items) => items.filter((item) => item.id !== proposal.id));
+      setEditing(undefined);
+      setNotice(decision === "accept" ? text.previewApplied : text.previewRejected);
+      if (decision === "accept") onApplied?.();
     } catch (e) {
       setError(String(e instanceof Error ? e.message : e));
-    }
+    } finally { setDeciding(undefined); }
   };
   const send = async () => {
     if (!session || !message.trim() || sending.current || polling) return;
     sending.current = true;
     setSaving(true);
     setError("");
+    setNotice("");
     try {
-      await taskClient.saveWorkspace(session.id, {
-        // The conversation message is persisted by taskClient.message. Keep the
-        // separate workspace draft intact so an existing Capture Solution stays
-        // available to every later provider turn.
-        inputDraft: latest.current.draft,
-        activeTab,
-        scrollAnchor: String(scrollRef.current?.scrollTop ?? 0),
-        baseDraftRevision: session.draftRevision,
-      });
+      latest.current.scrollAnchor = String(scrollRef.current?.scrollTop ?? 0);
+      await persistCurrent();
       await taskClient.message(session.id, message);
       setMessage("");
       setPolling(true);
@@ -244,145 +250,85 @@ export function RefinementPanel({
       setSaving(false);
     }
   };
+  const labels: Record<string, string> = {
+    title: text.title, detail: text.detail, outcome: text.outcome, scope: text.scope,
+    nonGoals: text.nonGoals, validationCriteria: text.criteria, statement: text.newProblemStatement,
+    category: text.previewCategory, note: text.previewNote, relationship: text.relationshipKind,
+    problemId: text.problem, problemRevision: text.problemRevision, taskId: text.task,
+  };
+  const fieldsFor = (payload: Record<string, unknown>) => {
+    const values = payload.patch && typeof payload.patch === "object" ? payload.patch as Record<string, unknown> : payload;
+    return Object.entries(values).filter(([key, value]) => labels[key] && value !== null && value !== undefined);
+  };
+  const editField = (proposal: RefinementProposal, key: string, input: string) => setEdits(current => {
+    const value = key === "problemRevision" ? Number(input) : input;
+    const payload = current[proposal.id] ?? proposal.payload;
+    return { ...current, [proposal.id]: payload.patch && typeof payload.patch === "object"
+      ? { ...payload, patch: { ...payload.patch as Record<string, unknown>, [key]: value } }
+      : { ...payload, [key]: value } };
+  });
+  const proposalLabel = (type: string) => ({ new_task: text.previewNewTask, task_patch: text.previewTaskChange,
+    problem_snapshot: text.previewProblem, task_problem_link: text.previewConnection }[type] ?? text.proposedChange);
   return (
-    <section className="task-panel refinement-panel" aria-label={text.refining} data-refinement-session={session?.id ?? ""} data-refinement-sending={String(saving)} data-refinement-polling={String(polling)} data-refinement-message-length={message.length}>
-      <header>
-        <div>
-          <small>{text.optionalAssistance}</small>
-          <h3 ref={headingRef} tabIndex={-1}>{text.refining}</h3>
-        </div>
-        <button type="button" data-control="refinement-close" onClick={() => void close()}>
-          ×
+    <section className="refinement-panel" aria-label={text.refining}
+      onKeyDown={event => { if (event.key === "Escape" && !event.nativeEvent.isComposing && !event.defaultPrevented) { event.preventDefault(); event.stopPropagation(); void close(); } }}
+      data-refinement-session={session?.id ?? ""} data-refinement-sending={String(saving)} data-refinement-polling={String(polling)} data-refinement-message-length={message.length}>
+      <header className="refinement-header">
+        <div><small>{text.optionalAssistance}</small><h2 ref={headingRef} tabIndex={-1}>{subjectTitle ?? text.refining}</h2></div>
+        <button type="button" data-control="refinement-close" aria-label={text.closeRefinement} onClick={() => void close()}>
+          <span className="refinement-back">{kind === "task" ? text.backToTask : text.back}</span><span className="refinement-close-icon" aria-hidden="true">×</span>
         </button>
       </header>
-      {error && <p role="alert">{error}</p>}
-      <div className="panel-tabs">
-        <button
-          type="button"
-          data-control="refinement-tab-conversation"
-          aria-pressed={activeTab === "conversation"}
-          onClick={() => selectTab("conversation")}
-        >
-          {text.conversation}
-        </button>
-        <button
-          type="button"
-          data-control="refinement-tab-proposals"
-          aria-pressed={activeTab === "proposals"}
-          onClick={() => selectTab("proposals")}
-        >
-          {text.proposals}
-        </button>
-      </div>
-      {activeTab === "conversation" && (
-        <>
-          <div
-            className="refinement-messages"
-            ref={scrollRef}
-            onScroll={(event) => {
-              latest.current.scrollAnchor = String(event.currentTarget.scrollTop);
-              scheduleSave();
-            }}
-          >
-            {session?.messages?.map((item) => (
-              <article key={item.id} className={`message message-${item.role}`}>
-                <strong>{item.role === "user" ? text.you : text.assistant}</strong>
-                <p>{item.body}</p>
-              </article>
-            ))}
-          </div>
-          <textarea
-            aria-label={text.refinementMessage}
-            data-control="refinement-message"
-            value={message}
-            onChange={(event) => setMessage(event.target.value)}
-            onKeyDown={(event) => {
-              if (
-                event.key === "Enter" &&
-                (event.metaKey || event.ctrlKey) &&
-                !event.nativeEvent.isComposing
-              ) {
-                event.preventDefault();
-                void send();
-              }
-            }}
-            placeholder={text.refinementPlaceholder}
-          />
-          <button
-            type="button"
-            disabled={saving || polling || !message.trim()}
-            onClick={() => void send()}
-            data-chat-control="refinement-send"
-            data-control="refinement-send"
-          >
-            {text.send}
-          </button>
-          <textarea
-            aria-label={text.savedRefinementNote}
-            data-control="refinement-note"
-            value={draft}
-            onChange={(event) => save(event.target.value)}
-            placeholder={text.savedRefinementPlaceholder}
-          />
-        </>
-      )}
-      {activeTab === "proposals" && proposals.length > 0 && (
-        <div>
-          <h4>{text.proposals}</h4>
-          {proposals.map((proposal) => (
-            <article key={proposal.id} className="proposal" data-proposal-id={proposal.id}>
-              <strong>{proposal.type.replaceAll("_", " ")}</strong>
-              <p>
-                {String(
-                  proposal.payload.title ??
-                    proposal.payload.statement ??
-                    proposal.payload.detail ??
-                    text.proposedChange,
-                )}
-              </p>
-              {editing === proposal.id && (
-                <textarea
-                  data-control="refinement-proposal-editor"
-                  aria-label={`Edit ${proposal.type} proposal`}
-                  defaultValue={String(
-                    proposal.payload.detail ?? proposal.payload.title ?? "",
-                  )}
-                  onChange={(event) => {
-                    proposal.payload.detail = event.target.value;
-                  }}
-                />
-              )}
-              <footer>
-                <button
-                  type="button"
-                  data-control="refinement-proposal-edit"
-                  onClick={() =>
-                    setEditing(
-                      editing === proposal.id ? undefined : proposal.id,
-                    )
-                  }
-                >
-                  {text.edit}
-                </button>
-                <button
-                  type="button"
-                  data-control="refinement-proposal-reject"
-                  onClick={() => void decide(proposal, "reject")}
-                >
-                  {text.reject}
-                </button>
-                <button
-                  type="button"
-                  data-control="refinement-proposal-accept"
-                  onClick={() => void decide(proposal, "accept")}
-                >
-                  {text.apply}
-                </button>
-              </footer>
-            </article>
-          ))}
+      {error && <p role="alert" className="workbench-error">{error}</p>}
+      <section className="refinement-conversation" aria-label={text.conversation}>
+        <div className="refinement-messages" ref={scrollRef} onScroll={event => {
+          latest.current.scrollAnchor = String(event.currentTarget.scrollTop); scheduleSave();
+        }}>
+          {session?.messages?.map(item => <article key={item.id} className={`message message-${item.role}`}>
+            <strong>{item.role === "user" ? text.you : text.assistant}</strong><p>{item.body}</p>
+          </article>)}
+          {!session && <p className="region-empty">{text.loading}</p>}
         </div>
-      )}
+        <div className="refinement-composer">
+          <textarea aria-label={text.refinementMessage} data-control="refinement-message" value={message}
+            onChange={event => setMessage(event.target.value)} onKeyDown={event => {
+              if (event.key === "Enter" && (event.metaKey || event.ctrlKey) && !event.nativeEvent.isComposing) { event.preventDefault(); void send(); }
+            }} placeholder={text.refinementPlaceholder} rows={2} />
+          <button type="button" className="primary" disabled={!session || saving || polling || !message.trim()}
+            onClick={() => void send()} data-chat-control="refinement-send" data-control="refinement-send">{text.send}</button>
+        </div>
+      </section>
+      <section className="refinement-preview" aria-label={text.previewTitle} aria-busy={polling}>
+        <header><h3>{text.previewTitle}</h3><small>{text.previewUnapplied}</small></header>
+        {notice && <p role="status">{notice}</p>}
+        {polling && <p role="status" className="region-empty">{text.previewGenerating}</p>}
+        {!proposals.length && !polling && <p className="region-empty">{text.previewEmpty}</p>}
+        {proposals.map(proposal => {
+          const payload = edits[proposal.id] ?? proposal.payload;
+          const fields = fieldsFor(payload);
+          const isEditing = editing === proposal.id;
+          return <article key={proposal.id} className="proposal proposal-document" data-proposal-id={proposal.id}>
+            <small>{proposalLabel(proposal.type)}</small>
+            <h4>{String(payload.title ?? (payload.patch as Record<string, unknown> | undefined)?.title ?? payload.statement ?? proposalLabel(proposal.type))}</h4>
+            {isEditing ? <div className="proposal-editor">{fields.map(([key, value]) => <label key={key}>{labels[key]}
+              <textarea data-control="refinement-proposal-editor" aria-label={`${text.edit} ${labels[key]}`} value={String(value)}
+                onChange={event => editField(proposal, key, event.target.value)} />
+            </label>)}</div> : <dl className="proposal-fields">{fields.filter(([key]) => key !== "title").map(([key, value]) =>
+              <div key={key}><dt>{labels[key]}</dt><dd>{String(value)}</dd></div>)}</dl>}
+            <footer>
+              <button type="button" data-control="refinement-proposal-edit" disabled={Boolean(deciding)}
+                onClick={() => setEditing(isEditing ? undefined : proposal.id)}>{isEditing ? text.previewFinishEdit : text.edit}</button>
+              <button type="button" data-control="refinement-proposal-reject" disabled={Boolean(deciding)} onClick={() => void decide(proposal, "reject")}>{text.reject}</button>
+              <button type="button" className="primary" data-control="refinement-proposal-accept" disabled={Boolean(deciding) || polling}
+                onClick={() => void decide(proposal, "accept")}>{text.apply}</button>
+            </footer>
+          </article>;
+        })}
+      </section>
+      <details className="refinement-private-note" data-control="refinement-note-details">
+        <summary>{text.savedRefinementNote}</summary>
+        <textarea aria-label={text.savedRefinementNote} data-control="refinement-note" value={draft} onChange={event => save(event.target.value)} placeholder={text.savedRefinementPlaceholder} />
+      </details>
     </section>
   );
 }

@@ -47,6 +47,27 @@ const response = (body: unknown, ok = true, status = ok ? 200 : 500) => ({
 });
 
 describe("Task Workbench", () => {
+  it("keeps the mounted Task and its unsaved inputs when refining and returning", async () => {
+    const aggregate = { id: "active", taskRevision: 3, state: "in_progress", title: "Ship workbench" };
+    window.llmWikiApplication = { request: vi.fn().mockImplementation(({ path }: { path: string }) =>
+      Promise.resolve(response(path === "/workbench" ? snapshot : path.endsWith("/proposals") ? [] : path.endsWith("/refinement") || path.endsWith("/workspace") ? { id: "refine", messages: [] } : aggregate))) };
+    render(<WorkbenchView active />);
+    fireEvent.click((await screen.findAllByText("Ship workbench"))[0].closest("button")!);
+    await waitFor(() => expect(document.querySelector('[data-control="task-detail-refine"]')).toBeInTheDocument());
+    const original = document.querySelector(".task-detail");
+    const entry = screen.getByLabelText("Work Log entry");
+    fireEvent.change(entry, { target: { value: "Keep this evidence draft" } });
+    fireEvent.click(document.querySelector('[data-control="task-detail-refine"]')!);
+    await screen.findByRole("button", { name: "Close refinement" });
+    expect(document.getElementById("workbench")).toHaveAttribute("data-refining-kind", "task");
+    expect(document.querySelector(".task-detail")).toBe(original);
+    expect(entry).toHaveValue("Keep this evidence draft");
+    fireEvent.click(screen.getByRole("button", { name: "Close refinement" }));
+    await waitFor(() => expect(document.querySelector(".refinement-panel")).not.toBeInTheDocument());
+    expect(document.querySelector(".task-detail")).toBe(original);
+    expect(entry).toHaveValue("Keep this evidence draft");
+  });
+
   it("refreshes saved refinement shortcuts when the loaded panel closes", async () => {
     let saved = false;
     const request = vi.fn().mockImplementation(({ path, method }: { path: string; method?: string }) => {
@@ -59,7 +80,7 @@ describe("Task Workbench", () => {
     const capture = await screen.findByText("Keep this thought");
     fireEvent.click(capture.closest("article")!.querySelector('[data-control="task-card-refine"]')!);
     await waitFor(() => expect(document.querySelector(".refinement-panel")).toHaveAttribute("data-refinement-session", "saved"));
-    fireEvent.click(screen.getByRole("button", { name: "×" }));
+    fireEvent.click(screen.getByRole("button", { name: "Close refinement" }));
     await waitFor(() => expect(document.querySelector('[data-control="task-shortcut-refine"]')).toBeInTheDocument());
     expect(saved).toBe(true);
   });
@@ -111,6 +132,23 @@ describe("Task Workbench", () => {
     ).toBeChecked();
   });
 
+  it("submits the Workbench entry on Enter while preserving Shift+Enter", async () => {
+    const request = vi.fn().mockResolvedValue(response(snapshot));
+    window.llmWikiApplication = { request };
+    render(<WorkbenchView active />);
+    const input = await screen.findByLabelText("Workbench entry");
+    fireEvent.change(input, { target: { value: "Enter capture" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => expect(request).toHaveBeenCalledWith(expect.objectContaining({ path: "/captures", method: "POST" })));
+    const capturesBeforeShift = request.mock.calls.filter(([arg]) => arg.path === "/captures").length;
+    fireEvent.change(input, { target: { value: "line one" } });
+    fireEvent.keyDown(input, { key: "Enter", shiftKey: true });
+    expect(input).toHaveValue("line one");
+    expect(request.mock.calls.filter(([arg]) => arg.path === "/captures")).toHaveLength(capturesBeforeShift);
+    fireEvent.keyDown(input, { key: "Enter", isComposing: true });
+    expect(request.mock.calls.filter(([arg]) => arg.path === "/captures")).toHaveLength(capturesBeforeShift);
+  });
+
   it("localizes empty shortcut states in Korean", async () => {
     document.documentElement.lang = "ko";
     window.llmWikiApplication = {
@@ -158,6 +196,7 @@ describe("Task Workbench", () => {
     expect(openChat).toHaveBeenCalledWith("problems", "p1", {
       problemRevision: 2,
       sourceTitle: "Preserved migrated Problem",
+      workspaceDock: true,
     });
     delete window.openChat;
   });
@@ -191,7 +230,7 @@ describe("Task Workbench", () => {
   });
   it("retains a Task and its active shortcut when deletion fails, then permits retry", async () => {
     let attempts = 0;
-    const request = vi.fn().mockImplementation(({ path, method }: { path: string; method?: string }) => {
+    const request = vi.fn().mockImplementation(({ method }: { path: string; method?: string }) => {
       if (method === "DELETE") { attempts++; return Promise.resolve(attempts === 1 ? response({ error: "Delete offline" }, false) : response(null, true, 204)); }
       return Promise.resolve(response(attempts === 2 ? { ...snapshot, activeShortcuts: [], categories: [] } : snapshot));
     });
@@ -210,7 +249,15 @@ describe("Task Workbench", () => {
 
 });
 
-const draftControl = (id: string) => document.querySelector<HTMLElement>(`[data-control="${id}"]`)!;
+const draftControl = (id: string) => {
+  if (id.startsWith("task-revision-")) {
+    const details = document.querySelector('[data-control="task-detail-tab-details"]') as HTMLElement | null;
+    if (details) fireEvent.click(details);
+    const edit = document.querySelector('[data-control="task-definition-edit"]') as HTMLElement | null;
+    if (edit) fireEvent.click(edit);
+  }
+  return document.querySelector<HTMLElement>(`[data-control="${id}"]`)!;
+};
 const openTask = (title: string) => fireEvent.click(screen.getAllByText(title).find((node) => node.closest("article"))!.closest("article")!.querySelector("button")!);
 describe("guarded Task selection", () => {
   it.each(["keep", "discard", "save", "failure"])("handles %s when switching tasks", async (choice) => {
@@ -314,6 +361,6 @@ describe("guarded Task selection", () => {
     const trigger = screen.getAllByText("Plan release").find((node) => node.closest("article"))!.closest("article")!.querySelector("button")!;
     fireEvent.keyDown(draftControl("task-revision-detail"), { key: "Escape" });
     expect(document.querySelector(".task-detail")).not.toBeInTheDocument();
-    expect(trigger).toHaveFocus();
+    await waitFor(() => expect(trigger).toHaveFocus());
   });
 });

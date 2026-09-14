@@ -7,8 +7,8 @@ import type {
   WorkbenchSnapshot,
 } from "../../types/taskWorkbench";
 import { DeleteItemDialog } from "./DeleteItemDialog";
-import { RefinementPanel } from "./RefinementPanel";
-import { TaskDetail, type TaskDetailHandle } from "./TaskDetail";
+import { RefinementPanel, type RefinementPanelHandle } from "./RefinementPanel";
+import { TaskDetail, type DetailSession, type TaskDetailHandle } from "./TaskDetail";
 import { useTaskWorkbenchText } from "./taskWorkbenchText";
 import "./task-workbench.css";
 const itemTitle = (item: WorkbenchItem) =>
@@ -29,19 +29,52 @@ export function WorkbenchView({ active }: { active: boolean }) {
     [deleteBusy, setDeleteBusy] = useState(false),
     [deleteError, setDeleteError] = useState("");
   const detailRef = useRef<TaskDetailHandle>(null);
+  const refinementRef = useRef<RefinementPanelHandle>(null);
+  const [detailRefresh, setDetailRefresh] = useState(0);
+  const detailSessions = useRef(new Map<string, DetailSession>());
+  const refinementMessages = useRef(new Map<string, string>());
   const detailTrigger = useRef<HTMLElement | null>(null);
+  const restoreDetailFocus = () => requestAnimationFrame(() => {
+    const target = detailTrigger.current?.isConnected && !detailTrigger.current.closest(".view:not(.active), [hidden]") ? detailTrigger.current : document.querySelector<HTMLElement>("#workbench.active h1");
+    target?.focus({ preventScroll: true });
+  });
+  const closeLegacyDock = () => {
+    const dialog = document.querySelector<HTMLDialogElement>('#chat-modal[data-workspace-dock="true"][open]');
+    dialog?.close();
+  };
   const selectDetail = (id: string | undefined, trigger?: HTMLElement) => {
     if (id === detail) return;
     const proceed = () => {
+      closeLegacyDock();
+      setRefining(undefined);
       setDetail(id);
       if (id) detailTrigger.current = trigger ?? null;
-      else {
-        const target = detailTrigger.current?.isConnected && !detailTrigger.current.closest(".view:not(.active), [hidden]") ? detailTrigger.current : document.querySelector<HTMLElement>("#workbench.active h1");
-        target?.focus();
-      }
+      else restoreDetailFocus();
     };
-    if (detailRef.current) detailRef.current.requestLeave(proceed);
-    else proceed();
+    const leaveTask = () => { if (detailRef.current) detailRef.current.requestLeave(proceed); else proceed(); };
+    if (refinementRef.current) refinementRef.current.requestLeave(leaveTask); else leaveTask();
+  };
+  const openRefinement = (next: { kind: "capture" | "task"; id: string }, trigger?: HTMLElement) => {
+    if (refining?.kind === next.kind && refining.id === next.id) return;
+    const proceed = () => {
+      closeLegacyDock();
+      setDetail(next.kind === "task" ? next.id : undefined);
+      if (trigger) detailTrigger.current = trigger;
+      setRefining(next);
+    };
+    const leaveTask = () => {
+      if (detailRef.current && detail !== (next.kind === "task" ? next.id : undefined)) detailRef.current.requestLeave(proceed);
+      else proceed();
+    };
+    if (refinementRef.current) refinementRef.current.requestLeave(leaveTask); else leaveTask();
+  };
+  const openLegacyRefinement = (problemId: string, problemRevision?: number, sourceTitle?: string) => {
+    const proceed = () => {
+      setRefining(undefined); setDetail(undefined);
+      window.openChat?.("problems", problemId, { problemRevision, sourceTitle, workspaceDock: true });
+    };
+    const leaveTask = () => { if (detailRef.current) detailRef.current.requestLeave(proceed); else proceed(); };
+    if (refinementRef.current) refinementRef.current.requestLeave(leaveTask); else leaveTask();
   };
   const load = useCallback(async () => {
     try {
@@ -59,6 +92,7 @@ export function WorkbenchView({ active }: { active: boolean }) {
   }, []);
   useEffect(() => {
     if (active) void load();
+    else closeLegacyDock();
   }, [active, load]);
   useEffect(() => {
     const refresh = () => active && void load();
@@ -132,6 +166,7 @@ export function WorkbenchView({ active }: { active: boolean }) {
       id="workbench"
       className={`view task-workbench${active ? " active" : ""}`}
       data-task-workbench="true"
+      data-refining-kind={refining?.kind}
       aria-busy={!snapshot && !error}
     >
       <header className="top">
@@ -141,6 +176,7 @@ export function WorkbenchView({ active }: { active: boolean }) {
         </div>
         <div className="status">{text.vaultStatus}</div>
       </header>
+      <div className="workbench-main">
       <section className="task-capture">
         <form onSubmit={save}>
           <fieldset disabled={busy}>
@@ -151,6 +187,12 @@ export function WorkbenchView({ active }: { active: boolean }) {
               aria-label={text.entryLabel}
               value={input}
               onChange={(event) => setInput(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+                  event.preventDefault();
+                  event.currentTarget.form?.requestSubmit();
+                }
+              }}
               placeholder={text.placeholder}
               rows={2}
               required
@@ -217,7 +259,7 @@ export function WorkbenchView({ active }: { active: boolean }) {
                       data-control="task-shortcut-open"
                       data-entity-id={shortcut.id}
                       type="button"
-                      className="shortcut-card"
+                      className={`shortcut-card${detail === shortcut.id ? " selected" : ""}`}
                       key={shortcut.id}
                       onClick={(event) => selectDetail(shortcut.id, event.currentTarget)}
                     >
@@ -256,10 +298,10 @@ export function WorkbenchView({ active }: { active: boolean }) {
                       data-control="task-shortcut-refine"
                       data-entity-id={shortcut.id}
                       type="button"
-                      className="shortcut-card subtle"
+                      className={`shortcut-card subtle${refining?.kind === shortcut.kind && refining.id === shortcut.id ? " selected" : ""}`}
                       key={`${shortcut.kind}-${shortcut.id}`}
-                      onClick={() =>
-                        setRefining({ kind: shortcut.kind, id: shortcut.id })
+                      onClick={(event) =>
+                        openRefinement({ kind: shortcut.kind, id: shortcut.id }, event.currentTarget)
                       }
                     >
                       <small>
@@ -291,7 +333,7 @@ export function WorkbenchView({ active }: { active: boolean }) {
                   <div className="category-grid">
                     {category.items.map((item) => (
                       <article
-                        className="canonical-card"
+                        className={`canonical-card${(item.kind === "task" && detail === item.id) || (refining?.kind === item.kind && refining.id === item.id) ? " selected" : ""}`}
                         key={`${item.kind}-${item.id}`}
                       >
                         <small>
@@ -324,8 +366,8 @@ export function WorkbenchView({ active }: { active: boolean }) {
                                 data-control="task-card-refine"
                                 data-entity-id={item.id}
                                 type="button"
-                                onClick={() =>
-                                  setRefining({ kind: "task", id: item.id })
+                                onClick={(event) =>
+                                  openRefinement({ kind: "task", id: item.id }, event.currentTarget)
                                 }
                               >
                                 {text.refine}
@@ -338,8 +380,8 @@ export function WorkbenchView({ active }: { active: boolean }) {
                               data-control="task-card-refine"
                               data-entity-id={item.id}
                               type="button"
-                              onClick={() =>
-                                setRefining({ kind: "capture", id: item.id })
+                              onClick={(event) =>
+                                openRefinement({ kind: "capture", id: item.id }, event.currentTarget)
                               }
                             >
                               {text.refine}
@@ -353,10 +395,7 @@ export function WorkbenchView({ active }: { active: boolean }) {
                               data-control="task-card-refine"
                               data-entity-id={item.problemId}
                               onClick={() =>
-                                window.openChat?.("problems", item.problemId, {
-                                  problemRevision: item.problemRevision,
-                                  sourceTitle: item.title,
-                                })
+                                openLegacyRefinement(item.problemId, item.problemRevision, item.title)
                               }
                             >
                               {text.refine}
@@ -376,27 +415,21 @@ export function WorkbenchView({ active }: { active: boolean }) {
           </section>
         </>
       )}
-      {refining && (
-        <RefinementPanel
-          kind={refining.kind}
-          subjectId={refining.id}
-          onClose={() => {
-            setRefining(undefined);
-            void load();
-          }}
-        />
-      )}{" "}
+      </div>
       {detail && (
         <TaskDetail
           key={detail}
           ref={detailRef}
           taskId={detail}
           onClose={() => {
-            setDetail(undefined);
-            const target = detailTrigger.current?.isConnected && !detailTrigger.current.closest(".view:not(.active), [hidden]") ? detailTrigger.current : document.querySelector<HTMLElement>("#workbench.active h1");
-            target?.focus();
+            const leave = () => { setRefining(undefined); setDetail(undefined); restoreDetailFocus(); };
+            if (refinementRef.current) refinementRef.current.requestLeave(leave); else leave();
           }}
+          onRefine={() => openRefinement({ kind: "task", id: detail })}
+          refreshKey={detailRefresh}
+          suppressInitialFocus={Boolean(refining)}
           onChanged={() => void load()}
+          sessions={detailSessions.current}
           onRequestDelete={(title) => requestDelete("tasks", detail, title)}
         />
       )}
@@ -409,6 +442,22 @@ export function WorkbenchView({ active }: { active: boolean }) {
           onCancel={() => setDeleteTarget(undefined)}
         />
       )}
+      {refining && (
+        <RefinementPanel
+          key={`${refining.kind}:${refining.id}`}
+          ref={refinementRef}
+          messageDrafts={refinementMessages.current}
+          subjectTitle={refining.kind === "task" ? taskFor(refining.id)?.title : captureFor(refining.id)?.text}
+          onApplied={() => { setDetailRefresh(value => value + 1); void load(); }}
+          kind={refining.kind}
+          subjectId={refining.id}
+          onClose={() => {
+            setRefining(undefined);
+            restoreDetailFocus();
+            void load();
+          }}
+        />
+      )}{" "}
     </section>
   );
 }
