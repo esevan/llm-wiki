@@ -301,6 +301,37 @@ main:has(.task-workbench.active :is(.task-detail, .refinement-panel)) {
   background: var(--color-bg-elevated);
   border-bottom: var(--border-default);
 }
+.task-detail-tabs button {
+  flex: 0 0 auto;
+  min-height: var(--control-height);
+  padding: var(--space-2) var(--space-3);
+  border: var(--border-default);
+  border-radius: var(--radius-control);
+  background: var(--color-bg-surface);
+  color: var(--color-text-secondary);
+  font: inherit;
+  font-weight: 700;
+  line-height: 1.2;
+  cursor: pointer;
+  transition: border-color var(--motion-fast), background var(--motion-fast), color var(--motion-fast), box-shadow var(--motion-fast), transform var(--motion-fast);
+}
+.task-detail-tabs button:hover {
+  border-color: var(--color-accent-primary);
+  background: var(--color-bg-accent-subtle);
+  color: var(--color-text-primary);
+}
+.task-detail-tabs button:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 2px;
+}
+.task-detail-tabs button:active:not(:disabled) {
+  transform: translateY(1px);
+}
+.task-detail-tabs button:disabled,
+.task-detail-tabs button[aria-disabled="true"] {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
 .task-detail-tabs button[aria-selected="true"] {
   color: var(--color-accent-strong);
   border-color: var(--color-accent-primary);
