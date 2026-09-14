@@ -114,6 +114,8 @@ export interface TaskAggregate extends TaskCard {
 }
 export interface RefinementSession {
   id: string;
+  taskId?: string;
+  captureId?: string;
   inputDraft?: string;
   activeTab?: string;
   scrollAnchor?: string;

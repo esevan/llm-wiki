@@ -18,8 +18,8 @@ scroll position, and conversation history support returning later.
 unavailable while the current submission or response is being processed. Every provider turn includes
 the original Capture and ordered conversation history, even after a transient draft is cleared.
 
-The dialog sizes to the content up to the available window height. Longer conversations keep their own
-scroll area so the composer remains reachable. While a response is being prepared, the conversation shows
+The dialog keeps a stable reading height up to the available window height. Longer conversations keep their own
+scroll area so the composer remains reachable without leaving an oversized empty chat area for short histories. While a response is being prepared, the conversation shows
 an accessible localized status with an animated ellipsis. The current refinement endpoint returns a complete
 assistant message after polling; when that new message arrives, the panel reveals it progressively as a
 presentation effect. Stored conversation history is shown immediately and is not replayed. Opening the
@@ -28,8 +28,9 @@ refinement dialog keeps the underlying Workbench scroll position fixed until the
 A response can produce proposals. Review each proposal separately: edit, accept, or reject it.
 Accepting one proposal does not accept its siblings. Response processing includes loading the
 resulting proposals; a delayed proposal read must not silently discard the result.
-Task proposal previews show the proposed result body as the Task detail, including responses that
-return that field as `body`; accepting the proposal preserves it in the Task detail.
+Task proposal previews show the complete meaningful Task result fields—title, detail, outcome, scope,
+non-goals, and validation criteria—including responses that return the detail as `body` or nest the result;
+accepting the proposal preserves those values in the Task detail.
 
 ## Interruptions and errors
 

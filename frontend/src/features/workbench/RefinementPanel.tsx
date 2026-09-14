@@ -4,6 +4,7 @@ import { taskClient } from "../../services/taskClient";
 import type {
   RefinementProposal,
   RefinementSession,
+  TaskAggregate,
 } from "../../types/taskWorkbench";
 import { useTaskWorkbenchText } from "./taskWorkbenchText";
 
@@ -78,6 +79,7 @@ export function RefinementPanel({
     undefined,
   );
   const [proposals, setProposals] = useState<RefinementProposal[]>([]);
+  const [taskBaseline, setTaskBaseline] = useState<TaskAggregate | undefined>();
   const [draft, setDraft] = useState("");
   const messageKey = `${kind}:${subjectId}`;
   const [message, setMessage] = useState(messageDrafts?.get(messageKey) ?? "");
@@ -134,6 +136,7 @@ export function RefinementPanel({
     loadingRef.current = true;
     setLoading(true);
     setLoadError("");
+    setTaskBaseline(undefined);
     const sequence = ++loadSequence.current;
     try {
       const next = await (latest.current.session
@@ -155,6 +158,11 @@ export function RefinementPanel({
       setRevealingMessageIds(new Set());
       setSession(next);
       setDraft(nextDraft);
+      if (kind === "task" && next.taskId === subjectId) {
+        const baseline = await taskClient.task(subjectId).catch(() => undefined);
+        if (sequence !== loadSequence.current) return;
+        if (baseline?.id === subjectId) setTaskBaseline(baseline);
+      }
       requestAnimationFrame(() => {
         if (scrollRef.current)
           scrollRef.current.scrollTop = Number(next.scrollAnchor ?? 0);
@@ -417,7 +425,15 @@ export function RefinementPanel({
       setProposals((items) => items.filter((item) => item.id !== proposal.id));
       setEditing(undefined);
       setNotice(decision === "accept" ? text.previewApplied : text.previewRejected);
-      if (decision === "accept") onApplied?.();
+      if (decision === "accept") {
+        onApplied?.();
+        if (kind === "task") {
+          const sequence = loadSequence.current;
+          const baseline = await taskClient.task(subjectId).catch(() => undefined);
+          if (sequence === loadSequence.current)
+            setTaskBaseline(baseline?.id === subjectId ? baseline : undefined);
+        }
+      }
     } catch (e) {
       setError(String(e instanceof Error ? e.message : e));
     } finally { setDeciding(undefined); }
@@ -450,8 +466,28 @@ export function RefinementPanel({
     category: text.previewCategory, note: text.previewNote, relationship: text.relationshipKind,
     problemId: text.problem, problemRevision: text.problemRevision, taskId: text.task,
   };
-  const fieldsFor = (payload: Record<string, unknown>) => {
-    const values = payload.patch && typeof payload.patch === "object" ? payload.patch as Record<string, unknown> : payload;
+  const meaningfulPayload = (payload: Record<string, unknown>, proposal?: RefinementProposal) => {
+    const patch = payload.patch && typeof payload.patch === "object" && !Array.isArray(payload.patch)
+      ? payload.patch as Record<string, unknown>
+      : undefined;
+    const source = patch ?? payload;
+    const values: Record<string, unknown> = proposal?.type === "task_patch" && kind === "task" && taskBaseline?.id === subjectId
+      && (!payload.taskId || payload.taskId === subjectId)
+      ? {
+          title: taskBaseline.title,
+          detail: taskBaseline.detail,
+          outcome: taskBaseline.outcome,
+          scope: taskBaseline.scope,
+          nonGoals: taskBaseline.nonGoals,
+          validationCriteria: taskBaseline.validationCriteria,
+          ...source,
+        }
+      : { ...source };
+    if (values.body !== undefined && values.detail === undefined) values.detail = values.body;
+    return values;
+  };
+  const fieldsFor = (payload: Record<string, unknown>, proposal?: RefinementProposal) => {
+    const values = meaningfulPayload(payload, proposal);
     return Object.entries(values).filter(([key, value]) => labels[key] && value !== null && value !== undefined);
   };
   const editField = (proposal: RefinementProposal, key: string, input: string) => setEdits(current => {
@@ -503,11 +539,12 @@ export function RefinementPanel({
         {!proposals.length && !polling && <p className="region-empty">{text.previewEmpty}</p>}
         {proposals.map(proposal => {
           const payload = edits[proposal.id] ?? canonicalPayload(proposal);
-          const fields = fieldsFor(payload);
+          const previewValues = meaningfulPayload(payload, proposal);
+          const fields = fieldsFor(payload, proposal);
           const isEditing = editing === proposal.id;
           return <article key={proposal.id} className="proposal proposal-document" data-proposal-id={proposal.id}>
             <small>{proposalLabel(proposal.type)}</small>
-            <h4>{String(payload.title ?? (payload.patch as Record<string, unknown> | undefined)?.title ?? payload.statement ?? proposalLabel(proposal.type))}</h4>
+            <h4>{String(previewValues.title ?? payload.statement ?? proposalLabel(proposal.type))}</h4>
             {isEditing ? <div className="proposal-editor">{fields.map(([key, value]) => <label key={key}>{labels[key]}
               <textarea data-control="refinement-proposal-editor" aria-label={`${text.edit} ${labels[key]}`} value={String(value)}
                 onChange={event => editField(proposal, key, event.target.value)} />

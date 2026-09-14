@@ -345,8 +345,30 @@ fn refinement_prompt(
             .map_err(|error| error.to_string())?;
         session["originalCapture"] = json!({"id":capture_id,"text":original});
     }
+    if let Some(task_id) = session.get("taskId").and_then(Value::as_str) {
+        let task = connection
+            .query_row(
+                "SELECT t.current_revision,r.title,r.detail,r.outcome,r.scope,r.non_goals,r.validation_criteria FROM tasks t JOIN task_revisions r ON r.task_id=t.id AND r.revision=t.current_revision WHERE t.id=?",
+                [task_id],
+                |row| Ok(json!({
+                    "id": task_id,
+                    "taskRevision": row.get::<_, i64>(0)?,
+                    "title": row.get::<_, String>(1)?,
+                    "detail": row.get::<_, String>(2)?,
+                    "outcome": row.get::<_, String>(3)?,
+                    "scope": row.get::<_, String>(4)?,
+                    "nonGoals": row.get::<_, String>(5)?,
+                    "validationCriteria": row.get::<_, String>(6)?,
+                })),
+            )
+            .optional()
+            .map_err(|error| error.to_string())?;
+        if let Some(task) = task {
+            session["taskSnapshot"] = task;
+        }
+    }
     Ok(format!(
-        "Return JSON only as {{\"message\":string,\"proposals\":[{{\"id\":string,\"type\":\"task_patch|new_task|problem_snapshot|task_problem_link\",\"payload\":object}}]}}. Propose durable changes but do not apply them. Use only the supplied local session. A Capture may already contain a proposed solution: preserve it as the starting Task draft and ask only for details that are actually missing; do not restart broad problem or solution discovery.\n\n{}",
+        "Return JSON only as {{\"message\":string,\"proposals\":[{{\"id\":string,\"type\":\"task_patch|new_task|problem_snapshot|task_problem_link\",\"payload\":object}}]}}. For new_task, include every available Task field in payload: title, detail, outcome, scope, nonGoals, and validationCriteria. For task_patch, put only the changed Task values in payload.patch using those field names and include the exact taskSnapshot.taskRevision as expectedTaskRevision; the UI combines the patch with taskSnapshot for a complete review preview. Use detail for the full Task description, never an unlabelled summary. For problem_snapshot include statement, detail, category, and note when available; for task_problem_link include problemId, problemRevision, relationship, and note when available. Propose durable changes but do not apply them. Use only the supplied local session. A Capture may already contain a proposed solution: preserve it as the starting Task draft and ask only for details that are actually missing; do not restart broad problem or solution discovery.\n\n{}",
         session
     ))
 }
@@ -2488,6 +2510,22 @@ mod tests {
                 .unwrap();
             expected.push(("assistant", assistant));
         }
+
+        let task_id = completed_task(&db);
+        let task_session = refinement_open(
+            &db,
+            &json!({"operationId":"prompt-task-open","taskId":task_id}),
+        )
+        .unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let task_prompt = refinement_prompt(&connection, &task_session).unwrap();
+        let task_context: Value =
+            serde_json::from_str(task_prompt.split_once("\n\n").unwrap().1).unwrap();
+        assert_eq!(task_context["taskSnapshot"]["id"], task_id);
+        assert_eq!(task_context["taskSnapshot"]["title"], "Evidence Task");
+        assert_eq!(task_context["taskSnapshot"]["taskRevision"], 1);
     }
 
     #[tokio::test]

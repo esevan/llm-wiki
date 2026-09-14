@@ -322,6 +322,38 @@ describe("Refinement panel", () => {
     expect(screen.queryByRole("button", { name: "Proposals" })).not.toBeInTheDocument();
   });
 
+  it("shows every meaningful Task field in a task patch preview", async () => {
+    const request = vi.fn().mockImplementation(({ path }: { path: string }) => Promise.resolve({
+      ok: true,
+      status: 200,
+      json: async () => path.endsWith("/proposals")
+        ? [{ id: "nested-task", type: "task_patch", payload: {
+            expectedTaskRevision: 4,
+            patch: {
+              title: "Keep the complete Task result",
+              detail: "The full authored description remains reviewable.",
+              outcome: "Reviewers can see the intended outcome.",
+              scope: "Only the refinement preview changes.",
+              nonGoals: "No unrelated Workbench changes.",
+              validationCriteria: "All six Task fields are visible.",
+            },
+          }, draftRevision: 4 }]
+        : { id: "nested-session", messages: [] },
+      text: async () => "",
+      body: null,
+    }));
+    window.llmWikiApplication = { request };
+    render(<RefinementPanel kind="task" subjectId="nested-task" onClose={vi.fn()} />);
+
+    for (const value of [
+      "The full authored description remains reviewable.",
+      "Reviewers can see the intended outcome.",
+      "Only the refinement preview changes.",
+      "No unrelated Workbench changes.",
+      "All six Task fields are visible.",
+    ]) expect(await screen.findByText(value)).toBeInTheDocument();
+  });
+
   it.each(["reject", "unmount"])("handles a delayed terminal proposal %s without stale updates", async (outcome) => {
     let sent = false;
     let finish: ((value?: unknown) => void) | undefined;
@@ -538,4 +570,31 @@ describe("Refinement panel", () => {
       vi.useRealTimers();
     }
   });
+  it("previews unchanged task details while applying only the sparse proposal", async () => {
+    const patch = { outcome: "Updated outcome" };
+    const request = vi.fn().mockImplementation(({ path }: { path: string }) => {
+      const value = path === "/tasks/full-preview"
+        ? { id: "full-preview", title: "Existing title", detail: "Full existing detail", scope: "Existing scope", outcome: "Old outcome", nonGoals: "Existing exclusions", validationCriteria: "Existing validation" }
+        : path.endsWith("/proposals")
+          ? [{ id: "sparse", type: "task_patch", draftRevision: 1, payload: { taskId: "full-preview", expectedTaskRevision: 1, patch } }]
+          : { id: "preview-session", taskId: "full-preview", messages: [] };
+      return Promise.resolve({ ok: true, status: 200, json: async () => value, text: async () => "", body: null });
+    });
+    window.llmWikiApplication = { request };
+    render(<RefinementPanel kind="task" subjectId="full-preview" onClose={vi.fn()} />);
+    expect(await screen.findByRole("heading", { name: "Existing title" })).toBeInTheDocument();
+    expect(screen.getByText("Full existing detail")).toBeInTheDocument();
+    expect(screen.getByText("Existing scope")).toBeInTheDocument();
+    expect(screen.getByText("Existing exclusions")).toBeInTheDocument();
+    expect(screen.getByText("Existing validation")).toBeInTheDocument();
+    expect(screen.getByText("Updated outcome")).toBeInTheDocument();
+    fireEvent.click(document.querySelector('[data-control="refinement-proposal-accept"]')!);
+    await waitFor(() => expect(request).toHaveBeenCalledWith(expect.objectContaining({
+      path: "/refinement/preview-session/proposal-decisions",
+      method: "POST",
+    })));
+    const decision = request.mock.calls.map(([input]) => input).find(input => input.path.endsWith("/proposal-decisions"));
+    expect(JSON.parse(decision.body).editedPayload).toBeUndefined();
+  });
+
 });
