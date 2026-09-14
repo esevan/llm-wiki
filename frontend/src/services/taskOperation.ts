@@ -53,6 +53,7 @@ export function taskOperation(
   if (p[0] === "tasks" && p[1]) {
     const ids = { taskId: p[1] };
     if (p.length === 2 && method === "GET") return op("task.get", ids);
+    if (p.length === 2 && method === "DELETE") return op("task.delete", ids);
     if (p.length === 3) {
       const names: Record<string, string> = {
         "POST revisions": "revision",

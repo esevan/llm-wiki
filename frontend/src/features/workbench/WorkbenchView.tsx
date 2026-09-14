@@ -6,6 +6,7 @@ import type {
   WorkbenchItem,
   WorkbenchSnapshot,
 } from "../../types/taskWorkbench";
+import { DeleteItemDialog } from "./DeleteItemDialog";
 import { RefinementPanel } from "./RefinementPanel";
 import { TaskDetail, type TaskDetailHandle } from "./TaskDetail";
 import { useTaskWorkbenchText } from "./taskWorkbenchText";
@@ -23,7 +24,10 @@ export function WorkbenchView({ active }: { active: boolean }) {
     [refining, setRefining] = useState<{
       kind: "capture" | "task";
       id: string;
-    }>();
+    }>(),
+    [deleteTarget, setDeleteTarget] = useState<{ entityType: "captures" | "problems" | "tasks"; id: string; title: string }>(),
+    [deleteBusy, setDeleteBusy] = useState(false),
+    [deleteError, setDeleteError] = useState("");
   const detailRef = useRef<TaskDetailHandle>(null);
   const detailTrigger = useRef<HTMLElement | null>(null);
   const selectDetail = (id: string | undefined, trigger?: HTMLElement) => {
@@ -100,6 +104,29 @@ export function WorkbenchView({ active }: { active: boolean }) {
       : task.state === "in_progress"
         ? text.inProgress
         : text.ready;
+  const requestDelete = (entityType: "captures" | "problems" | "tasks", id: string, title: string) => {
+    const proceed = () => {
+      setDeleteError("");
+      setDeleteTarget({ entityType, id, title });
+    };
+    if (entityType === "tasks" && detail === id && detailRef.current) detailRef.current.requestLeave(proceed);
+    else proceed();
+  };
+  const confirmDelete = async () => {
+    if (!deleteTarget || deleteBusy) return;
+    setDeleteBusy(true);
+    setDeleteError("");
+    try {
+      await taskClient.deleteItem(deleteTarget.entityType, deleteTarget.id);
+      if (detail === deleteTarget.id) setDetail(undefined);
+      await load();
+      setDeleteTarget(undefined);
+    } catch (e) {
+      setDeleteError(String(e instanceof Error ? e.message : e) || text.deleteFailure);
+    } finally {
+      setDeleteBusy(false);
+    }
+  };
   return (
     <section
       id="workbench"
@@ -303,8 +330,10 @@ export function WorkbenchView({ active }: { active: boolean }) {
                               >
                                 {text.refine}
                               </button>
+                              <button type="button" data-control="task-card-delete" data-entity-id={item.id} onClick={() => requestDelete("tasks", item.id, item.title)}>{text.delete}</button>
                             </>
                           ) : item.kind === "capture" ? (
+                            <>
                             <button
                               data-control="task-card-refine"
                               data-entity-id={item.id}
@@ -315,7 +344,10 @@ export function WorkbenchView({ active }: { active: boolean }) {
                             >
                               {text.refine}
                             </button>
+                            <button type="button" data-control="task-card-delete" data-entity-id={item.id} onClick={() => requestDelete("captures", item.id, item.text)}>{text.delete}</button>
+                            </>
                           ) : (
+                            <>
                             <button
                               type="button"
                               data-control="task-card-refine"
@@ -329,6 +361,8 @@ export function WorkbenchView({ active }: { active: boolean }) {
                             >
                               {text.refine}
                             </button>
+                            <button type="button" data-control="task-card-delete" data-entity-id={item.problemId} onClick={() => requestDelete("problems", item.problemId, item.title)}>{text.delete}</button>
+                            </>
                           )}
                         </footer>
                       </article>
@@ -363,6 +397,16 @@ export function WorkbenchView({ active }: { active: boolean }) {
             target?.focus();
           }}
           onChanged={() => void load()}
+          onRequestDelete={(title) => requestDelete("tasks", detail, title)}
+        />
+      )}
+      {deleteTarget && (
+        <DeleteItemDialog
+          title={deleteTarget.title}
+          busy={deleteBusy}
+          error={deleteError}
+          onConfirm={() => void confirmDelete()}
+          onCancel={() => setDeleteTarget(undefined)}
         />
       )}
     </section>

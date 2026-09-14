@@ -57,5 +57,9 @@ does not automatically approve or block a Task.
 Queue can also open reports retained from the previous workflow. Their visible conflict-decision
 controls save the user's decision and note; they do not restore the retired Problem approval flow.
 
+## Remove a Workbench item
+
+Each Capture, Task, and migrated Problem card has a Delete action. Task detail also offers Delete. The confirmation shows the item title; Keep item or Escape cancels it. Unsaved Task changes first require a save, discard, or keep-editing choice. Confirmed deletion preserves the original record and hides it from the Workbench. Cancelling leaves the card in place; a failed request leaves the confirmation open with the error. Confirmed items disappear after refresh, while related Knowledge records and vault files remain intact. A pending refinement result cannot make a deleted item visible again.
+
 Related Spec Kit: [012 — Task-centered Workbench](../../specs/012-task-centered-workbench/spec.md).
 Historical contract: [002 — Conflict-Gated Workflow](../../specs/002-conflict-gated-workflow/spec.md).

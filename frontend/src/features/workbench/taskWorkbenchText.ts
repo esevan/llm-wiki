@@ -138,6 +138,12 @@ const en = {
   saveBeforeClosing: "Save changes before leaving this Task?",
   discard: "Discard",
   keepEditing: "Keep editing",
+  delete: "Delete",
+  deleteItem: "Delete this item",
+  deleteConfirm: "Delete this item from the Workbench?",
+  deleteExplanation: "The item will be hidden from the Workbench. Linked Knowledge documents and vault files will be kept.",
+  deleteCancel: "Keep item",
+  deleteFailure: "The item could not be deleted.",
 };
 const ko: typeof en = {
   workspace: "내 작업 공간",
@@ -277,6 +283,12 @@ const ko: typeof en = {
   saveBeforeClosing: "이 Task를 떠나기 전에 변경 사항을 저장할까요?",
   discard: "버리기",
   keepEditing: "계속 편집",
+  delete: "삭제",
+  deleteItem: "이 항목 삭제",
+  deleteConfirm: "이 항목을 작업대에서 삭제할까요?",
+  deleteExplanation: "항목이 작업대에서 숨겨집니다. 연결된 Knowledge 문서와 보관함 파일은 유지됩니다.",
+  deleteCancel: "항목 유지",
+  deleteFailure: "항목을 삭제하지 못했습니다.",
 };
 const subscribe = (changed: () => void) => {
   const observer = new MutationObserver(changed);

@@ -13,11 +13,13 @@ export function TaskDetail({
   taskId,
   onClose,
   onChanged,
+  onRequestDelete,
   ref,
 }: {
   taskId: string;
   onClose: () => void;
   onChanged: () => void;
+  onRequestDelete?: (title: string) => void;
   ref?: Ref<TaskDetailHandle>;
 }) {
   const text = useTaskWorkbenchText();
@@ -327,6 +329,9 @@ export function TaskDetail({
             {text.reopen}
           </button>
         )}
+        {onRequestDelete && <button type="button" data-control="task-detail-delete" onClick={() => onRequestDelete(task.title)}>
+          {text.deleteItem}
+        </button>}
       </section>
       {refining && (
         <RefinementPanel

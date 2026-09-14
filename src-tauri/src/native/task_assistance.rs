@@ -4,7 +4,7 @@ use crate::adapters::sqlite::task_repository::{
 };
 use crate::native::{database, semantic::SemanticEngine, settings, vault};
 use chrono::{SecondsFormat, Utc};
-use rusqlite::{params, OptionalExtension, Transaction};
+use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -183,6 +183,28 @@ fn subject(input: &Value) -> Result<(&'static str, &str), String> {
     }
 }
 
+/// Refinement sessions retain their drafts for auditability, but a deleted subject must not
+/// remain usable as a path to create or modify Workbench entities.
+fn ensure_refinement_subject_visible(connection: &Connection, session_id: &str) -> Result<(), String> {
+    let visible: bool = connection
+        .query_row(
+            "SELECT EXISTS(
+                SELECT 1 FROM refinement_sessions s
+                WHERE s.id=?
+                  AND ((s.capture_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM deleted_entities d WHERE d.entity_type='captures' AND d.entity_id=s.capture_id))
+                    OR (s.task_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM deleted_entities d WHERE d.entity_type='tasks' AND d.entity_id=s.task_id)))
+            )",
+            [session_id],
+            |row| row.get(0),
+        )
+        .map_err(|error| error.to_string())?;
+    if visible {
+        Ok(())
+    } else {
+        Err("Refinement subject not found".into())
+    }
+}
+
 fn refinement_open(db_path: &Path, input: &Value) -> Result<Value, String> {
     let (kind, subject_id) = subject(input)?;
     let mut connection = database::open(db_path)?;
@@ -205,6 +227,10 @@ fn refinement_open(db_path: &Path, input: &Value) -> Result<Value, String> {
         )
         .map_err(|error| error.to_string())?;
     if !exists {
+        return Err(format!("{kind} not found"));
+    }
+    let visible: bool = tx.query_row("SELECT NOT EXISTS(SELECT 1 FROM deleted_entities WHERE entity_type=? AND entity_id=?)", [if kind == "capture" { "captures" } else { "tasks" }, subject_id], |row| row.get(0)).map_err(|error| error.to_string())?;
+    if !visible {
         return Err(format!("{kind} not found"));
     }
     let column = if kind == "capture" {
@@ -261,10 +287,12 @@ fn refinement_get_for_subject(db_path: &Path, input: &Value) -> Result<Value, St
         .optional()
         .map_err(|error| error.to_string())?
         .ok_or("Refinement session not found")?;
+    ensure_refinement_subject_visible(&connection, &session_id)?;
     session_value(&connection, &session_id)
 }
 
 fn session_value(connection: &rusqlite::Connection, session_id: &str) -> Result<Value, String> {
+    ensure_refinement_subject_visible(connection, session_id)?;
     let mut value = connection
         .query_row(
             "SELECT id,state,current_draft_revision,active_tab,scroll_anchor,input_draft,last_user_activity_at,updated_at,capture_id,task_id FROM refinement_sessions WHERE id=?",
@@ -334,6 +362,7 @@ fn refinement_workspace(db_path: &Path, input: &Value) -> Result<Value, String> 
     if let Some(result) = operation_replay(&tx, input)? {
         return Ok(result);
     }
+    ensure_refinement_subject_visible(&tx, session_id)?;
     let current: i64 = tx
         .query_row(
             "SELECT current_draft_revision FROM refinement_sessions WHERE id=?",
@@ -399,6 +428,7 @@ async fn refinement_message(
     .optional()
     .map_err(|error| error.to_string())?
     .ok_or("Refinement session not found")?;
+    ensure_refinement_subject_visible(&tx, session_id)?;
     let message_id = id();
     let job_id = id();
     let timestamp = now();
@@ -492,6 +522,9 @@ async fn run_refinement_response(
                 let tx = connection
                     .transaction()
                     .map_err(|error| error.to_string())?;
+                // The provider response may arrive after the subject was deleted. Retain no new
+                // draft in that case, so the deleted subject cannot be revived by async work.
+                ensure_refinement_subject_visible(&tx, session_id)?;
                 let revision: i64 = tx
                     .query_row(
                         "SELECT current_draft_revision+1 FROM refinement_sessions WHERE id=?",
@@ -585,6 +618,7 @@ fn validate_proposals(proposals: &[Value]) -> Result<(), String> {
 
 fn refinement_proposals(db_path: &Path, session_id: &str) -> Result<Value, String> {
     let connection = database::open(db_path)?;
+    ensure_refinement_subject_visible(&connection, session_id)?;
     let row = connection
         .query_row(
             "SELECT revision,payload_json FROM refinement_drafts WHERE session_id=? ORDER BY revision DESC LIMIT 1",
@@ -638,6 +672,7 @@ pub(crate) fn refinement_decision_tx(tx: &Transaction<'_>, input: &Value) -> Res
     if let Some(result) = operation_replay(tx, input)? {
         return Ok(result);
     }
+    ensure_refinement_subject_visible(tx, session_id)?;
     let current: i64 = tx
         .query_row(
             "SELECT current_draft_revision FROM refinement_sessions WHERE id=?",
@@ -2484,6 +2519,60 @@ mod tests {
             .query_row("SELECT count(*) FROM tasks", [], |row| row.get(0))
             .unwrap();
         assert_eq!(count, 1);
+    }
+
+    #[tokio::test]
+    async fn deleted_refinement_subjects_cannot_apply_capture_or_task_proposals() {
+        let (_root, db, vault, settings) = fixture();
+        let capture_id = capture(&db);
+        let capture_session = execute(
+            &db,
+            &settings,
+            &vault,
+            SemanticEngine::new(None),
+            "task-refinement.open",
+            &json!({"operationId":"deleted-capture-open","captureId":capture_id}),
+        )
+        .await
+        .unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let capture_payload = json!({"proposals":[{"id":"capture-new-task","type":"new_task","payload":{"title":"Must not be created"}}]});
+
+        let task_id = completed_task(&db);
+        let task_session = execute(
+            &db,
+            &settings,
+            &vault,
+            SemanticEngine::new(None),
+            "task-refinement.open",
+            &json!({"operationId":"deleted-task-open","taskId":task_id}),
+        )
+        .await
+        .unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let task_payload = json!({"proposals":[{"id":"task-patch","type":"task_patch","payload":{"expectedTaskRevision":1,"patch":{"title":"Must not revise"}}}]});
+
+        let connection = database::open(&db).unwrap();
+        for (session, payload) in [(&capture_session, &capture_payload), (&task_session, &task_payload)] {
+            connection.execute("INSERT INTO refinement_drafts(session_id,revision,material_hash,payload_json) VALUES(?,1,?,?)", params![session,digest(&payload.to_string()),payload.to_string()]).unwrap();
+            connection.execute("UPDATE refinement_sessions SET current_draft_revision=1 WHERE id=?", [session]).unwrap();
+        }
+        connection.execute("INSERT INTO deleted_entities(entity_type,entity_id) VALUES('captures',?)", [&capture_id]).unwrap();
+        connection.execute("INSERT INTO deleted_entities(entity_type,entity_id) VALUES('tasks',?)", [&task_id]).unwrap();
+        drop(connection);
+
+        let capture_error = execute(&db,&settings,&vault,SemanticEngine::new(None),"task-refinement.decision",&json!({"operationId":"deleted-capture-apply","sessionId":capture_session,"proposalId":"capture-new-task","draftRevision":1,"decision":"apply"})).await.unwrap_err();
+        assert!(capture_error.contains("Refinement subject not found"));
+        let task_error = execute(&db,&settings,&vault,SemanticEngine::new(None),"task-refinement.decision",&json!({"operationId":"deleted-task-apply","sessionId":task_session,"proposalId":"task-patch","draftRevision":1,"decision":"apply"})).await.unwrap_err();
+        assert!(task_error.contains("Refinement subject not found"));
+
+        let connection = database::open(&db).unwrap();
+        assert_eq!(connection.query_row("SELECT count(*) FROM tasks WHERE id!=?", [&task_id], |row| row.get::<_, i64>(0)).unwrap(), 0);
+        assert_eq!(connection.query_row("SELECT current_revision FROM tasks WHERE id=?", [&task_id], |row| row.get::<_, i64>(0)).unwrap(), 1);
     }
 
     #[test]

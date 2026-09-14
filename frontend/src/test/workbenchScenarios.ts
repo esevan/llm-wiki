@@ -436,6 +436,30 @@ export async function runTaskControlMatrixScenario(h: WorkbenchScenarioHarness) 
   await h.waitFor(() => Boolean(document.querySelector(".refinement-panel")), "resumed Task refinement");
   effect(h, ["task-shortcut-refine"], () => Boolean(document.querySelector(".refinement-panel")));
   h.click(control("refinement-close"), "Close resumed Task refinement");
+  await h.waitFor(() => !document.querySelector(".refinement-panel"), "closed refinement before deletion");
+  const captureDelete = captureCard?.querySelector<HTMLElement>('[data-control="task-card-delete"]');
+  if (!captureDelete) throw new Error("Capture delete control missing");
+  observe(h, "Workbench deletion controls");
+  h.coverage.interact("task-card-delete", () => h.click(captureDelete, "Ask to delete Capture"));
+  await h.waitFor(() => Boolean(document.querySelector(".workbench-delete-dialog[open]")), "Capture delete confirmation");
+  effect(h, ["task-card-delete"], () => Boolean(document.querySelector(".workbench-delete-dialog[open]")));
+  observe(h, "delete confirmation");
+  await clickControl(h, "task-delete-cancel", "Keep Capture");
+  effect(h, ["task-delete-cancel"], () => !document.querySelector(".workbench-delete-dialog") && captureDelete.isConnected);
+  h.click(captureDelete, "Ask again to delete Capture");
+  await h.waitFor(() => Boolean(document.querySelector(".workbench-delete-dialog[open]")), "reopened delete confirmation");
+  await clickControl(h, "task-delete-confirm", "Delete Capture");
+  await h.waitFor(() => !document.querySelector(".workbench-delete-dialog") && !captureDelete.isConnected, "deleted Capture removed");
+  effect(h, ["task-delete-confirm"], () => !document.querySelector(".canonical-work")?.textContent?.includes(shortcutCapture));
+  await h.detail(revisedTitle);
+  observe(h, "Task detail delete");
+  await clickControl(h, "task-detail-delete", "Ask to delete Task from detail");
+  await h.waitFor(() => Boolean(document.querySelector(".workbench-delete-dialog[open]")), "Task delete confirmation");
+  effect(h, ["task-detail-delete"], () => document.querySelector(".workbench-delete-dialog")?.textContent?.includes(revisedTitle) === true);
+  await clickControl(h, "task-delete-confirm", "Delete Task from detail");
+  await h.waitFor(() => !document.querySelector(".task-detail") && !document.querySelector(".workbench-delete-dialog"), "deleted Task detail closes");
+  const afterDeletion = await h.api<{ categories: Array<{ items: Array<{ title?: string; text?: string }> }> }>("/workbench");
+  if (afterDeletion.categories.some(group => group.items.some(item => item.title === revisedTitle || item.text === shortcutCapture))) throw new Error("Deleted item remains in native Workbench readback");
   await h.step("F03–F30 current Workbench controls were enabled only at valid preconditions and produced native readback or an independent visible effect.");
 }
 

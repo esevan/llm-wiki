@@ -451,6 +451,7 @@ impl NativeApplication {
             | "capture.create"
             | "task.create"
             | "task.get"
+            | "task.delete"
             | "task.revision"
             | "task.transition"
             | "task.problem-link.create"

@@ -47,6 +47,10 @@ export const taskClient = {
   createCapture: (text: string) => request("/captures", "POST", { text }),
   createTask: (inputText: string) =>
     request<TaskAggregate>("/tasks", "POST", { inputText, title: inputText }),
+  deleteItem: (entityType: "captures" | "problems" | "features" | "tasks", id: string) =>
+    entityType === "tasks"
+      ? request(`/tasks/${encodeURIComponent(id)}`, "DELETE")
+      : request(`/items/${entityType}/${encodeURIComponent(id)}`, "DELETE"),
   createProblem: (statement: string, detail = "") =>
     request<{ id: string; problemRevision: number }>("/problems", "POST", {
       statement,

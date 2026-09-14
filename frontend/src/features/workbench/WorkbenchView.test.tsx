@@ -1,6 +1,12 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { beforeAll, afterAll, describe, expect, it, vi } from "vitest";
 import { WorkbenchView } from "./WorkbenchView";
+
+beforeAll(() => {
+  Object.defineProperty(HTMLDialogElement.prototype, "showModal", { configurable: true, value: function (this: HTMLDialogElement) { this.open = true; } });
+  Object.defineProperty(HTMLDialogElement.prototype, "close", { configurable: true, value: function (this: HTMLDialogElement) { this.open = false; } });
+});
+afterAll(() => { Reflect.deleteProperty(HTMLDialogElement.prototype, "showModal"); Reflect.deleteProperty(HTMLDialogElement.prototype, "close"); });
 
 const snapshot = {
   revision: 1,
@@ -155,6 +161,53 @@ describe("Task Workbench", () => {
     });
     delete window.openChat;
   });
+
+  it("requires confirmation before deleting a Capture and refreshes after confirmation", async () => {
+    let deleted = false;
+    const request = vi.fn().mockImplementation(({ path, method }: { path: string; method?: string }) => {
+      if (path === "/workbench") return Promise.resolve(response(deleted ? { ...snapshot, refiningShortcuts: [], categories: [] } : snapshot));
+      if (path === "/items/captures/capture" && method === "DELETE") { deleted = true; return Promise.resolve(response(null, true, 204)); }
+      return Promise.resolve(response({}));
+    });
+    window.llmWikiApplication = { request };
+    render(<WorkbenchView active />);
+    const card = (await screen.findAllByText("Keep this thought")).find((node) => node.closest("article"))!;
+    const trigger = card.closest("article")!.querySelector<HTMLButtonElement>('[data-control="task-card-delete"]')!;
+    trigger.focus();
+    fireEvent.click(trigger);
+    expect(screen.getByRole("button", { name: "Keep item" })).toHaveFocus();
+    fireEvent.click(screen.getByRole("button", { name: "Keep item" }));
+    expect(trigger).toHaveFocus();
+    fireEvent.click(trigger);
+    fireEvent(screen.getByRole("alertdialog"), new Event("cancel", { bubbles: false, cancelable: true }));
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    fireEvent.click(trigger);
+    expect(request.mock.calls.some(([arg]) => arg.path.includes("/items/"))).toBe(false);
+    expect(screen.getByRole("alertdialog")).toHaveTextContent("Delete this item from the Workbench?");
+    fireEvent.click(screen.getByRole("alertdialog").querySelector('[data-control="task-delete-confirm"]')!);
+    await waitFor(() => expect(screen.queryByText("Keep this thought")).not.toBeInTheDocument());
+    expect(request.mock.calls.filter(([arg]) => arg.method === "DELETE")).toHaveLength(1);
+    expect(document.querySelector("#workbench h1")).toHaveFocus();
+  });
+  it("retains a Task and its active shortcut when deletion fails, then permits retry", async () => {
+    let attempts = 0;
+    const request = vi.fn().mockImplementation(({ path, method }: { path: string; method?: string }) => {
+      if (method === "DELETE") { attempts++; return Promise.resolve(attempts === 1 ? response({ error: "Delete offline" }, false) : response(null, true, 204)); }
+      return Promise.resolve(response(attempts === 2 ? { ...snapshot, activeShortcuts: [], categories: [] } : snapshot));
+    });
+    window.llmWikiApplication = { request };
+    render(<WorkbenchView active />);
+    const card = (await screen.findAllByText("Ship workbench")).find((node) => node.closest("article"))!;
+    fireEvent.click(card.closest("article")!.querySelector('[data-control="task-card-delete"]')!);
+    fireEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: /^Delete$/ }));
+    await screen.findByText("Delete offline");
+    expect(document.querySelector('[data-control="task-shortcut-open"]')).toBeInTheDocument();
+    fireEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: /^Delete$/ }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument());
+    expect(document.querySelector('[data-control="task-shortcut-open"]')).not.toBeInTheDocument();
+    expect(request.mock.calls.filter(([arg]) => arg.path === "/tasks/active" && arg.method === "DELETE")).toHaveLength(2);
+  });
+
 });
 
 const draftControl = (id: string) => document.querySelector<HTMLElement>(`[data-control="${id}"]`)!;
@@ -190,6 +243,27 @@ describe("guarded Task selection", () => {
       expect(draftControl("task-revision-detail")).toHaveValue(choice === "save" ? "Local draft" : "Original");
     }
     expect(request.mock.calls.filter(([arg]) => arg.path.endsWith("/revisions"))).toHaveLength(choice === "save" || choice === "failure" ? 1 : 0);
+  });
+
+  it("guards unsaved detail before deletion and confirms the current Task title", async () => {
+    const task = { id: "active", taskRevision: 3, state: "in_progress", title: "Ship workbench", detail: "Original" };
+    const request = vi.fn().mockImplementation(({ path }: { path: string }) => Promise.resolve(response(path === "/workbench" ? snapshot : task)));
+    window.llmWikiApplication = { request };
+    render(<WorkbenchView active />);
+    await screen.findByText("Plan release");
+    openTask("Ship workbench");
+    await waitFor(() => expect(draftControl("task-revision-detail")).toBeInTheDocument());
+    fireEvent.change(draftControl("task-revision-detail"), { target: { value: "Unsaved draft" } });
+    fireEvent.click(draftControl("task-detail-delete"));
+    expect(document.querySelector(".workbench-delete-dialog")).not.toBeInTheDocument();
+    fireEvent.click(draftControl("task-draft-guard-keep-editing"));
+    expect(draftControl("task-revision-detail")).toHaveValue("Unsaved draft");
+    fireEvent.click(draftControl("task-detail-delete"));
+    fireEvent.click(draftControl("task-draft-guard-discard"));
+    expect(document.querySelector(".workbench-delete-dialog")).toHaveTextContent("Ship workbench");
+    fireEvent.click(draftControl("task-delete-cancel"));
+    expect(document.querySelector(".task-detail")).toBeInTheDocument();
+    expect(request.mock.calls.some(([arg]) => arg.method === "DELETE")).toBe(false);
   });
 
   it("blocks switches during a mutation and keeps drafts while the route is hidden", async () => {

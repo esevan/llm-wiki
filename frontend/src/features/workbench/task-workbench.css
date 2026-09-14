@@ -219,7 +219,8 @@
 .task-actions button,
 .task-panel button,
 .refinement-panel button,
-.review-panel button {
+.review-panel button,
+.workbench-delete-dialog button {
   min-height: 34px;
   padding: 6px 10px;
   border: var(--border-default);
@@ -232,7 +233,8 @@
 .task-actions button:hover,
 .task-panel button:hover,
 .refinement-panel button:hover,
-.review-panel button:hover {
+.review-panel button:hover,
+.workbench-delete-dialog button:hover {
   border-color: var(--color-accent-primary);
   background: var(--color-bg-accent-subtle);
 }
@@ -440,3 +442,24 @@
     grid-template-columns: 1fr;
   }
 }
+
+.workbench-delete-dialog {
+  color: var(--color-text-primary);
+  background: var(--color-bg-surface);
+  border: var(--border-default);
+  border-radius: var(--radius-dialog);
+  box-shadow: var(--shadow-dialog);
+  padding: var(--space-5);
+  max-height: calc(100vh - 32px);
+  overflow: auto;
+  overflow-wrap: anywhere;
+}
+.workbench-delete-dialog h2 { margin-top: 0; font-size: var(--font-size-lg); }
+.workbench-delete-dialog::backdrop { background: var(--color-overlay-ink); }
+.workbench-delete-subject { max-height: 25vh; overflow: auto; }
+.workbench-delete-dialog footer { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--space-2); }
+.workbench-delete-dialog .workbench-delete-confirm { color: var(--color-status-error); border-color: var(--color-status-error); }
+
+.workbench-delete-dialog button { min-height: 40px; }
+.workbench-delete-dialog button:active:not(:disabled) { transform: translateY(1px); }
+.workbench-delete-dialog button:disabled { cursor: wait; opacity: .55; }

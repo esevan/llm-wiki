@@ -27,6 +27,7 @@ impl TaskApplicationService {
         match name {
             "capture.create" => self.capture(input),
             "task.get" => self.get(req(input, "taskId")?),
+            "task.delete" => self.delete(req(input, "taskId")?),
             "workbench.get" => self.workbench(),
             "task.readiness.get" => self.readiness(req(input, "taskId")?),
             "task.work-log.get" => self.work_log(req(input, "taskId")?),
@@ -155,6 +156,11 @@ impl TaskApplicationService {
             tx.execute("INSERT INTO captures(id,text,created_at,source_mode,last_user_activity_at) VALUES(?,?,?,'direct_task_provenance',?)", params![capture_id, text, at, at]).map_err(|e| e.to_string())?;
             Some(capture_id)
         } else {
+            let origin_id = origin.expect("origin is present when direct input is absent");
+            let visible: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM captures c WHERE c.id=? AND NOT EXISTS(SELECT 1 FROM deleted_entities d WHERE d.entity_type='captures' AND d.entity_id=c.id))", [origin_id], |row| row.get(0)).map_err(|error| error.to_string())?;
+            if !visible {
+                return Err("Capture not found".into());
+            }
             origin.map(str::to_owned)
         };
         let result = self.create_task_tx(tx, input, provenance.as_deref(), None, at)?;
@@ -598,7 +604,7 @@ impl TaskApplicationService {
     fn expected(&self, tx: &Transaction<'_>, id: &str, input: &Value) -> Result<i64, String> {
         let current: i64 = tx
             .query_row(
-                "SELECT current_revision FROM tasks WHERE id=?",
+                "SELECT current_revision FROM tasks WHERE id=? AND NOT EXISTS(SELECT 1 FROM deleted_entities d WHERE d.entity_type='tasks' AND d.entity_id=tasks.id)",
                 [id],
                 |row| row.get(0),
             )
@@ -668,6 +674,8 @@ impl TaskApplicationService {
     }
     fn get(&self, id: &str) -> Result<Value, String> {
         let c = crate::native::database::open(self.repo.path())?;
+        let deleted: bool = c.query_row("SELECT EXISTS(SELECT 1 FROM deleted_entities WHERE entity_type='tasks' AND entity_id=?)", [id], |r| r.get(0)).map_err(|e| e.to_string())?;
+        if deleted { return Err("Task not found".into()); }
         let mut x=c.query_row("SELECT t.current_revision,t.state,r.title,r.detail,r.outcome,r.scope,r.non_goals,r.validation_criteria,t.category,t.created_at,t.last_user_activity_at FROM tasks t JOIN task_revisions r ON r.task_id=t.id AND r.revision=t.current_revision WHERE t.id=?",[id],|r|Ok(json!({"id":id,"taskRevision":r.get::<_,i64>(0)?,"state":r.get::<_,String>(1)?,"title":r.get::<_,String>(2)?,"detail":r.get::<_,String>(3)?,"outcome":r.get::<_,String>(4)?,"scope":r.get::<_,String>(5)?,"nonGoals":r.get::<_,String>(6)?,"validationCriteria":r.get::<_,String>(7)?,"category":r.get::<_,String>(8)?,"createdAt":r.get::<_,String>(9)?,"lastUserActivityAt":r.get::<_,String>(10)?}))).optional().map_err(|x|x.to_string())?.ok_or("Task not found")?;
         let mut work_log = self.work_log(id)?["entries"].clone();
         if let Some(entries) = work_log.as_array_mut() {
@@ -708,13 +716,21 @@ impl TaskApplicationService {
         }
         Ok(x)
     }
+    fn delete(&self, id: &str) -> Result<Value, String> {
+        let c = crate::native::database::open(self.repo.path())?;
+        let exists: bool = c.query_row("SELECT EXISTS(SELECT 1 FROM tasks WHERE id=? AND NOT EXISTS(SELECT 1 FROM deleted_entities d WHERE d.entity_type='tasks' AND d.entity_id=tasks.id))", [id], |r| r.get(0)).map_err(|e| e.to_string())?;
+        if !exists { return Err("Task not found".into()); }
+        c.execute("INSERT OR REPLACE INTO deleted_entities(entity_type,entity_id) VALUES ('tasks',?)", [id]).map_err(|e| e.to_string())?;
+        Ok(Value::Null)
+    }
+
     fn workbench(&self) -> Result<Value, String> {
         let c = crate::native::database::open(self.repo.path())?;
-        let mut s=c.prepare("SELECT t.id,t.current_revision,t.state,r.title,t.category,t.last_user_activity_at FROM tasks t JOIN task_revisions r ON r.task_id=t.id AND r.revision=t.current_revision WHERE t.archived_at IS NULL ORDER BY t.last_user_activity_at DESC").map_err(|x|x.to_string())?;
+        let mut s=c.prepare("SELECT t.id,t.current_revision,t.state,r.title,t.category,t.last_user_activity_at FROM tasks t JOIN task_revisions r ON r.task_id=t.id AND r.revision=t.current_revision WHERE t.archived_at IS NULL AND NOT EXISTS(SELECT 1 FROM deleted_entities d WHERE d.entity_type='tasks' AND d.entity_id=t.id) ORDER BY t.last_user_activity_at DESC").map_err(|x|x.to_string())?;
         let mut rows=s.query_map([],|r|Ok(json!({"kind":"task","id":r.get::<_,String>(0)?,"taskRevision":r.get::<_,i64>(1)?,"state":r.get::<_,String>(2)?,"title":r.get::<_,String>(3)?,"category":r.get::<_,String>(4)?,"lastUserActivityAt":r.get::<_,String>(5)?}))).map_err(|x|x.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|x|x.to_string())?;
-        let mut captures=c.prepare("SELECT c.id,c.text,c.created_at,COALESCE(o.category,'General') FROM captures c LEFT JOIN workbench_category_overrides o ON o.entity_type='captures' AND o.entity_id=c.id WHERE c.source_mode='capture' ORDER BY c.last_user_activity_at DESC").map_err(|x|x.to_string())?;
+        let mut captures=c.prepare("SELECT c.id,c.text,c.created_at,COALESCE(o.category,'General') FROM captures c LEFT JOIN workbench_category_overrides o ON o.entity_type='captures' AND o.entity_id=c.id WHERE c.source_mode='capture' AND NOT EXISTS(SELECT 1 FROM deleted_entities d WHERE d.entity_type='captures' AND d.entity_id=c.id) ORDER BY c.last_user_activity_at DESC").map_err(|x|x.to_string())?;
         rows.extend(captures.query_map([],|r|Ok(json!({"kind":"capture","id":r.get::<_,String>(0)?,"text":r.get::<_,String>(1)?,"lastUserActivityAt":r.get::<_,String>(2)?,"category":r.get::<_,String>(3)?}))).map_err(|x|x.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|x|x.to_string())?);
-        let mut legacy_refinements=c.prepare("SELECT i.id,i.problem_id,i.problem_revision,r.statement,i.source_kind,i.created_at,COALESCE(o.category,'General') FROM refinement_items i JOIN problem_revisions r ON r.problem_id=i.problem_id AND r.revision=i.problem_revision LEFT JOIN workbench_category_overrides o ON o.entity_type='problems' AND o.entity_id=i.problem_id ORDER BY i.created_at DESC").map_err(|x|x.to_string())?;
+        let mut legacy_refinements=c.prepare("SELECT i.id,i.problem_id,i.problem_revision,r.statement,i.source_kind,i.created_at,COALESCE(o.category,'General') FROM refinement_items i JOIN problem_revisions r ON r.problem_id=i.problem_id AND r.revision=i.problem_revision LEFT JOIN workbench_category_overrides o ON o.entity_type='problems' AND o.entity_id=i.problem_id WHERE NOT EXISTS(SELECT 1 FROM deleted_entities d WHERE d.entity_type='problems' AND d.entity_id=i.problem_id) ORDER BY i.created_at DESC").map_err(|x|x.to_string())?;
         rows.extend(legacy_refinements.query_map([],|r|Ok(json!({"kind":"refinement","id":r.get::<_,String>(0)?,"problemId":r.get::<_,String>(1)?,"problemRevision":r.get::<_,i64>(2)?,"title":r.get::<_,String>(3)?,"sourceKind":r.get::<_,String>(4)?,"lastUserActivityAt":r.get::<_,String>(5)?,"category":r.get::<_,String>(6)?}))).map_err(|x|x.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|x|x.to_string())?);
         rows.sort_by(|a, b| {
             b["lastUserActivityAt"]
@@ -732,7 +748,7 @@ impl TaskApplicationService {
             .filter_map(|x| x["id"].as_str())
             .collect::<Vec<_>>();
         let mut refining = Vec::new();
-        if let Ok(mut sessions) = c.prepare("SELECT capture_id,task_id,current_draft_revision FROM refinement_sessions WHERE (capture_id IS NOT NULL OR task_id IS NOT NULL) AND state!='completed' ORDER BY last_user_activity_at DESC LIMIT 6") {
+        if let Ok(mut sessions) = c.prepare("SELECT s.capture_id,s.task_id,s.current_draft_revision FROM refinement_sessions s WHERE (s.capture_id IS NOT NULL OR s.task_id IS NOT NULL) AND s.state!='completed' AND NOT EXISTS(SELECT 1 FROM deleted_entities d WHERE d.entity_type='captures' AND d.entity_id=s.capture_id) AND NOT EXISTS(SELECT 1 FROM deleted_entities d WHERE d.entity_type='tasks' AND d.entity_id=s.task_id) ORDER BY s.last_user_activity_at DESC LIMIT 6") {
             let subjects = sessions.query_map([], |row| Ok((row.get::<_,Option<String>>(0)?, row.get::<_,Option<String>>(1)?, row.get::<_,i64>(2)?))).map_err(|error| error.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|error| error.to_string())?;
             refining.extend(subjects.into_iter().filter_map(|(capture_id,task_id,revision)| {
                 let (kind,id) = if let Some(id) = task_id { if active_ids.contains(&id.as_str()) { return None; } ("task",id) } else { ("capture",capture_id?) };
@@ -872,6 +888,74 @@ mod tests {
         assert_eq!(refinement["problemRevision"], 1);
         assert_eq!(refinement["title"], "Preserve this migrated Problem");
         assert!(!items.iter().any(|item| item["kind"] == "task"));
+
+        connection
+            .execute(
+                "INSERT INTO deleted_entities(entity_type,entity_id) VALUES('problems',?)",
+                [problem_id],
+            )
+            .unwrap();
+        let hidden = service.execute("workbench.get", &json!({})).unwrap();
+        assert!(hidden["categories"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|category| category["items"].as_array().unwrap())
+            .all(|item| item["kind"] != "refinement"));
+    }
+
+    #[test]
+    fn delete_tombstones_task_across_reopen_and_hides_every_workbench_shortcut() {
+        let root = tempdir().unwrap();
+        let db = root.path().join("state.db");
+        crate::native::database::initialize(&db).unwrap();
+        let service = TaskApplicationService::new(&db);
+        let task = service
+            .execute(
+                "task.create",
+                &json!({"operationId":"delete-create","inputText":"keep source","title":"Delete me"}),
+            )
+            .unwrap();
+        let task_id = task["id"].as_str().unwrap();
+        service
+            .execute(
+                "task.transition",
+                &json!({"operationId":"delete-start","taskId":task_id,"expectedTaskRevision":1,"to":"in_progress"}),
+            )
+            .unwrap();
+        service
+            .execute(
+                "task.work-log.create",
+                &json!({"operationId":"delete-log","taskId":task_id,"expectedTaskRevision":1,"body":"retain this"}),
+            )
+            .unwrap();
+        crate::native::database::open(&db)
+            .unwrap()
+            .execute(
+                "INSERT INTO refinement_sessions(id,task_id,state,current_draft_revision,last_user_activity_at,updated_at) VALUES('deleted-task-session',?,'active',1,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)",
+                [task_id],
+            )
+            .unwrap();
+
+        service.execute("task.delete", &json!({"taskId":task_id})).unwrap();
+        assert!(service.execute("task.delete", &json!({"taskId":"missing"})).unwrap_err().contains("Task not found"));
+        assert!(service.execute("task.get", &json!({"taskId":task_id})).unwrap_err().contains("Task not found"));
+
+        // A new service and connection emulate the next desktop launch. The tombstone hides the
+        // Task while its work log remains durable for audit and recovery tooling.
+        let reloaded = TaskApplicationService::new(&db);
+        let workbench = reloaded.execute("workbench.get", &json!({})).unwrap();
+        assert!(workbench["activeShortcuts"].as_array().unwrap().is_empty());
+        assert!(workbench["refiningShortcuts"].as_array().unwrap().is_empty());
+        assert!(workbench["categories"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|category| category["items"].as_array().unwrap())
+            .all(|item| item["id"] != task_id));
+        let connection = crate::native::database::open(&db).unwrap();
+        assert_eq!(connection.query_row("SELECT count(*) FROM deleted_entities WHERE entity_type='tasks' AND entity_id=?", [task_id], |row| row.get::<_, i64>(0)).unwrap(), 1);
+        assert_eq!(connection.query_row("SELECT count(*) FROM task_work_log_entries WHERE task_id=?", [task_id], |row| row.get::<_, i64>(0)).unwrap(), 1);
     }
 
     #[test]
