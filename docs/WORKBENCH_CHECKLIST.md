@@ -16,6 +16,6 @@
 
 The native Task-centered baseline was exercised with a signed packaged macOS run on 2026-09-12. Its exact package identity and final scenario/control totals belong in the generated desktop-E2E artifacts, not this checklist.
 
-The UI/UX follow-up implements six-field Task-definition draft protection across independent mutations, guarded close/Task switching, responsive shortcut and title-input geometry, selected-locale system copy, nonmodal focus/Escape/IME behavior, and Queue setup recovery. The final package passed 32/32 scenarios with 188 scanned source controls and 175 rendered/exercised/asserted controls, with all six gap arrays empty. Nine final screenshots were visually reviewed; real Korean IME, VoiceOver, and OS reduced-motion remain unverified. It does not claim autosave or app-quit/crash draft durability.
+The UI/UX follow-up implements six-field Task-definition draft protection across independent mutations, guarded close/Task switching, responsive shortcut and title-input geometry, selected-locale system copy, modal focus/Escape/IME behavior, and Queue setup recovery. The final package passed 32/32 scenarios with 188 scanned source controls and 175 rendered/exercised/asserted controls, with all six gap arrays empty. Nine final screenshots were visually reviewed; real Korean IME, VoiceOver, and OS reduced-motion remain unverified. It does not claim autosave or app-quit/crash draft durability.
 
 See [specification 012](../specs/012-task-centered-workbench/spec.md) and the [UI/UX plan](plans/ui-ux-improvements.md).

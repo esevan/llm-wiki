@@ -9,8 +9,10 @@ can become a Task directly; refinement and Problem approval are not mandatory ga
 ## Work in the refinement panel
 
 Open **Refine** from a Capture or Task, or resume the saved refinement shortcut in Workbench.
-The conversation and proposals have separate tabs. Keep working notes alongside the conversation;
-the saved notes, selected tab, scroll position, and conversation history support returning later.
+Refinement opens in a focused dialog: the proposed result stays in a scrollable left pane while the
+full conversation history and composer stay together in a right-hand chat pane. The rest of Workbench
+is unavailable until the dialog closes. Keep working notes with the proposed result; the saved notes,
+scroll position, and conversation history support returning later.
 
 **Send**, `Ctrl+Enter`, and `Cmd+Enter` submit a message. Plain Enter writes another line. Send is
 unavailable while the current submission or response is being processed. Every provider turn includes
@@ -19,6 +21,8 @@ the original Capture and ordered conversation history, even after a transient dr
 A response can produce proposals. Review each proposal separately: edit, accept, or reject it.
 Accepting one proposal does not accept its siblings. Response processing includes loading the
 resulting proposals; a delayed proposal read must not silently discard the result.
+Task proposal previews show the proposed result body as the Task detail, including responses that
+return that field as `body`; accepting the proposal preserves it in the Task detail.
 
 ## Interruptions and errors
 
@@ -39,7 +43,7 @@ resulting proposals; a delayed proposal read must not silently discard the resul
 
 ## Keyboard behavior
 
-Refinement and Task detail are nonmodal panels: opening one moves focus to its heading or compose control without trapping Tab navigation. `Escape` closes the panel and restores focus to its trigger when it remains available. `Cmd+Enter` and `Ctrl+Enter` send only outside an active IME composition. Automated checks cover the synthetic composition and focus contract; real Korean IME and VoiceOver verification remain manual work.
+Refinement opens in a modal dialog. Tab and Shift+Tab stay within it, including the saved-note disclosure; `Escape` closes it and restores focus to its trigger when it remains available. Task detail remains a panel. `Cmd+Enter` and `Ctrl+Enter` send only outside an active IME composition. Automated checks cover the synthetic composition and focus contract; real Korean IME and VoiceOver verification remain manual work.
 
 ## Continue a migrated Problem
 

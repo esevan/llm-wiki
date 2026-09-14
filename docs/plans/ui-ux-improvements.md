@@ -34,7 +34,7 @@ Likely boundaries are `frontend/src/features/workbench/TaskDetail.tsx`, `Workben
 | I1.1–I1.4 Task definition draft, independent-mutation merge, expected-revision save, close/switch guard | Implemented and covered by focused tests |
 | I2.1–I2.2 shortcut layout and title-input width | Implemented; focused native geometry and full E2E pass |
 | I3.1–I3.3 selected-locale copy and assertions | Implemented and covered by focused tests |
-| I4.1–I4.3 refinement spacing, nonmodal focus/Escape, composition safety | Implemented; real IME and VoiceOver remain manual checks |
+| I4.1–I4.3 refinement spacing, modal focus/Escape, composition safety | Implemented; real IME and VoiceOver remain manual checks |
 | I5.1–I5.2 Queue Open AI setup and failed-job return/retry | Implemented and covered by focused tests |
 | I4.4 shared left-axis headings/counts and I6 12px-or-larger status/revision metadata | Implemented; broader detail regrouping is out of scope |
 | T2 native quit/crash guard | Deferred |

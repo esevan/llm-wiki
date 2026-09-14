@@ -624,3 +624,150 @@ main:has(.task-workbench.active :is(.task-detail, .refinement-panel)) {
 }
 
 #chat-modal[data-workspace-dock="true"] #chat-close { position: absolute; top: var(--space-5); right: var(--space-5); z-index: 2; }
+
+/* Refinement opens as a focused conversation workspace. The result stays visible beside the chat. */
+.refinement-modal-layer {
+  position: fixed;
+  z-index: calc(var(--layer-menu) + 1);
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: var(--space-6);
+}
+.refinement-modal-backdrop {
+  position: absolute;
+  inset: 0;
+  background: var(--color-overlay-veil);
+}
+.refinement-panel[role="dialog"] {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  width: min(1380px, 100%);
+  height: min(860px, 100%);
+  min-height: 0;
+  max-height: 100%;
+  overflow: hidden;
+  padding: var(--space-6);
+  border: var(--border-default);
+  border-radius: var(--radius-dialog);
+  background: var(--color-bg-surface);
+  box-shadow: var(--shadow-dialog);
+}
+.refinement-panel[role="dialog"] .refinement-header {
+  position: static;
+  margin: calc(-1 * var(--space-6)) calc(-1 * var(--space-6)) 0;
+  padding: var(--space-6);
+  border-bottom: var(--border-default);
+}
+.refinement-panel[role="dialog"] .refinement-header > button {
+  max-width: none;
+  font-size: var(--font-size-sm);
+}
+.refinement-panel[role="dialog"] .refinement-error {
+  position: absolute;
+  z-index: 2;
+  top: calc(var(--space-6) + 56px);
+  right: var(--space-6);
+  max-width: min(480px, calc(100% - var(--space-8)));
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-status-error);
+  border-radius: var(--radius-control);
+  background: var(--color-bg-surface);
+  color: var(--color-status-error);
+  box-shadow: var(--shadow-card);
+}
+.refinement-panel[role="dialog"] .refinement-workspace {
+  display: grid;
+  grid-template-columns: minmax(280px, .82fr) minmax(0, 1.18fr);
+  gap: var(--space-6);
+  min-width: 0;
+  min-height: 0;
+}
+.refinement-panel[role="dialog"] .refinement-preview {
+  min-width: 0;
+  min-height: 0;
+  margin: 0;
+  padding: var(--space-6) var(--space-6) var(--space-4) 0;
+  overflow: auto;
+  border-top: 0;
+  border-right: var(--border-default);
+}
+.refinement-panel[role="dialog"] .refinement-conversation {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  padding: var(--space-6) 0 0;
+}
+.refinement-panel[role="dialog"] .refinement-messages {
+  flex: 1;
+  min-height: 0;
+  max-height: none;
+  margin: 0 0 var(--space-4);
+  padding: 0 var(--space-2) var(--space-2) 0;
+  overflow: auto;
+}
+.refinement-panel[role="dialog"] .refinement-composer {
+  flex: none;
+  align-items: flex-end;
+  padding-top: var(--space-4);
+  border-top: var(--border-default);
+}
+.refinement-panel[role="dialog"] .refinement-composer textarea {
+  min-height: 88px;
+  border-radius: var(--radius-card);
+}
+.refinement-panel[role="dialog"] .refinement-private-note {
+  min-width: 0;
+  margin: var(--space-5) 0 0;
+  padding: var(--space-4) 0 0;
+  border-top: var(--border-default);
+}
+.refinement-panel[role="dialog"] .proposal-document {
+  padding: var(--space-5) 0;
+}
+.refinement-panel[role="dialog"] .message {
+  max-width: 92%;
+  border: var(--border-default);
+  border-left: 3px solid var(--color-border-accent);
+  border-radius: var(--radius-card);
+  background: var(--color-bg-muted);
+}
+.refinement-panel[role="dialog"] .message-user {
+  justify-self: end;
+  border-left: 0;
+  border-right: 3px solid var(--color-accent-primary);
+  background: var(--color-bg-accent-subtle);
+}
+@media (max-width: 900px) {
+  .refinement-modal-layer { padding: var(--space-3); }
+  .refinement-panel[role="dialog"] {
+    padding: var(--space-4);
+  }
+  .refinement-panel[role="dialog"] .refinement-header {
+    margin: calc(-1 * var(--space-4)) calc(-1 * var(--space-4)) 0;
+    padding: var(--space-4);
+  }
+  .refinement-panel[role="dialog"] .refinement-workspace { gap: var(--space-4); }
+  .refinement-panel[role="dialog"] .refinement-preview { padding-right: var(--space-4); }
+}
+@media (max-width: 640px) {
+  .refinement-panel[role="dialog"] {
+    height: 100%;
+  }
+  .refinement-panel[role="dialog"] .refinement-workspace { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(120px, .65fr) minmax(180px, 1fr); gap: 0; }
+  .refinement-panel[role="dialog"] .refinement-preview {
+    padding: var(--space-4) 0;
+    border-right: 0;
+    border-bottom: var(--border-default);
+  }
+  .refinement-panel[role="dialog"] .refinement-conversation {
+    padding: var(--space-4) 0 0;
+  }
+  .refinement-panel[role="dialog"] .refinement-private-note {
+    margin: 0;
+  }
+}

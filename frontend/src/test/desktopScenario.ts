@@ -1128,25 +1128,32 @@ async function localization(step: Step) {
     }, "equal split or narrow replacement layout");
   }
   await invoke("desktop_e2e_resize_window", { width: 1280, height: 820 });
-  await taskDetailIdle("opening split Task refinement");
+  await taskDetailIdle("opening Task refinement dialog");
   const retainedTask = document.querySelector(".task-detail");
   const refineTask = document.querySelector<HTMLElement>('[data-control="task-detail-refine"]');
   if (!refineTask) throw new Error("Missing Task refinement action");
-  await prepareClick(refineTask, "Open split Task refinement");
-  clickElement(refineTask, "Open split Task refinement");
-  await waitFor(() => Boolean(document.querySelector(".refinement-panel[data-refinement-session]:not([data-refinement-session=''])")), "loaded split refinement");
+  await prepareClick(refineTask, "Open Task refinement dialog");
+  clickElement(refineTask, "Open Task refinement dialog");
+  await waitFor(() => Boolean(document.querySelector(".refinement-panel[data-refinement-session]:not([data-refinement-session=''])")), "loaded refinement dialog");
   for (const width of [1200, 900]) {
     const size = await invoke<{ windowWidth: number }>("desktop_e2e_resize_window", { width, height: 820 });
     await waitFor(() => Math.abs(window.innerWidth - size.windowWidth) < 3, "refinement window resized");
     await waitFor(() => {
-      const taskPanel = document.querySelector<HTMLElement>(".task-detail");
-      const refinement = document.querySelector<HTMLElement>(".refinement-panel");
-      const workbench = document.querySelector<HTMLElement>(".workbench-main");
-      if (!taskPanel || !refinement || !workbench || getComputedStyle(workbench).display !== "none") return false;
-      const left = taskPanel.getBoundingClientRect(), right = refinement.getBoundingClientRect();
-      if (window.innerWidth <= 1100) return getComputedStyle(taskPanel).display === "none" && right.width > 0;
-      return Math.abs(left.width - right.width) < 2 && left.right <= right.left && getComputedStyle(refinement).position !== "fixed";
-    }, "Task and refinement split or narrow replacement");
+      const layer = document.querySelector<HTMLElement>(".refinement-modal-layer");
+      const backdrop = document.querySelector<HTMLElement>(".refinement-modal-backdrop");
+      const refinement = document.querySelector<HTMLElement>(".refinement-panel[role='dialog']");
+      const preview = document.querySelector<HTMLElement>(".refinement-preview");
+      const conversation = document.querySelector<HTMLElement>(".refinement-conversation");
+      const messages = document.querySelector<HTMLElement>(".refinement-messages");
+      const composer = document.querySelector<HTMLElement>(".refinement-composer");
+      const app = document.querySelector<HTMLElement>(".app");
+      if (!layer || !backdrop || !refinement || !preview || !conversation || !messages || !composer || !app || !app.inert) return false;
+      const panel = refinement.getBoundingClientRect(), left = preview.getBoundingClientRect(), right = conversation.getBoundingClientRect(), compose = composer.getBoundingClientRect();
+      const withinViewport = panel.left >= -1 && panel.top >= -1 && panel.right <= window.innerWidth + 1 && panel.bottom <= window.innerHeight + 1;
+      const columns = left.width > 0 && right.width > 0 && left.right <= right.left && compose.width > 0 && compose.height > 0 && compose.bottom <= right.bottom + 1;
+      const scrollable = getComputedStyle(preview).overflowY !== "visible" && getComputedStyle(messages).overflowY !== "visible" && preview !== messages;
+      return getComputedStyle(layer).position === "fixed" && getComputedStyle(backdrop).position === "absolute" && withinViewport && columns && scrollable;
+    }, "bounded modal with side-by-side preview, visible composer, and independent scrolling panes");
   }
   const closeRefinement = document.querySelector<HTMLElement>('[data-control="refinement-close"]');
   if (!closeRefinement) throw new Error("Missing refinement return action");
@@ -1155,7 +1162,7 @@ async function localization(step: Step) {
   clickElement(closeRefinement, "Return from refinement");
   await waitFor(() => !document.querySelector(".refinement-panel"), "returned from refinement");
   if (document.querySelector(".task-detail") !== retainedTask) throw new Error("Refinement remounted Task context");
-  await step("Task refinement occupied half the workspace, replaced it at narrow width, and retained the original Task context on return.");
+  await step("Task refinement opened as a bounded modal with an inert Workbench, side-by-side preview and chat panes, a visible composer, and independent scroll containers at 1200px and 900px; it retained the original Task context on return.");
   click('[data-control="task-detail-close"]', "Close responsive Task detail");
   await waitFor(() => !document.querySelector(".task-detail"), "returned to responsive Workbench");
   await step("Task detail resized the Workbench into equal non-overlapping columns at 1200px and replaced it at 900px.");

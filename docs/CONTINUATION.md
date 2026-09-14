@@ -94,3 +94,21 @@ Run `npm test`, lint, typecheck, production build, Rust format/clippy/tests, Tau
 desktop E2E for native changes. Preserve the application-client boundary and keep command handlers
 thin. Do not restore the browser server as a compatibility shim; its retirement record is
 [here](migrations/python-browser-retirement.md).
+
+## Refinement dialog follow-up
+
+The focused Refinement dialog keeps the proposed result and the conversation visible together, and
+preserves Task proposal `body` values as Task detail when accepted. The signed release build,
+202 frontend tests, typecheck, lint, and whitespace checks passed. Rendered review covered Korean
+at 1280×800 and 800×600, English at 600×650, and keyboard focus containment.
+The final packaged E2E passed 29 of 33 scenarios, including refinement and modal geometry at
+1200px/900px. `task-controls` (waiting for a Knowledge draft), `task-legacy-chat-controls`,
+`task-mcp-continuation`, and `global-queue-notifications` timed out. Three also failed before the
+dialog change; `task-controls` is newly observed and its cause is not established. The earlier
+`task-chat-controls` failure passed in the final run. The complete release gate remains unmet.
+Results are retained in the task worktree at `.tmp/desktop-e2e-artifacts-PUCV85/results.json`.
+
+Integration with the database-lock recovery change passed 206 npm tests, typecheck, lint, a signed
+release build, and six focused packaged scenarios: refinement, localization, provider recovery,
+close retry, close pending, and relaunch. Results: `.tmp/desktop-e2e-artifacts-YF1Gtd/results.json`.
+This focused verification does not replace the full release gate noted above.

@@ -298,7 +298,7 @@ describe("Refinement panel", () => {
         ok: true,
         status: 200,
         json: async () => path.endsWith("/proposals")
-          ? [{ id: "preview-1", type: "new_task", payload: { title: "Preview this Task", detail: "Preserve the authored detail" }, draftRevision: 1 }]
+          ? [{ id: "preview-1", type: "new_task", payload: { title: "Preview this Task", body: "Preserve the authored body" }, draftRevision: 1 }]
           : { id: "preview-session", messages: [{ id: "assistant-1", role: "assistant", body: "Conversation remains available." }] },
         text: async () => "",
         body: null,
@@ -309,6 +309,12 @@ describe("Refinement panel", () => {
 
     expect(await screen.findByText("Conversation remains available.")).toBeInTheDocument();
     expect(screen.getByText("Preview this Task")).toBeInTheDocument();
+    expect(screen.getByText("Preserve the authored body")).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "Refining" })).toHaveAttribute("aria-modal", "true");
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+    await waitFor(() => expect(request.mock.calls.some(([input]) => input.path.endsWith("/proposal-decisions"))).toBe(true));
+    const decision = request.mock.calls.find(([input]) => input.path.endsWith("/proposal-decisions"))?.[0];
+    expect(JSON.parse(decision.body).editedPayload).toMatchObject({ detail: "Preserve the authored body" });
     expect(document.querySelector(".refinement-messages")).toBeInTheDocument();
     expect(document.querySelector(".refinement-preview[aria-label='Proposed result']")).toBeInTheDocument();
     expect(document.querySelector('[data-control="refinement-note-details"]')).toBeInTheDocument();
@@ -392,7 +398,7 @@ describe("Refinement panel", () => {
     expect(request.mock.calls.some(([input]) => input.path.endsWith('/messages'))).toBe(false);
   });
 
-  it("moves focus to the non-modal heading and restores the opener on Escape after saving", async () => {
+  it("traps focus in the modal, makes the background inert, and restores the opener on Escape after saving", async () => {
     const onClose = vi.fn();
     const request = vi.fn().mockImplementation(({ path }: { path: string }) => Promise.resolve({ ok: true, status: 200, json: async () => path.endsWith("/proposals") ? [] : ({ id: 'focus', messages: [] }), text: async () => '', body: null }));
     window.llmWikiApplication = { request };
@@ -400,12 +406,29 @@ describe("Refinement panel", () => {
     opener.textContent = 'Open refinement';
     document.body.append(opener);
     opener.focus();
-    render(<RefinementPanel kind="task" subjectId="focus-task" onClose={onClose} />);
+    const app = document.createElement("div");
+    app.className = "app";
+    document.body.append(app);
+    const view = render(<RefinementPanel kind="task" subjectId="focus-task" onClose={onClose} />, { container: app });
     const heading = await screen.findByRole('heading', { name: 'Refining' });
     expect(document.activeElement).toBe(heading);
+    expect(app).toHaveProperty("inert", true);
+    const summary = screen.getByText("Saved refinement note", { selector: "summary" });
+    expect(summary).toBeInTheDocument();
+    const send = screen.getByRole("button", { name: "Send" });
+    fireEvent.change(screen.getByLabelText("Refinement message"), { target: { value: "Keep this draft" } });
+    send.focus();
+    fireEvent.keyDown(send, { key: "Tab" });
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Close refinement" }));
+    heading.focus();
+    fireEvent.keyDown(heading, { key: "Tab", shiftKey: true });
+    expect(document.activeElement).toBe(send);
     fireEvent.keyDown(screen.getByRole("region", { name: "Conversation" }), { key: 'Escape' });
     await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
     await waitFor(() => expect(document.activeElement).toBe(opener));
+    view.unmount();
+    expect(app.inert).not.toBe(true);
+    app.remove();
     opener.remove();
   });
 
