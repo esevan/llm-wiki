@@ -9,6 +9,53 @@ import { useTaskWorkbenchText } from "./taskWorkbenchText";
 
 export type RefinementPanelHandle = { requestLeave: (proceed: () => void) => void };
 
+type RefinementScrollLock = {
+  count: number;
+  scrollY: number;
+  rootOverflow: string;
+  bodyOverflow: string;
+  bodyPosition: string;
+  bodyTop: string;
+  bodyWidth: string;
+};
+
+let refinementScrollLock: RefinementScrollLock | undefined;
+
+function RefinementMessage({
+  body,
+  reveal,
+}: {
+  body: string;
+  reveal: boolean;
+}) {
+  const [visibleBody, setVisibleBody] = useState(reveal ? "" : body);
+
+  useEffect(() => {
+    if (!reveal) {
+      setVisibleBody(body);
+      return;
+    }
+    if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) {
+      setVisibleBody(body);
+      return;
+    }
+    let position = 0;
+    setVisibleBody("");
+    const step = Math.max(1, Math.ceil(body.length / 90));
+    const interval = window.setInterval(() => {
+      position = Math.min(body.length, position + step);
+      setVisibleBody(body.slice(0, position));
+      if (position >= body.length) window.clearInterval(interval);
+    }, 24);
+    return () => window.clearInterval(interval);
+  }, [body, reveal]);
+
+  return <p>
+    {reveal && <span className="sr-only">{body}</span>}
+    <span aria-hidden={reveal}>{visibleBody}</span>
+  </p>;
+}
+
 export function RefinementPanel({
   kind,
   subjectId,
@@ -52,6 +99,8 @@ export function RefinementPanel({
   const loadingRef = useRef(false);
   const loadSequence = useRef(0);
   const hasLoadedSession = useRef(false);
+  const knownMessageIds = useRef(new Set<string>());
+  const [revealingMessageIds, setRevealingMessageIds] = useState<Set<string>>(new Set());
   const draftTouched = useRef(false);
   const lastSubmittedMessage = useRef("");
   const workspaceQueue = useRef<Promise<unknown>>(Promise.resolve());
@@ -102,6 +151,8 @@ export function RefinementPanel({
         activeTab: "conversation",
         scrollAnchor: next.scrollAnchor ?? "0",
       };
+      knownMessageIds.current = new Set((next.messages ?? []).map(item => item.id));
+      setRevealingMessageIds(new Set());
       setSession(next);
       setDraft(nextDraft);
       requestAnimationFrame(() => {
@@ -159,6 +210,16 @@ export function RefinementPanel({
           .refinementStatus(kind, subjectId)
           .then(async (next) => {
             if (cancelled) return;
+            const nextMessages = next.messages ?? [];
+            const newAssistantIds = nextMessages
+              .filter(item => item.role === "assistant" && !knownMessageIds.current.has(item.id))
+              .map(item => item.id);
+            // A normal turn adds one assistant message. If an older backend returns
+            // several unseen messages at once, keep that recovered history readable
+            // immediately instead of replaying it as a new answer.
+            if (newAssistantIds.length === 1)
+              setRevealingMessageIds(current => new Set([...current, ...newAssistantIds]));
+            nextMessages.forEach(item => knownMessageIds.current.add(item.id));
             setSession(next);
             if (
               ["completed", "failed", "cancelled"].includes(
@@ -202,6 +263,17 @@ export function RefinementPanel({
       if (pollTimer.current) window.clearInterval(pollTimer.current);
     };
   }, [polling, session?.id, kind, subjectId, text.assistantFailure]);
+  useEffect(() => {
+    if (!revealingMessageIds.size || typeof ResizeObserver === "undefined") return;
+    const element = scrollRef.current;
+    if (!element) return;
+    const observer = new ResizeObserver(() => {
+      if (element.scrollHeight - element.scrollTop - element.clientHeight < 120)
+        element.scrollTop = element.scrollHeight;
+    });
+    element.querySelectorAll<HTMLElement>(".message").forEach(message => observer.observe(message));
+    return () => observer.disconnect();
+  }, [revealingMessageIds]);
   const canonicalPayload = (proposal: RefinementProposal) => {
     const patch = proposal.payload.patch;
     if (patch && typeof patch === "object" && !Array.isArray(patch)) {
@@ -284,6 +356,45 @@ export function RefinementPanel({
     const wasInert = application.inert;
     application.inert = true;
     return () => { application.inert = wasInert; };
+  }, []);
+  useEffect(() => {
+    const root = document.documentElement;
+    const body = document.body;
+    if (refinementScrollLock) {
+      refinementScrollLock.count += 1;
+    } else {
+      const scrollY = window.scrollY;
+      refinementScrollLock = {
+        count: 1,
+        scrollY,
+        rootOverflow: root.style.overflow,
+        bodyOverflow: body.style.overflow,
+        bodyPosition: body.style.position,
+        bodyTop: body.style.top,
+        bodyWidth: body.style.width,
+      };
+
+      // The modal is portaled under body, so lock the document itself while it is
+      // open. Fixed positioning preserves the user's page position even when the
+      // browser normally exposes the body as the root scroll container.
+      root.style.overflow = "hidden";
+      body.style.overflow = "hidden";
+      body.style.position = "fixed";
+      body.style.top = `-${scrollY}px`;
+      body.style.width = "100%";
+    }
+
+    return () => {
+      const lock = refinementScrollLock;
+      if (!lock || --lock.count > 0) return;
+      root.style.overflow = lock.rootOverflow;
+      body.style.overflow = lock.bodyOverflow;
+      body.style.position = lock.bodyPosition;
+      body.style.top = lock.bodyTop;
+      body.style.width = lock.bodyWidth;
+      refinementScrollLock = undefined;
+      if (lock.scrollY) window.scrollTo(0, lock.scrollY);
+    };
   }, []);
   const decide = async (
     proposal: RefinementProposal,
@@ -421,10 +532,14 @@ export function RefinementPanel({
           latest.current.scrollAnchor = String(event.currentTarget.scrollTop); scheduleSave();
         }}>
           {session?.messages?.map(item => <article key={item.id} className={`message message-${item.role}`}>
-            <strong>{item.role === "user" ? text.you : text.assistant}</strong><p>{item.body}</p>
+            <strong>{item.role === "user" ? text.you : text.assistant}</strong>
+            <RefinementMessage body={item.body} reveal={revealingMessageIds.has(item.id)} />
           </article>)}
           {!session && <p className="region-empty">{text.loading}</p>}
         </div>
+        {polling && <p className="refinement-thinking" role="status" aria-label={text.assistantGenerating} aria-live="polite">
+          <span>{text.assistantGenerating}</span><span className="refinement-thinking-dots" aria-hidden="true"><span>...</span></span>
+        </p>}
         <div className="refinement-composer">
           <textarea aria-label={text.refinementMessage} data-control="refinement-message" value={message}
             onChange={event => { latest.current.message = event.target.value; setMessage(event.target.value); }} onKeyDown={event => {

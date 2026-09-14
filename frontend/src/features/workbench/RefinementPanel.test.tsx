@@ -432,6 +432,54 @@ describe("Refinement panel", () => {
     opener.remove();
   });
 
+  it("locks document scrolling while open and restores styles and position on unmount", async () => {
+    const request = vi.fn().mockImplementation(({ path }: { path: string }) => Promise.resolve({
+      ok: true,
+      status: 200,
+      json: async () => path.endsWith("/proposals") ? [] : ({ id: "scroll-lock", messages: [] }),
+      text: async () => "",
+      body: null,
+    }));
+    window.llmWikiApplication = { request };
+    const root = document.documentElement;
+    const body = document.body;
+    root.style.overflow = "auto";
+    body.style.overflow = "scroll";
+    body.style.position = "relative";
+    body.style.top = "12px";
+    body.style.width = "90%";
+    const scrollYDescriptor = Object.getOwnPropertyDescriptor(window, "scrollY");
+    Object.defineProperty(window, "scrollY", { configurable: true, value: 143 });
+    const scrollTo = vi.spyOn(window, "scrollTo").mockImplementation(() => undefined);
+    const view = render(<RefinementPanel kind="capture" subjectId="scroll-lock" onClose={vi.fn()} />);
+
+    await screen.findByRole("dialog", { name: "Refining" });
+    expect(root.style.overflow).toBe("hidden");
+    expect(body.style.overflow).toBe("hidden");
+    expect(body.style.position).toBe("fixed");
+    expect(body.style.top).toBe("-143px");
+    expect(body.style.width).toBe("100%");
+
+    const nested = render(<RefinementPanel kind="capture" subjectId="nested-scroll-lock" onClose={vi.fn()} />);
+    view.unmount();
+    expect(root.style.overflow).toBe("hidden");
+    nested.unmount();
+    expect(root.style.overflow).toBe("auto");
+    expect(body.style.overflow).toBe("scroll");
+    expect(body.style.position).toBe("relative");
+    expect(body.style.top).toBe("12px");
+    expect(body.style.width).toBe("90%");
+    expect(scrollTo).toHaveBeenCalledWith(0, 143);
+    scrollTo.mockRestore();
+    root.style.overflow = "";
+    body.style.overflow = "";
+    body.style.position = "";
+    body.style.top = "";
+    body.style.width = "";
+    if (scrollYDescriptor) Object.defineProperty(window, "scrollY", scrollYDescriptor);
+    else delete (window as unknown as { scrollY?: number }).scrollY;
+  });
+
   it("ignores a late response from a closed subject after switching to another refinement", async () => {
     let resolveFirst!: (value: unknown) => void;
     const first = new Promise<unknown>((resolve) => { resolveFirst = resolve; });
@@ -448,5 +496,46 @@ describe("Refinement panel", () => {
     expect(await screen.findByText("B only")).toBeInTheDocument();
     await act(async () => undefined);
     expect(screen.queryByText("late A")).not.toBeInTheDocument();
+  });
+
+  it("reveals only a newly arrived assistant answer and exposes an accessible generating state", async () => {
+    let completed = false;
+    let pollReads = 0;
+    const answer = "A newly generated answer arrives progressively.";
+    const reply = (json: unknown) => Promise.resolve({ ok: true, status: 200, json: async () => json, text: async () => "", body: null });
+    const request = vi.fn().mockImplementation(({ path }: { path: string }) => {
+      if (path.endsWith("/messages")) {
+        completed = true;
+        return reply({});
+      }
+      if (path.endsWith("/proposals")) return reply([]);
+      if (completed) pollReads += 1;
+      return reply({
+        id: "animated",
+        responseStatus: completed ? (pollReads > 1 ? "completed" : "running") : undefined,
+        messages: completed
+          ? [{ id: "stored", role: "assistant", body: "Stored history" }, { id: "fresh", role: "assistant", body: answer }]
+          : [{ id: "stored", role: "assistant", body: "Stored history" }],
+      });
+    });
+    window.llmWikiApplication = { request };
+    render(<RefinementPanel kind="capture" subjectId="animated-capture" onClose={vi.fn()} />);
+    expect(await screen.findByText("Stored history")).toBeInTheDocument();
+    vi.useFakeTimers();
+    try {
+      const message = screen.getByLabelText("Refinement message");
+      fireEvent.change(message, { target: { value: "Answer this" } });
+      fireEvent.click(screen.getByRole("button", { name: "Send" }));
+      await act(async () => { await vi.advanceTimersByTimeAsync(700); });
+      await act(async () => undefined);
+      expect(screen.getByRole("status", { name: "Assistant is responding" })).toBeInTheDocument();
+      expect(screen.getByText("Stored history")).toBeInTheDocument();
+      expect(Array.from(document.querySelectorAll('.refinement-messages [aria-hidden="true"]')).some(element => element.textContent === answer)).toBe(false);
+      await act(async () => { await vi.advanceTimersByTimeAsync(700); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(2_500); });
+      expect(Array.from(document.querySelectorAll('.refinement-messages [aria-hidden="true"]')).some(element => element.textContent === answer)).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
