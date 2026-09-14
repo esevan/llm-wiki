@@ -272,16 +272,18 @@ export function TaskDetail({
   };
   const task = detailState && { ...detailState.persisted, ...detailState.draft };
   const addWorkLog = () => {
-    if (!task || !entry.trim() || mutationBusyRef.current) return;
-    void encodeAttachment().then((file) =>
-      update(() =>
-        taskClient.workLog(task.id, revision, entry, file).then((next) => {
-          setEntry("");
-          setAttachment(undefined);
-          return next;
-        }),
-      ),
-    );
+    if (!task || (!entry.trim() && !attachment) || mutationBusyRef.current) return;
+    void encodeAttachment()
+      .then((file) =>
+        update(() =>
+          taskClient.workLog(task.id, revision, entry, file).then((next) => {
+            setEntry("");
+            setAttachment(undefined);
+            return next;
+          }),
+        ),
+      )
+      .catch((e) => setError(String(e instanceof Error ? e.message : e)));
   };
   const saveDraft = async () => {
     if (!detailState || !detailState.dirty.size || detailState.conflicts.length || mutationBusyRef.current) return false;
@@ -546,6 +548,14 @@ export function TaskDetail({
           aria-label={text.worklogEntry}
           value={entry}
           onChange={(event) => setEntry(event.target.value)}
+          onPaste={(event) => {
+            const imageItem = [...event.clipboardData.items].find((item) => item.type.startsWith("image/"));
+            const pastedImage = imageItem?.getAsFile() ?? Array.from(event.clipboardData.files ?? []).find((file) => file.type.startsWith("image/"));
+            if (pastedImage) {
+              event.preventDefault();
+              setAttachment(pastedImage);
+            }
+          }}
           onKeyDown={(event) => {
             if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
               event.preventDefault();
@@ -563,7 +573,7 @@ export function TaskDetail({
         <button
           type="button"
           data-control="task-worklog-add"
-          disabled={!entry.trim()}
+          disabled={!entry.trim() && !attachment}
           onClick={addWorkLog}
         >
           {text.add}

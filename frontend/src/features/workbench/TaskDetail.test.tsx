@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { createEvent, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { TaskDetail, type DetailSession } from "./TaskDetail";
 
@@ -128,6 +128,51 @@ describe("Task detail", () => {
     fireEvent.keyDown(field, { key: "Enter", isComposing: true });
     expect(field).toHaveValue("Composing text");
     expect(request.mock.calls.filter(([arg]) => arg.path === "/tasks/task-1/work-log")).toHaveLength(workLogsBeforeIme);
+  });
+
+  it("attaches an image pasted from the clipboard and submits an image-only Work Log", async () => {
+    const request = vi.fn().mockResolvedValue(response(task));
+    window.llmWikiApplication = { request };
+    render(<TaskDetail taskId="task-1" onClose={vi.fn()} onChanged={vi.fn()} />);
+    const field = await screen.findByLabelText("Work Log entry");
+    const image = new File(["screenshot"], "Screenshot.png", { type: "image/png" });
+    Object.defineProperty(image, "arrayBuffer", { value: async () => new TextEncoder().encode("screenshot").buffer });
+    fireEvent.paste(field, {
+      clipboardData: {
+        items: [{ type: "image/png", getAsFile: () => image }],
+      },
+    });
+
+    expect(await screen.findByText("Attach image or file: Screenshot.png")).toBeVisible();
+    const workLogAdd = document.querySelector<HTMLButtonElement>('[data-control="task-worklog-add"]')!;
+    expect(workLogAdd).toBeEnabled();
+    fireEvent.click(workLogAdd);
+
+    await waitFor(() => {
+      const workLog = request.mock.calls
+        .map(([input]) => input)
+        .find((input) => input.path === "/tasks/task-1/work-log" && input.method === "POST");
+      expect(JSON.parse(workLog.body)).toMatchObject({
+        expectedTaskRevision: 2,
+        body: "",
+        attachment: { name: "Screenshot.png", mediaType: "image/png" },
+      });
+    });
+  });
+
+  it("leaves plain text paste available and preserves an existing file attachment", async () => {
+    window.llmWikiApplication = { request: vi.fn().mockResolvedValue(response(task)) };
+    render(<TaskDetail taskId="task-1" onClose={vi.fn()} onChanged={vi.fn()} />);
+    const field = await screen.findByLabelText("Work Log entry");
+    const existing = new File(["evidence"], "evidence.txt", { type: "text/plain" });
+    fireEvent.change(screen.getByLabelText("Attach image or file"), { target: { files: [existing] } });
+    const paste = createEvent.paste(field, {
+      clipboardData: { items: [{ type: "text/plain", getAsFile: () => null }] },
+    });
+    fireEvent(field, paste);
+
+    expect(paste.defaultPrevented).toBe(false);
+    expect(screen.getByText("Attach image or file: evidence.txt")).toBeVisible();
   });
 
   it("sends the current Task revision and the checkbox event value", async () => {

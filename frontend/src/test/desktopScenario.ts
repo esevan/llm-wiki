@@ -50,7 +50,7 @@ type Task = {
   workLog?: Array<{
     id: string;
     body?: string;
-    attachment?: { name?: string };
+    attachment?: { name?: string; mediaType?: string; data?: string };
     comments?: Array<{ body: string }>;
   }>;
   checklist?: Array<{ checked: boolean }>;
@@ -375,6 +375,16 @@ async function log(step: Step) {
   enter(field("Work Log entry"), "attached evidence");
   await clickAfter("Work Log entry", "Add attachment");
   await waitForAsync(async () => (await task(title)).workLog?.some((item) => item.attachment?.name === "evidence.txt") ?? false, "persisted attachment");
+  await taskDetailIdle("pasting a screenshot");
+  await revealTaskField("Work Log entry");
+  const screenshotData = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=";
+  const screenshot = new DataTransfer();
+  screenshot.items.add(new File([Uint8Array.from(atob(screenshotData), character => character.charCodeAt(0))], "screenshot.png", { type: "image/png" }));
+  field("Work Log entry").dispatchEvent(new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: screenshot }));
+  await waitFor(() => !document.querySelector<HTMLButtonElement>('[data-control="task-worklog-add"]')?.disabled, "screenshot-only entry enabled");
+  await clickAfter("Work Log entry", "Save pasted screenshot");
+  await waitForAsync(async () => (await task(title)).workLog?.some(item => item.body === "" && item.attachment?.name === "screenshot.png" && item.attachment?.mediaType === "image/png" && item.attachment?.data === screenshotData) ?? false, "pasted screenshot bytes persisted");
+  await step("Pasted an image through the Work Log clipboard handler and persisted exact screenshot bytes without requiring text.");
   await revealTaskField("Checklist item");
   enter(field("Checklist item"), "verify result");
   await clickAfter("Checklist item", "Add checklist");

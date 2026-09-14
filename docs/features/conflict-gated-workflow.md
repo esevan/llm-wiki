@@ -44,6 +44,9 @@ items initially; expand the list to see all items, including completed ones.
 Task detail keeps six editable definition fields—title, detail, outcome, scope, non-goals, and
 validation criteria—beside Work Log entries, attachments, comments, checklists, and decisions.
 Press **Enter** in a Work Log entry to add it; use **Shift+Enter** for a line break.
+Paste a screenshot into the Work Log entry to attach it directly; an image-only entry is allowed,
+and ordinary text paste continues to insert text normally. The selected attachment filename remains
+visible until the entry is added or replaced.
 Work Log entries appear newest first, and each recorded entry shows its date and time in the local
 locale.
 Edits stay local until **Save changes**. An independent saved mutation or refresh preserves a dirty
