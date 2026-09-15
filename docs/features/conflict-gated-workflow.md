@@ -19,9 +19,13 @@ Related work is visible and can be unlinked from either Task; prerequisites reta
 
 ## Resume from the board
 
-Workbench places shortcuts to work in progress first, followed by saved refinement work. These
-shortcuts open the same records shown in the categorized main list; they are not duplicate Tasks.
-Category redesign is outside this change.
+Workbench shows all in-progress Tasks at the top, followed by a compact entry form and three vertical lanes:
+**Inbox** for Captures without an ongoing refinement, **Refining** for saved refinements and migrated
+Problem-only items, and **Refined Tasks** for registered Tasks without an ongoing refinement.
+Each item appears once; in-progress Tasks stay at the top even when they have a refinement session.
+Completed Tasks are available in a collapsed section in the right lane. Category names remain on cards.
+All saved refinements are included, without a shortcut count limit. On narrow windows, the lanes stack
+in the same order. Opening, refining, and deleting items remain available on their cards.
 
 A Task is distinct from a Task in progress. Start work explicitly, then complete it with evidence;
 a completed Task can be reopened. Refinement readiness shows which preparation fields are filled

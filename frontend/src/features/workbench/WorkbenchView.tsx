@@ -178,6 +178,100 @@ export function WorkbenchView({ active }: { active: boolean }) {
       setDeleteBusy(false);
     }
   };
+  const items = snapshot?.categories.flatMap((category) => category.items) ?? [];
+  const categoryLabels = new Map(snapshot?.categories.flatMap((category) =>
+    category.items.map((item) => [`${item.kind}:${item.id}`, category.label] as const)));
+  const refiningIds = new Set(snapshot?.refiningShortcuts.map((item) => `${item.kind}:${item.id}`));
+  const activeTasks = items.filter((item) => item.kind === "task" && item.state === "in_progress");
+  const completedTasks = items.filter((item) => item.kind === "task" && item.state === "completed");
+  const pendingItems = items.filter((item) => item.kind !== "task" || item.state === "task");
+  const lanes = [
+    { id: "inbox", title: text.inbox, hint: text.inboxHint, empty: text.noInbox,
+      items: pendingItems.filter((item) => item.kind === "capture" && !refiningIds.has(`capture:${item.id}`)) },
+    { id: "refining", title: text.refining, hint: text.refiningHint, empty: text.noRefining,
+      items: pendingItems.filter((item) => item.kind === "refinement" || refiningIds.has(`${item.kind}:${item.id}`)) },
+    { id: "tasks", title: text.refinedTasks, hint: text.refinedTasksHint, empty: text.noReadyTasks,
+      items: pendingItems.filter((item) => item.kind === "task" && !refiningIds.has(`task:${item.id}`)) },
+  ];
+  const renderCard = (item: WorkbenchItem) => (
+    <article
+      className={`canonical-card${(item.kind === "task" && detail === item.id) || (refining?.kind === item.kind && refining.id === item.id) ? " selected" : ""}`}
+      key={`${item.kind}-${item.id}`}
+      data-entity-id={item.id}
+    >
+      <small>
+        {item.kind === "task"
+          ? stateLabel(item)
+          : item.kind === "capture"
+            ? text.capture
+            : text.refining}
+      </small>
+      <h3>{item.kind === "task" && item.state === "in_progress" ? (
+        <button className="active-task-title" data-control="task-shortcut-open" data-entity-id={item.id} onClick={(event) => selectDetail(item.id, event.currentTarget)}>{itemTitle(item)}</button>
+      ) : itemTitle(item)}</h3>
+      <p className="workbench-card-category">{categoryLabels.get(`${item.kind}:${item.id}`)}</p>
+        {item.kind === "task" && (
+        <p>
+          {item.readiness
+            ? `${item.readiness.missing} ${text.readinessItemsRemain}`
+            : ""}
+        </p>
+      )}
+      <footer>
+        {item.kind === "task" ? (
+          <>
+            <button
+              data-control="task-card-open"
+              data-entity-id={item.id}
+              type="button"
+              onClick={(event) => selectDetail(item.id, event.currentTarget)}
+            >
+              {text.open}
+            </button>
+            <button
+              data-control={refiningIds.has(`${item.kind}:${item.id}`) ? "task-shortcut-refine" : "task-card-refine"}
+              data-entity-id={item.id}
+              type="button"
+              onClick={(event) =>
+                openRefinement({ kind: "task", id: item.id }, event.currentTarget)
+              }
+            >
+              {text.refine}
+            </button>
+            <button type="button" data-control="task-card-delete" data-entity-id={item.id} onClick={() => requestDelete("tasks", item.id, item.title)}>{text.delete}</button>
+          </>
+        ) : item.kind === "capture" ? (
+          <>
+          <button
+            data-control={refiningIds.has(`${item.kind}:${item.id}`) ? "task-shortcut-refine" : "task-card-refine"}
+            data-entity-id={item.id}
+            type="button"
+            onClick={(event) =>
+              openRefinement({ kind: "capture", id: item.id }, event.currentTarget)
+            }
+          >
+            {text.refine}
+          </button>
+          <button type="button" data-control="task-card-delete" data-entity-id={item.id} onClick={() => requestDelete("captures", item.id, item.text)}>{text.delete}</button>
+          </>
+        ) : (
+          <>
+          <button
+            type="button"
+            data-control={refiningIds.has(`${item.kind}:${item.id}`) ? "task-shortcut-refine" : "task-card-refine"}
+            data-entity-id={item.problemId}
+            onClick={() =>
+              openLegacyRefinement(item.problemId, item.problemRevision, item.title)
+            }
+          >
+            {text.refine}
+          </button>
+          <button type="button" data-control="task-card-delete" data-entity-id={item.problemId} onClick={() => requestDelete("problems", item.problemId, item.title)}>{text.delete}</button>
+          </>
+        )}
+      </footer>
+    </article>
+  );
   return (
     <section
       id="workbench"
@@ -194,6 +288,15 @@ export function WorkbenchView({ active }: { active: boolean }) {
         <div className="status">{text.vaultStatus}</div>
       </header>
       <div className="workbench-main">
+      {snapshot && (
+        <section className="workbench-active shortcut-region" aria-labelledby="workbench-active-title">
+          <header className="workbench-active-header">
+            <div><small>{text.resume}</small><h2 id="workbench-active-title">{text.active}</h2></div>
+            <span className="workbench-count">{activeTasks.length}</span>
+          </header>
+          {activeTasks.length ? <div className="workbench-active-cards">{activeTasks.map(renderCard)}</div> : <p className="region-empty">{text.noActive}</p>}
+        </section>
+      )}
       <section className="task-capture">
         <form onSubmit={save}>
           <fieldset disabled={busy}>
@@ -260,177 +363,29 @@ export function WorkbenchView({ active }: { active: boolean }) {
         )}
       </section>
       {snapshot && (
-        <>
+        <section className="workbench-board" aria-label={text.categories}>
           {trackedTitle && <p className="region-empty">{trackedTitle}</p>}
-          <section className="shortcut-region" aria-label={text.active}>
-            <header>
-              <small>{text.resume}</small>
-              <h2>{text.active}</h2>
-            </header>
-            {snapshot.activeShortcuts.length ? (
-              <div className="shortcut-list">
-                {snapshot.activeShortcuts.map((shortcut) => {
-                  const task = taskFor(shortcut.id);
-                  return (
-                    <button
-                      data-control="task-shortcut-open"
-                      data-entity-id={shortcut.id}
-                      type="button"
-                      className={`shortcut-card${detail === shortcut.id ? " selected" : ""}`}
-                      key={shortcut.id}
-                      onClick={(event) => selectDetail(shortcut.id, event.currentTarget)}
-                    >
-                      <small>{text.inProgress} · r{shortcut.taskRevision}</small>
-                      <strong>{task?.title ?? shortcut.id}</strong>
-                      <span>{text.open}</span>
-                    </button>
-                  );
-                })}
-              </div>
-            ) : (
-              <p className="region-empty">{text.noActive}</p>
-            )}
-          </section>
-          <section
-            className="shortcut-region refinement-shortcuts"
-            aria-label={text.refining}
-          >
-            <header>
-              <small>{text.refining}</small>
-              <h2>{text.refining}</h2>
-            </header>
-            {snapshot.refiningShortcuts.length ? (
-              <div className="shortcut-list">
-                {snapshot.refiningShortcuts.map((shortcut) => {
-                  const task =
-                      shortcut.kind === "task"
-                        ? taskFor(shortcut.id)
-                        : undefined,
-                    capture =
-                      shortcut.kind === "capture"
-                        ? captureFor(shortcut.id)
-                        : undefined;
-                  return (
-                    <button
-                      data-control="task-shortcut-refine"
-                      data-entity-id={shortcut.id}
-                      type="button"
-                      className={`shortcut-card subtle${refining?.kind === shortcut.kind && refining.id === shortcut.id ? " selected" : ""}`}
-                      key={`${shortcut.kind}-${shortcut.id}`}
-                      onClick={(event) =>
-                        openRefinement({ kind: shortcut.kind, id: shortcut.id }, event.currentTarget)
-                      }
-                    >
-                      <small>
-                        {(shortcut.kind === "task" ? text.task : text.capture)} · draft r{shortcut.draftRevision}
-                      </small>
-                      <strong>
-                        {task?.title ?? capture?.text ?? shortcut.id}
-                      </strong>
-                      <span>{text.refine}</span>
-                    </button>
-                  );
-                })}
-              </div>
-            ) : (
-              <p className="region-empty">{text.noRefining}</p>
-            )}
-          </section>
-          <section className="canonical-work">
-            <header>
-              <h2>{text.categories}</h2>
-            </header>
-            {snapshot.categories.length ? (
-              snapshot.categories.map((category) => (
-                <section className="category-group" key={category.id}>
-                  <header>
-                    <h3>{category.label}</h3>
-                    <span>{category.items.length}</span>
-                  </header>
-                  <div className="category-grid">
-                    {category.items.map((item) => (
-                      <article
-                        className={`canonical-card${(item.kind === "task" && detail === item.id) || (refining?.kind === item.kind && refining.id === item.id) ? " selected" : ""}`}
-                        key={`${item.kind}-${item.id}`}
-                      >
-                        <small>
-                          {item.kind === "task"
-                            ? stateLabel(item as TaskCard)
-                            : item.kind === "capture"
-                              ? text.capture
-                              : text.refining}
-                        </small>
-                        <h3>{itemTitle(item)}</h3>
-                          {item.kind === "task" && (
-                          <p>
-                            {(item as TaskCard).readiness
-                              ? `${(item as TaskCard).readiness!.missing} ${text.readinessItemsRemain}`
-                              : ""}
-                          </p>
-                        )}
-                        <footer>
-                          {item.kind === "task" ? (
-                            <>
-                              <button
-                                data-control="task-card-open"
-                                data-entity-id={item.id}
-                                type="button"
-                                onClick={(event) => selectDetail(item.id, event.currentTarget)}
-                              >
-                                {text.open}
-                              </button>
-                              <button
-                                data-control="task-card-refine"
-                                data-entity-id={item.id}
-                                type="button"
-                                onClick={(event) =>
-                                  openRefinement({ kind: "task", id: item.id }, event.currentTarget)
-                                }
-                              >
-                                {text.refine}
-                              </button>
-                              <button type="button" data-control="task-card-delete" data-entity-id={item.id} onClick={() => requestDelete("tasks", item.id, item.title)}>{text.delete}</button>
-                            </>
-                          ) : item.kind === "capture" ? (
-                            <>
-                            <button
-                              data-control="task-card-refine"
-                              data-entity-id={item.id}
-                              type="button"
-                              onClick={(event) =>
-                                openRefinement({ kind: "capture", id: item.id }, event.currentTarget)
-                              }
-                            >
-                              {text.refine}
-                            </button>
-                            <button type="button" data-control="task-card-delete" data-entity-id={item.id} onClick={() => requestDelete("captures", item.id, item.text)}>{text.delete}</button>
-                            </>
-                          ) : (
-                            <>
-                            <button
-                              type="button"
-                              data-control="task-card-refine"
-                              data-entity-id={item.problemId}
-                              onClick={() =>
-                                openLegacyRefinement(item.problemId, item.problemRevision, item.title)
-                              }
-                            >
-                              {text.refine}
-                            </button>
-                            <button type="button" data-control="task-card-delete" data-entity-id={item.problemId} onClick={() => requestDelete("problems", item.problemId, item.title)}>{text.delete}</button>
-                            </>
-                          )}
-                        </footer>
-                      </article>
-                    ))}
-                  </div>
-                </section>
-              ))
-            ) : (
-              <p className="region-empty">{text.empty}</p>
-            )}
-          </section>
-        </>
+          <div className="workbench-lanes">
+            {lanes.map((lane) => (
+              <section className={`workbench-lane workbench-lane-${lane.id}`} data-lane={lane.id} aria-labelledby={`lane-${lane.id}`} key={lane.id}>
+                <header className="workbench-lane-header">
+                  <h2 id={`lane-${lane.id}`}>{lane.title}</h2>
+                  <span className="workbench-count">{lane.items.length}</span>
+                </header>
+                <p className="workbench-lane-hint">{lane.hint}</p>
+                <div className="workbench-lane-cards">
+                  {lane.items.length ? lane.items.map(renderCard) : <p className="region-empty">{lane.empty}</p>}
+                </div>
+                {lane.id === "tasks" && completedTasks.length > 0 && (
+                  <details className="workbench-completed" data-control="workbench-completed-details">
+                    <summary>{text.completed} <span className="workbench-count">{completedTasks.length}</span></summary>
+                    <div className="workbench-lane-cards">{completedTasks.map(renderCard)}</div>
+                  </details>
+                )}
+              </section>
+            ))}
+          </div>
+        </section>
       )}
       </div>
       {detail && (

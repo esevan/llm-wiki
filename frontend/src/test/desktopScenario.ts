@@ -288,6 +288,8 @@ async function detail(title: string) {
   const card = [
     ...document.querySelectorAll<HTMLElement>(".canonical-card"),
   ].find((card) => card.querySelector("h3")?.textContent?.trim() === title);
+  const completed = card?.closest<HTMLDetailsElement>("details");
+  if (completed && !completed.open) clickElement(completed.querySelector<HTMLElement>("summary")!, "Show completed Tasks");
   const button = card?.querySelector<HTMLButtonElement>("button");
   if (!button) throw new Error(`No detail control for ${title}`);
   clickElement(button, `Open ${title}`);
@@ -1089,24 +1091,21 @@ async function localization(step: Step) {
     }
     if (Math.abs(measured.innerWidth - nativeSize.windowWidth) > 2 || Math.abs(measured.clientWidth - measured.innerWidth) > 2 || Math.abs(measured.clientHeight - measured.innerHeight) > 2 || measured.innerHeight <= 0 || measured.innerHeight > nativeSize.windowHeight + 2 || stableReads < 1)
       throw new Error(`Browser metrics did not settle after native window resize: requested native window ${nativeSize.requestedWidth}×${nativeSize.requestedHeight}, native window ${nativeSize.windowWidth}×${nativeSize.windowHeight}, WebKit inner ${measured.innerWidth}×${measured.innerHeight}, outer ${measured.outerWidth}×${measured.outerHeight}, document client ${measured.clientWidth}×${measured.clientHeight}`);
-    const shortcut = [...document.querySelectorAll<HTMLElement>(".shortcut-card")].find((card) => card.textContent?.includes(longTitle));
-    const canonical = [...document.querySelectorAll<HTMLElement>(".canonical-card")].find((card) => card.textContent?.includes(longTitle));
-    const action = shortcut?.querySelector<HTMLElement>("span");
-    const allWork = [...document.querySelectorAll<HTMLElement>(".canonical-work h2")].find((heading) => heading.textContent === (document.documentElement.lang === "ko" ? "모든 작업" : "All work"));
-    if (!shortcut || !canonical || !action || !allWork) throw new Error(`Missing long-title shortcut geometry at ${width}×${height}`);
-    const cardRect = shortcut.getBoundingClientRect(), actionRect = action.getBoundingClientRect(), headingRect = allWork.getBoundingClientRect();
-    const titleRect = shortcut.querySelector<HTMLElement>("strong")?.getBoundingClientRect();
-    const canonicalRect = canonical.getBoundingClientRect(), canonicalTitle = canonical.querySelector<HTMLElement>("h3")?.getBoundingClientRect();
-    const viewportWidth = document.documentElement.clientWidth;
-    const rectangle = (name: string, rect: DOMRect | undefined) => rect ? `${name}=${Math.round(rect.left)},${Math.round(rect.top)},${Math.round(rect.width)}×${Math.round(rect.height)}` : `${name}=missing`;
-    const computed = (name: string, element: Element | null, fields: string[]) => {
-      if (!element) return `${name}=missing`;
-      const style = getComputedStyle(element);
-      return `${name}=${fields.map((field) => `${field}:${style.getPropertyValue(field)}`).join(",")}`;
-    };
-    const layout = (name: string, element: HTMLElement | null) => element ? `${name}=client:${element.clientWidth}×${element.clientHeight},scroll:${element.scrollWidth}×${element.scrollHeight}` : `${name}=missing`;
-    if (!titleRect || !canonicalTitle || cardRect.width < 1 || actionRect.width < 1 || titleRect.left < cardRect.left || titleRect.right > cardRect.right || actionRect.left < cardRect.left || actionRect.right > cardRect.right || actionRect.bottom > cardRect.bottom + 1 || actionRect.bottom > headingRect.top || canonicalTitle.left < canonicalRect.left || canonicalTitle.right > canonicalRect.right || document.documentElement.scrollWidth > viewportWidth + 1)
-      throw new Error(`Shortcut geometry failed at requested native window ${width}×${height}: ${rectangle("shortcut", cardRect)}, ${rectangle("shortcut title", titleRect)}, ${rectangle("shortcut action", actionRect)}, ${rectangle("All work", headingRect)}, ${rectangle("canonical", canonicalRect)}, ${rectangle("canonical title", canonicalTitle)}, scroll=${document.documentElement.scrollWidth}×${document.documentElement.clientWidth}, WebKit=${measured.innerWidth}×${measured.innerHeight}; ${layout("shortcut", shortcut)}, ${layout("title", shortcut.querySelector("strong"))}, ${layout("action", action)}, ${computed("shortcut style", shortcut, ["display", "height", "min-height", "max-height", "flex-shrink", "flex-basis", "align-self", "overflow", "box-sizing"])}, ${computed("title style", shortcut.querySelector("strong"), ["display", "height", "min-height", "flex-shrink", "flex-basis", "margin-block-start", "margin-block-end"])}, ${computed("action style", action, ["display", "height", "min-height", "flex-shrink", "flex-basis", "margin-top"])}, ${computed("grid style", shortcut.parentElement, ["display", "grid-template-rows", "grid-auto-rows", "align-items", "align-content"])}`);
+    const card = [...document.querySelectorAll<HTMLElement>(".workbench-active .canonical-card")].find((item) => item.textContent?.includes(longTitle));
+    const board = document.querySelector<HTMLElement>(".workbench-board");
+    const action = card?.querySelector<HTMLElement>('[data-control="task-card-open"]');
+    const title = card?.querySelector<HTMLElement>("h3");
+    if (!card || !board || !action || !title) throw new Error(`Missing active Task geometry at ${width}×${height}`);
+    const cardRect = card.getBoundingClientRect(), actionRect = action.getBoundingClientRect(), titleRect = title.getBoundingClientRect();
+    if (titleRect.left < cardRect.left || titleRect.right > cardRect.right || actionRect.right > cardRect.right || actionRect.bottom > cardRect.bottom + 1 || cardRect.bottom > board.getBoundingClientRect().top || document.documentElement.scrollWidth > document.documentElement.clientWidth + 1)
+      throw new Error(`Active Task overflowed its card or workflow lanes at ${width}×${height}`);
+    const lanes = [...board.querySelectorAll<HTMLElement>("[data-lane]")];
+    if (lanes.map(lane => lane.dataset.lane).join(",") !== "inbox,refining,tasks") throw new Error("Workflow lane order changed");
+    if (board.textContent?.includes(longTitle)) throw new Error("Active Task was duplicated in the workflow lanes");
+    const rects = lanes.map(lane => lane.getBoundingClientRect());
+    const wide = document.querySelector(".workbench-main")!.getBoundingClientRect().width > 700;
+    if (wide ? !(rects[0].right <= rects[1].left && rects[1].right <= rects[2].left) : !(rects[0].bottom <= rects[1].top && rects[1].bottom <= rects[2].top))
+      throw new Error(`Workflow lanes overlap at ${width}×${height}`);
     return { nativeSize, measured };
   };
   const englishCompact = await assertGeometry(900, 640);
@@ -1179,7 +1178,7 @@ async function localization(step: Step) {
   await waitFor(() => !document.querySelector(".task-detail"), "returned to responsive Workbench");
   await step("Task detail resized the Workbench into equal non-overlapping columns at 1200px and replaced it at 900px.");
   await step(
-    "Korean and English long-title Workbench shortcuts kept their action inside the card and above All work at the recorded native-window and WebKit viewport sizes; the Task title editor used the panel width and Korean AI privacy copy was exact.",
+    "Korean and English long-title active Tasks kept their action inside the card and above the responsive workflow lanes at the recorded native-window and WebKit viewport sizes; the Task title editor used the panel width and Korean AI privacy copy was exact.",
   );
 }
 

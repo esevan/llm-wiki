@@ -10,7 +10,7 @@
 
 ## Workbench와 Task 상세
 
-Workbench의 가벼운 입력에서 텍스트를 Capture로 저장하거나 Task를 바로 만듭니다. 저장한 작업과 재개할 수 있는 Refinement 바로가기는 그 아래에서 찾습니다. Problem은 Task에 연결할 수 있는 선택적인 맥락이며, 반드시 거쳐야 하는 단계가 아닙니다.
+Workbench는 진행 중인 Task를 맨 위에 표시합니다. 가벼운 입력 아래에는 Inbox, 다듬는 중, 정제된 Task 레인이 있습니다. 텍스트를 Capture로 저장하거나 Task를 바로 만들고, 오른쪽 레인에서 완료한 Task를 펼쳐 볼 수 있습니다. Problem은 Task에 연결할 수 있는 선택적인 맥락이며, 반드시 거쳐야 하는 단계가 아닙니다.
 
 ![Capture·Task 입력과 저장한 작업을 보여 주는 Workbench](images/workbench-tasks.png)
 

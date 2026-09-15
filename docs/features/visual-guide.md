@@ -10,7 +10,7 @@ The refreshed Korean and English Workbench captures and build checks are recorde
 
 ## Workbench and Task detail
 
-The Workbench starts with a lightweight entry: save the text as a Capture or create a Task directly. Saved work and resumable refinement shortcuts remain available below it. A Problem is optional context that may be linked to a Task; it is not a required stage.
+The Workbench shows in-progress Tasks at the top. Below a lightweight entry, work is arranged into Inbox, Refining, and Refined Tasks lanes. Save text as a Capture or create a Task directly; completed Tasks can be expanded in the right lane. A Problem is optional context that may be linked to a Task; it is not a required stage.
 
 ![Workbench with Capture and Task entry plus saved work](images/workbench-tasks.en.png)
 

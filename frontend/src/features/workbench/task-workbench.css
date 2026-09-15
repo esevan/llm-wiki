@@ -895,3 +895,91 @@ main:has(.task-workbench.active :is(.task-detail, .refinement-panel)) {
 @media (prefers-reduced-motion: reduce) {
   .refinement-thinking-dots > span { animation: none; width: 1.6em; }
 }
+
+/* Work flows left to right; active Tasks remain above the preparation lanes. */
+.workbench-main { container-type: inline-size; }
+.workbench-active {
+  padding: var(--space-5);
+  border: 1px solid var(--color-border-positive);
+  border-radius: var(--radius-panel);
+  background: var(--color-bg-positive-subtle);
+}
+.workbench-active > .workbench-active-header {
+  flex-direction: row;
+  align-items: center;
+}
+.workbench-count {
+  display: inline-grid;
+  place-items: center;
+  min-width: 26px;
+  min-height: 26px;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-pill);
+  background: var(--color-bg-surface);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  font-variant-numeric: tabular-nums;
+}
+.workbench-active-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr));
+  gap: var(--space-3);
+  margin-top: var(--space-4);
+}
+.workbench-active .active-task-title {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--color-text-primary);
+  text-align: left;
+  font: inherit;
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+.workbench-active .active-task-title:hover { color: var(--color-accent-strong); }
+.workbench-main > .task-capture {
+  max-width: none;
+  padding: var(--space-4);
+  margin-bottom: var(--space-6);
+}
+.workbench-lanes {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-4);
+  align-items: start;
+}
+.workbench-lane {
+  min-width: 0;
+  padding: var(--space-4);
+  border: var(--border-default);
+  border-radius: var(--radius-panel);
+  background: var(--color-bg-neutral);
+}
+.workbench-lane-refining { background: var(--color-bg-accent-subtle); }
+.workbench-lane-tasks { background: var(--color-bg-positive-subtle); }
+.workbench-lane-header { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); }
+.workbench-lane-header h2 { margin: 0; font-size: 18px; overflow-wrap: anywhere; }
+.workbench-lane-hint { margin: var(--space-2) 0 var(--space-5); font-size: var(--font-size-sm); color: var(--color-text-secondary); line-height: 1.5; }
+.workbench-lane-cards { display: grid; gap: var(--space-3); }
+.workbench-lane-cards > .region-empty { padding: var(--space-5) var(--space-2); border-top: 1px dashed var(--color-border-strong); font-size: var(--font-size-md); line-height: 1.6; }
+.workbench-board .canonical-card,
+.workbench-active .canonical-card { min-width: 0; min-height: 0; }
+.workbench-board .canonical-card h3,
+.workbench-active .canonical-card h3 { font-size: 16px; line-height: 1.5; overflow-wrap: anywhere; }
+.workbench-board .canonical-card small,
+.workbench-active .canonical-card small { font-family: var(--font-family-body); font-size: var(--font-size-sm); }
+.workbench-card-category { font-size: var(--font-size-sm); color: var(--color-text-secondary); overflow-wrap: anywhere; }
+.workbench-board .canonical-card footer,
+.workbench-active .canonical-card footer { flex-wrap: wrap; gap: var(--space-2); }
+.workbench-board .canonical-card footer button,
+.workbench-active .canonical-card footer button { min-height: 40px; }
+.workbench-board .canonical-card footer button:last-child,
+.workbench-active .canonical-card footer button:last-child { margin-left: auto; color: var(--color-text-secondary); }
+.workbench-board button:active:not(:disabled),
+.workbench-active button:active:not(:disabled) { transform: translateY(1px); }
+.workbench-completed { margin-top: var(--space-5); border-top: var(--border-default); padding-top: var(--space-4); }
+.workbench-completed summary { cursor: pointer; font-weight: 700; }
+.workbench-completed .workbench-lane-cards { margin-top: var(--space-3); }
+@container (max-width: 700px) {
+  .workbench-lanes { grid-template-columns: minmax(0, 1fr); }
+}

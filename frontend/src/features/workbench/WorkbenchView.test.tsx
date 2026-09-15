@@ -85,24 +85,30 @@ describe("Task Workbench", () => {
     expect(saved).toBe(true);
   });
 
-  it("orders active and refining shortcuts before canonical categories", async () => {
-    window.llmWikiApplication = {
-      request: vi.fn().mockResolvedValue(response(snapshot)),
-    };
+  it("places active Tasks above three exclusive workflow lanes", async () => {
+    const board = { ...snapshot, categories: [{ ...snapshot.categories[0], items: [
+      ...snapshot.categories[0].items,
+      { kind: "capture", id: "inbox", text: "A new thought" },
+      { kind: "task", id: "done", title: "Finished work", state: "completed", taskRevision: 1 },
+      { kind: "task", id: "shaping", title: "Shape this task", state: "task", taskRevision: 1 },
+    ] }], refiningShortcuts: [...snapshot.refiningShortcuts, { kind: "task", id: "shaping", draftRevision: 1 }] };
+    window.llmWikiApplication = { request: vi.fn().mockResolvedValue(response(board)) };
     render(<WorkbenchView active />);
-    await waitFor(() =>
-      expect(screen.getAllByText("Ship workbench")).toHaveLength(2),
-    );
-    const page = document.getElementById("workbench")!.textContent!;
-    expect(page.indexOf("Active tasks")).toBeLessThan(page.indexOf("Refining"));
-    expect(page.indexOf("Refining")).toBeLessThan(page.indexOf("All work"));
-    expect(screen.getAllByText("Ship workbench")).toHaveLength(2);
-    expect(screen.getByText("Plan release").closest("article")).toHaveTextContent(
-      "Task",
-    );
-    expect(screen.getByText("Plan release").closest("article")).not.toHaveTextContent(
-      "In progress",
-    );
+    await screen.findByText("Ship workbench");
+    expect(screen.getAllByText("Ship workbench")).toHaveLength(1);
+    expect(document.querySelector(".workbench-active")).toHaveTextContent("Ship workbench");
+    expect(document.querySelector(".workbench-board")).not.toHaveTextContent("Ship workbench");
+    const lanes = [...document.querySelectorAll("[data-lane]")];
+    expect(lanes.map(lane => lane.getAttribute("data-lane"))).toEqual(["inbox", "refining", "tasks"]);
+    expect(lanes[0]).toHaveTextContent("A new thought");
+    expect(lanes[0]).not.toHaveTextContent("Keep this thought");
+    expect(lanes[1]).toHaveTextContent("Keep this thought");
+    expect(lanes[1]).toHaveTextContent("Shape this task");
+    expect(lanes[2]).toHaveTextContent("Plan release");
+    expect(lanes[2]).not.toHaveTextContent("Shape this task");
+    expect(lanes[2].querySelector("details")).not.toHaveAttribute("open");
+    expect(lanes[2].querySelector("details")).toHaveTextContent("Finished work");
+    expect(document.querySelector(".workbench-main")?.firstElementChild).toHaveClass("workbench-active");
   });
 
   it("retains a direct Task draft and selected mode after a save failure", async () => {
@@ -116,7 +122,7 @@ describe("Task Workbench", () => {
         ),
     };
     render(<WorkbenchView active />);
-    await screen.findByText("All work");
+    await screen.findByRole("region", { name: "All work" });
     fireEvent.click(screen.getByRole("radio", { name: "Register as a Task" }));
     const input = screen.getByLabelText(
       "Workbench entry",

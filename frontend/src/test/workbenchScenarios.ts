@@ -465,6 +465,16 @@ export async function runTaskControlMatrixScenario(h: WorkbenchScenarioHarness) 
   await h.waitFor(() => document.querySelector(".task-detail")?.getAttribute("data-task-state") === "completed", "rendered completed Task");
   effect(h, ["task-completion-complete"], () => document.querySelector(".task-detail")?.getAttribute("data-task-state") === "completed");
 
+  await clickControl(h, "task-detail-close", "Close completed Task");
+  await h.waitFor(() => !document.querySelector(".task-detail"), "closed completed detail");
+  observe(h, "completed Tasks disclosure");
+  const completed = control<HTMLDetailsElement>("workbench-completed-details");
+  await h.prepareClick(completed.querySelector("summary")!, "Show completed Tasks");
+  h.coverage.interact("workbench-completed-details", () => h.click(completed.querySelector("summary")!, "Show completed Tasks"));
+  await h.waitFor(() => completed.open, "expanded completed Tasks");
+  effect(h, ["workbench-completed-details"], () => completed.open && Boolean(completed.textContent?.includes(revisedTitle)));
+  await h.detail(revisedTitle);
+  await h.waitFor(() => document.querySelector(".task-detail")?.getAttribute("data-task-state") === "completed", "reopened completed detail");
   await h.step("Task controls: completed Task rendered");
   observe(h, "completed Task");
   await clickControl(h, "task-lineage-load", "Load Task lineage");

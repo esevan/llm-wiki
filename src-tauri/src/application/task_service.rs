@@ -748,12 +748,12 @@ impl TaskApplicationService {
             .filter_map(|x| x["id"].as_str())
             .collect::<Vec<_>>();
         let mut refining = Vec::new();
-        if let Ok(mut sessions) = c.prepare("SELECT s.capture_id,s.task_id,s.current_draft_revision FROM refinement_sessions s WHERE (s.capture_id IS NOT NULL OR s.task_id IS NOT NULL) AND s.state!='completed' AND NOT EXISTS(SELECT 1 FROM deleted_entities d WHERE d.entity_type='captures' AND d.entity_id=s.capture_id) AND NOT EXISTS(SELECT 1 FROM deleted_entities d WHERE d.entity_type='tasks' AND d.entity_id=s.task_id) ORDER BY s.last_user_activity_at DESC LIMIT 6") {
+        if let Ok(mut sessions) = c.prepare("SELECT s.capture_id,s.task_id,s.current_draft_revision FROM refinement_sessions s WHERE (s.capture_id IS NOT NULL OR s.task_id IS NOT NULL) AND s.state!='completed' AND NOT EXISTS(SELECT 1 FROM deleted_entities d WHERE d.entity_type='captures' AND d.entity_id=s.capture_id) AND NOT EXISTS(SELECT 1 FROM deleted_entities d WHERE d.entity_type='tasks' AND d.entity_id=s.task_id) ORDER BY s.last_user_activity_at DESC") {
             let subjects = sessions.query_map([], |row| Ok((row.get::<_,Option<String>>(0)?, row.get::<_,Option<String>>(1)?, row.get::<_,i64>(2)?))).map_err(|error| error.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|error| error.to_string())?;
             refining.extend(subjects.into_iter().filter_map(|(capture_id,task_id,revision)| {
                 let (kind,id) = if let Some(id) = task_id { if active_ids.contains(&id.as_str()) { return None; } ("task",id) } else { ("capture",capture_id?) };
                 Some(json!({"kind":kind,"id":id,"draftRevision":revision}))
-            }).take(3));
+            }));
         }
         let mut groups = std::collections::BTreeMap::<String, Vec<Value>>::new();
         for item in rows {
@@ -873,6 +873,27 @@ mod tests {
         let loaded = service.execute("task.get", &json!({"taskId":task_id})).unwrap();
         assert_eq!(loaded["publication"]["state"], "draft");
         assert_eq!(loaded["publication"]["bodyMarkdown"], "# Saved Knowledge\n\nReview this private draft.");
+    }
+
+    #[test]
+    fn workbench_includes_all_saved_refinements_for_workflow_lanes() {
+        let root = tempdir().unwrap();
+        let db = root.path().join("state.db");
+        crate::native::database::initialize(&db).unwrap();
+        let service = TaskApplicationService::new(&db);
+        let connection = crate::native::database::open(&db).unwrap();
+        for index in 0..8 {
+            let capture = service.execute("capture.create", &json!({"operationId":format!("capture-{index}"),"text":format!("Thought {index}")})).unwrap();
+            connection.execute(
+                "INSERT INTO refinement_sessions(id,capture_id,state,current_draft_revision,last_user_activity_at,updated_at) VALUES(?,?,'active',1,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)",
+                params![format!("session-{index}"), capture["id"].as_str().unwrap()],
+            ).unwrap();
+        }
+        let board = service.execute("workbench.get", &json!({})).unwrap();
+        assert_eq!(board["refiningShortcuts"].as_array().unwrap().len(), 8);
+        connection.execute("UPDATE refinement_sessions SET state='completed' WHERE id='session-0'", []).unwrap();
+        let board = service.execute("workbench.get", &json!({})).unwrap();
+        assert_eq!(board["refiningShortcuts"].as_array().unwrap().len(), 7);
     }
 
     #[test]
