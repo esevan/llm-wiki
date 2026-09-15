@@ -1018,3 +1018,10 @@ main:has(.task-workbench.active :is(.task-detail, .refinement-panel)) {
   padding: var(--space-1);
   border-radius: var(--radius-panel);
 }
+.input-image-attachment { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); min-width: 0; margin-top: var(--space-2); }
+.input-image-attachment small { color: var(--color-text-secondary); overflow-wrap: anywhere; }
+.input-image-preview { margin: var(--space-2) 0; min-width: 0; max-width: 100%; }
+.input-image-preview img { display: block; max-width: 100%; max-height: 180px; object-fit: contain; border: var(--border-default); border-radius: var(--radius-control); }
+.input-image-preview figcaption { font-size: var(--font-size-sm); overflow-wrap: anywhere; color: var(--color-text-secondary); }
+.refinement-composer-input { flex: 1; min-width: 0; }
+.refinement-composer-input textarea { width: 100%; }

@@ -1,5 +1,6 @@
 import type { ApplicationResponse, HttpMethod } from "../types/application";
 import type {
+  InputImage,
   ConflictReview,
   ConflictReviewHistory,
   RefinementProposal,
@@ -44,7 +45,7 @@ const request = async <T>(
 
 export const taskClient = {
   workbench: () => request<WorkbenchSnapshot>("/workbench"),
-  createCapture: (text: string) => request("/captures", "POST", { text }),
+  createCapture: (text: string, image?: InputImage) => request("/captures", "POST", { text, image }),
   createTask: (inputText: string) =>
     request<TaskAggregate>("/tasks", "POST", { inputText, title: inputText }),
   deleteItem: (entityType: "captures" | "problems" | "features" | "tasks", id: string) =>
@@ -211,11 +212,11 @@ export const taskClient = {
     request<RefinementProposal[]>(
       `/refinement/${encodeURIComponent(id)}/proposals`,
     ),
-  message: (id: string, message: string) =>
+  message: (id: string, message: string, image?: InputImage) =>
     request<RefinementSession>(
       `/refinement/${encodeURIComponent(id)}/messages`,
       "POST",
-      { message },
+      { message, image },
     ),
   proposalDecision: (
     id: string,

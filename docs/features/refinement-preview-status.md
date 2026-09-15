@@ -6,6 +6,20 @@ Refinement helps turn a Capture or Task into reviewable work while preserving it
 A Capture that already contains a solution does not have to discover that solution again. Simple work
 can become a Task directly; refinement and Problem approval are not mandatory gates.
 
+## Images in Capture and refinement
+
+Capture and refinement messages accept one image per entry, using **Attach image** or pasting
+from the clipboard into the text field. PNG, JPEG, GIF and WebP files up to 10 MB are supported.
+A thumbnail and filename appear before sending; **Remove image** clears the attachment. Text is
+optional when an image is attached. Selecting another image replaces the current attachment.
+
+Saved images remain in the local database and appear when reopening refinement. The original
+Capture image and conversation images are sent to the configured AI provider for both chat and
+proposal generation; these requests need a model that supports image input. Provider failures
+remain visible and do not discard saved images. Unsent refinement images survive closing and
+reopening the panel during the current app session, and failed sends retain the attachment.
+
+
 ## Work in the refinement panel
 
 Open **Refine** from a Capture or Task, or resume the saved refinement shortcut in Workbench.

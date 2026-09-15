@@ -10,6 +10,7 @@ const task = (id: string, family: `F${number}`, source: string, effect: string, 
 const existing = (id: string, family: `F${number}`, selector: string, source: string, evidence: string, effect: string, disabledReason?: string): ControlSpec => ({ id, family, kind: 'button', selector, source, sourceEvidence: evidence, scenario: 'designated-interactive-suite', effect, disabledReason });
 
 const manifest: readonly ControlSpec[] = [
+  ...['input-image-file', 'input-image-choose', 'input-image-remove'].map(id => task(id, 'F3', 'frontend/src/features/workbench/InputImageAttachment.tsx', 'image selection, preview, or removal updates the unsent entry')),
   ...['refinement-tab-preview','refinement-tab-status','refinement-start-work','refinement-boundaries'].map(id => task(id,'F35','frontend/src/features/workbench/RefinementPanel.tsx','refinement status, work transition, or Task boundaries appear')),
   ...['task-hierarchy-details','task-parent-open','task-family-open'].map(id => task(id,'F24','frontend/src/features/workbench/TaskDetail.tsx','explicit Task hierarchy opens or navigates')),
   ...['task-subtasks-expand','workbench-focus-active'].map(id => task(id,'F3','frontend/src/features/workbench/WorkbenchView.tsx','Subtasks expand or active work receives focus')),

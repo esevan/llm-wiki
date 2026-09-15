@@ -1,3 +1,6 @@
+import { InputImageAttachment, InputImagePreview } from "./InputImageAttachment";
+import { useInputImage } from "./useInputImage";
+import type { InputImage } from "../../types/taskWorkbench";
 import { useCallback, useEffect, useImperativeHandle, useRef, useState, type Ref } from "react";
 import { createPortal } from "react-dom";
 import { taskClient } from "../../services/taskClient";
@@ -64,6 +67,7 @@ export function RefinementPanel({
   onApplied,
   subjectTitle,
   messageDrafts,
+  imageDrafts,
   ref,
 }: {
   kind: "capture" | "task";
@@ -72,6 +76,7 @@ export function RefinementPanel({
   onApplied?: () => void;
   subjectTitle?: string;
   messageDrafts?: Map<string, string>;
+  imageDrafts?: Map<string, InputImage>;
   ref?: Ref<RefinementPanelHandle>;
 }) {
   const text = useTaskWorkbenchText();
@@ -84,6 +89,11 @@ export function RefinementPanel({
   const currentTask = appliedTask ?? taskBaseline;
   const [draft, setDraft] = useState("");
   const messageKey = `${kind}:${subjectId}`;
+  const attachment = useInputImage(imageDrafts?.get(messageKey));
+  useEffect(() => {
+    if (attachment.image) imageDrafts?.set(messageKey, attachment.image);
+    else imageDrafts?.delete(messageKey);
+  }, [attachment.image, imageDrafts, messageKey]);
   const [message, setMessage] = useState(messageDrafts?.get(messageKey) ?? "");
   useEffect(() => { messageDrafts?.set(messageKey, message); }, [messageDrafts, messageKey, message]);
   const [editing, setEditing] = useState<string>();
@@ -114,6 +124,10 @@ export function RefinementPanel({
   const [revealingMessageIds, setRevealingMessageIds] = useState<Set<string>>(new Set());
   const draftTouched = useRef(false);
   const lastSubmittedMessage = useRef("");
+  const lastSubmittedImage = useRef<InputImage | undefined>(undefined);
+  const currentImage = useRef(attachment.image);
+  currentImage.current = attachment.image;
+  const restoreImage = attachment.restore;
   const workspaceQueue = useRef<Promise<unknown>>(Promise.resolve());
   const skipCleanupFlush = useRef(false);
   const latest = useRef({
@@ -182,10 +196,11 @@ export function RefinementPanel({
         setProposals(nextProposals);
         setResponding(activeStatus(next.responseStatus));
         setPolling(activeStatus(next.responseStatus) || activeStatus(next.previewStatus));
-        if (next.responseStatus === "failed" && !latest.current.message && lastSubmittedMessage.current) {
+        if (next.responseStatus === "failed" && !latest.current.message && !currentImage.current && (lastSubmittedMessage.current || lastSubmittedImage.current)) {
           setError(text.assistantFailure);
           setMessage(lastSubmittedMessage.current);
           latest.current.message = lastSubmittedMessage.current;
+          if (!currentImage.current) restoreImage(lastSubmittedImage.current);
         }
       }
     } catch (e) {
@@ -197,7 +212,7 @@ export function RefinementPanel({
         setLoading(false);
       }
     }
-  }, [kind, subjectId, text.assistantFailure]);
+  }, [kind, subjectId, text.assistantFailure, restoreImage]);
   useEffect(() => {
     hasLoadedSession.current = false;
     void load();
@@ -271,9 +286,10 @@ export function RefinementPanel({
               if (next.responseStatus === "failed")
                 {
                   setError(text.assistantFailure);
-                  if (!latest.current.message && lastSubmittedMessage.current) {
+                  if (!latest.current.message && !currentImage.current && (lastSubmittedMessage.current || lastSubmittedImage.current)) {
                     setMessage(lastSubmittedMessage.current);
                     latest.current.message = lastSubmittedMessage.current;
+                    if (!currentImage.current) restoreImage(lastSubmittedImage.current);
                   }
                 }
             }
@@ -291,7 +307,7 @@ export function RefinementPanel({
       cancelled = true;
       if (pollTimer.current) window.clearInterval(pollTimer.current);
     };
-  }, [polling, session?.id, kind, subjectId, text.assistantFailure]);
+  }, [polling, session?.id, kind, subjectId, text.assistantFailure, restoreImage]);
   useEffect(() => {
     if (!revealingMessageIds.size || typeof ResizeObserver === "undefined") return;
     const element = scrollRef.current;
@@ -465,7 +481,7 @@ export function RefinementPanel({
     } finally { setDeciding(undefined); }
   };
   const send = async () => {
-    if (!session || !message.trim() || sending.current || responding || loadingRef.current || loadError) return;
+    if (!session || (!message.trim() && !attachment.image) || attachment.reading || sending.current || responding || loadingRef.current || loadError) return;
     sending.current = true;
     setSaving(true);
     setError("");
@@ -474,7 +490,9 @@ export function RefinementPanel({
       latest.current.scrollAnchor = String(scrollRef.current?.scrollTop ?? 0);
       await persistCurrent();
       const submittedMessage = message.trim();
-      await taskClient.message(session.id, submittedMessage);
+      await taskClient.message(session.id, submittedMessage, attachment.image);
+      lastSubmittedImage.current = attachment.image;
+      attachment.clear();
       turnGeneration.current += 1;
       lastSubmittedMessage.current = submittedMessage;
       setMessage("");
@@ -634,9 +652,11 @@ export function RefinementPanel({
         <div className="refinement-messages" ref={scrollRef} onScroll={event => {
           latest.current.scrollAnchor = String(event.currentTarget.scrollTop); scheduleSave();
         }}>
+          {session?.captureImage && <article className="message message-user"><strong>{text.capture}</strong><InputImagePreview image={session.captureImage} /></article>}
           {session?.messages?.map(item => <article key={item.id} className={`message message-${item.role}`}>
             <strong>{item.role === "user" ? text.you : text.assistant}</strong>
             <RefinementMessage body={item.body} reveal={revealingMessageIds.has(item.id)} />
+            {item.image && <InputImagePreview image={item.image} />}
           </article>)}
           {!session && <p className="region-empty">{text.loading}</p>}
         </div>
@@ -644,11 +664,14 @@ export function RefinementPanel({
           <span>{text.assistantGenerating}</span><span className="refinement-thinking-dots" aria-hidden="true"><span>...</span></span>
         </p>}
         <div className="refinement-composer">
-          <textarea aria-label={text.refinementMessage} data-control="refinement-message" value={message}
+          <div className="refinement-composer-input">
+          <textarea disabled={saving} onPaste={!saving && !responding ? attachment.paste : undefined} aria-label={text.refinementMessage} data-control="refinement-message" value={message}
             onChange={event => { latest.current.message = event.target.value; setMessage(event.target.value); }} onKeyDown={event => {
               if (event.key === "Enter" && (event.metaKey || event.ctrlKey) && !event.nativeEvent.isComposing) { event.preventDefault(); void send(); }
             }} placeholder={text.refinementPlaceholder} rows={2} />
-          <button type="button" className="primary" disabled={!session || saving || responding || loading || Boolean(loadError) || !message.trim()}
+          <InputImageAttachment attachment={attachment} disabled={saving || responding} />
+          </div>
+          <button type="button" className="primary" disabled={!session || saving || responding || loading || Boolean(loadError) || attachment.reading || (!message.trim() && !attachment.image)}
             onClick={() => void send()} data-chat-control="refinement-send" data-control="refinement-send">{text.send}</button>
         </div>
       </section>

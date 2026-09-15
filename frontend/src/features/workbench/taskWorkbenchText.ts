@@ -1,6 +1,13 @@
 import { useSyncExternalStore } from "react";
 
 const en = {
+  attachImage: "Attach image",
+  removeImage: "Remove image",
+  imageHint: "Paste an image or choose a file · PNG, JPEG, GIF, WebP · up to 10 MB",
+  imageError: "Choose a PNG, JPEG, GIF or WebP image up to 10 MB.",
+  imageReadError: "Could not read the image. Try selecting it again.",
+  imageCapture: "Image capture",
+  attachedImage: "Attached image",
   workspace: "Local workspace",
   refined: "Refined - Revision",
   workStatus: "Work status",
@@ -209,6 +216,13 @@ const en = {
   deleteFailure: "The item could not be deleted.",
 };
 const ko: typeof en = {
+  attachImage: "이미지 첨부",
+  removeImage: "이미지 제거",
+  imageHint: "이미지 붙여넣기 또는 파일 선택 · PNG, JPEG, GIF, WebP · 최대 10 MB",
+  imageError: "10 MB 이하의 PNG, JPEG, GIF 또는 WebP 이미지를 선택해 주세요.",
+  imageReadError: "이미지를 읽지 못했습니다. 다시 선택해 주세요.",
+  imageCapture: "이미지 캡처",
+  attachedImage: "첨부 이미지",
   refined: "Refined - Revision",
   workStatus: "작업 상태",
   previewTab: "프리뷰",

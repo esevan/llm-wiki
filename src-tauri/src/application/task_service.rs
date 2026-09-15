@@ -605,7 +605,19 @@ impl TaskApplicationService {
         Ok(())
     }
     fn capture(&self, input: &Value) -> Result<Value, String> {
-        self.repo.transaction(|tx|{if let Some(x)=self.op(tx,input,"capture.create")?{return Ok(x)}let id=task_repository::new_id();let at=task_repository::now();let text=req(input,"text")?;tx.execute("INSERT INTO captures(id,text,created_at,source_mode,last_user_activity_at) VALUES(?,?,?,'capture',?)",params![id,text,at,at]).map_err(|e|e.to_string())?;let x=json!({"id":id,"text":text,"createdAt":at});self.finish(tx,input,"capture.create",&x)?;Ok(x)})
+        let image = crate::adapters::sqlite::input_images::validate(input)?;
+        let text = input["text"].as_str().unwrap_or("").trim();
+        if text.is_empty() && image.is_none() { return Err("invalid_input: text or image is required".into()); }
+        self.repo.transaction(|tx| {
+            if let Some(result) = self.op(tx, input, "capture.create")? { return Ok(result); }
+            let id = task_repository::new_id();
+            let at = task_repository::now();
+            tx.execute("INSERT INTO captures(id,text,created_at,source_mode,last_user_activity_at) VALUES(?,?,?,'capture',?)", params![id,text,at,at]).map_err(|e|e.to_string())?;
+            if let Some(image) = &image { crate::adapters::sqlite::input_images::save(tx, true, &id, image)?; }
+            let result = json!({"id":id,"text":text,"createdAt":at});
+            self.finish(tx, input, "capture.create", &result)?;
+            Ok(result)
+        })
     }
     fn expected(&self, tx: &Transaction<'_>, id: &str, input: &Value) -> Result<i64, String> {
         let current: i64 = tx
@@ -740,8 +752,8 @@ impl TaskApplicationService {
         let c = crate::native::database::open(self.repo.path())?;
         let mut s=c.prepare("SELECT t.id,t.current_revision,t.state,r.title,t.category,t.last_user_activity_at,f.revision,h.parent_task_id FROM tasks t JOIN task_revisions r ON r.task_id=t.id AND r.revision=t.current_revision LEFT JOIN task_refinements f ON f.task_id=t.id LEFT JOIN task_subtasks h ON h.child_task_id=t.id WHERE t.archived_at IS NULL AND NOT EXISTS(SELECT 1 FROM deleted_entities d WHERE d.entity_type='tasks' AND d.entity_id=t.id) ORDER BY t.last_user_activity_at DESC").map_err(|x|x.to_string())?;
         let mut rows=s.query_map([],|r|Ok(json!({"kind":"task","id":r.get::<_,String>(0)?,"taskRevision":r.get::<_,i64>(1)?,"state":r.get::<_,String>(2)?,"title":r.get::<_,String>(3)?,"category":r.get::<_,String>(4)?,"lastUserActivityAt":r.get::<_,String>(5)?,"refinedRevision":r.get::<_,Option<i64>>(6)?,"parentTaskId":r.get::<_,Option<String>>(7)?}))).map_err(|x|x.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|x|x.to_string())?;
-        let mut captures=c.prepare("SELECT c.id,c.text,c.created_at,COALESCE(o.category,'General') FROM captures c LEFT JOIN workbench_category_overrides o ON o.entity_type='captures' AND o.entity_id=c.id WHERE c.source_mode='capture' AND NOT EXISTS(SELECT 1 FROM deleted_entities d WHERE d.entity_type='captures' AND d.entity_id=c.id) ORDER BY c.last_user_activity_at DESC").map_err(|x|x.to_string())?;
-        rows.extend(captures.query_map([],|r|Ok(json!({"kind":"capture","id":r.get::<_,String>(0)?,"text":r.get::<_,String>(1)?,"lastUserActivityAt":r.get::<_,String>(2)?,"category":r.get::<_,String>(3)?}))).map_err(|x|x.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|x|x.to_string())?);
+        let mut captures=c.prepare("SELECT c.id,c.text,c.created_at,COALESCE(o.category,'General'),EXISTS(SELECT 1 FROM input_images i WHERE i.capture_id=c.id) FROM captures c LEFT JOIN workbench_category_overrides o ON o.entity_type='captures' AND o.entity_id=c.id WHERE c.source_mode='capture' AND NOT EXISTS(SELECT 1 FROM deleted_entities d WHERE d.entity_type='captures' AND d.entity_id=c.id) ORDER BY c.last_user_activity_at DESC").map_err(|x|x.to_string())?;
+        rows.extend(captures.query_map([],|r|Ok(json!({"kind":"capture","id":r.get::<_,String>(0)?,"text":r.get::<_,String>(1)?,"lastUserActivityAt":r.get::<_,String>(2)?,"category":r.get::<_,String>(3)?,"hasImage":r.get::<_,bool>(4)?}))).map_err(|x|x.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|x|x.to_string())?);
         let mut legacy_refinements=c.prepare("SELECT i.id,i.problem_id,i.problem_revision,r.statement,i.source_kind,i.created_at,COALESCE(o.category,'General') FROM refinement_items i JOIN problem_revisions r ON r.problem_id=i.problem_id AND r.revision=i.problem_revision LEFT JOIN workbench_category_overrides o ON o.entity_type='problems' AND o.entity_id=i.problem_id WHERE NOT EXISTS(SELECT 1 FROM deleted_entities d WHERE d.entity_type='problems' AND d.entity_id=i.problem_id) ORDER BY i.created_at DESC").map_err(|x|x.to_string())?;
         rows.extend(legacy_refinements.query_map([],|r|Ok(json!({"kind":"refinement","id":r.get::<_,String>(0)?,"problemId":r.get::<_,String>(1)?,"problemRevision":r.get::<_,i64>(2)?,"title":r.get::<_,String>(3)?,"sourceKind":r.get::<_,String>(4)?,"lastUserActivityAt":r.get::<_,String>(5)?,"category":r.get::<_,String>(6)?}))).map_err(|x|x.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|x|x.to_string())?);
         rows.sort_by(|a, b| {
@@ -786,6 +798,30 @@ mod tests {
     use super::*;
     use rusqlite::params;
     use tempfile::tempdir;
+
+    #[test]
+    fn capture_image_is_atomic_persistent_and_replayable() {
+        let root = tempdir().unwrap();
+        let db = root.path().join("images.db");
+        crate::native::database::initialize(&db).unwrap();
+        let service = TaskApplicationService::new(&db);
+        let image = json!({"name":"capture.png","mediaType":"image/png","data":"iVBORw0KGgo="});
+        let input = json!({"operationId":"image-capture","text":"","image":image});
+        let saved = service.execute("capture.create", &input).unwrap();
+        assert_eq!(service.execute("capture.create", &input).unwrap(), saved);
+        let connection = crate::native::database::open(&db).unwrap();
+        assert_eq!(crate::adapters::sqlite::input_images::get(&connection, true, saved["id"].as_str().unwrap()).unwrap(), Some(image));
+        assert_eq!(connection.query_row("SELECT count(*) FROM input_images", [], |r| r.get::<_,i64>(0)).unwrap(), 1);
+        let mut invalid = input.clone();
+        invalid["operationId"] = json!("invalid-image");
+        invalid["image"]["mediaType"] = json!("image/svg+xml");
+        assert!(service.execute("capture.create", &invalid).is_err());
+        invalid["image"]["mediaType"] = json!("image/png");
+        invalid["image"]["data"] = json!("not base64");
+        assert!(service.execute("capture.create", &invalid).is_err());
+        assert_eq!(connection.query_row("SELECT count(*) FROM captures", [], |r| r.get::<_,i64>(0)).unwrap(), 1);
+        assert!(service.execute("capture.create", &json!({"operationId":"empty","text":""})).is_err());
+    }
 
     fn link_owned_session(
         connection: &rusqlite::Connection,

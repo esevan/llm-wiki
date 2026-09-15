@@ -10,6 +10,7 @@ import settings from '../features/settings/SettingsView.tsx?raw';
 import migration from '../features/vault-setup/MigrationRecoveryView.tsx?raw';
 import vaultSetup from '../features/vault-setup/VaultSetupView.tsx?raw';
 import conflictReview from '../features/workbench/ConflictReviewPanel.tsx?raw';
+import inputImage from '../features/workbench/InputImageAttachment.tsx?raw';
 import refinement from '../features/workbench/RefinementPanel.tsx?raw';
 import deleteDialog from '../features/workbench/DeleteItemDialog.tsx?raw';
 import taskDetail from '../features/workbench/TaskDetail.tsx?raw';
@@ -44,6 +45,7 @@ export const productionInteractiveSources = new Map<string, string>([
   ['frontend/src/features/vault-setup/MigrationRecoveryView.tsx', migration],
   ['frontend/src/features/vault-setup/VaultSetupView.tsx', vaultSetup],
   ['frontend/src/features/workbench/ConflictReviewPanel.tsx', conflictReview],
+  ['frontend/src/features/workbench/InputImageAttachment.tsx', inputImage],
   ['frontend/src/features/workbench/RefinementPanel.tsx', refinement],
   ['frontend/src/features/workbench/TaskDetail.tsx', taskDetail],
   ['frontend/src/features/workbench/DeleteItemDialog.tsx', deleteDialog],

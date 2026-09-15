@@ -22,7 +22,7 @@ describe('shipping interactive source inventory', () => {
   });
 
   it('rejects unnamed or unmapped controls, including conditional source markup', () => {
-    expect(productionInteractiveSources.size).toBe(28);
+    expect(productionInteractiveSources.size).toBe(29);
     const failures: string[] = [];
     for (const [path, source] of productionInteractiveSources) {
       const controls = taskInteractiveManifest.filter(control => control.source === path);

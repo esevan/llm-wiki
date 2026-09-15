@@ -62,3 +62,18 @@ describe("Task Knowledge hash contract", () => {
     ]);
   });
 });
+
+
+describe("Capture and refinement image requests", () => {
+  it("preserves image bytes on image-only submissions and omits absent images", async () => {
+    const request = vi.fn().mockResolvedValue(response({ id: "saved" }));
+    window.llmWikiApplication = { request };
+    const image = { name: "shot.png", mediaType: "image/png", data: "iVBORw0KGgo=" };
+    await taskClient.createCapture("", image);
+    await taskClient.message("session", "", image);
+    await taskClient.createCapture("text only");
+    expect(JSON.parse(request.mock.calls[0][0].body)).toMatchObject({ text: "", image });
+    expect(JSON.parse(request.mock.calls[1][0].body)).toMatchObject({ message: "", image });
+    expect(JSON.parse(request.mock.calls[2][0].body)).not.toHaveProperty("image");
+  });
+});

@@ -1,8 +1,11 @@
+export interface InputImage { name: string; mediaType: string; data: string }
+
 export type TaskState = "task" | "in_progress" | "completed";
 export type WorkbenchItem = CaptureCard | TaskCard | LegacyRefinementCard;
 
 export interface CaptureCard {
   kind: "capture";
+  hasImage?: boolean;
   id: string;
   text: string;
   category?: string;
@@ -125,7 +128,8 @@ export interface RefinementSession {
   activeTab?: string;
   scrollAnchor?: string;
   draftRevision?: number;
-  messages?: Array<{ id: string; role: string; body: string }>;
+  captureImage?: InputImage;
+  messages?: Array<{ id: string; role: string; body: string; image?: InputImage }>;
   previewJobId?: string;
   previewStatus?: "queued" | "running" | "retryable" | "completed" | "failed" | "cancelled" | "stale";
   responseStatus?: "queued" | "running" | "completed" | "failed" | "cancelled";

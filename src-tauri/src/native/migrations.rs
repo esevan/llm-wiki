@@ -4,7 +4,7 @@ use rusqlite::{
 use serde_json::{json, Map, Value};
 use std::collections::BTreeMap;
 
-pub const CURRENT_SCHEMA_VERSION: i64 = 10;
+pub const CURRENT_SCHEMA_VERSION: i64 = 11;
 
 type MigrationFunction = for<'connection> fn(&Transaction<'connection>) -> Result<(), String>;
 type LegacyLocalizationRow = (String, String, String, String, String, String, String);
@@ -66,7 +66,21 @@ const MIGRATIONS: &[Migration] = &[
         name: "add Task refinement and subtask lifecycle",
         run: add_task_hierarchy,
     },
+    Migration {
+        version: 11,
+        name: "add Capture and refinement images",
+        run: add_input_images,
+    },
 ];
+
+fn add_input_images(tx: &Transaction<'_>) -> Result<(), String> {
+    tx.execute_batch("CREATE TABLE input_images (
+        capture_id TEXT UNIQUE REFERENCES captures(id),
+        message_id TEXT UNIQUE REFERENCES refinement_messages(id),
+        name TEXT NOT NULL, media_type TEXT NOT NULL, data TEXT NOT NULL,
+        CHECK ((capture_id IS NOT NULL) != (message_id IS NOT NULL))
+    );").map_err(|error| error.to_string())
+}
 
 /// Version 9 has exactly one durable purpose: an explicitly reviewed continuation of an
 /// existing Task does not invent a Capture.  Keep this rebuild deliberately narrow.  In
@@ -1149,6 +1163,22 @@ fn legacy_localization_rows(connection: &Connection) -> Result<Vec<LegacyLocaliz
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn input_images_upgrade_preserves_existing_captures_and_messages() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        apply_plan(&mut connection, &MIGRATIONS[..10], 10).unwrap();
+        connection.execute_batch("INSERT INTO captures(id,text) VALUES('capture-image-upgrade','Original');
+            INSERT INTO refinement_sessions(id,capture_id) VALUES('session-image-upgrade','capture-image-upgrade');
+            INSERT INTO refinement_messages(id,session_id,role,content,created_at) VALUES('message-image-upgrade','session-image-upgrade','user','Existing message','2026-01-01');").unwrap();
+        apply(&mut connection).unwrap();
+        connection.execute("INSERT INTO input_images(capture_id,name,media_type,data) VALUES('capture-image-upgrade','shot.png','image/png','bytes')", []).unwrap();
+        apply(&mut connection).unwrap();
+        assert_eq!(connection.query_row("SELECT content FROM refinement_messages WHERE id='message-image-upgrade'", [], |r| r.get::<_,String>(0)).unwrap(), "Existing message");
+        assert_eq!(connection.query_row("SELECT text FROM captures WHERE id='capture-image-upgrade'", [], |r| r.get::<_,String>(0)).unwrap(), "Original");
+        assert_eq!(connection.query_row("SELECT count(*) FROM input_images", [], |r| r.get::<_,i64>(0)).unwrap(), 1);
+        assert!(connection.execute("INSERT INTO input_images(name,media_type,data) VALUES('orphan','image/png','bytes')", []).is_err());
+    }
 
     #[test]
     fn fresh_database_reaches_current_version() {

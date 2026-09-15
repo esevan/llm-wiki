@@ -1,3 +1,4 @@
+use crate::adapters::sqlite::input_images;
 use crate::adapters::sqlite::task_repository::{
     create_problem_revision_tx, create_task_tx, record_activity_tx, sync_linked_sessions_tx,
     SqliteTaskRepository,
@@ -94,6 +95,45 @@ async fn provider_json(
     prompt: String,
     token: Option<&CancellationToken>,
 ) -> Result<Value, String> {
+    provider_json_with_images(settings_path, task_kind, prompt, &[], token).await
+}
+
+fn provider_content(prompt: String, images: &[Value]) -> Value {
+    if images.is_empty() { return json!(prompt); }
+    let mut content = vec![json!({"type":"text","text":prompt})];
+    content.extend_from_slice(images);
+    json!(content)
+}
+
+// Keep binary data out of textual prompts while identifying each image's source.
+fn image_context(value: &Value) -> (Value, Vec<Value>) {
+    fn visit(value: &mut Value, path: &str, images: &mut Vec<Value>) {
+        match value {
+            Value::Object(object) => {
+                if let (Some(data), Some(media)) = (object.get("data").and_then(Value::as_str), object.get("mediaType").and_then(Value::as_str)) {
+                    images.push(json!({"type":"text","text":format!("Image from {path}")}));
+                    images.push(json!({"type":"image_url","image_url":{"url":format!("data:{media};base64,{data}")}}));
+                    object.remove("data");
+                }
+                for (key, child) in object { visit(child, &format!("{path}.{key}"), images); }
+            }
+            Value::Array(array) => for (index, child) in array.iter_mut().enumerate() { visit(child, &format!("{path}[{index}]"), images); },
+            _ => {}
+        }
+    }
+    let mut context = value.clone();
+    let mut images = Vec::new();
+    visit(&mut context, "session", &mut images);
+    (context, images)
+}
+
+async fn provider_json_with_images(
+    settings_path: &Path,
+    task_kind: &str,
+    prompt: String,
+    images: &[Value],
+    token: Option<&CancellationToken>,
+) -> Result<Value, String> {
     let (base_url, model, api_key) = settings::provider_credentials_for(settings_path, task_kind)?;
     if model.trim().is_empty() {
         return Err("Configure a model in AI setup before using AI".into());
@@ -109,7 +149,7 @@ async fn provider_json(
         .bearer_auth(api_key)
         .json(&json!({
             "model": model,
-            "messages": [{"role":"user","content":prompt}],
+            "messages": [{"role":"user","content":provider_content(prompt, images)}],
             "stream": false
         }));
     let response = if let Some(token) = token {
@@ -358,6 +398,15 @@ fn session_value(connection: &rusqlite::Connection, session_id: &str) -> Result<
         .map_err(|error| error.to_string())?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| error.to_string())?;
+    let mut messages = messages;
+    for message in &mut messages {
+        if let Some(image) = input_images::get(connection, false, message["id"].as_str().unwrap())? {
+            message["image"] = image;
+        }
+    }
+    if let Some(capture) = value["captureId"].as_str() {
+        if let Some(image) = input_images::get(connection, true, capture)? { value["captureImage"] = image; }
+    }
     value["messages"] = json!(messages);
     value["responseStatus"] = connection
         .query_row(
@@ -422,7 +471,7 @@ fn refinement_context(
 }
 
 fn refinement_prompt(connection: &Connection, session_id: &str) -> Result<String, String> {
-    let session = refinement_context(connection, session_id)?;
+    let (session, _) = image_context(&refinement_context(connection, session_id)?);
     Ok(format!(
         "Return JSON only as {{\"proposals\":[{{\"id\":string,\"type\":\"task_patch|new_task|subtask|problem_snapshot|task_problem_link\",\"payload\":object}}]}}. When taskSnapshot exists, refine that SAME Task with task_patch by default. Never create a replacement or duplicate Task. Only propose subtask when independently completable work genuinely needs its own boundary; include boundaryReason, parentTaskId=taskSnapshot.id, expectedTaskRevision, and all Task fields. Respect hierarchyContext: read parent, siblings and children scope/nonGoals; do not overlap sibling work or extend beyond the parent boundary. If boundaries are unclear ask before proposing a split. new_task is only for a Capture without a Task. For new_task, include every available Task field in payload: title, detail, outcome, scope, nonGoals, and validationCriteria. For task_patch, put only the changed Task values in payload.patch using those field names and include the exact taskSnapshot.taskRevision as expectedTaskRevision; the UI combines the patch with taskSnapshot for a complete review preview. Use detail for the full Task description, never an unlabelled summary. For problem_snapshot include statement, detail, category, and note when available; for task_problem_link include problemId, problemRevision, relationship, and note when available. Propose durable changes but do not apply them. Use only the supplied local session. A Capture may already contain a proposed solution: preserve it as the starting Task draft and ask only for details that are actually missing; do not restart broad problem or solution discovery.\n\n{}",
         session
@@ -481,13 +530,14 @@ async fn refinement_message(
     input: &Value,
 ) -> Result<Value, String> {
     let session_id = required(input, "sessionId")?;
+    let image = input_images::validate(input)?;
     let message = input
         .get("message")
         .or_else(|| input.get("body"))
         .and_then(Value::as_str)
         .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or("invalid_input: message is required")?;
+        .unwrap_or("");
+    if message.is_empty() && image.is_none() { return Err("invalid_input: message or image is required".into()); }
     let mut connection = database::open(db_path)?;
     let tx = database::immediate_transaction(&mut connection)?;
     if let Some(result) = operation_replay(&tx, input)? {
@@ -523,6 +573,7 @@ async fn refinement_message(
         params![message_id, session_id, message, timestamp],
     )
     .map_err(|error| error.to_string())?;
+    if let Some(image) = image { input_images::save(&tx, false, &message_id, &image)?; }
     tx.execute(
         "INSERT INTO task_assistance_jobs(id,kind,subject_id,status,input_json,created_at) VALUES(?,'refinement_response',?,'queued',?,?)",
         params![job_id, session_id, input.to_string(), timestamp],
@@ -582,14 +633,14 @@ async fn run_refinement_response(
     auto_review: bool,
 ) -> Result<(), String> {
     update_refinement_job_status(db_path, job_id, "running", None)?;
-    let context = refinement_context(&database::open(db_path)?, session_id)?;
+    let (context, images) = image_context(&refinement_context(&database::open(db_path)?, session_id)?);
     let task_kind = if context["taskId"].is_string() {
         "solution_assistance"
     } else {
         "capture_assistance"
     };
     let prompt = format!("Return JSON only as {{\"message\":string}}. Reply briefly to the latest user message using the supplied local conversation. Ask only for missing details. Preserve the original Capture and Task facts. Do not generate proposals or a full preview; a separate background job handles that.\n\n{}", context);
-    let response = provider_json(settings_path, task_kind, prompt, None).await?;
+    let response = provider_json_with_images(settings_path, task_kind, prompt, &images, None).await?;
     let assistant = required(&response, "message")?;
     let preview_id = id();
     {
@@ -610,7 +661,7 @@ async fn run_refinement_response(
         let preview_context = refinement_context(&tx,session_id)?;
         let task_binding = preview_context["taskSnapshot"].clone();
         let family_hash = digest(&preview_context["hierarchyContext"].to_string());
-        let preview_input = json!({"taskBinding":task_binding,"hierarchyContextHash":family_hash,"sessionId":session_id,"responseJobId":job_id,"autoReview":auto_review,"prompt":refinement_prompt(&tx,session_id)?,"modelTask":task_kind});
+        let preview_input = json!({"images":image_context(&preview_context).1,"taskBinding":task_binding,"hierarchyContextHash":family_hash,"sessionId":session_id,"responseJobId":job_id,"autoReview":auto_review,"prompt":refinement_prompt(&tx,session_id)?,"modelTask":task_kind});
         tx.execute("INSERT INTO ai_jobs_v2(id,task_kind,entity_type,entity_id,status,input_json,execution_mode,idempotency_key,result_interface,progress_total,available_at,created_at) VALUES(?,'refinement_preview','refinement_sessions',?,'queued',?,'native',?,'inline_preview',1,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)", params![preview_id,session_id,preview_input.to_string(),format!("refinement-preview:{job_id}")]).map_err(|error| error.to_string())?;
         tx.execute("UPDATE task_assistance_jobs SET status='completed',result_json=?,finished_at=? WHERE id=?", params![json!({"message":assistant,"previewJobId":preview_id}).to_string(),now(),job_id]).map_err(|error| error.to_string())?;
         tx.commit().map_err(|error| error.to_string())?;
@@ -630,10 +681,11 @@ pub(crate) async fn prepare_refinement_preview(
     settings_path: &Path,
     input: &Value,
 ) -> Result<Value, String> {
-    let response = provider_json(
+    let response = provider_json_with_images(
         settings_path,
         required(input, "modelTask")?,
         required(input, "prompt")?.to_owned(),
+        input["images"].as_array().map(Vec::as_slice).unwrap_or(&[]),
         None,
     )
     .await?;
@@ -2658,6 +2710,35 @@ mod tests {
     fn completed_task(db: &Path) -> String {
         let repo = SqliteTaskRepository::new(db);
         repo.transaction(|tx|{let at=now();let value=create_task_tx(tx,&json!({"title":"Evidence Task","outcome":"A verified outcome","scope":"Local files","validationCriteria":"Evidence exists"}),None,None,&at)?;let task=value["id"].as_str().unwrap().to_owned();tx.execute("UPDATE tasks SET state='completed',completed_at=? WHERE id=?",params![at,task]).map_err(|error|error.to_string())?;tx.execute("INSERT INTO task_work_log_entries(id,task_id,body,created_at) VALUES(?,?,?,?)",params![id(),task,"Observed exact behavior",at]).map_err(|error|error.to_string())?;tx.execute("INSERT INTO task_completions(id,task_id,task_revision,evidence,report,operation_id,created_at) VALUES(?,?,1,'Passing contract test','No open issue',?,?)",params![id(),task,id(),at]).map_err(|error|error.to_string())?;Ok(task)}).unwrap()
+    }
+
+    #[tokio::test]
+    async fn image_only_refinement_persists_and_both_prompts_include_images() {
+        let (_root, db, vault, settings) = fixture();
+        let capture_id = capture(&db);
+        let image = json!({"name":"shot.png","mediaType":"image/png","data":"iVBORw0KGgo="});
+        input_images::save(&database::open(&db).unwrap(), true, &capture_id, &image).unwrap();
+        let opened = refinement_open(&db, &json!({"operationId":"image-open","captureId":capture_id})).unwrap();
+        assert_eq!(opened["captureImage"], image);
+        let session = opened["id"].as_str().unwrap();
+        let input = json!({"operationId":"image-message","sessionId":session,"message":"","image":image});
+        let result = execute(&db, &settings, &vault, SemanticEngine::new(None), "task-refinement.message", &input).await.unwrap();
+        let replay = execute(&db, &settings, &vault, SemanticEngine::new(None), "task-refinement.message", &input).await.unwrap();
+        assert_eq!(result, replay);
+        let connection = database::open(&db).unwrap();
+        let saved = session_value(&connection, session).unwrap();
+        assert_eq!(saved["messages"][0]["image"], image);
+        assert_eq!(saved["messages"][0]["body"], "");
+        assert_eq!(saved["messages"].as_array().unwrap().len(), 1);
+        let context = refinement_context(&connection, session).unwrap();
+        let (text, images) = image_context(&context);
+        assert_eq!(images.iter().filter(|part| part["type"] == "image_url").count(), 2);
+        assert!(!text.to_string().contains("iVBORw0KGgo="));
+        let prompt = refinement_prompt(&connection, session).unwrap();
+        assert!(!prompt.contains("iVBORw0KGgo="));
+        let content = provider_content(prompt, &images);
+        assert_eq!(content[2]["image_url"]["url"], "data:image/png;base64,iVBORw0KGgo=");
+        assert_eq!(provider_content("text only".into(), &[]), json!("text only"));
     }
 
     #[test]

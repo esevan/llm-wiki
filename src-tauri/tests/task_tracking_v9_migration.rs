@@ -3,6 +3,8 @@ use rusqlite::{params, Connection};
 use sha2::{Digest, Sha256};
 use tempfile::tempdir;
 
+const MIGRATED_SCHEMA_VERSION: i64 = 11;
+
 fn make_v8_session_fixture(db: &std::path::Path, vault: &std::path::Path) {
     let app = NativeApplication::isolated(vault, db).unwrap();
     let service = app.work_tracking_service();
@@ -46,7 +48,9 @@ fn make_v8_session_fixture(db: &std::path::Path, vault: &std::path::Path) {
         )
         .unwrap();
     let db_conn = Connection::open(db).unwrap();
-    db_conn.execute_batch("PRAGMA user_version=8;").unwrap();
+    // Remove post-v8 additions before replaying migrations from the historical fixture.
+    db_conn.execute_batch("DROP TABLE input_images; DROP TABLE task_auto_publications;
+        DROP TABLE task_refinements; DROP TABLE task_subtasks; PRAGMA user_version=8;").unwrap();
     let parent = session["sessionId"].as_str().unwrap();
     let child = "v9-child";
     db_conn
@@ -188,7 +192,7 @@ fn v9_preserves_sessions_children_events_and_custom_objects_and_allows_null_capt
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        9
+        MIGRATED_SCHEMA_VERSION
     );
     assert_eq!(
         connection
@@ -334,7 +338,7 @@ fn v9_failure_rolls_back_version_and_retry_succeeds_with_backup_manifest() {
             .unwrap()
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        9
+        MIGRATED_SCHEMA_VERSION
     );
 }
 
@@ -408,7 +412,7 @@ fn verify_v8_backup(root: &std::path::Path) {
     let value: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&manifest).unwrap()).unwrap();
     assert_eq!(value["sourceSchemaVersion"], 8);
-    assert_eq!(value["targetSchemaVersion"], 9);
+    assert_eq!(value["targetSchemaVersion"], MIGRATED_SCHEMA_VERSION);
     let backup = manifest
         .parent()
         .unwrap()

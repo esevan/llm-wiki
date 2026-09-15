@@ -7,6 +7,8 @@
 시 domain command나 기존 설정 import가 DB를 읽기 전에 이후 migration을 version 순서대로 모두
 실행합니다.
 
+Version 11은 기존 텍스트와 대화 기록을 변경하지 않고 캡처와 정제 메시지의 이미지 첨부를 추가합니다. 이미지는 소유 레코드와 같은 트랜잭션에서 저장됩니다.
+
 ## 보장 사항
 
 - Version `0`은 이전 Python 애플리케이션 또는 과거 네이티브 build가 만든 version 미지정 DB입니다.

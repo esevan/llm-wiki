@@ -1,3 +1,6 @@
+import { InputImageAttachment } from "./InputImageAttachment";
+import { useInputImage } from "./useInputImage";
+import type { InputImage } from "../../types/taskWorkbench";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { taskClient } from "../../services/taskClient";
 import type {
@@ -28,6 +31,8 @@ export function WorkbenchView({ active }: { active: boolean }) {
     [deleteTarget, setDeleteTarget] = useState<{ entityType: "captures" | "problems" | "tasks"; id: string; title: string }>(),
     [deleteBusy, setDeleteBusy] = useState(false),
     [deleteError, setDeleteError] = useState("");
+  const captureImage = useInputImage();
+  const refinementImages = useRef(new Map<string, InputImage>());
   const [focusActive, setFocusActive] = useState(false);
   const detailRef = useRef<TaskDetailHandle>(null);
   const refinementRef = useRef<RefinementPanelHandle>(null);
@@ -120,14 +125,15 @@ export function WorkbenchView({ active }: { active: boolean }) {
   }, [text.saveDraftBeforeQueueResult]);
   const save = async (event: React.FormEvent) => {
     event.preventDefault();
-    if (!input.trim() || busy) return;
+    if ((!input.trim() && !(mode === "capture" && captureImage.image)) || busy || captureImage.reading) return;
     setBusy(true);
     setError("");
     try {
       await (mode === "capture"
-        ? taskClient.createCapture(input.trim())
+        ? taskClient.createCapture(input.trim(), captureImage.image)
         : taskClient.createTask(input.trim()));
       setInput("");
+      if (mode === "capture") captureImage.clear();
       await load();
     } catch (e) {
       setError(String(e instanceof Error ? e.message : e));
@@ -214,7 +220,8 @@ export function WorkbenchView({ active }: { active: boolean }) {
       </small>
       <h3>{item.kind === "task" && item.state === "in_progress" ? (
         <button className="active-task-title" data-control="task-shortcut-open" data-entity-id={item.id} onClick={(event) => selectDetail(item.id, event.currentTarget)}>{itemTitle(item)}</button>
-      ) : itemTitle(item)}</h3>
+      ) : itemTitle(item) || text.imageCapture}</h3>
+      {item.kind === "capture" && item.hasImage && <small>{text.attachedImage}</small>}
       {item.kind === "task" && item.parentTaskId && <small>{text.subtask}</small>}
       <p className="workbench-card-category">{categoryLabels.get(`${item.kind}:${item.id}`)}</p>
         {item.kind === "task" && (
@@ -311,6 +318,7 @@ export function WorkbenchView({ active }: { active: boolean }) {
               aria-label={text.entryLabel}
               value={input}
               onChange={(event) => setInput(event.target.value)}
+              onPaste={mode === "capture" && !busy ? captureImage.paste : undefined}
               onKeyDown={(event) => {
                 if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
                   event.preventDefault();
@@ -319,8 +327,9 @@ export function WorkbenchView({ active }: { active: boolean }) {
               }}
               placeholder={text.placeholder}
               rows={2}
-              required
+              required={mode !== "capture" || !captureImage.image}
             />
+            {mode === "capture" && <InputImageAttachment attachment={captureImage} disabled={busy} />}
             <div className="task-entry-actions">
               <div className="task-entry-modes">
                 <label>
@@ -350,7 +359,7 @@ export function WorkbenchView({ active }: { active: boolean }) {
                 className="primary"
                 type="submit"
                 data-control="task-entry-save"
-                disabled={busy || !input.trim()}
+                disabled={busy || captureImage.reading || (!input.trim() && !(mode === "capture" && captureImage.image))}
               >
                 {busy ? "…" : text.save}
               </button>
@@ -449,7 +458,8 @@ export function WorkbenchView({ active }: { active: boolean }) {
           key={`${refining.kind}:${refining.id}`}
           ref={refinementRef}
           messageDrafts={refinementMessages.current}
-          subjectTitle={refining.kind === "task" ? taskFor(refining.id)?.title : captureFor(refining.id)?.text}
+          imageDrafts={refinementImages.current}
+          subjectTitle={refining.kind === "task" ? taskFor(refining.id)?.title : captureFor(refining.id)?.text || text.imageCapture}
           onApplied={() => { setDetailRefresh(value => value + 1); void load(); }}
           kind={refining.kind}
           subjectId={refining.id}

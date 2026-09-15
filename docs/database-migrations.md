@@ -7,6 +7,8 @@ The native application owns one SQLite schema migration boundary in
 version. Application startup applies every later migration in ascending order before any domain
 command or legacy settings import can read the database.
 
+Version 11 adds image attachments for Captures and refinement messages without rewriting existing text or conversation history. Images are stored with their owning record in the same transaction.
+
 ## Guarantees
 
 - Version `0` represents an unversioned database created by the former Python application or an

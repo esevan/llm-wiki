@@ -3444,3 +3444,5 @@ mod challenge_idempotency_tests {
         );
     }
 }
+
+pub(crate) mod input_images;
