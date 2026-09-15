@@ -284,6 +284,43 @@ main:has(.task-workbench.active :is(.task-detail, .refinement-panel)) {
   border-radius: var(--radius-panel);
   box-shadow: var(--shadow-card);
 }
+.task-detail-modal-layer {
+  position: fixed;
+  z-index: calc(var(--layer-menu) + 1);
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: var(--space-6);
+  overscroll-behavior: contain;
+}
+.task-detail-modal-backdrop {
+  position: absolute;
+  inset: 0;
+  background: var(--color-overlay-veil);
+}
+.task-detail-modal-layer .task-detail {
+  position: relative;
+  z-index: 1;
+  top: auto;
+  width: min(1080px, 100%);
+  height: min(860px, calc(100dvh - (2 * var(--space-6))));
+  min-height: 0;
+  max-height: calc(100dvh - (2 * var(--space-6)));
+  padding: var(--space-6);
+  border-radius: var(--radius-dialog);
+  background: var(--color-bg-elevated);
+  box-shadow: var(--shadow-dialog);
+  overscroll-behavior: contain;
+}
+.task-detail-modal-layer .task-detail-header {
+  top: calc(-1 * var(--space-6));
+  margin: calc(-1 * var(--space-6)) calc(-1 * var(--space-6)) 0;
+}
+.task-detail-modal-layer .task-detail-header > header,
+.task-detail-modal-layer .task-detail-tabs {
+  padding-left: var(--space-6);
+  padding-right: var(--space-6);
+}
 .task-detail-header {
   position: sticky;
   z-index: 2;
@@ -593,6 +630,25 @@ main:has(.task-workbench.active :is(.task-detail, .refinement-panel)) {
   .task-detail-header > header > button { font-size: var(--font-size-md); }
   .category-grid {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .task-detail-modal-layer { padding: var(--space-3); }
+  .task-detail-modal-layer .task-detail {
+    width: 100%;
+    height: calc(100dvh - (2 * var(--space-3)));
+    max-height: calc(100dvh - (2 * var(--space-3)));
+    padding: var(--space-4);
+  }
+  .task-detail-modal-layer .task-detail-header {
+    top: calc(-1 * var(--space-4));
+    margin: calc(-1 * var(--space-4)) calc(-1 * var(--space-4)) 0;
+  }
+  .task-detail-modal-layer .task-detail-header > header,
+  .task-detail-modal-layer .task-detail-tabs {
+    padding-left: var(--space-4);
+    padding-right: var(--space-4);
   }
 }
 

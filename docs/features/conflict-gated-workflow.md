@@ -30,13 +30,13 @@ resume work and does not create another mandatory approval gate.
 
 ## Keep the work record
 
-Opening a Task divides the workspace equally between the Workbench and detail when space permits;
-the detail resizes the Workbench instead of covering it. Each side scrolls independently. The detail has
-**Work**, **Details**, and **Review** tabs: Work groups checklist, Work Log, and decisions;
-Details reads the definition first and enters an explicit edit mode; Review groups readiness,
-conflict review, completion, and Knowledge. Narrow windows replace the Workbench with the detail
-until it is closed. Task-local drafts, the selected tab, and panel position remain available while
-the Workbench is open.
+Opening a Task opens a focused modal over the Workbench. The background is unavailable while the
+dialog is open; `Escape` or **Close Task detail** returns focus to the opener when it remains
+available. The detail has **Work**, **Details**, and **Review** tabs: Work groups checklist, Work
+Log, and decisions; Details reads the definition first and enters an explicit edit mode; Review
+groups readiness, conflict review, completion, and Knowledge. The dialog keeps its own scroll
+surface and uses the available window height on narrow screens. Task-local drafts and the selected
+tab remain available while the Workbench is open.
 In-progress Tasks initially open Work, Tasks not yet started open Details, and completed Tasks open
 Review. Later openings restore the Task's selected tab. Work shows up to five unfinished checklist
 items initially; expand the list to see all items, including completed ones.

@@ -34,10 +34,10 @@ describe("Task detail", () => {
       ],
     };
     window.llmWikiApplication = { request: vi.fn().mockResolvedValue(response(loggedTask)) };
-    const { container } = render(<TaskDetail taskId="task-1" onClose={vi.fn()} onChanged={vi.fn()} />);
+    render(<TaskDetail taskId="task-1" onClose={vi.fn()} onChanged={vi.fn()} />);
 
     await screen.findByText("Newer evidence");
-    const entries = [...container.querySelectorAll<HTMLElement>(".log-entry")];
+    const entries = [...document.querySelectorAll<HTMLElement>(".log-entry")];
     expect(entries.map((entry) => entry.querySelector("p")?.textContent)).toEqual([
       "Newer evidence",
       "Older evidence",
@@ -50,6 +50,15 @@ describe("Task detail", () => {
       "2026-01-16T18:45:00Z",
       "2026-01-15T10:30:00Z",
     ]);
+  });
+
+  it("presents Task detail as a focused modal", async () => {
+    window.llmWikiApplication = { request: vi.fn().mockResolvedValue(response(task)) };
+    render(<TaskDetail taskId="task-1" onClose={vi.fn()} onChanged={vi.fn()} />);
+
+    const detail = await screen.findByRole("dialog", { name: "Independent work" });
+    expect(detail).toHaveAttribute("aria-modal", "true");
+    expect(document.querySelector("[data-task-detail-modal='true']")).toBeInTheDocument();
   });
 
   it("keeps dependent mutations inert until the current revision is rendered", async () => {

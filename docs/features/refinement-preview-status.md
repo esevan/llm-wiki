@@ -51,7 +51,7 @@ accepting the proposal preserves those values in the Task detail.
 
 ## Keyboard behavior
 
-Refinement opens in a modal dialog. Tab and Shift+Tab stay within it, including the saved-note disclosure; `Escape` closes it and restores focus to its trigger when it remains available. Task detail remains a panel. `Cmd+Enter` and `Ctrl+Enter` send only outside an active IME composition. Automated checks cover the synthetic composition and focus contract; real Korean IME and VoiceOver verification remain manual work.
+Refinement and Task detail open in focused modal dialogs. Tab and Shift+Tab stay within the active dialog, including the saved-note disclosure; `Escape` closes it and restores focus to its trigger when it remains available. `Cmd+Enter` and `Ctrl+Enter` send only outside an active IME composition. Automated checks cover the synthetic composition and focus contract; real Korean IME and VoiceOver verification remain manual work.
 
 ## Continue a migrated Problem
 

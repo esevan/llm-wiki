@@ -51,7 +51,7 @@ Task 제안 프리뷰는 제목·세부 정보·결과·범위·하지 않을 �
 
 ## 키보드 동작
 
-Refinement은 모달 대화상자로 열립니다. 저장된 메모 펼치기를 포함해 Tab과 Shift+Tab은 대화상자 안에 머물며, `Escape`는 대화상자를 닫고 trigger가 남아 있으면 그곳으로 포커스를 돌립니다. Task 상세는 패널로 유지됩니다. `Cmd+Enter`, `Ctrl+Enter`는 IME 조합 중에는 보내지 않습니다. 자동 검사는 synthetic composition과 포커스 계약을 다루며, 실제 한국어 IME와 VoiceOver 검증은 수동으로 남아 있습니다.
+Refinement와 Task 상세는 집중 모달 대화상자로 열립니다. 저장된 메모 펼치기를 포함해 Tab과 Shift+Tab은 활성 대화상자 안에 머물며, `Escape`는 대화상자를 닫고 trigger가 남아 있으면 그곳으로 포커스를 돌립니다. `Cmd+Enter`, `Ctrl+Enter`는 IME 조합 중에는 보내지 않습니다. 자동 검사는 synthetic composition과 포커스 계약을 다루며, 실제 한국어 IME와 VoiceOver 검증은 수동으로 남아 있습니다.
 
 ## 이전 Problem 기록 이어가기
 

@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, type Ref } from "react";
+import { useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, type ReactNode, type Ref } from "react";
+import { createPortal } from "react-dom";
 import { taskClient } from "../../services/taskClient";
 import { formatSystemTime } from "../../services/systemTime";
 import type { LineageSnapshot, TaskAggregate } from "../../types/taskWorkbench";
@@ -9,6 +10,14 @@ import { useTaskWorkbenchText } from "./taskWorkbenchText";
 import { acknowledgeSave, baseline, definitionOf, editDraft, keepEdits, mergeSnapshot, type DefinitionField, type DetailState } from "./taskDraft";
 
 export type TaskDetailHandle = { requestLeave: (proceed: () => void) => void };
+
+type DetailScrollLock = {
+  count: number;
+  rootOverflow: string;
+  bodyOverflow: string;
+};
+
+let detailScrollLock: DetailScrollLock | undefined;
 
 type DetailTab = "work" | "details" | "review";
 type KnowledgeDraft = {
@@ -247,6 +256,31 @@ export function TaskDetail({
   useEffect(() => {
     if (loaded && !suppressInitialFocus && !panelRef.current?.closest(".view:not(.active)")) headingRef.current?.focus({ preventScroll: true });
   }, [loaded, suppressInitialFocus]);
+  useEffect(() => {
+    const application = document.querySelector<HTMLElement>(".app");
+    const wasInert = application?.inert;
+    if (application) application.inert = true;
+    const root = document.documentElement;
+    const body = document.body;
+    if (detailScrollLock) detailScrollLock.count += 1;
+    else {
+      detailScrollLock = {
+        count: 1,
+        rootOverflow: root.style.overflow,
+        bodyOverflow: body.style.overflow,
+      };
+      root.style.overflow = "hidden";
+      body.style.overflow = "hidden";
+    }
+    return () => {
+      if (application) application.inert = wasInert ?? false;
+      const lock = detailScrollLock;
+      if (!lock || --lock.count > 0) return;
+      root.style.overflow = lock.rootOverflow;
+      body.style.overflow = lock.bodyOverflow;
+      detailScrollLock = undefined;
+    };
+  }, []);
   const focusedQueueResult = useRef<KnowledgeDraft | undefined>(undefined);
   useEffect(() => {
     if (!queueKnowledgeDraft || !loaded || tab !== "review"
@@ -410,12 +444,19 @@ export function TaskDetail({
       setMutationBusy(false);
     }
   };
+  const modal = (content: ReactNode) => createPortal(
+    <div className="task-detail-modal-layer" data-task-detail-modal="true">
+      <div className="task-detail-modal-backdrop" aria-hidden="true" />
+      {content}
+    </div>,
+    document.body,
+  );
   if (!task)
-    return (
-      <aside className="task-detail" aria-live="polite">
+    return modal(
+      <aside className="task-detail" role="dialog" aria-modal="true" aria-label={text.taskDetails} aria-live="polite">
         <header><h2>{error || text.loading}</h2><button type="button" data-control="task-detail-close" aria-label={text.closeTaskDetail} onClick={onClose}>×</button></header>
         {error && <button type="button" data-control="task-detail-retry" onClick={() => void load()}>{text.retry}</button>}
-      </aside>
+      </aside>,
     );
   const revision = detailState.persisted.taskRevision;
   const definitions: Array<{ field: DefinitionField; label: string; control: string; value: string }> = [
@@ -433,7 +474,7 @@ export function TaskDetail({
       Math.max(latestProblemRevisions.get(link.problemId) ?? 0, link.problemRevision),
     );
   }
-  return (
+  return modal(
     <aside
       ref={panelRef}
       onKeyDown={(event) => {
@@ -443,8 +484,23 @@ export function TaskDetail({
           if (closePrompt) { pendingLeave.current = undefined; setClosePrompt(false); }
           else requestLeave(onClose);
         }
+        if (event.key !== "Tab") return;
+        const focusable = Array.from(event.currentTarget.querySelectorAll<HTMLElement>(
+          "button:not(:disabled), textarea, input, select, summary, [tabindex]:not([tabindex='-1'])",
+        )).filter((element) =>
+          !element.closest("[hidden], [inert]")
+          && !element.hasAttribute("disabled")
+          && (!element.closest("details:not([open])") || element.matches("summary")),
+        );
+        if (!focusable.length) return;
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+        if (event.shiftKey && (document.activeElement === first || document.activeElement === headingRef.current)) { event.preventDefault(); last.focus(); }
+        else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
       }}
       className="task-detail"
+      role="dialog"
+      aria-modal="true"
       aria-label={task.title}
       data-task-state={task.state}
       data-task-revision={revision}
@@ -1205,6 +1261,6 @@ export function TaskDetail({
         )}
       </details>
       </div>
-    </aside>
+    </aside>,
   );
 }
