@@ -39,7 +39,7 @@ its first Task; subsequent refinement continues that Task. A provider response l
 in an existing Task session is treated as a Task revision, so Apply does not create an unrelated copy.
 After Apply, **Work status** opens beside **Preview** and shows **Refined - Revision N**. Refinement
 is separate from execution state: **Start work** moves the Task to **In progress**. Applied sessions
-leave the Refining shortcuts. Workbench places all in-progress Tasks above Capture, with **Focus
+leave the Refining shortcuts. Workbench places all in-progress Tasks immediately below Capture, with **Focus
 active work** to hide the other sections without losing selection or drafts.
 
 ## Explicit Subtasks

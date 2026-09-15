@@ -47,6 +47,26 @@ const response = (body: unknown, ok = true, status = ok ? 200 : 500) => ({
 });
 
 describe("Task Workbench", () => {
+  it("places Capture before active work and isolates category lanes with General first", async () => {
+    const categorized = { ...snapshot, categories: [
+      { id: "security", label: "Security", items: [{ kind: "capture", id: "security-capture", text: "Review permissions" }] },
+      ...snapshot.categories,
+    ] };
+    window.llmWikiApplication = { request: vi.fn().mockResolvedValue(response(categorized)) };
+    render(<WorkbenchView active />);
+    await screen.findByText("Review permissions");
+    const main = document.querySelector(".workbench-main")!;
+    expect(main.children[0]).toHaveClass("task-capture");
+    expect(main.children[1]).toHaveClass("workbench-active");
+    const categories = [...document.querySelectorAll(".workbench-category")];
+    expect(categories.map(category => category.getAttribute("data-category"))).toEqual(["general", "security"]);
+    expect(categories[0]).toHaveTextContent("Plan release");
+    expect(categories[0]).not.toHaveTextContent("Review permissions");
+    expect(categories[1]).not.toHaveTextContent("Plan release");
+    expect(categories[1].querySelector('[data-lane="inbox"]')).toHaveTextContent("Review permissions");
+    expect(categories[1].querySelector(".workbench-category-scroll")).toHaveAttribute("tabindex", "0");
+  });
+
   it("renders Subtasks under their parent and focuses only active work", async () => {
     const familySnapshot = { ...snapshot, categories: [{ id: "general", label: "General", items: [
       { kind: "task", id: "parent", title: "Meeting preparation", taskRevision: 2, refinedRevision: 2, state: "task" },
@@ -126,7 +146,7 @@ describe("Task Workbench", () => {
     expect(lanes[2]).not.toHaveTextContent("Shape this task");
     expect(lanes[2].querySelector("details")).not.toHaveAttribute("open");
     expect(lanes[2].querySelector("details")).toHaveTextContent("Finished work");
-    expect(document.querySelector(".workbench-main")?.firstElementChild).toHaveClass("workbench-active");
+    expect(document.querySelector(".workbench-main")?.firstElementChild).toHaveClass("task-capture");
   });
 
   it("retains a direct Task draft and selected mode after a save failure", async () => {

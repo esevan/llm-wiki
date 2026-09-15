@@ -10,7 +10,7 @@
 
 ## Workbench와 Task 상세
 
-Workbench는 진행 중인 Task를 맨 위에 표시합니다. 가벼운 입력 아래에는 Inbox, 다듬는 중, 정제된 Task 레인이 있습니다. 텍스트를 Capture로 저장하거나 Task를 바로 만들고, 오른쪽 레인에서 완료한 Task를 펼쳐 볼 수 있습니다. Problem은 Task에 연결할 수 있는 선택적인 맥락이며, 반드시 거쳐야 하는 단계가 아닙니다.
+Workbench는 캡처 폼을 맨 위에, 진행 중인 Task를 그 아래에 표시합니다. 하단은 General을 첫 번째로 고정한 카테고리별 Swim Lane이며, 각각 Inbox, 다듬는 중, 정제된 Task 열을 포함합니다. 각 카테고리 본문은 최대 480px 또는 화면 높이의 65%로 제한되고 내부에서 세로 스크롤됩니다. 텍스트를 Capture로 저장하거나 Task를 바로 만들고, 오른쪽 레인에서 완료한 Task를 펼쳐 볼 수 있습니다. Problem은 Task에 연결할 수 있는 선택적인 맥락이며, 반드시 거쳐야 하는 단계가 아닙니다.
 
 ![Capture·Task 입력과 저장한 작업을 보여 주는 Workbench](images/workbench-tasks.png)
 

@@ -10,7 +10,7 @@ The refreshed Korean and English Workbench captures and build checks are recorde
 
 ## Workbench and Task detail
 
-The Workbench shows in-progress Tasks at the top. Below a lightweight entry, work is arranged into Inbox, Refining, and Refined Tasks lanes. Save text as a Capture or create a Task directly; completed Tasks can be expanded in the right lane. A Problem is optional context that may be linked to a Task; it is not a required stage.
+The Workbench places Capture first and in-progress Tasks immediately below it. Category swim lanes follow, with General always first and Inbox, Refining, and Refined Tasks columns inside each category. Each category body scrolls vertically within a maximum height of 480px or 65% of the viewport, whichever is smaller. Save text as a Capture or create a Task directly; completed Tasks can be expanded in the right lane. A Problem is optional context that may be linked to a Task; it is not a required stage.
 
 ![Workbench with Capture and Task entry plus saved work](images/workbench-tasks.en.png)
 

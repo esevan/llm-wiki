@@ -195,6 +195,10 @@ export function WorkbenchView({ active }: { active: boolean }) {
     { id: "tasks", title: text.refinedTasks, hint: text.refinedTasksHint, empty: text.noReadyTasks,
       items: pendingItems.filter((item) => item.kind === "task" && !refiningIds.has(`task:${item.id}`)) },
   ];
+  const categories = [...(snapshot?.categories ?? [])];
+  const generalIndex = categories.findIndex(category => category.id.toLowerCase() === "general" || category.label === "General");
+  if (generalIndex >= 0) categories.unshift(...categories.splice(generalIndex, 1));
+  else categories.unshift({ id: "general", label: "General", items: [] });
   const renderCard = (item: WorkbenchItem): React.ReactNode => (
     <article
       className={`canonical-card${(item.kind === "task" && detail === item.id) || (refining?.kind === item.kind && refining.id === item.id) ? " selected" : ""}`}
@@ -297,16 +301,6 @@ export function WorkbenchView({ active }: { active: boolean }) {
         <div className="status">{text.vaultStatus}</div>
       </header>
       <div className="workbench-main">
-      {snapshot && (
-        <section className="workbench-active shortcut-region" aria-labelledby="workbench-active-title">
-          <header className="workbench-active-header">
-            <div><small>{text.resume}</small><h2 id="workbench-active-title">{text.active}</h2></div>
-            <button type="button" data-control="workbench-focus-active" aria-pressed={focusActive} onClick={() => setFocusActive(value => !value)}>{focusActive ? text.showAllWork : text.focus}</button>
-            <span className="workbench-count">{activeTasks.length}</span>
-          </header>
-          {activeTasks.length ? <div className="workbench-active-cards">{activeTasks.map(renderCard)}</div> : <p className="region-empty">{text.noActive}</p>}
-        </section>
-      )}
       <section className="task-capture">
         <form onSubmit={save}>
           <fieldset disabled={busy}>
@@ -373,28 +367,52 @@ export function WorkbenchView({ active }: { active: boolean }) {
         )}
       </section>
       {snapshot && (
+        <section className="workbench-active shortcut-region" aria-labelledby="workbench-active-title">
+          <header className="workbench-active-header">
+            <div><small>{text.resume}</small><h2 id="workbench-active-title">{text.active}</h2></div>
+            <button type="button" data-control="workbench-focus-active" aria-pressed={focusActive} onClick={() => setFocusActive(value => !value)}>{focusActive ? text.showAllWork : text.focus}</button>
+            <span className="workbench-count">{activeTasks.length}</span>
+          </header>
+          {activeTasks.length ? <div className="workbench-active-cards">{activeTasks.map(renderCard)}</div> : <p className="region-empty">{text.noActive}</p>}
+        </section>
+      )}
+      {snapshot && (
         <section className="workbench-board" aria-label={text.categories}>
           {trackedTitle && <p className="region-empty">{trackedTitle}</p>}
-          <div className="workbench-lanes">
-            {lanes.map((lane) => (
-              <section className={`workbench-lane workbench-lane-${lane.id}`} data-lane={lane.id} aria-labelledby={`lane-${lane.id}`} key={lane.id}>
+          {categories.map((category, categoryIndex) => {
+            const categoryItems = new Set(category.items.map(item => `${item.kind}:${item.id}`));
+            const belongs = (item: WorkbenchItem) => categoryItems.has(`${item.kind}:${item.id}`);
+            const categoryCompleted = completedTasks.filter(belongs);
+            return (
+            <section className="workbench-category" data-category={category.id} aria-labelledby={`category-${categoryIndex}`} key={category.id}>
+              <header className="workbench-category-header">
+                <h2 id={`category-${categoryIndex}`}>{category.label}</h2>
+              </header>
+              <div className="workbench-category-scroll" role="region" aria-labelledby={`category-${categoryIndex}`} tabIndex={0}>
+              <div className="workbench-lanes">
+            {lanes.map(lane => ({ ...lane, items: lane.items.filter(belongs) })).map((lane) => (
+              <section className={`workbench-lane workbench-lane-${lane.id}`} data-lane={lane.id} aria-labelledby={`lane-${categoryIndex}-${lane.id}`} key={lane.id}>
                 <header className="workbench-lane-header">
-                  <h2 id={`lane-${lane.id}`}>{lane.title}</h2>
+                  <h3 id={`lane-${categoryIndex}-${lane.id}`}>{lane.title}</h3>
                   <span className="workbench-count">{lane.items.length}</span>
                 </header>
                 <p className="workbench-lane-hint">{lane.hint}</p>
                 <div className="workbench-lane-cards">
                   {lane.items.length ? lane.items.map(renderCard) : <p className="region-empty">{lane.empty}</p>}
                 </div>
-                {lane.id === "tasks" && completedTasks.length > 0 && (
+                {lane.id === "tasks" && categoryCompleted.length > 0 && (
                   <details className="workbench-completed" data-control="workbench-completed-details">
-                    <summary>{text.completed} <span className="workbench-count">{completedTasks.length}</span></summary>
-                    <div className="workbench-lane-cards">{completedTasks.map(renderCard)}</div>
+                    <summary>{text.completed} <span className="workbench-count">{categoryCompleted.length}</span></summary>
+                    <div className="workbench-lane-cards">{categoryCompleted.map(renderCard)}</div>
                   </details>
                 )}
               </section>
             ))}
-          </div>
+              </div>
+              </div>
+            </section>
+            );
+          })}
         </section>
       )}
       </div>

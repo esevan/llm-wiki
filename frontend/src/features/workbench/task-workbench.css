@@ -958,7 +958,7 @@ main:has(.task-workbench.active :is(.task-detail, .refinement-panel)) {
 .workbench-lane-refining { background: var(--color-bg-accent-subtle); }
 .workbench-lane-tasks { background: var(--color-bg-positive-subtle); }
 .workbench-lane-header { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); }
-.workbench-lane-header h2 { margin: 0; font-size: 18px; overflow-wrap: anywhere; }
+.workbench-lane-header h3 { margin: 0; font-size: 18px; overflow-wrap: anywhere; }
 .workbench-lane-hint { margin: var(--space-2) 0 var(--space-5); font-size: var(--font-size-sm); color: var(--color-text-secondary); line-height: 1.5; }
 .workbench-lane-cards { display: grid; gap: var(--space-3); }
 .workbench-lane-cards > .region-empty { padding: var(--space-5) var(--space-2); border-top: 1px dashed var(--color-border-strong); font-size: var(--font-size-md); line-height: 1.6; }
@@ -984,9 +984,9 @@ main:has(.task-workbench.active :is(.task-detail, .refinement-panel)) {
   .workbench-lanes { grid-template-columns: minmax(0, 1fr); }
 }
 
-/* Active work leads the page; Focus keeps the same selected Task and drafts. */
+/* Capture leads the page; Focus keeps the same selected Task and drafts. */
 .workbench-main { display: flex; flex-direction: column; }
-.workbench-main > .workbench-active { order: -1; }
+
 .workbench-active > header button { margin-left: auto; }
 .task-workbench[data-focus-active="true"] .workbench-main > :not(.workbench-active) { display: none; }
 .refined-status { color: var(--color-status-success); font-family: var(--font-family-mono); font-size: var(--font-size-sm); }
@@ -1003,4 +1003,18 @@ main:has(.task-workbench.active :is(.task-detail, .refinement-panel)) {
 @media (max-width: 600px) {
   .subtask-children { margin-left: 0; padding-left: var(--space-2); }
   .workbench-active > header button { margin-left: 0; }
+}
+
+
+.workbench-category { min-width: 0; margin-bottom: var(--space-6); }
+.workbench-category-header { padding: var(--space-2) 0 var(--space-3); }
+.workbench-category-header h2 { margin: 0; font-size: var(--font-size-lg); overflow-wrap: anywhere; }
+.workbench-category-scroll {
+  max-height: 480px;
+  max-height: min(480px, 65dvh);
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+  overscroll-behavior-y: contain;
+  padding: var(--space-1);
+  border-radius: var(--radius-panel);
 }
