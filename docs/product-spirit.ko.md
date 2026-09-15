@@ -5,6 +5,9 @@
 제품 원칙은 모든 제품·개발 판단의 첫 번째 기준입니다. [Constitution](../.specify/memory/constitution.md)은
 이 원칙들을 필수 리뷰 게이트로 구체화합니다.
 
+
+명시적인 Subtask 적용은 자식 완료마다 부모 Knowledge를 누적 갱신·자동 발행하는 흐름에 동의하는 동작입니다. 모든 자식이 완료되어야 부모도 닫힙니다. 정제는 Task ID를 보존하고, 분리한 작업에는 부모·자식 경계를 표시합니다. 독립 Task의 Knowledge는 별도 검토 후 발행합니다.
+
 ## 1. 말하면, 일이 스스로 정리됩니다.
 
 Capture는 자연스러운 생각을 그대로 받습니다. AI 대화와 Refinement가 구조를 찾아 의도를 보존하고
@@ -41,7 +44,7 @@ Refinement는 검토 가능한 Problem과 여러 버전의 Task를 만들 수 �
 
 ## 5. 과정은 비공개로 유지하고, Knowledge는 자유롭게 옮깁니다.
 
-대화·초안·Refinement·진행 기록·완료 결정은 개인 로컬 과정으로 남습니다. 완료와 발행은 서로 다른
+대화·초안·Refinement·진행 기록·완료 결정은 개인 로컬 과정으로 남습니다. 독립 Task의 완료와 발행은 서로 다른
 사용자 결정입니다. 사용자가 Knowledge 발행을 명시적으로 승인해야 Obsidian 호환 Playbook과 원시
 근거 묶음을 만듭니다. 이 Markdown은 LLM Wiki 없이도 유용하며 이후 충돌 검토의
 Knowledge로 검색할 수 있습니다.

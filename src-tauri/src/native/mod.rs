@@ -12,6 +12,7 @@ mod refinement;
 pub(crate) mod semantic;
 pub mod settings;
 pub(crate) mod task_assistance;
+pub(crate) mod task_hierarchy;
 pub(crate) mod vault;
 pub(crate) mod work_tracking;
 pub(crate) mod work_tracking_projector;
@@ -115,6 +116,7 @@ impl NativeApplication {
                 semantic.clone(),
             )
             .with_job_registry(jobs.clone());
+        if !recovery_pending && !vault_setup_required { let _ = task_hierarchy::publish_pending(&db_path,&vault); }
         Ok(Self {
             db_path: db_path.clone(),
             settings_path,
@@ -136,7 +138,9 @@ impl NativeApplication {
         if let Some(response) = self.recovery_block() {
             return response;
         }
-        work_tracking::execute(&self.work_tracking, operation)
+        let response = work_tracking::execute(&self.work_tracking, operation);
+        if !self.vault_setup_required { let _ = task_hierarchy::publish_pending(&self.db_path,&self.vault); }
+        response
     }
 
     pub fn work_tracking_service(
@@ -285,7 +289,10 @@ impl NativeApplication {
         {
             return response;
         }
-        match self.dispatch(&operation.name, &operation.input) {
+        if !self.vault_setup_required { let _ = task_hierarchy::publish_pending(&self.db_path,&self.vault); }
+        let result = self.dispatch(&operation.name, &operation.input);
+        if !self.vault_setup_required { let _ = task_hierarchy::publish_pending(&self.db_path,&self.vault); }
+        match result {
             Ok((status, body)) => NativeResponse { status, body },
             Err(error) => NativeResponse {
                 status: error_status(&error),

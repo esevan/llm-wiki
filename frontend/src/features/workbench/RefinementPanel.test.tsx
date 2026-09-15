@@ -33,6 +33,30 @@ describe("Refinement panel", () => {
     await waitFor(() => expect(document.querySelector(".refinement-preview")).toHaveAttribute("aria-busy", "true"), { timeout: 2000 });
   });
 
+  it("keeps the Task identity, shows its refined revision, and starts work from the status tab", async () => {
+    let task = { id: "same-task", taskRevision: 1, title: "Agenda", state: "task", scope: "Meeting topics", refinedRevision: 0 };
+    const request = vi.fn().mockImplementation(({ path }: { path: string }) => {
+      const result = (value: unknown) => Promise.resolve({ ok: true, status: 200, json: async () => value, text: async () => "", body: null });
+      if (path.endsWith("/refinement")) return result({ id: "session", taskId: task.id, draftRevision: 1, messages: [] });
+      if (path.endsWith("/proposals")) return result([{ id: "patch", type: "task_patch", draftRevision: 1, payload: { expectedTaskRevision: 1, patch: { title: "Refined agenda" } } }]);
+      if (path.endsWith("/proposal-decisions")) { task = { ...task, title: "Refined agenda", taskRevision: 2, refinedRevision: 2 }; return result(task); }
+      if (path.endsWith("/transitions")) { task = { ...task, state: "in_progress" }; return result(task); }
+      return result(task);
+    });
+    window.llmWikiApplication = { request };
+    const onApplied = vi.fn();
+    render(<RefinementPanel kind="task" subjectId="same-task" onClose={vi.fn()} onApplied={onApplied} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Apply" }));
+    await waitFor(() => expect(screen.getByRole("tab", { name: "Work status" })).toHaveAttribute("aria-selected", "true"));
+    expect(screen.getByText("Refined - Revision 2")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Start work" }));
+    expect(await screen.findByText("In progress")).toBeInTheDocument();
+    expect(request.mock.calls.some(([input]) => input.path === "/tasks/same-task/transitions")).toBe(true);
+    expect(onApplied).toHaveBeenCalledTimes(2);
+    fireEvent.keyDown(screen.getByRole("tab", { name: "Work status" }), { key: "ArrowLeft" });
+    expect(screen.getByRole("tab", { name: "Preview" })).toHaveFocus();
+  });
+
   it("retries a database-locked refinement read without losing local drafts", async () => {
     let attempts = 0;
     const request = vi.fn().mockImplementation(({ path }: { path: string; method?: string }) => {
@@ -624,7 +648,7 @@ describe("Refinement panel", () => {
       method: "POST",
     })));
     const decision = request.mock.calls.map(([input]) => input).find(input => input.path.endsWith("/proposal-decisions"));
-    expect(JSON.parse(decision.body).editedPayload).toBeUndefined();
+    expect(JSON.parse(decision.body).editedPayload).toEqual({ taskId: "full-preview", expectedTaskRevision: 1, patch });
   });
 
 });

@@ -12,6 +12,8 @@ export interface TaskCard {
   kind: "task";
   id: string;
   taskRevision: number;
+  refinedRevision?: number;
+  parentTaskId?: string;
   state: TaskState;
   title: string;
   detail?: string;
@@ -70,6 +72,8 @@ export interface ReadinessEntry {
   provenance?: string;
 }
 export interface TaskAggregate extends TaskCard {
+  autoPublicationError?: string;
+  hierarchy?: { parent?: TaskAggregate; siblings: TaskAggregate[]; children: TaskAggregate[] };
   detail?: string;
   outcome?: string;
   scope?: string;
@@ -113,6 +117,7 @@ export interface TaskAggregate extends TaskCard {
   };
 }
 export interface RefinementSession {
+  state?: "active" | "completed";
   id: string;
   taskId?: string;
   captureId?: string;

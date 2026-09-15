@@ -76,6 +76,7 @@ export function TaskDetail({
   onChanged,
   onRequestDelete,
   onRefine,
+  onOpenTask,
   refreshKey,
   suppressInitialFocus,
   sessions,
@@ -83,6 +84,7 @@ export function TaskDetail({
   ref,
 }: {
   taskId: string;
+  onOpenTask?: (id: string) => void;
   onClose: () => void;
   onChanged: () => void;
   onRequestDelete?: (title: string) => void;
@@ -524,6 +526,15 @@ export function TaskDetail({
           <span aria-hidden="true">×</span><span className="task-detail-back">{text.back}</span>
         </button>
       </header>
+      {task.refinedRevision && <p className="refined-status">{text.refined} {task.refinedRevision}</p>}
+      {task.hierarchy && (task.hierarchy.parent || task.hierarchy.children.length > 0) && <details className="task-hierarchy-summary" data-control="task-hierarchy-details">
+        <summary>{text.boundaryContext}</summary>
+        {task.hierarchy.parent && <p>{text.parentTask}: <button type="button" data-control="task-parent-open" onClick={() => onOpenTask?.(task.hierarchy!.parent!.id)}>{task.hierarchy.parent.title}</button></p>}
+        {[...task.hierarchy.siblings,...task.hierarchy.children].map(related => <p key={related.id}>
+          {related.parentTaskId === task.id || task.hierarchy!.children.some(child => child.id === related.id) ? text.subtask : text.siblingTasks}: <button type="button" data-control="task-family-open" onClick={() => onOpenTask?.(related.id)}>{related.title}</button>
+        </p>)}
+        <p>{text.subtaskHint}</p>
+      </details>}
       <nav className="task-detail-tabs" aria-label={text.taskDetails} role="tablist" onKeyDown={(event) => {
         const tabs: DetailTab[] = ["work", "details", "review"];
         const current = tabs.indexOf(tab);
@@ -1099,7 +1110,8 @@ export function TaskDetail({
       </section>
       <section className="task-panel">
         <h3>{text.knowledge}</h3>
-        <p>{text.publishHint}</p>
+        <p>{task.hierarchy?.children.length ? text.subtaskHint : text.publishHint}</p>
+        {task.autoPublicationError && <p role="alert">{text.autoPublishFailure}: {task.autoPublicationError}</p>}
         <button
           type="button"
           data-control="task-knowledge-draft"

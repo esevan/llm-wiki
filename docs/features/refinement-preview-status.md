@@ -32,6 +32,40 @@ Task proposal previews show the complete meaningful Task result fields—title, 
 non-goals, and validation criteria—including responses that return the detail as `body` or nest the result;
 accepting the proposal preserves those values in the Task detail.
 
+## Refine the same Task and focus active work
+
+Refinement updates the existing Task ID and creates a new definition revision. A Capture creates
+its first Task; subsequent refinement continues that Task. A provider response labelled “new Task”
+in an existing Task session is treated as a Task revision, so Apply does not create an unrelated copy.
+After Apply, **Work status** opens beside **Preview** and shows **Refined - Revision N**. Refinement
+is separate from execution state: **Start work** moves the Task to **In progress**. Applied sessions
+leave the Refining shortcuts. Workbench places all in-progress Tasks above Capture, with **Focus
+active work** to hide the other sections without losing selection or drafts.
+
+## Explicit Subtasks
+
+Create a Subtask only for independently completable work. The preview states why it needs a separate
+boundary, its parent, scope, non-goals and validation criteria. Accepting it also accepts the parent
+Knowledge rollup described below. The parent and children appear as an expandable, indented tree;
+Task detail links to the parent, siblings and children. Historical `split_from` links remain provenance,
+not ownership. Hierarchy members retain their records; deleting them is blocked to preserve completion
+and Knowledge evidence.
+
+Every Task refinement includes its parent, siblings and children, including their scope and non-goals.
+A changed family snapshot invalidates a pending proposal: refine again before applying. This avoids
+applying a split based on outdated boundaries, including after accepting another Subtask proposal.
+
+Completing a Subtask with evidence creates a cumulative Knowledge revision on its parent and
+**automatically publishes it to the same parent Vault document**. Other Subtasks remain open. The
+parent closes automatically when every Subtask is complete, and completed nested parents roll up
+to their own parents. Reopening a child reopens completed ancestors while preserving historical
+completion evidence and Knowledge revisions.
+
+Completion and local Knowledge revision creation commit together; retrying the same completion
+cannot create duplicates. A durable publication outbox retries after reopening the Task or restarting
+the application. External edits to the Vault file are preserved and publication errors remain visible
+on the parent. Restore the expected file or resolve the edited document before retrying publication.
+
 ## Interruptions and errors
 
 - Provider or proposal-loading errors remain visible. Previously saved context is preserved.

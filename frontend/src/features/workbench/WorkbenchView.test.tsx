@@ -47,6 +47,24 @@ const response = (body: unknown, ok = true, status = ok ? 200 : 500) => ({
 });
 
 describe("Task Workbench", () => {
+  it("renders Subtasks under their parent and focuses only active work", async () => {
+    const familySnapshot = { ...snapshot, categories: [{ id: "general", label: "General", items: [
+      { kind: "task", id: "parent", title: "Meeting preparation", taskRevision: 2, refinedRevision: 2, state: "task" },
+      { kind: "task", id: "active", parentTaskId: "parent", title: "Collect topics", taskRevision: 3, state: "in_progress" },
+    ] }] };
+    window.llmWikiApplication = { request: vi.fn().mockResolvedValue(response(familySnapshot)) };
+    render(<WorkbenchView active />);
+    expect(await screen.findByText("Refined - Revision 2")).toBeInTheDocument();
+    const disclosure = document.querySelector<HTMLDetailsElement>('[data-control="task-subtasks-expand"]')!;
+    expect(disclosure.closest(".canonical-card")).toHaveTextContent("Meeting preparation");
+    fireEvent.click(disclosure.querySelector("summary")!);
+    expect(disclosure.open).toBe(true);
+    expect(disclosure.querySelector(".subtask-children")).toHaveTextContent("Collect topics");
+    fireEvent.click(screen.getByRole("button", { name: "Focus active work" }));
+    expect(document.querySelector("#workbench")).toHaveAttribute("data-focus-active", "true");
+    expect(screen.getByRole("button", { name: "Show all work" })).toHaveAttribute("aria-pressed", "true");
+  });
+
   it("keeps the mounted Task and its unsaved inputs when refining and returning", async () => {
     const aggregate = { id: "active", taskRevision: 3, state: "in_progress", title: "Ship workbench" };
     window.llmWikiApplication = { request: vi.fn().mockImplementation(({ path }: { path: string }) =>

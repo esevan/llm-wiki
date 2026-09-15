@@ -3,9 +3,14 @@
 **English** | [한국어](completion-writeback-archive.ko.md)
 
 A Task keeps Work Log entries, attachments, comments, checklist items, and decisions together.
-Complete the Task explicitly with evidence when its work is done. Completion changes that Task's
+Complete a standalone Task explicitly with evidence when its work is done. Completion changes that Task's
 state; it does not resolve linked Problems, complete sibling Tasks, or publish a Vault document.
 The Capture and exact linked Problem revisions remain available as provenance.
+
+
+### Automatic parent Knowledge for Subtasks
+
+Accepting an explicit Subtask enables automatic parent Knowledge publication on each evidence-backed child completion. Each revision accumulates completed-child evidence in the same parent document. The parent closes only after all children finish; reopening a child reopens completed ancestors. Publication is recoverable through a durable outbox and preserves external file edits. Standalone Tasks retain the separate review-and-publish flow below. See [Subtask lifecycle](refinement-preview-status.md#explicit-subtasks).
 
 ## Review and publish separately
 
@@ -30,7 +35,7 @@ overwriting that edit.
 
 Withdrawal is also explicit and preserves a recoverable local copy. It does not erase the completed
 Task or its private work evidence. Publishing, regeneration, and withdrawal have their own results
-and errors; none is implied by merely completing or reopening a Task.
+and errors; standalone Task completion or reopening does not imply them.
 
 See [Lineage Knowledge Layer](lineage-knowledge-layer.md) for provenance and the
 [interactive coverage record](../testing/interactive-coverage.md) for actual verification evidence.

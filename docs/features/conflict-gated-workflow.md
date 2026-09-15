@@ -2,6 +2,9 @@
 
 **English** | [한국어](conflict-gated-workflow.ko.md)
 
+
+Workbench places all active Tasks above Capture. **Focus active work** hides other sections. Refined definitions show **Refined - Revision N**; applied refinement is not an ongoing execution state. Explicit Subtasks expand below their parent with indentation. See [Refinement and Subtasks](refinement-preview-status.md) for boundary context, automatic parent completion and Knowledge publication.
+
 ## Capture and shape work
 
 Capture a thought, problem, or existing solution without choosing a mandatory sequence of stages.

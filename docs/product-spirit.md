@@ -5,6 +5,9 @@
 Product Spirit is the first test for every product and engineering decision. The
 [constitution](../.specify/memory/constitution.md) turns these principles into a mandatory review gate.
 
+
+Explicit Subtask acceptance authorizes cumulative parent Knowledge publication on each child completion. All children must finish before the parent closes. Refinement preserves Task identity; separate work has visible parent/child boundaries. Standalone Knowledge keeps its review-before-publication flow.
+
 ## 1. You talk. The work organizes itself.
 
 Capture accepts natural thought. AI conversation and Refinement discover structure, preserve the
@@ -44,7 +47,7 @@ checklists, and decisions; completing a Task does not silently resolve a Problem
 ## 5. Private process, portable knowledge.
 
 Chats, drafts, refinements, progress, and completed-work decisions remain private local process.
-Completion and publication are separate human decisions. Explicit Knowledge publication creates an
+For standalone Tasks, completion and publication are separate human decisions. Explicit Knowledge publication creates an
 Obsidian-compatible Playbook and raw evidence bundle. That Markdown remains useful
 without LLM Wiki and can be searched as Knowledge for future conflict review.
 App-managed Knowledge uses English Markdown as its canonical portable source. A Korean reading

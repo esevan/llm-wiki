@@ -983,3 +983,24 @@ main:has(.task-workbench.active :is(.task-detail, .refinement-panel)) {
 @container (max-width: 700px) {
   .workbench-lanes { grid-template-columns: minmax(0, 1fr); }
 }
+
+/* Active work leads the page; Focus keeps the same selected Task and drafts. */
+.workbench-main { display: flex; flex-direction: column; }
+.workbench-main > .workbench-active { order: -1; }
+.workbench-active > header button { margin-left: auto; }
+.task-workbench[data-focus-active="true"] .workbench-main > :not(.workbench-active) { display: none; }
+.refined-status { color: var(--color-status-success); font-family: var(--font-family-mono); font-size: var(--font-size-sm); }
+.subtask-tree { margin-top: var(--space-4); border-top: var(--border-default); padding-top: var(--space-3); }
+.subtask-tree summary, .task-hierarchy-summary summary, .refinement-boundaries summary { cursor: pointer; min-height: var(--control-height); padding: var(--space-2) 0; font-weight: 700; }
+.subtask-children { display: grid; gap: var(--space-3); margin-left: var(--space-3); padding-left: var(--space-4); border-left: 2px solid var(--color-border-accent); }
+.subtask-children .canonical-card { min-width: 0; box-shadow: none; }
+.subtask-tree p { font-size: var(--font-size-sm); color: var(--color-text-secondary); }
+.task-hierarchy-summary { padding: 0 var(--space-5); }
+.refinement-preview .task-detail-tabs { margin: 0 0 var(--space-5); }
+.refinement-preview [role="tabpanel"] h3 { overflow-wrap: anywhere; }
+.refinement-boundaries article { border-top: var(--border-default); padding: var(--space-3) 0; }
+.refinement-boundaries p { white-space: pre-wrap; overflow-wrap: anywhere; }
+@media (max-width: 600px) {
+  .subtask-children { margin-left: 0; padding-left: var(--space-2); }
+  .workbench-active > header button { margin-left: 0; }
+}

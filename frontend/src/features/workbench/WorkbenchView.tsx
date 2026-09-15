@@ -28,6 +28,7 @@ export function WorkbenchView({ active }: { active: boolean }) {
     [deleteTarget, setDeleteTarget] = useState<{ entityType: "captures" | "problems" | "tasks"; id: string; title: string }>(),
     [deleteBusy, setDeleteBusy] = useState(false),
     [deleteError, setDeleteError] = useState("");
+  const [focusActive, setFocusActive] = useState(false);
   const detailRef = useRef<TaskDetailHandle>(null);
   const refinementRef = useRef<RefinementPanelHandle>(null);
   const [detailRefresh, setDetailRefresh] = useState(0);
@@ -154,7 +155,7 @@ export function WorkbenchView({ active }: { active: boolean }) {
       ? text.completed
       : task.state === "in_progress"
         ? text.inProgress
-        : text.ready;
+        : task.refinedRevision ? `${text.refined} ${task.refinedRevision}` : text.ready;
   const requestDelete = (entityType: "captures" | "problems" | "tasks", id: string, title: string) => {
     const proceed = () => {
       setDeleteError("");
@@ -183,8 +184,9 @@ export function WorkbenchView({ active }: { active: boolean }) {
     category.items.map((item) => [`${item.kind}:${item.id}`, category.label] as const)));
   const refiningIds = new Set(snapshot?.refiningShortcuts.map((item) => `${item.kind}:${item.id}`));
   const activeTasks = items.filter((item) => item.kind === "task" && item.state === "in_progress");
-  const completedTasks = items.filter((item) => item.kind === "task" && item.state === "completed");
-  const pendingItems = items.filter((item) => item.kind !== "task" || item.state === "task");
+  const completedTasks = items.filter((item) => item.kind === "task" && item.state === "completed" && (!item.parentTaskId || !items.some(parent => parent.kind === "task" && parent.id === item.parentTaskId)));
+  const allTasks = items.filter((item): item is TaskCard => item.kind === "task");
+  const pendingItems = items.filter((item) => (item.kind !== "task" || item.state === "task") && (item.kind !== "task" || !item.parentTaskId || !allTasks.some(parent => parent.id === item.parentTaskId)));
   const lanes = [
     { id: "inbox", title: text.inbox, hint: text.inboxHint, empty: text.noInbox,
       items: pendingItems.filter((item) => item.kind === "capture" && !refiningIds.has(`capture:${item.id}`)) },
@@ -193,7 +195,7 @@ export function WorkbenchView({ active }: { active: boolean }) {
     { id: "tasks", title: text.refinedTasks, hint: text.refinedTasksHint, empty: text.noReadyTasks,
       items: pendingItems.filter((item) => item.kind === "task" && !refiningIds.has(`task:${item.id}`)) },
   ];
-  const renderCard = (item: WorkbenchItem) => (
+  const renderCard = (item: WorkbenchItem): React.ReactNode => (
     <article
       className={`canonical-card${(item.kind === "task" && detail === item.id) || (refining?.kind === item.kind && refining.id === item.id) ? " selected" : ""}`}
       key={`${item.kind}-${item.id}`}
@@ -209,6 +211,7 @@ export function WorkbenchView({ active }: { active: boolean }) {
       <h3>{item.kind === "task" && item.state === "in_progress" ? (
         <button className="active-task-title" data-control="task-shortcut-open" data-entity-id={item.id} onClick={(event) => selectDetail(item.id, event.currentTarget)}>{itemTitle(item)}</button>
       ) : itemTitle(item)}</h3>
+      {item.kind === "task" && item.parentTaskId && <small>{text.subtask}</small>}
       <p className="workbench-card-category">{categoryLabels.get(`${item.kind}:${item.id}`)}</p>
         {item.kind === "task" && (
         <p>
@@ -270,6 +273,11 @@ export function WorkbenchView({ active }: { active: boolean }) {
           </>
         )}
       </footer>
+      {item.kind === "task" && allTasks.some(child => child.parentTaskId === item.id) && <details className="subtask-tree" data-control="task-subtasks-expand">
+        <summary>{text.subtasks} · {allTasks.filter(child => child.parentTaskId === item.id).length}</summary>
+        <p>{text.subtaskHint}</p>
+        <div className="subtask-children">{allTasks.filter(child => child.parentTaskId === item.id).map(child => renderCard(child))}</div>
+      </details>}
     </article>
   );
   return (
@@ -277,6 +285,7 @@ export function WorkbenchView({ active }: { active: boolean }) {
       id="workbench"
       className={`view task-workbench${active ? " active" : ""}`}
       data-task-workbench="true"
+      data-focus-active={focusActive}
       data-refining-kind={refining?.kind}
       aria-busy={!snapshot && !error}
     >
@@ -292,6 +301,7 @@ export function WorkbenchView({ active }: { active: boolean }) {
         <section className="workbench-active shortcut-region" aria-labelledby="workbench-active-title">
           <header className="workbench-active-header">
             <div><small>{text.resume}</small><h2 id="workbench-active-title">{text.active}</h2></div>
+            <button type="button" data-control="workbench-focus-active" aria-pressed={focusActive} onClick={() => setFocusActive(value => !value)}>{focusActive ? text.showAllWork : text.focus}</button>
             <span className="workbench-count">{activeTasks.length}</span>
           </header>
           {activeTasks.length ? <div className="workbench-active-cards">{activeTasks.map(renderCard)}</div> : <p className="region-empty">{text.noActive}</p>}
@@ -397,6 +407,7 @@ export function WorkbenchView({ active }: { active: boolean }) {
             const leave = () => { setRefining(undefined); setDetail(undefined); restoreDetailFocus(); };
             if (refinementRef.current) refinementRef.current.requestLeave(leave); else leave();
           }}
+          onOpenTask={(id) => selectDetail(id)}
           onRefine={() => openRefinement({ kind: "task", id: detail })}
           refreshKey={detailRefresh}
           queueKnowledgeDraft={queueKnowledgeDraft?.taskId === detail ? queueKnowledgeDraft : undefined}

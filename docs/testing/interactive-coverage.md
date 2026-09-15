@@ -147,3 +147,11 @@ The automated source gate discovers shipping React control sources with a Vite g
 - Conditional system UI: F50–F59 for confirmations, transition forms, queue, notifications, onboarding, Vault setup and migration recovery fixtures.
 - Legacy runtime: F60–F68 with explicit reachability assertions from the final Task artifact; drive reachable surfaces and record unreachable old-board triggers as removal/dead-code decisions, not interaction passes.
 - Final artifact gate: build once, record hash/signing time, run the complete manifest against that exact path with isolated state, then compare the launched executable path and code hash before accepting results.
+
+## Task refinement and Subtask lifecycle verification
+
+The refinement identity, status tabs, Focus toggle and indented hierarchy have React unit coverage.
+Native regression coverage checks cumulative parent Knowledge, completion rollbacks/replay, ancestor
+reopening, automatic publication retries and external-file preservation. New hierarchy controls are
+in the source inventory. Packaged builds, desktop E2E and rendered visual checks for this change
+were intentionally deferred at the user's request; prior packaged results do not validate these controls.

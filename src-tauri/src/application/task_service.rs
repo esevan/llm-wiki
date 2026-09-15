@@ -257,7 +257,11 @@ impl TaskApplicationService {
             None => req(input, "to")?,
         };
         let state = validate_state_transition(&from, requested_state)?;
-        tx.execute("UPDATE tasks SET state=?,started_at=CASE WHEN ?='in_progress' AND started_at IS NULL THEN ? ELSE started_at END,reopened_at=CASE WHEN ?='in_progress' AND ?='completed' THEN ? ELSE reopened_at END WHERE id=?", params![state, state, at, state, from, at, id]).map_err(|e| e.to_string())?;
+        if state == "completed" { return self.complete_tx(tx,id,input,at); }
+        if from == "completed" && state == "in_progress" {
+            crate::native::task_hierarchy::reopen_ancestors(tx,id,req(input,"operationId")?,at)?;
+        }
+        tx.execute("UPDATE tasks SET state=?,completed_at=CASE WHEN ?='in_progress' THEN NULL ELSE completed_at END,started_at=CASE WHEN ?='in_progress' AND started_at IS NULL THEN ? ELSE started_at END,reopened_at=CASE WHEN ?='in_progress' AND ?='completed' THEN ? ELSE reopened_at END WHERE id=?", params![state, state, state, at, state, from, at, id]).map_err(|e| e.to_string())?;
         self.record_task_activity(tx, id, "transition", input, at)?;
         Ok(json!({"id":id,"taskRevision":revision,"state":state}))
     }
@@ -467,6 +471,7 @@ impl TaskApplicationService {
         if state != "in_progress" {
             return Err("transition_invalid: task must be in_progress before completion".into());
         }
+        crate::native::task_hierarchy::ensure_children_completed(tx,task)?;
         let id = task_repository::new_id();
         tx.execute("INSERT INTO task_completions(id,task_id,task_revision,evidence,report,operation_id,created_at) VALUES(?,?,?,?,?,?,?)", params![id, task, revision, req(input, "evidence")?, input.get("report").and_then(Value::as_str).unwrap_or(""), req(input, "operationId")?, at]).map_err(|e| e.to_string())?;
         tx.execute(
@@ -475,6 +480,7 @@ impl TaskApplicationService {
         )
         .map_err(|e| e.to_string())?;
         self.record_task_activity(tx, task, "completed", input, at)?;
+        crate::native::task_hierarchy::child_completed(tx,task,&id,req(input,"operationId")?,at)?;
         Ok(
             json!({"id":id,"taskId":task,"taskRevision":revision,"state":"completed","createdAt":at}),
         )
@@ -677,6 +683,8 @@ impl TaskApplicationService {
         let deleted: bool = c.query_row("SELECT EXISTS(SELECT 1 FROM deleted_entities WHERE entity_type='tasks' AND entity_id=?)", [id], |r| r.get(0)).map_err(|e| e.to_string())?;
         if deleted { return Err("Task not found".into()); }
         let mut x=c.query_row("SELECT t.current_revision,t.state,r.title,r.detail,r.outcome,r.scope,r.non_goals,r.validation_criteria,t.category,t.created_at,t.last_user_activity_at FROM tasks t JOIN task_revisions r ON r.task_id=t.id AND r.revision=t.current_revision WHERE t.id=?",[id],|r|Ok(json!({"id":id,"taskRevision":r.get::<_,i64>(0)?,"state":r.get::<_,String>(1)?,"title":r.get::<_,String>(2)?,"detail":r.get::<_,String>(3)?,"outcome":r.get::<_,String>(4)?,"scope":r.get::<_,String>(5)?,"nonGoals":r.get::<_,String>(6)?,"validationCriteria":r.get::<_,String>(7)?,"category":r.get::<_,String>(8)?,"createdAt":r.get::<_,String>(9)?,"lastUserActivityAt":r.get::<_,String>(10)?}))).optional().map_err(|x|x.to_string())?.ok_or("Task not found")?;
+        for (key,value) in crate::native::task_hierarchy::metadata(&c,id)?.as_object().ok_or("invalid metadata")? { x[key] = value.clone(); }
+        x["hierarchy"] = crate::native::task_hierarchy::context(&c,id)?;
         let mut work_log = self.work_log(id)?["entries"].clone();
         if let Some(entries) = work_log.as_array_mut() {
             for entry in entries {
@@ -708,9 +716,11 @@ impl TaskApplicationService {
         object.insert("problemLinks".into(), json!(problem_links));
         object.insert("relationships".into(), json!(relationships));
         object.insert("readinessEntries".into(), readiness["entries"].clone());
-        if let Some(completion) = completion {
-            object.insert("completion".into(), completion);
+        if object.get("state").and_then(Value::as_str) == Some("completed") {
+            if let Some(completion) = completion { object.insert("completion".into(), completion); }
         }
+        let auto_error: Option<String> = c.query_row("SELECT error FROM task_auto_publications WHERE task_id=? AND state='pending' AND error!='' ORDER BY revision LIMIT 1",[id],|r|r.get(0)).optional().map_err(|e|e.to_string())?;
+        object.insert("autoPublicationError".into(),json!(auto_error));
         if let Some(publication) = publication {
             object.insert("publication".into(), publication);
         }
@@ -720,14 +730,16 @@ impl TaskApplicationService {
         let c = crate::native::database::open(self.repo.path())?;
         let exists: bool = c.query_row("SELECT EXISTS(SELECT 1 FROM tasks WHERE id=? AND NOT EXISTS(SELECT 1 FROM deleted_entities d WHERE d.entity_type='tasks' AND d.entity_id=tasks.id))", [id], |r| r.get(0)).map_err(|e| e.to_string())?;
         if !exists { return Err("Task not found".into()); }
+        let owned: bool = c.query_row("SELECT EXISTS(SELECT 1 FROM task_subtasks WHERE child_task_id=? OR parent_task_id=?)",params![id,id],|r|r.get(0)).map_err(|e|e.to_string())?;
+        if owned { return Err("Task hierarchy must be retained; complete or reopen its Subtasks".into()); }
         c.execute("INSERT OR REPLACE INTO deleted_entities(entity_type,entity_id) VALUES ('tasks',?)", [id]).map_err(|e| e.to_string())?;
         Ok(Value::Null)
     }
 
     fn workbench(&self) -> Result<Value, String> {
         let c = crate::native::database::open(self.repo.path())?;
-        let mut s=c.prepare("SELECT t.id,t.current_revision,t.state,r.title,t.category,t.last_user_activity_at FROM tasks t JOIN task_revisions r ON r.task_id=t.id AND r.revision=t.current_revision WHERE t.archived_at IS NULL AND NOT EXISTS(SELECT 1 FROM deleted_entities d WHERE d.entity_type='tasks' AND d.entity_id=t.id) ORDER BY t.last_user_activity_at DESC").map_err(|x|x.to_string())?;
-        let mut rows=s.query_map([],|r|Ok(json!({"kind":"task","id":r.get::<_,String>(0)?,"taskRevision":r.get::<_,i64>(1)?,"state":r.get::<_,String>(2)?,"title":r.get::<_,String>(3)?,"category":r.get::<_,String>(4)?,"lastUserActivityAt":r.get::<_,String>(5)?}))).map_err(|x|x.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|x|x.to_string())?;
+        let mut s=c.prepare("SELECT t.id,t.current_revision,t.state,r.title,t.category,t.last_user_activity_at,f.revision,h.parent_task_id FROM tasks t JOIN task_revisions r ON r.task_id=t.id AND r.revision=t.current_revision LEFT JOIN task_refinements f ON f.task_id=t.id LEFT JOIN task_subtasks h ON h.child_task_id=t.id WHERE t.archived_at IS NULL AND NOT EXISTS(SELECT 1 FROM deleted_entities d WHERE d.entity_type='tasks' AND d.entity_id=t.id) ORDER BY t.last_user_activity_at DESC").map_err(|x|x.to_string())?;
+        let mut rows=s.query_map([],|r|Ok(json!({"kind":"task","id":r.get::<_,String>(0)?,"taskRevision":r.get::<_,i64>(1)?,"state":r.get::<_,String>(2)?,"title":r.get::<_,String>(3)?,"category":r.get::<_,String>(4)?,"lastUserActivityAt":r.get::<_,String>(5)?,"refinedRevision":r.get::<_,Option<i64>>(6)?,"parentTaskId":r.get::<_,Option<String>>(7)?}))).map_err(|x|x.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|x|x.to_string())?;
         let mut captures=c.prepare("SELECT c.id,c.text,c.created_at,COALESCE(o.category,'General') FROM captures c LEFT JOIN workbench_category_overrides o ON o.entity_type='captures' AND o.entity_id=c.id WHERE c.source_mode='capture' AND NOT EXISTS(SELECT 1 FROM deleted_entities d WHERE d.entity_type='captures' AND d.entity_id=c.id) ORDER BY c.last_user_activity_at DESC").map_err(|x|x.to_string())?;
         rows.extend(captures.query_map([],|r|Ok(json!({"kind":"capture","id":r.get::<_,String>(0)?,"text":r.get::<_,String>(1)?,"lastUserActivityAt":r.get::<_,String>(2)?,"category":r.get::<_,String>(3)?}))).map_err(|x|x.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|x|x.to_string())?);
         let mut legacy_refinements=c.prepare("SELECT i.id,i.problem_id,i.problem_revision,r.statement,i.source_kind,i.created_at,COALESCE(o.category,'General') FROM refinement_items i JOIN problem_revisions r ON r.problem_id=i.problem_id AND r.revision=i.problem_revision LEFT JOIN workbench_category_overrides o ON o.entity_type='problems' AND o.entity_id=i.problem_id WHERE NOT EXISTS(SELECT 1 FROM deleted_entities d WHERE d.entity_type='problems' AND d.entity_id=i.problem_id) ORDER BY i.created_at DESC").map_err(|x|x.to_string())?;
@@ -740,7 +752,6 @@ impl TaskApplicationService {
         let active = rows
             .iter()
             .filter(|x| x["state"] == "in_progress")
-            .take(3)
             .map(|x| json!({"kind":"task","id":x["id"],"taskRevision":x["taskRevision"]}))
             .collect::<Vec<_>>();
         let active_ids = active

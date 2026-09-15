@@ -30,7 +30,7 @@ fn id() -> String {
     Uuid::new_v4().to_string()
 }
 
-fn digest(value: &str) -> String {
+pub(crate) fn digest(value: &str) -> String {
     format!("{:x}", Sha256::digest(value.as_bytes()))
 }
 
@@ -344,6 +344,10 @@ fn session_value(connection: &rusqlite::Connection, session_id: &str) -> Result<
         .optional()
         .map_err(|error| error.to_string())?
         .ok_or("Refinement session not found")?;
+    if value["taskId"].is_null() {
+        let applied: Option<String> = connection.query_row("SELECT json_extract(result_json,'$.id') FROM refinement_proposal_decisions WHERE session_id=? AND decision!='reject' AND json_extract(result_json,'$.taskRevision') IS NOT NULL ORDER BY created_at DESC,rowid DESC LIMIT 1", [session_id], |r| r.get(0)).optional().map_err(|e| e.to_string())?;
+        if let Some(task_id) = applied { value["taskId"] = json!(task_id); }
+    }
     let mut statement = connection
         .prepare("SELECT id,role,content,created_at FROM refinement_messages WHERE session_id=? ORDER BY created_at,rowid")
         .map_err(|error| error.to_string())?;
@@ -410,6 +414,7 @@ fn refinement_context(
             .optional()
             .map_err(|error| error.to_string())?;
         if let Some(task) = task {
+            session["hierarchyContext"] = super::task_hierarchy::context(connection, task_id)?;
             session["taskSnapshot"] = task;
         }
     }
@@ -419,7 +424,7 @@ fn refinement_context(
 fn refinement_prompt(connection: &Connection, session_id: &str) -> Result<String, String> {
     let session = refinement_context(connection, session_id)?;
     Ok(format!(
-        "Return JSON only as {{\"proposals\":[{{\"id\":string,\"type\":\"task_patch|new_task|problem_snapshot|task_problem_link\",\"payload\":object}}]}}. For new_task, include every available Task field in payload: title, detail, outcome, scope, nonGoals, and validationCriteria. For task_patch, put only the changed Task values in payload.patch using those field names and include the exact taskSnapshot.taskRevision as expectedTaskRevision; the UI combines the patch with taskSnapshot for a complete review preview. Use detail for the full Task description, never an unlabelled summary. For problem_snapshot include statement, detail, category, and note when available; for task_problem_link include problemId, problemRevision, relationship, and note when available. Propose durable changes but do not apply them. Use only the supplied local session. A Capture may already contain a proposed solution: preserve it as the starting Task draft and ask only for details that are actually missing; do not restart broad problem or solution discovery.\n\n{}",
+        "Return JSON only as {{\"proposals\":[{{\"id\":string,\"type\":\"task_patch|new_task|subtask|problem_snapshot|task_problem_link\",\"payload\":object}}]}}. When taskSnapshot exists, refine that SAME Task with task_patch by default. Never create a replacement or duplicate Task. Only propose subtask when independently completable work genuinely needs its own boundary; include boundaryReason, parentTaskId=taskSnapshot.id, expectedTaskRevision, and all Task fields. Respect hierarchyContext: read parent, siblings and children scope/nonGoals; do not overlap sibling work or extend beyond the parent boundary. If boundaries are unclear ask before proposing a split. new_task is only for a Capture without a Task. For new_task, include every available Task field in payload: title, detail, outcome, scope, nonGoals, and validationCriteria. For task_patch, put only the changed Task values in payload.patch using those field names and include the exact taskSnapshot.taskRevision as expectedTaskRevision; the UI combines the patch with taskSnapshot for a complete review preview. Use detail for the full Task description, never an unlabelled summary. For problem_snapshot include statement, detail, category, and note when available; for task_problem_link include problemId, problemRevision, relationship, and note when available. Propose durable changes but do not apply them. Use only the supplied local session. A Capture may already contain a proposed solution: preserve it as the starting Task draft and ask only for details that are actually missing; do not restart broad problem or solution discovery.\n\n{}",
         session
     ))
 }
@@ -524,7 +529,7 @@ async fn refinement_message(
     )
     .map_err(|error| error.to_string())?;
     tx.execute(
-        "UPDATE refinement_sessions SET input_draft='',last_user_activity_at=?,updated_at=? WHERE id=?",
+        "UPDATE refinement_sessions SET state='active',input_draft='',last_user_activity_at=?,updated_at=? WHERE id=?",
         params![timestamp, timestamp, session_id],
     )
     .map_err(|error| error.to_string())?;
@@ -602,7 +607,10 @@ async fn run_refinement_response(
             return Ok(());
         }
         tx.execute("INSERT INTO refinement_messages(id,session_id,role,content,created_at) VALUES(?,?,'assistant',?,?)", params![id(),session_id,assistant,now()]).map_err(|error| error.to_string())?;
-        let preview_input = json!({"sessionId":session_id,"responseJobId":job_id,"autoReview":auto_review,"prompt":refinement_prompt(&tx,session_id)?,"modelTask":task_kind});
+        let preview_context = refinement_context(&tx,session_id)?;
+        let task_binding = preview_context["taskSnapshot"].clone();
+        let family_hash = digest(&preview_context["hierarchyContext"].to_string());
+        let preview_input = json!({"taskBinding":task_binding,"hierarchyContextHash":family_hash,"sessionId":session_id,"responseJobId":job_id,"autoReview":auto_review,"prompt":refinement_prompt(&tx,session_id)?,"modelTask":task_kind});
         tx.execute("INSERT INTO ai_jobs_v2(id,task_kind,entity_type,entity_id,status,input_json,execution_mode,idempotency_key,result_interface,progress_total,available_at,created_at) VALUES(?,'refinement_preview','refinement_sessions',?,'queued',?,'native',?,'inline_preview',1,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)", params![preview_id,session_id,preview_input.to_string(),format!("refinement-preview:{job_id}")]).map_err(|error| error.to_string())?;
         tx.execute("UPDATE task_assistance_jobs SET status='completed',result_json=?,finished_at=? WHERE id=?", params![json!({"message":assistant,"previewJobId":preview_id}).to_string(),now(),job_id]).map_err(|error| error.to_string())?;
         tx.commit().map_err(|error| error.to_string())?;
@@ -629,11 +637,15 @@ pub(crate) async fn prepare_refinement_preview(
         None,
     )
     .await?;
-    let proposals = response
+    let mut proposals = response
         .get("proposals")
         .and_then(Value::as_array)
-        .ok_or("Preview response must contain proposals")?;
-    validate_proposals(proposals)?;
+        .ok_or("Preview response must contain proposals")?.clone();
+    if let (Some(task),Some(revision)) = (input["taskBinding"]["id"].as_str(),input["taskBinding"]["taskRevision"].as_i64()) {
+        let hash = input["hierarchyContextHash"].as_str().map(str::to_owned);
+        for proposal in &mut proposals { normalize_task_proposal(proposal,task,revision,hash.as_ref()); }
+    }
+    validate_proposals(&proposals)?;
     Ok(json!({"proposals":proposals}))
 }
 
@@ -753,13 +765,23 @@ fn update_refinement_job_status(
     tx.commit().map_err(|error| error.to_string())
 }
 
+fn normalize_task_proposal(proposal: &mut Value, task: &str, revision: i64, hash: Option<&String>) {
+    if proposal["type"] == "new_task" { proposal["type"] = json!("task_patch"); }
+    if proposal["type"] == "task_patch" || proposal["type"] == "subtask" {
+        if !proposal["payload"].is_object() { return; }
+        if proposal["payload"].get("expectedTaskRevision").is_none() { proposal["payload"]["expectedTaskRevision"] = json!(revision); }
+        if let Some(hash) = hash { proposal["payload"]["hierarchyContextHash"] = json!(hash); }
+        if proposal["type"] == "subtask" { proposal["payload"]["parentTaskId"] = json!(task); }
+    }
+}
+
 fn validate_proposals(proposals: &[Value]) -> Result<(), String> {
     for proposal in proposals {
         required(proposal, "id")?;
         let kind = required(proposal, "type")?;
         if !matches!(
             kind,
-            "task_patch" | "new_task" | "problem_snapshot" | "task_problem_link"
+            "task_patch" | "new_task" | "subtask" | "problem_snapshot" | "task_problem_link"
         ) {
             return Err(format!("Unsupported refinement proposal type: {kind}"));
         }
@@ -801,6 +823,11 @@ fn refinement_proposals(db_path: &Path, session_id: &str) -> Result<Value, Strin
             .iter()
             .any(|id| proposal.get("id").and_then(Value::as_str) == Some(id))
     });
+    let effective = session_value(&connection,session_id)?;
+    if let Some(task) = effective["taskId"].as_str() {
+        let revision = connection.query_row("SELECT current_revision FROM tasks WHERE id=?",[task],|r| r.get::<_,i64>(0)).map_err(|e|e.to_string())?;
+        for proposal in &mut proposals { normalize_task_proposal(proposal,task,revision,None); }
+    }
     for proposal in &mut proposals {
         proposal["draftRevision"] = json!(revision);
     }
@@ -858,7 +885,7 @@ pub(crate) fn refinement_decision_tx(tx: &Transaction<'_>, input: &Value) -> Res
             return Err("draft_conflict: preview belongs to an earlier conversation turn".into());
         }
     }
-    let proposal = draft
+    let mut proposal = draft
         .get("proposals")
         .and_then(Value::as_array)
         .into_iter()
@@ -866,14 +893,31 @@ pub(crate) fn refinement_decision_tx(tx: &Transaction<'_>, input: &Value) -> Res
         .find(|item| item.get("id").and_then(Value::as_str) == Some(proposal_id))
         .cloned()
         .ok_or("Refinement proposal not found")?;
+    let legacy_unbound_revision = proposal["payload"].get("expectedTaskRevision").is_none();
+    let effective = session_value(tx,session_id)?;
+    let session_task_id = effective["taskId"].as_str().map(str::to_owned).or(session_task_id);
+    if let Some(task) = session_task_id.as_deref() {
+        let revision = tx.query_row("SELECT current_revision FROM tasks WHERE id=?",[task],|r|r.get::<_,i64>(0)).map_err(|e|e.to_string())?;
+        normalize_task_proposal(&mut proposal,task,revision,None);
+    }
     let timestamp = now();
     let result = if decision == "reject" {
         json!({"proposalId":proposal_id,"decision":"reject"})
     } else {
-        let payload = input
+        let mut payload = input
             .get("editedPayload")
             .cloned()
             .unwrap_or_else(|| proposal["payload"].clone());
+        // Edits may change content, never the server-bound task/family revision.
+        for key in ["expectedTaskRevision", "hierarchyContextHash", "parentTaskId"] {
+            if key == "expectedTaskRevision" && legacy_unbound_revision && payload.get(key).is_some() { continue; }
+            if let Some(value) = proposal["payload"].get(key) { payload[key] = value.clone(); }
+        }
+        if let Some(task) = session_task_id.as_deref() {
+            if let Some(hash) = payload["hierarchyContextHash"].as_str() {
+                if hash != super::task_hierarchy::context_hash(tx,task)? { return Err("head_conflict: parent or sibling Task changed; refine again".into()); }
+            }
+        }
         apply_proposal_tx(
             tx,
             proposal["type"].as_str().unwrap_or(""),
@@ -896,7 +940,7 @@ pub(crate) fn refinement_decision_tx(tx: &Transaction<'_>, input: &Value) -> Res
                 operation_id,
                 &timestamp,
             )?,
-            "new_task" | "task_patch" => record_activity_tx(
+            "new_task" | "task_patch" | "subtask" => record_activity_tx(
                 tx,
                 "task",
                 result["id"]
@@ -918,6 +962,10 @@ pub(crate) fn refinement_decision_tx(tx: &Transaction<'_>, input: &Value) -> Res
             )?,
             _ => {}
         }
+        if let (Some(task),Some(revision)) = (result["id"].as_str(),result["taskRevision"].as_i64()) {
+            super::task_hierarchy::mark_refined(tx,task,revision)?;
+            tx.execute("UPDATE refinement_sessions SET state='completed' WHERE id=?",[session_id]).map_err(|e|e.to_string())?;
+        }
         sync_linked_sessions_tx(tx, operation_id, "task.refinement", None, &timestamp)?;
     }
     tx.execute(
@@ -937,7 +985,24 @@ fn apply_proposal_tx(
     timestamp: &str,
 ) -> Result<Value, String> {
     match kind {
-        "new_task" => create_task_tx(tx, payload, capture_id, None, timestamp),
+        "new_task" => {
+            if let Some(task) = session_task_id { return revise_task_tx(tx,task,payload,timestamp); }
+            create_task_tx(tx, payload, capture_id, None, timestamp)
+        },
+        "subtask" => {
+            let parent = session_task_id.ok_or("subtask requires a Task session")?;
+            if payload["parentTaskId"].as_str() != Some(parent) { return Err("invalid_input: Subtask parent must be the current Task".into()); }
+            let revision = tx.query_row("SELECT current_revision FROM tasks WHERE id=?",[parent],|r|r.get::<_,i64>(0)).map_err(|e|e.to_string())?;
+            if payload["expectedTaskRevision"].as_i64() != Some(revision) { return Err("head_conflict: parent Task changed".into()); }
+            let reason = required(payload,"boundaryReason")?;
+            for field in ["scope","nonGoals","validationCriteria"] { required(payload,field)?; }
+            let child = create_task_tx(tx,payload,None,None,timestamp)?;
+            let child_id = required(&child,"id")?;
+            tx.execute("INSERT INTO task_subtasks(child_task_id,parent_task_id,boundary_reason,created_at) VALUES(?,?,?,?)",params![child_id,parent,reason,timestamp]).map_err(|e|e.to_string())?;
+            tx.execute("UPDATE tasks SET category=(SELECT category FROM tasks WHERE id=?) WHERE id=?",params![parent,child_id]).map_err(|e|e.to_string())?;
+            super::task_hierarchy::reopen_ancestors(tx,child_id,child_id,timestamp)?;
+            Ok(child)
+        },
         "problem_snapshot" => create_problem_revision_tx(
             tx,
             payload,
@@ -2208,7 +2273,7 @@ async fn enhance_knowledge(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn insert_knowledge_draft_tx(
+pub(crate) fn insert_knowledge_draft_tx(
     tx: &Transaction<'_>,
     task_id: &str,
     task_revision: i64,
@@ -2391,9 +2456,7 @@ fn knowledge_publish(db_path: &Path, vault_root: &Path, input: &Value) -> Result
         .ok_or("draftRevision is required")?;
     let expected = required(input, "expectedContentHash")?;
     let mut connection = database::open(db_path)?;
-    let tx = connection
-        .transaction()
-        .map_err(|error| error.to_string())?;
+    let tx = database::immediate_transaction(&mut connection)?;
     if let Some(result) = operation_replay(&tx, input)? {
         return Ok(result);
     }
@@ -2412,6 +2475,12 @@ fn knowledge_publish(db_path: &Path, vault_root: &Path, input: &Value) -> Result
     if state == "withdrawn" {
         return Err("Withdrawn Knowledge requires a new draft".into());
     }
+    // A queued aggregate may have been saved before its preceding revision published.
+    let previous: Option<(String,String)> = if lineage["source"]["kind"] == "subtask_aggregate" {
+        tx.query_row("SELECT path,published_hash FROM task_knowledge_drafts WHERE task_id=? AND revision<? AND state='published' ORDER BY revision DESC LIMIT 1",params![task_id,revision],|r|Ok((r.get(0)?,r.get(1)?))).optional().map_err(|e|e.to_string())?
+    } else { None };
+    let path = previous.as_ref().map(|p|p.0.clone()).or(path);
+    let published_hash = previous.map(|p|p.1).or(published_hash);
     let relative =
         path.unwrap_or_else(|| format!("Knowledge/Tasks/{}-{}.md", task_id, slug(&title)));
     let document=format!("---\nllm_wiki_task_id: \"{task_id}\"\nllm_wiki_task_revision: {}\nllm_wiki_draft_revision: {revision}\nsource_hash: \"{source_hash}\"\nbody_hash: \"{hash}\"\n---\n\n{}",tx.query_row("SELECT task_revision FROM task_knowledge_drafts WHERE task_id=? AND revision=?",params![task_id,revision],|row|row.get::<_,i64>(0)).map_err(|error|error.to_string())?,body);
@@ -2423,7 +2492,7 @@ fn knowledge_publish(db_path: &Path, vault_root: &Path, input: &Value) -> Result
         // committed the durable publication state. The accepted review job can
         // safely recover only that byte-for-byte document; all other files stay
         // guarded as external changes.
-        let recoverable_exact_write = published_hash.is_none() && digest(&current) == document_hash;
+        let recoverable_exact_write = digest(&current) == document_hash;
         if published_hash.as_deref() != Some(&digest(&current)) && !recoverable_exact_write {
             return Err("source_changed: Knowledge file changed outside LLM Wiki".into());
         }
@@ -2531,6 +2600,44 @@ fn slug(title: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn existing_task_refinement_updates_identity_and_explicit_subtasks_bind_family() {
+        let (_root,db,_vault,_settings) = fixture();
+        let repo = SqliteTaskRepository::new(&db);
+        let parent = repo.transaction(|tx| create_task_tx(tx,&json!({"title":"Parent","scope":"Meeting agenda"}),None,None,&now())).unwrap();
+        let parent_id = parent["id"].as_str().unwrap();
+        let session = refinement_open(&db,&json!({"operationId":"open-parent","taskId":parent_id})).unwrap();
+        let session_id = session["id"].as_str().unwrap();
+        let save = |revision: i64, proposal: Value| {
+            let c = database::open(&db).unwrap();
+            let payload = json!({"proposals":[proposal]});
+            c.execute("INSERT INTO refinement_drafts(session_id,revision,material_hash,payload_json) VALUES(?,?,?,?)",params![session_id,revision,digest(&payload.to_string()),payload.to_string()]).unwrap();
+            c.execute("UPDATE refinement_sessions SET current_draft_revision=? WHERE id=?",params![revision,session_id]).unwrap();
+        };
+        save(1,json!({"id":"patch","type":"new_task","payload":{"title":"Refined agenda","expectedTaskRevision":1}}));
+        assert_eq!(refinement_proposals(&db,session_id).unwrap()[0]["type"],"task_patch");
+        let input = json!({"operationId":"apply-parent","sessionId":session_id,"proposalId":"patch","draftRevision":1,"decision":"accept"});
+        let refined = refinement_decision(&db,&input).unwrap();
+        assert_eq!(refined["id"],parent_id);
+        assert_eq!(refined["taskRevision"],2);
+        assert_eq!(refinement_decision(&db,&input).unwrap(),refined);
+        let c = database::open(&db).unwrap();
+        assert_eq!(c.query_row("SELECT COUNT(*) FROM tasks",[],|r|r.get::<_,i64>(0)).unwrap(),1);
+        assert_eq!(session_value(&c,session_id).unwrap()["state"],"completed");
+        let hash = super::super::task_hierarchy::context_hash(&c,parent_id).unwrap();
+        save(2,json!({"id":"child","type":"subtask","payload":{"title":"Collect agenda","scope":"Collect topics","nonGoals":"Prioritizing topics","validationCriteria":"Topic list exists","boundaryReason":"Independent collection result","expectedTaskRevision":2,"parentTaskId":parent_id,"hierarchyContextHash":hash}}));
+        let child = refinement_decision(&db,&json!({"operationId":"apply-child","sessionId":session_id,"proposalId":"child","draftRevision":2,"decision":"accept"})).unwrap();
+        let child_id = child["id"].as_str().unwrap();
+        assert_eq!(super::super::task_hierarchy::parent(&c,child_id).unwrap().as_deref(),Some(parent_id));
+        let prompt = refinement_prompt(&c,session_id).unwrap();
+        assert!(prompt.contains("Collect agenda") && prompt.contains("Prioritizing topics"));
+        save(3,json!({"id":"stale","type":"task_patch","payload":{"patch":{"scope":"New scope"},"expectedTaskRevision":2,"hierarchyContextHash":hash}}));
+        assert!(refinement_decision(&db,&json!({"operationId":"stale-family","sessionId":session_id,"proposalId":"stale","draftRevision":3,"decision":"accept"})).unwrap_err().contains("parent or sibling"));
+        let child_session = refinement_open(&db,&json!({"operationId":"open-child","taskId":child_id})).unwrap();
+        let prompt = refinement_prompt(&c,child_session["id"].as_str().unwrap()).unwrap();
+        assert!(prompt.contains("Refined agenda") && prompt.contains("Meeting agenda"));
+    }
 
     fn fixture() -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf) {
         let root = tempfile::tempdir().unwrap();

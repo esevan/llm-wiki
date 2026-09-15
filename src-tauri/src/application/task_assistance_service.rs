@@ -58,6 +58,10 @@ pub(crate) struct TaskAssistanceApplicationService {
 }
 
 impl TaskAssistanceApplicationService {
+    pub(crate) fn publish_subtask_knowledge(&self) -> Result<(), String> {
+        crate::native::task_hierarchy::publish_pending(&self.db_path,&self.vault_root)
+    }
+
     pub(crate) fn new(
         db_path: PathBuf,
         settings_path: PathBuf,

@@ -2,6 +2,9 @@
 
 [English](conflict-gated-workflow.md) | **한국어**
 
+
+Workbench는 진행 중인 모든 Task를 Capture 위에 표시합니다. **진행 중인 작업에 Focus**로 다른 영역을 숨길 수 있습니다. 정제 결과는 **Refined - Revision N**으로 표시하며, 정제 적용과 실행 상태를 구분합니다. 명시적인 Subtask는 부모 아래에 들여쓰기와 펼치기로 표시합니다. 경계 맥락과 부모 자동 완료·Knowledge 발행은 [Refinement와 Subtask](refinement-preview-status.ko.md)를 참고하세요.
+
 ## Capture와 작업 정제
 
 생각·문제·이미 찾은 해결책을 Capture에 기록하며, 정해진 단계를 반드시 거칠 필요는 없습니다.

@@ -772,8 +772,9 @@ impl WorkTrackingApplicationService {
                 }
             }
         }
-        self.store
-            .consume_challenge(connection_id, state, input, decision)
+        let result = self.store.consume_challenge(connection_id, state, input, decision)?;
+        let _ = self.assistance.publish_subtask_knowledge();
+        Ok(result)
     }
 
     pub fn save_knowledge_draft(

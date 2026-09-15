@@ -80,12 +80,16 @@ export function RefinementPanel({
   );
   const [proposals, setProposals] = useState<RefinementProposal[]>([]);
   const [taskBaseline, setTaskBaseline] = useState<TaskAggregate | undefined>();
+  const [appliedTask, setAppliedTask] = useState<TaskAggregate>();
+  const currentTask = appliedTask ?? taskBaseline;
   const [draft, setDraft] = useState("");
   const messageKey = `${kind}:${subjectId}`;
   const [message, setMessage] = useState(messageDrafts?.get(messageKey) ?? "");
   useEffect(() => { messageDrafts?.set(messageKey, message); }, [messageDrafts, messageKey, message]);
   const [editing, setEditing] = useState<string>();
   const activeTab = "conversation";
+  const [resultTab, setResultTab] = useState<"preview" | "status">("preview");
+  const [statusBusy, setStatusBusy] = useState(false);
   const [edits, setEdits] = useState<Record<string, Record<string, unknown>>>({});
   const [deciding, setDeciding] = useState<string>();
   const [notice, setNotice] = useState("");
@@ -162,11 +166,12 @@ export function RefinementPanel({
       knownMessageIds.current = new Set((next.messages ?? []).map(item => item.id));
       setRevealingMessageIds(new Set());
       setSession(next);
+      if (next.state === "completed" && next.taskId) setResultTab("status");
       setDraft(nextDraft);
-      if (kind === "task" && next.taskId === subjectId) {
-        const baseline = await taskClient.task(subjectId).catch(() => undefined);
+      if (next.taskId) {
+        const baseline = await taskClient.task(next.taskId).catch(() => undefined);
         if (sequence !== loadSequence.current) return;
-        if (baseline?.id === subjectId) setTaskBaseline(baseline);
+        if (baseline?.id === next.taskId) setTaskBaseline(baseline);
       }
       requestAnimationFrame(() => {
         if (scrollRef.current)
@@ -429,12 +434,12 @@ export function RefinementPanel({
     setError("");
     try {
       const normalizedPayload = canonicalPayload(proposal);
-      await taskClient.proposalDecision(
+      const applied = await taskClient.proposalDecision(
         session.id,
         proposal.id,
         proposal.draftRevision,
         decision,
-        decision === "accept" && (edits[proposal.id] || normalizedPayload !== proposal.payload)
+        decision === "accept"
           ? (edits[proposal.id] ?? normalizedPayload)
           : undefined,
       );
@@ -443,11 +448,16 @@ export function RefinementPanel({
       setNotice(decision === "accept" ? text.previewApplied : text.previewRejected);
       if (decision === "accept") {
         onApplied?.();
-        if (kind === "task") {
+        const result = (applied ?? {}) as { id?: string; taskRevision?: number };
+        const taskId = result.taskRevision ? result.id : taskBaseline?.id;
+        if (taskId) {
           const sequence = loadSequence.current;
-          const baseline = await taskClient.task(subjectId).catch(() => undefined);
-          if (sequence === loadSequence.current)
-            setTaskBaseline(baseline?.id === subjectId ? baseline : undefined);
+          const baseline = await taskClient.task(taskId).catch(() => undefined);
+          if (sequence === loadSequence.current) {
+            setAppliedTask(baseline);
+            if (proposal.type !== "subtask") setTaskBaseline(baseline);
+            setResultTab("status");
+          }
         }
       }
     } catch (e) {
@@ -471,6 +481,7 @@ export function RefinementPanel({
       latest.current.message = "";
       setResponding(true);
       setPolling(true);
+      setResultTab("preview");
     } catch (e) {
       setError(String(e instanceof Error ? e.message : e));
     } finally {
@@ -479,6 +490,7 @@ export function RefinementPanel({
     }
   };
   const labels: Record<string, string> = {
+    boundaryReason: text.boundaryReason, parentTaskId: text.parentTask,
     title: text.title, detail: text.detail, outcome: text.outcome, scope: text.scope,
     nonGoals: text.nonGoals, validationCriteria: text.criteria, statement: text.newProblemStatement,
     category: text.previewCategory, note: text.previewNote, relationship: text.relationshipKind,
@@ -489,8 +501,8 @@ export function RefinementPanel({
       ? payload.patch as Record<string, unknown>
       : undefined;
     const source = patch ?? payload;
-    const values: Record<string, unknown> = proposal?.type === "task_patch" && kind === "task" && taskBaseline?.id === subjectId
-      && (!payload.taskId || payload.taskId === subjectId)
+    const values: Record<string, unknown> = proposal?.type === "task_patch" && taskBaseline
+      && (!payload.taskId || payload.taskId === taskBaseline?.id)
       ? {
           title: taskBaseline.title,
           detail: taskBaseline.detail,
@@ -515,7 +527,7 @@ export function RefinementPanel({
       ? { ...payload, patch: { ...payload.patch as Record<string, unknown>, [key]: value } }
       : { ...payload, [key]: value } };
   });
-  const proposalLabel = (type: string) => ({ new_task: text.previewNewTask, task_patch: text.previewTaskChange,
+  const proposalLabel = (type: string) => ({ new_task: text.previewNewTask, subtask: text.subtask, task_patch: text.previewTaskChange,
     problem_snapshot: text.previewProblem, task_problem_link: text.previewConnection }[type] ?? text.proposedChange);
   return createPortal(
     <div className="refinement-modal-layer">
@@ -551,6 +563,33 @@ export function RefinementPanel({
       </div>}
       <div className="refinement-workspace">
       <section className="refinement-preview" aria-label={text.previewTitle} aria-busy={previewBusy}>
+        <nav className="task-detail-tabs" role="tablist" aria-label={text.proposals} onKeyDown={event => {
+          if (!currentTask || !["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+          event.preventDefault();
+          const next = event.key === "Home" ? "preview" : event.key === "End" ? "status" : resultTab === "preview" ? "status" : "preview";
+          setResultTab(next);
+          document.getElementById(`refinement-tab-${next}`)?.focus();
+        }}>
+          <button type="button" id="refinement-tab-preview" data-control="refinement-tab-preview" role="tab" aria-selected={resultTab === "preview"} aria-controls="refinement-result-preview" tabIndex={resultTab === "preview" ? 0 : -1} onClick={() => setResultTab("preview")}>{text.previewTab}</button>
+          {currentTask && <button type="button" id="refinement-tab-status" data-control="refinement-tab-status" role="tab" aria-selected={resultTab === "status"} aria-controls="refinement-result-status" tabIndex={resultTab === "status" ? 0 : -1} onClick={() => setResultTab("status")}>{text.workStatus}</button>}
+        </nav>
+        {currentTask && resultTab === "status" && <div id="refinement-result-status" role="tabpanel" aria-labelledby="refinement-tab-status" hidden={resultTab !== "status"}>
+          <p className="refined-status">{currentTask.refinedRevision ? `${text.refined} ${currentTask.refinedRevision}` : text.ready}</p>
+          <h3>{currentTask.title}</h3>
+          <p>{currentTask.state === "in_progress" ? text.inProgress : currentTask.state === "completed" ? text.completed : text.ready}</p>
+          <dl className="proposal-fields">{["detail", "outcome", "scope", "nonGoals", "validationCriteria"].map(key => {
+            const value = currentTask[key as keyof TaskAggregate];
+            return typeof value === "string" && value ? <div key={key}><dt>{labels[key]}</dt><dd>{value}</dd></div> : null;
+          })}</dl>
+          {currentTask.hierarchy?.parent && <p>{text.parentTask}: <strong>{currentTask.hierarchy.parent.title}</strong></p>}
+          {currentTask.state !== "in_progress" && <button type="button" className="primary" disabled={statusBusy} data-control="refinement-start-work" onClick={() => {
+            setStatusBusy(true); setError("");
+            void taskClient.transition(currentTask.id,currentTask.taskRevision,currentTask.state === "completed" ? "reopen" : "in_progress")
+              .then(() => taskClient.task(currentTask.id)).then(task => { setAppliedTask(task); onApplied?.(); })
+              .catch(e => setError(String(e instanceof Error ? e.message : e))).finally(() => setStatusBusy(false));
+          }}>{currentTask.state === "completed" ? text.reopen : text.start}</button>}
+        </div>}
+        <div id="refinement-result-preview" role="tabpanel" aria-labelledby="refinement-tab-preview" hidden={resultTab !== "preview"}>
         <header><h3>{text.previewTitle}</h3><small>{text.previewUnapplied}</small></header>
         {notice && <p role="status">{notice}</p>}
         {previewBusy && <p role="status" className="region-empty">{text.previewGenerating}</p>}
@@ -563,6 +602,7 @@ export function RefinementPanel({
           const isEditing = editing === proposal.id;
           return <article key={proposal.id} className="proposal proposal-document" data-proposal-id={proposal.id}>
             <small>{proposalLabel(proposal.type)}</small>
+            {proposal.type === "subtask" && <p>{text.subtaskHint}</p>}
             <h4>{String(previewValues.title ?? payload.statement ?? proposalLabel(proposal.type))}</h4>
             {isEditing ? <div className="proposal-editor">{fields.map(([key, value]) => <label key={key}>{labels[key]}
               <textarea data-control="refinement-proposal-editor" aria-label={`${text.edit} ${labels[key]}`} value={String(value)}
@@ -578,6 +618,13 @@ export function RefinementPanel({
             </footer>
           </article>;
         })}
+        {taskBaseline?.hierarchy && (taskBaseline.hierarchy.parent || taskBaseline.hierarchy.children.length > 0) && <details className="refinement-boundaries" data-control="refinement-boundaries">
+          <summary>{text.boundaryContext}</summary>
+          {[...(taskBaseline.hierarchy.parent ? [taskBaseline.hierarchy.parent] : []), ...taskBaseline.hierarchy.siblings, ...taskBaseline.hierarchy.children].map(task => <article key={task.id}>
+            <h4>{task.title}</h4><p>{text.scope}: {task.scope}</p><p>{text.nonGoals}: {task.nonGoals}</p>
+          </article>)}
+        </details>}
+        </div>
         <details className="refinement-private-note" data-control="refinement-note-details">
           <summary>{text.savedRefinementNote}</summary>
           <textarea aria-label={text.savedRefinementNote} data-control="refinement-note" value={draft} onChange={event => save(event.target.value)} placeholder={text.savedRefinementPlaceholder} />

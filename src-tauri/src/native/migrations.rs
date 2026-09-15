@@ -4,7 +4,7 @@ use rusqlite::{
 use serde_json::{json, Map, Value};
 use std::collections::BTreeMap;
 
-pub const CURRENT_SCHEMA_VERSION: i64 = 9;
+pub const CURRENT_SCHEMA_VERSION: i64 = 10;
 
 type MigrationFunction = for<'connection> fn(&Transaction<'connection>) -> Result<(), String>;
 type LegacyLocalizationRow = (String, String, String, String, String, String, String);
@@ -60,6 +60,11 @@ const MIGRATIONS: &[Migration] = &[
         version: 9,
         name: "allow captureless task work sessions",
         run: allow_captureless_task_sessions,
+    },
+    Migration {
+        version: 10,
+        name: "add Task refinement and subtask lifecycle",
+        run: add_task_hierarchy,
     },
 ];
 
@@ -1477,4 +1482,9 @@ mod tests {
         assert!(!table_exists(&connection, "incomplete").unwrap());
         assert_eq!(schema_version(&connection).unwrap(), 0);
     }
+}
+
+fn add_task_hierarchy(tx: &Transaction<'_>) -> Result<(), String> {
+    if !table_exists(tx, "tasks")? { return Ok(()); }
+    tx.execute_batch(include_str!("task_hierarchy_schema.sql")).map_err(|e| e.to_string())
 }
