@@ -1,10 +1,33 @@
 # LLM Wiki — Continuation handoff
 
-**Updated:** 2026-09-12
+**Updated:** 2026-09-15
 **Current status:** The React/Tauri/Rust desktop now uses the Task as the canonical unit of work.
 Capture remains a lightweight input; Work Log, refinement, exact Problem revisions, Task
 relationships, advisory review, completion, and Knowledge publication are independent decisions.
 The Python/FastAPI browser delivery remains retired in Git history at `caef236`.
+
+## Latest local installation verification
+
+- Installed the application built from `7eac07c` (Capture/refinement images) at
+  `/Applications/LLM Wiki.app` on 2026-09-15. The guarded installer retained the
+  previous bundle at `/Applications/LLM Wiki.app.previous-1789513091476-58810`.
+- Strict/deep signature checks passed with the existing local signing identity and
+  unchanged designated requirement. A normal Launch Services launch remained alive
+  and created a 1280 × 821 window. The installed executable matched the tested
+  candidate (SHA-256 `af987f8c3722fc21e20261886f42a306be875d218687c0a9c4e8996aa3f59d50`).
+- A read-only check confirmed the existing database reached schema 11 and contains
+  `input_images`. No screen interaction or feature E2E was performed in this run.
+- **Packaging follow-up:** the default Intel macOS signed build still references an
+  unsigned Homebrew ONNX runtime and aborts before database initialization. For this
+  installation, 86 runtime libraries were copied into the candidate's Frameworks
+  directory, their dependencies changed to bundle-relative paths, and all libraries
+  and the app signed. Local signing has no Team ID, so the candidate also required
+  `com.apple.security.cs.disable-library-validation`; system security settings were
+  unchanged. These are artifact repairs, not changes to the build scripts. Automate
+  dependency bundling and the local-signing policy before relying on a fresh build.
+- Local diagnostic scripts and results remain under
+  `.worktrees/capture-refinement-images/.tmp/` (`repair-package.py`,
+  `package-smoke.py`, and `installed-launch-verification.json`).
 
 ## Runtime
 
