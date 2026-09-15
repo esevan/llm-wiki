@@ -91,12 +91,17 @@ export function RefinementPanel({
   const [notice, setNotice] = useState("");
   const [saving, setSaving] = useState(false);
   const [polling, setPolling] = useState(false);
+  const [responding, setResponding] = useState(false);
+  const activeStatus = (status?: string) => Boolean(status && ["queued", "running", "retryable"].includes(status));
+  const previewBusy = responding || activeStatus(session?.previewStatus);
+
   const [error, setError] = useState("");
   const [loadError, setLoadError] = useState("");
   const [loading, setLoading] = useState(false);
   const timer = useRef<number | undefined>(undefined);
   const pollTimer = useRef<number | undefined>(undefined);
   const sending = useRef(false);
+  const turnGeneration = useRef(0);
   const pollRequesting = useRef(false);
   const loadingRef = useRef(false);
   const loadSequence = useRef(0);
@@ -170,8 +175,8 @@ export function RefinementPanel({
       const nextProposals = await taskClient.proposals(next.id);
       if (sequence === loadSequence.current) {
         setProposals(nextProposals);
-        if (next.responseStatus && !["completed", "failed", "cancelled"].includes(next.responseStatus))
-          setPolling(true);
+        setResponding(activeStatus(next.responseStatus));
+        setPolling(activeStatus(next.responseStatus) || activeStatus(next.previewStatus));
         if (next.responseStatus === "failed" && !latest.current.message && lastSubmittedMessage.current) {
           setError(text.assistantFailure);
           setMessage(lastSubmittedMessage.current);
@@ -208,16 +213,26 @@ export function RefinementPanel({
     };
   }, [cancelLoad, kind, subjectId, load]);
   useEffect(() => {
+    const onQueueChanged = (event: Event) => {
+      const jobs = (event as CustomEvent<Array<{ id: string; entity_id: string; task_kind: string; status: string }>>).detail;
+      const job = jobs?.find(item => item.task_kind === "refinement_preview" && item.entity_id === session?.id);
+      if (job && (job.id !== session?.previewJobId || job.status !== session?.previewStatus)) setPolling(true);
+    };
+    window.addEventListener("llm-wiki:queue-changed", onQueueChanged);
+    return () => window.removeEventListener("llm-wiki:queue-changed", onQueueChanged);
+  }, [session?.id, session?.previewJobId, session?.previewStatus]);
+  useEffect(() => {
     if (!polling || !session?.id) return;
     let cancelled = false;
     pollTimer.current = window.setInterval(
       () => {
         if (pollRequesting.current) return;
         pollRequesting.current = true;
+        const generation = turnGeneration.current;
         void taskClient
           .refinementStatus(kind, subjectId)
           .then(async (next) => {
-            if (cancelled) return;
+            if (cancelled || generation !== turnGeneration.current) return;
             const nextMessages = next.messages ?? [];
             const newAssistantIds = nextMessages
               .filter(item => item.role === "assistant" && !knownMessageIds.current.has(item.id))
@@ -229,6 +244,7 @@ export function RefinementPanel({
               setRevealingMessageIds(current => new Set([...current, ...newAssistantIds]));
             nextMessages.forEach(item => knownMessageIds.current.add(item.id));
             setSession(next);
+            setResponding(activeStatus(next.responseStatus));
             if (
               ["completed", "failed", "cancelled"].includes(
                 next.responseStatus ?? "completed",
@@ -238,15 +254,15 @@ export function RefinementPanel({
               try {
                 nextProposals = await taskClient.proposals(next.id);
               } catch (e) {
-                if (!cancelled) {
+                if (!cancelled && generation === turnGeneration.current) {
                   setLoadError(String(e instanceof Error ? e.message : e));
                   setPolling(false);
                 }
                 return;
               }
-              if (cancelled) return;
+              if (cancelled || generation !== turnGeneration.current) return;
               setProposals(nextProposals);
-              setPolling(false);
+              setPolling(activeStatus(next.previewStatus));
               if (next.responseStatus === "failed")
                 {
                   setError(text.assistantFailure);
@@ -258,7 +274,7 @@ export function RefinementPanel({
             }
           })
           .catch((e) => {
-            if (cancelled) return;
+            if (cancelled || generation !== turnGeneration.current) return;
             setPolling(false);
             setLoadError(String(e instanceof Error ? e.message : e));
           })
@@ -439,7 +455,7 @@ export function RefinementPanel({
     } finally { setDeciding(undefined); }
   };
   const send = async () => {
-    if (!session || !message.trim() || sending.current || polling || loadingRef.current || loadError) return;
+    if (!session || !message.trim() || sending.current || responding || loadingRef.current || loadError) return;
     sending.current = true;
     setSaving(true);
     setError("");
@@ -449,9 +465,11 @@ export function RefinementPanel({
       await persistCurrent();
       const submittedMessage = message.trim();
       await taskClient.message(session.id, submittedMessage);
+      turnGeneration.current += 1;
       lastSubmittedMessage.current = submittedMessage;
       setMessage("");
       latest.current.message = "";
+      setResponding(true);
       setPolling(true);
     } catch (e) {
       setError(String(e instanceof Error ? e.message : e));
@@ -532,11 +550,12 @@ export function RefinementPanel({
         {loadError && <button type="button" data-control="refinement-retry" disabled={loading} onClick={() => void load()}>{text.retry}</button>}
       </div>}
       <div className="refinement-workspace">
-      <section className="refinement-preview" aria-label={text.previewTitle} aria-busy={polling}>
+      <section className="refinement-preview" aria-label={text.previewTitle} aria-busy={previewBusy}>
         <header><h3>{text.previewTitle}</h3><small>{text.previewUnapplied}</small></header>
         {notice && <p role="status">{notice}</p>}
-        {polling && <p role="status" className="region-empty">{text.previewGenerating}</p>}
-        {!proposals.length && !polling && <p className="region-empty">{text.previewEmpty}</p>}
+        {previewBusy && <p role="status" className="region-empty">{text.previewGenerating}</p>}
+        {session?.previewStatus && ["failed", "cancelled", "stale"].includes(session.previewStatus) && <p role="status" className="region-empty">{text.previewQueueRecovery}</p>}
+        {!proposals.length && !previewBusy && <p className="region-empty">{text.previewEmpty}</p>}
         {proposals.map(proposal => {
           const payload = edits[proposal.id] ?? canonicalPayload(proposal);
           const previewValues = meaningfulPayload(payload, proposal);
@@ -554,7 +573,7 @@ export function RefinementPanel({
               <button type="button" data-control="refinement-proposal-edit" disabled={Boolean(deciding)}
                 onClick={() => setEditing(isEditing ? undefined : proposal.id)}>{isEditing ? text.previewFinishEdit : text.edit}</button>
               <button type="button" data-control="refinement-proposal-reject" disabled={Boolean(deciding)} onClick={() => void decide(proposal, "reject")}>{text.reject}</button>
-              <button type="button" className="primary" data-control="refinement-proposal-accept" disabled={Boolean(deciding) || polling}
+              <button type="button" className="primary" data-control="refinement-proposal-accept" disabled={Boolean(deciding) || previewBusy || Boolean(session?.previewStatus && session.previewStatus !== "completed")}
                 onClick={() => void decide(proposal, "accept")}>{text.apply}</button>
             </footer>
           </article>;
@@ -574,7 +593,7 @@ export function RefinementPanel({
           </article>)}
           {!session && <p className="region-empty">{text.loading}</p>}
         </div>
-        {polling && <p className="refinement-thinking" role="status" aria-label={text.assistantGenerating} aria-live="polite">
+        {responding && <p className="refinement-thinking" role="status" aria-label={text.assistantGenerating} aria-live="polite">
           <span>{text.assistantGenerating}</span><span className="refinement-thinking-dots" aria-hidden="true"><span>...</span></span>
         </p>}
         <div className="refinement-composer">
@@ -582,7 +601,7 @@ export function RefinementPanel({
             onChange={event => { latest.current.message = event.target.value; setMessage(event.target.value); }} onKeyDown={event => {
               if (event.key === "Enter" && (event.metaKey || event.ctrlKey) && !event.nativeEvent.isComposing) { event.preventDefault(); void send(); }
             }} placeholder={text.refinementPlaceholder} rows={2} />
-          <button type="button" className="primary" disabled={!session || saving || polling || loading || Boolean(loadError) || !message.trim()}
+          <button type="button" className="primary" disabled={!session || saving || responding || loading || Boolean(loadError) || !message.trim()}
             onClick={() => void send()} data-chat-control="refinement-send" data-control="refinement-send">{text.send}</button>
         </div>
       </section>

@@ -17,6 +17,7 @@ function messageText(content) {
 }
 
 function deterministicResult(prompt) {
+  if (prompt.includes('Return JSON only as {"message":string}')) return { message: "I will use those details to update the preview in the background." };
   if (prompt.includes('"task_patch|new_task|problem_snapshot|task_problem_link"')) {
     return {
       message: "I prepared one reviewable Task proposal from the saved conversation.",
@@ -166,7 +167,9 @@ const server = http.createServer((request, response) => {
       const prompt = (payload.messages ?? []).map((message) => messageText(message.content)).join("\n");
       sendJson(response, 200, { choices: [{ message: { content: JSON.stringify(deterministicResult(prompt)) } }] });
     };
-    if (payload.model === "deterministic-timeout") setTimeout(reply, 600);
+    const previewRequest = (payload.messages ?? []).some(message => messageText(message.content).includes('"task_patch|new_task|problem_snapshot|task_problem_link"'));
+    if (payload.model === "deterministic-slow-preview" && previewRequest) setTimeout(reply, 3000);
+    else if (payload.model === "deterministic-timeout") setTimeout(reply, 600);
     else reply();
   });
 });

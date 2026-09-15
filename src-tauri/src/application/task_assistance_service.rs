@@ -54,6 +54,7 @@ pub(crate) struct TaskAssistanceApplicationService {
     settings_path: PathBuf,
     vault_root: PathBuf,
     semantic: SemanticEngine,
+    registry: crate::native::jobs::JobRegistry,
 }
 
 impl TaskAssistanceApplicationService {
@@ -68,7 +69,13 @@ impl TaskAssistanceApplicationService {
             settings_path,
             vault_root,
             semantic,
+            registry: crate::native::jobs::JobRegistry::default(),
         }
+    }
+
+    pub(crate) fn with_job_registry(mut self, registry: crate::native::jobs::JobRegistry) -> Self {
+        self.registry = registry;
+        self
     }
 
     /// Authorization and exact review belong to the calling application service, before dispatch.
@@ -124,11 +131,12 @@ impl TaskAssistanceApplicationService {
             }
             _ => {}
         }
-        task_assistance::execute(
+        task_assistance::execute_with_registry(
             &self.db_path,
             &self.settings_path,
             &self.vault_root,
             self.semantic.clone(),
+            self.registry.clone(),
             action.operation(),
             input,
         )

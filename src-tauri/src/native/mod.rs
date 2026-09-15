@@ -95,6 +95,7 @@ impl NativeApplication {
         let recovery_pending = database::migration_failure(&db_path)?.is_some();
         if !recovery_pending {
             database::initialize(&db_path)?;
+            task_assistance::recover_interrupted_refinement(&db_path)?;
         }
         let semantic = semantic::SemanticEngine::new(embedding_model_dir);
         let store = crate::adapters::sqlite::SqliteWorkTrackingStore::new(&db_path);
@@ -105,20 +106,22 @@ impl NativeApplication {
         }
         let vault_adapter =
             crate::adapters::vault::MarkdownVaultAdapter::new(&db_path, &vault, semantic.clone());
+        let jobs = jobs::JobRegistry::default();
         let task_assistance =
             crate::application::task_assistance_service::TaskAssistanceApplicationService::new(
                 db_path.clone(),
                 settings_path.clone(),
                 vault.clone(),
                 semantic.clone(),
-            );
+            )
+            .with_job_registry(jobs.clone());
         Ok(Self {
             db_path: db_path.clone(),
             settings_path,
             vault,
             vault_setup_required,
             semantic,
-            jobs: jobs::JobRegistry::default(),
+            jobs,
             work_tracking:
                 crate::application::work_tracking_service::WorkTrackingApplicationService::new(
                     store,
@@ -367,11 +370,12 @@ impl NativeApplication {
             || name.starts_with("task-knowledge.")
             || name == "task.lineage"
         {
-            return match task_assistance::execute(
+            return match task_assistance::execute_with_registry(
                 &self.db_path,
                 &self.settings_path,
                 &self.vault,
                 self.semantic.clone(),
+                self.jobs.clone(),
                 &name,
                 &input,
             )

@@ -66,3 +66,10 @@ See [feature specification](../../specs/009-background-ai-queue/spec.md) and
 [worker contract](../../specs/009-background-ai-queue/contracts/worker-contract.md). The
 [backend architecture guide](../architecture.md) maps every durable task to its authoritative
 handler module and documents the enforced dependency rules.
+
+## Refinement previews
+
+Capture and Task refinement return the chat answer before generating the full proposal. The separate
+**Refinement preview** queue job saves a reviewable preview without applying it. Chat remains available
+while the preview runs. Cancel or retry a preview independently; a newer chat turn makes older preview
+results stale. Interrupted previews remain visible for retry after restarting the application.

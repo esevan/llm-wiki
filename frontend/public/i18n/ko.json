@@ -691,5 +691,7 @@
   "search.loading_title": "Vault를 검색하는 중…",
   "ai_setup.connection_group": "연결",
   "ai_setup.models_group": "모델 설정",
-  "ai_setup.credential_group": "인증 정보"
+  "ai_setup.credential_group": "인증 정보",
+  "queue.task.refinement_preview": "다듬기 프리뷰",
+  "queue.description.refinement_preview": "채팅을 계속하는 동안 백그라운드에서 검토할 프리뷰를 준비합니다."
 }

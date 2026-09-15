@@ -26,9 +26,8 @@ assistant message after polling; when that new message arrives, the panel reveal
 presentation effect. Stored conversation history is shown immediately and is not replayed. Opening the
 refinement dialog keeps the underlying Workbench scroll position fixed until the dialog closes.
 
-A response can produce proposals. Review each proposal separately: edit, accept, or reject it.
-Accepting one proposal does not accept its siblings. Response processing includes loading the
-resulting proposals; a delayed proposal read must not silently discard the result.
+A background preview can produce proposals. Review each proposal separately: edit, accept, or reject it.
+Accepting one proposal does not accept its siblings. Chat responses and proposal retrieval proceed independently; a delayed read still displays the latest proposals.
 Task proposal previews show the complete meaningful Task result fields—title, detail, outcome, scope,
 non-goals, and validation criteria—including responses that return the detail as `body` or nest the result;
 accepting the proposal preserves those values in the Task detail.
@@ -49,6 +48,19 @@ accepting the proposal preserves those values in the Task detail.
 - Closing during a provider job does not cancel that durable server job. Its late response must not
   overwrite a different open item; reopening the original item can recover the saved result.
 - Returning after a successful save, including an app restart, restores the saved refinement workspace.
+
+
+### Independent chat and preview
+
+Chat requests generate a short answer first. Once it is saved, Send becomes available again. Full
+proposal generation runs separately as **Refinement preview** in the AI queue, with its own progress,
+cancellation, and retry. The preview can keep updating while you send the next message. A preview
+failure leaves the saved chat answer available; retry from the queue or send another message.
+
+A new message supersedes older preview work. Delayed results and proposals from an earlier turn cannot
+replace or apply over the current conversation. Closing the dialog leaves background work running;
+reopening restores its status. If the application exits during generation, the interrupted preview
+can be retried from the queue after restart. Changes still require explicit review and Apply.
 
 ## Keyboard behavior
 

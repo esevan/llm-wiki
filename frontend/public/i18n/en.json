@@ -691,5 +691,7 @@
   "search.loading_title": "Searching your Vault…",
   "ai_setup.connection_group": "Connection",
   "ai_setup.models_group": "Model routing",
-  "ai_setup.credential_group": "Credential"
+  "ai_setup.credential_group": "Credential",
+  "queue.task.refinement_preview": "Refinement preview",
+  "queue.description.refinement_preview": "Prepares a reviewable preview in the background while chat remains available."
 }

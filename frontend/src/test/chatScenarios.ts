@@ -2,7 +2,7 @@ import type { InteractionCoverage } from "./interactionCoverage";
 import { invoke } from "@tauri-apps/api/core";
 
 type RefinementMessage = { id: string; role: string; body: string };
-type RefinementSnapshot = { id: string; inputDraft?: string; messages?: RefinementMessage[]; responseStatus?: "queued" | "running" | "completed" | "failed" | "cancelled" };
+type RefinementSnapshot = { id: string; previewStatus?: string; previewJobId?: string; inputDraft?: string; messages?: RefinementMessage[]; responseStatus?: "queued" | "running" | "completed" | "failed" | "cancelled" };
 type ProviderRequest = { messages: Array<{ role: string; content: string }> };
 
 /** Desktop primitives supplied by the central scenario registry. */
@@ -103,7 +103,7 @@ async function send(harness: ChatScenarioHarness, message: string, keyboard = fa
  */
 export async function runTaskChatScenario(harness: ChatScenarioHarness): Promise<void> {
   const captureText = `Existing Solution preserved ${Date.now()}`;
-  await harness.api("/provider/config", "PUT", { base_url: harness.providerUrl, model: "deterministic-test-model", api_key: "desktop-e2e-key" });
+  await harness.api("/provider/config", "PUT", { base_url: harness.providerUrl, model: "deterministic-slow-preview", api_key: "desktop-e2e-key" });
   await harness.create(captureText, "capture");
   const captureId = await openCaptureRefinement(harness, captureText);
   const refinementPanel = control<HTMLElement>(".refinement-panel", "Capture refinement panel");
@@ -125,7 +125,13 @@ export async function runTaskChatScenario(harness: ChatScenarioHarness): Promise
       return (snapshot.messages?.filter(message => message.role === "assistant").length ?? 0) === index + 1;
     }, `persisted refinement assistant turn ${index + 1}`);
     await harness.waitFor(() => refinementPanel.dataset.refinementSending === "false", `refinement sender settled turn ${index + 1}`);
-    await harness.waitFor(() => refinementPanel.dataset.refinementPolling === "false", `rendered terminal refinement turn ${index + 1}`);
+    if (index < turns.length - 1) {
+      await harness.waitFor(() => document.querySelectorAll(".refinement-messages .message-assistant").length === index + 1, "chat visible before preview completion");
+      const snapshot = await harness.api<RefinementSnapshot>(sessionPath);
+      if (!["queued", "running"].includes(snapshot.previewStatus ?? "")) throw new Error("Slow preview must remain independently queued while the next chat is available");
+    } else {
+      await harness.waitFor(() => refinementPanel.dataset.refinementPolling === "false", `rendered terminal refinement turn ${index + 1}`);
+    }
   }
   await harness.waitFor(() => document.querySelectorAll(".refinement-messages .message-assistant").length >= 3, "three rendered assistant turns");
   coverEffect(harness, "refinement-message", () => document.querySelectorAll(".refinement-messages .message-user").length === 3);
@@ -134,7 +140,7 @@ export async function runTaskChatScenario(harness: ChatScenarioHarness): Promise
   const userTurns = completed.messages?.filter(message => message.role === "user").map(message => message.body) ?? [];
   if (JSON.stringify(userTurns) !== JSON.stringify(turns)) throw new Error("Native refinement session did not retain all ordered user turns");
   const finalPrompt = (await providerRequests(harness.providerUrl)).at(-1)?.messages?.[0]?.content ?? "";
-  for (const retained of [captureText, ...turns, "I prepared one reviewable Task proposal from the saved conversation."]) if (!finalPrompt.includes(retained)) throw new Error(`Provider request omitted prior conversation context: ${retained}`);
+  for (const retained of [captureText, ...turns, "I will use those details to update the preview in the background."]) if (!finalPrompt.includes(retained)) throw new Error(`Provider request omitted prior conversation context: ${retained}`);
 
   const noteDetails = control<HTMLDetailsElement>('[data-control="refinement-note-details"]', "saved refinement note disclosure");
   await harness.prepareClick(noteDetails.querySelector("summary")!, "Open saved refinement note");

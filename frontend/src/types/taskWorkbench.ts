@@ -121,6 +121,8 @@ export interface RefinementSession {
   scrollAnchor?: string;
   draftRevision?: number;
   messages?: Array<{ id: string; role: string; body: string }>;
+  previewJobId?: string;
+  previewStatus?: "queued" | "running" | "retryable" | "completed" | "failed" | "cancelled" | "stale";
   responseStatus?: "queued" | "running" | "completed" | "failed" | "cancelled";
 }
 export interface RefinementProposal {

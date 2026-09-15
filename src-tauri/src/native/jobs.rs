@@ -11,28 +11,35 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 #[derive(Clone, Default)]
-pub struct JobRegistry(Arc<Mutex<HashMap<String, CancellationToken>>>);
+pub struct JobRegistry(Arc<Mutex<HashMap<String, (String, CancellationToken)>>>);
 
 impl JobRegistry {
-    fn register(&self, job_id: &str) -> Result<CancellationToken, String> {
+    fn register(&self, job_id: &str) -> Result<(String, CancellationToken), String> {
         let token = CancellationToken::new();
-        self.0
+        let generation = id();
+        if let Some(previous) = self
+            .0
             .lock()
             .map_err(|_| "Job registry is unavailable")?
-            .insert(job_id.to_owned(), token.clone());
-        Ok(token)
+            .insert(job_id.to_owned(), (generation.clone(), token.clone()))
+        {
+            previous.1.cancel();
+        }
+        Ok((generation, token))
     }
 
-    fn finish(&self, job_id: &str) {
+    fn finish(&self, job_id: &str, generation: &str) {
         if let Ok(mut active) = self.0.lock() {
-            active.remove(job_id);
+            if active.get(job_id).is_some_and(|entry| entry.0 == generation) {
+                active.remove(job_id);
+            }
         }
     }
 
-    fn cancel(&self, job_id: &str) {
+    pub(crate) fn cancel(&self, job_id: &str) {
         if let Ok(mut active) = self.0.lock() {
             if let Some(token) = active.remove(job_id) {
-                token.cancel();
+                token.1.cancel();
             }
         }
     }
@@ -249,7 +256,7 @@ pub async fn enqueue(
     let spawned_id = job_id.clone();
     let spawned_db = db_path.clone();
     let spawned_settings = settings_path.clone();
-    let token = registry.register(&job_id)?;
+    let (generation, token) = registry.register(&job_id)?;
     tauri::async_runtime::spawn(async move {
         let _ = run(
             spawned_db,
@@ -258,6 +265,7 @@ pub async fn enqueue(
             registry,
             semantic,
             token,
+            generation,
             spawned_id,
         )
         .await;
@@ -287,7 +295,7 @@ pub fn retry(
     let spawned_vault = vault.to_owned();
     let spawned_registry = registry.clone();
     let spawned_semantic = semantic.clone();
-    let token = registry.register(job_id)?;
+    let (generation, token) = registry.register(job_id)?;
     tauri::async_runtime::spawn(async move {
         let _ = run(
             spawned_db,
@@ -296,11 +304,35 @@ pub fn retry(
             spawned_registry,
             spawned_semantic,
             token,
+            generation,
             spawned_id,
         )
         .await;
     });
     get(db_path, job_id)
+}
+
+pub(crate) fn start_stored(
+    db_path: &Path,
+    settings_path: &Path,
+    vault: &Path,
+    registry: &JobRegistry,
+    semantic: &crate::native::semantic::SemanticEngine,
+    job_id: &str,
+) -> Result<(), String> {
+    let (generation, token) = registry.register(job_id)?;
+    let (db, settings, vault, registry, semantic, job) = (
+        db_path.to_owned(),
+        settings_path.to_owned(),
+        vault.to_owned(),
+        registry.clone(),
+        semantic.clone(),
+        job_id.to_owned(),
+    );
+    tauri::async_runtime::spawn(async move {
+        let _ = run(db, settings, vault, registry, semantic, token, generation, job).await;
+    });
+    Ok(())
 }
 
 fn get_for_id(
@@ -321,16 +353,20 @@ async fn run(
     registry: JobRegistry,
     semantic: crate::native::semantic::SemanticEngine,
     token: CancellationToken,
+    generation: String,
     job_id: String,
 ) -> Result<(), String> {
-    let outcome = run_inner(&db_path, &settings_path, &vault, &semantic, &token, &job_id).await;
+    let outcome = run_inner(&db_path, &settings_path, &vault, &semantic, &token, &generation, &job_id).await;
+    if token.is_cancelled() {
+        return Ok(());
+    }
     if let Err(error) = &outcome {
         database::open(&db_path)?.execute(
-            "UPDATE ai_jobs_v2 SET status='failed',error_code='application_error',error_message=?,finished_at=CURRENT_TIMESTAMP WHERE id=? AND status='running'",
-            params![error,job_id],
+            "UPDATE ai_jobs_v2 SET status='failed',error_code='application_error',error_message=?,finished_at=CURRENT_TIMESTAMP WHERE id=? AND status='running' AND worker_id=?",
+            params![error,job_id,generation],
         ).map_err(|database_error| database_error.to_string())?;
     }
-    registry.finish(&job_id);
+    registry.finish(&job_id, &generation);
     outcome
 }
 
@@ -340,11 +376,12 @@ async fn run_inner(
     vault: &Path,
     semantic: &crate::native::semantic::SemanticEngine,
     token: &CancellationToken,
+    generation: &str,
     job_id: &str,
 ) -> Result<(), String> {
     let (task, entity_type, entity_id, input) = {
         let connection = database::open(db_path)?;
-        let claimed = connection.execute("UPDATE ai_jobs_v2 SET status='running',started_at=CURRENT_TIMESTAMP,attempt=attempt+1 WHERE id=? AND status='queued'", [&job_id]).map_err(|e| e.to_string())?;
+        let claimed = connection.execute("UPDATE ai_jobs_v2 SET status='running',started_at=CURRENT_TIMESTAMP,attempt=attempt+1,worker_id=? WHERE id=? AND status='queued'", params![generation,job_id]).map_err(|e| e.to_string())?;
         if claimed == 0 {
             return Ok(());
         }
@@ -364,6 +401,42 @@ async fn run_inner(
             .map_err(|e| e.to_string())?
     };
     let input = serde_json::from_str::<Value>(&input).unwrap_or_else(|_| json!({}));
+    if task == "refinement_preview" {
+        let attempt: i64 = database::open(db_path)?
+            .query_row(
+                "SELECT attempt FROM ai_jobs_v2 WHERE id=?",
+                [job_id],
+                |row| row.get(0),
+            )
+            .map_err(|error| error.to_string())?;
+        let prepared = tokio::select! {
+            biased;
+            _ = token.cancelled() => return Ok(()),
+            prepared = crate::native::task_assistance::prepare_refinement_preview(settings_path, &input) => prepared?,
+        };
+        if token.is_cancelled() {
+            return Ok(());
+        }
+        if let Some(revision) = crate::native::task_assistance::finalize_refinement_preview(
+            db_path, job_id, attempt, &input, &prepared,
+        )? {
+            if prepared["proposals"]
+                .as_array()
+                .is_some_and(|items| !items.is_empty())
+            {
+                let _ = crate::native::task_assistance::review_refinement_preview(
+                    db_path,
+                    settings_path,
+                    vault,
+                    semantic.clone(),
+                    &input,
+                    revision,
+                )
+                .await;
+            }
+        }
+        return Ok(());
+    }
     if task == "knowledge_draft" {
         let prepared = tokio::select! {
             biased;
@@ -647,4 +720,19 @@ pub(crate) fn finalize_knowledge_draft(db_path: &Path, job_id: &str, input: &Val
     tx.execute("UPDATE ai_jobs_v2 SET status='completed',result_json=?,progress_completed=1,finished_at=CURRENT_TIMESTAMP WHERE id=? AND status='running'", params![result.to_string(),job_id]).map_err(|error| error.to_string())?;
     tx.commit().map_err(|error| error.to_string())?;
     Ok(())
+}
+
+#[cfg(test)]
+mod registry_tests {
+    use super::*;
+    #[test]
+    fn old_worker_cannot_remove_retried_workers_cancellation() {
+        let registry = JobRegistry::default();
+        let (old, old_token) = registry.register("preview").unwrap();
+        let (_new, new_token) = registry.register("preview").unwrap();
+        assert!(old_token.is_cancelled());
+        registry.finish("preview", &old);
+        registry.cancel("preview");
+        assert!(new_token.is_cancelled());
+    }
 }

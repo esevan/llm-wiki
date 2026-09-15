@@ -3,6 +3,36 @@ import { describe, expect, it, vi } from "vitest";
 import { RefinementPanel } from "./RefinementPanel";
 
 describe("Refinement panel", () => {
+  it("allows the next chat while preview runs and keeps preview failure separate", async () => {
+    let messages = 0;
+    let previewStatus = "running";
+    const reply = (value: unknown) => Promise.resolve({ ok: true, status: 200, json: async () => value, text: async () => "", body: null });
+    const request = vi.fn().mockImplementation(({ path }: { path: string }) => {
+      if (path.endsWith("/proposals")) return reply([]);
+      if (path.endsWith("/messages")) { messages += 1; return reply({}); }
+      return reply({ id: "independent", draftRevision: 0, responseStatus: "completed", previewStatus,
+        previewJobId: "preview", messages: [{ id: "answer", role: "assistant", body: "Chat is already ready." }] });
+    });
+    window.llmWikiApplication = { request };
+    render(<RefinementPanel kind="capture" subjectId="split" onClose={vi.fn()} />);
+    expect(await screen.findByText("Chat is already ready.")).toBeInTheDocument();
+    const message = screen.getByLabelText("Refinement message");
+    fireEvent.change(message, { target: { value: "One more detail" } });
+    expect(screen.getByRole("button", { name: "Send" })).toBeEnabled();
+    expect(document.querySelector(".refinement-preview")).toHaveAttribute("aria-busy", "true");
+    expect(document.querySelector(".refinement-thinking")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(messages).toBe(1));
+    previewStatus = "failed";
+    await waitFor(() => expect(screen.getByText(/Retry it in the AI queue/)).toBeInTheDocument(), { timeout: 2000 });
+    expect(screen.getByText("Chat is already ready.")).toBeInTheDocument();
+    expect(message).toHaveValue("");
+    expect(document.querySelector(".refinement-thinking")).toBeNull();
+    previewStatus = "running";
+    act(() => { window.dispatchEvent(new CustomEvent("llm-wiki:queue-changed", { detail: [{ id: "preview", entity_id: "independent", task_kind: "refinement_preview", status: "running" }] })); });
+    await waitFor(() => expect(document.querySelector(".refinement-preview")).toHaveAttribute("aria-busy", "true"), { timeout: 2000 });
+  });
+
   it("retries a database-locked refinement read without losing local drafts", async () => {
     let attempts = 0;
     const request = vi.fn().mockImplementation(({ path }: { path: string; method?: string }) => {
