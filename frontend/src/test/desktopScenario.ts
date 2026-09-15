@@ -1162,7 +1162,7 @@ async function localization(step: Step) {
       if (!layer || !backdrop || !refinement || !preview || !conversation || !messages || !composer || !app || !app.inert) return false;
       const panel = refinement.getBoundingClientRect(), left = preview.getBoundingClientRect(), right = conversation.getBoundingClientRect(), compose = composer.getBoundingClientRect();
       const withinViewport = panel.left >= -1 && panel.top >= -1 && panel.right <= window.innerWidth + 1 && panel.bottom <= window.innerHeight + 1;
-      const columns = left.width > 0 && right.width > 0 && left.right <= right.left && compose.width > 0 && compose.height > 0 && compose.bottom <= right.bottom + 1;
+      const columns = left.width > 0 && right.width > 0 && left.right <= right.left && compose.width > 0 && compose.height > 0 && Math.abs(compose.bottom - right.bottom) <= 1;
       const scrollable = getComputedStyle(preview).overflowY !== "visible" && getComputedStyle(messages).overflowY !== "visible" && preview !== messages;
       return getComputedStyle(layer).position === "fixed" && getComputedStyle(backdrop).position === "absolute" && withinViewport && columns && scrollable;
     }, "bounded modal with side-by-side preview, visible composer, and independent scrolling panes");

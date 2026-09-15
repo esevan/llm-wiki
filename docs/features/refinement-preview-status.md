@@ -19,7 +19,8 @@ unavailable while the current submission or response is being processed. Every p
 the original Capture and ordered conversation history, even after a transient draft is cleared.
 
 The dialog keeps a stable reading height up to the available window height. Longer conversations keep their own
-scroll area so the composer remains reachable without leaving an oversized empty chat area for short histories. While a response is being prepared, the conversation shows
+scroll area while the composer stays at the bottom of the chat pane. Short conversations sit directly above
+the composer; new messages appear below earlier messages, moving the history upward. While a response is being prepared, the conversation shows
 an accessible localized status with an animated ellipsis. The current refinement endpoint returns a complete
 assistant message after polling; when that new message arrives, the panel reveals it progressively as a
 presentation effect. Stored conversation history is shown immediately and is not replayed. Opening the
