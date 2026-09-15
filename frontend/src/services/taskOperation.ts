@@ -105,6 +105,8 @@ export function taskOperation(
     method === "POST"
   )
     return op("work-log.comment.create", { entryId: p[1] });
+  if (p[0] === "work-log" && p.length === 3 && p[2] === "image-summary" && method === "POST")
+    return { name: "jobs.enqueue", input: { taskKind: "image_summary", entityType: "task_work_log_entries", entityId: p[1], locale } };
   if (path === "/conflict-reviews" && method === "POST")
     return op("task-review.create");
   if (path === "/conflict-reviews" && method === "GET")

@@ -462,3 +462,21 @@ fn reference_fixture_capture_and_workbench_p95_stay_within_local_budgets() {
         "workbench p95 exceeded 100ms: {workbench_p95:.3}ms"
     );
 }
+
+#[tokio::test]
+async fn image_work_log_save_queues_bilingual_summary_once_even_when_replayed() {
+    let h = Harness::new();
+    let created = h.call("workflow", "task.create", json!({"operationId":"image-task","title":"Screenshot","inputText":"Screenshot"}));
+    ok(&created);
+    let input = json!({"operationId":"save-image","taskId":created.body["id"],"expectedTaskRevision":1,"locale":"ko","attachment":{"name":"screen.png","mediaType":"image/png","data":"aGVsbG8="}});
+    let saved = h.app.execute_workflow(NativeOperation { name:"task.work-log.create".into(), input:input.clone() }).await;
+    ok(&saved);
+    let replay = h.app.execute_workflow(NativeOperation { name:"task.work-log.create".into(), input }).await;
+    ok(&replay);
+    assert_eq!(saved.body["id"], replay.body["id"]);
+    let connection = rusqlite::Connection::open(h.root.path().join("state.sqlite3")).unwrap();
+    let count: i64 = connection.query_row("SELECT count(*) FROM ai_jobs_v2 WHERE task_kind='image_summary' AND entity_type='task_work_log_entries' AND entity_id=?", [saved.body["id"].as_str().unwrap()], |r| r.get(0)).unwrap();
+    assert_eq!(count, 1);
+    let data = get(&h, created.body["id"].as_str().unwrap());
+    assert!(data.body["workLog"][0]["imageSummaryJob"]["id"].is_string());
+}

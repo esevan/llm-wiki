@@ -19,7 +19,7 @@ An explicit choice is stored in local application settings and restored for late
 | --- | --- |
 | Menus, controls, guidance, and status text | Switch immediately from the packaged language resources. Missing Korean text falls back to English. |
 | Task and Problem records | Keep their authored or generated stored content. A language change does not rewrite a record or make a new AI request. |
-| AI Image Summaries | Keep the stored summary. A language change does not rewrite authored evidence or automatically request another summary. |
+| AI Image Summaries | New image jobs save Korean and English together. The displayed summary follows the interface language without another AI request; older single-language summaries remain available as a fallback. |
 | Existing records and Vault files | Remain unchanged. If the selected-language version is missing, LLM Wiki shows the stored original and does not translate it automatically. |
 | Live AI conversation and reviews | Use only the language that was active when the request started. Existing responses are not regenerated after a switch. |
 | Eligible managed Knowledge | A Korean reading is available only for an English Markdown note marked `llm_wiki_managed: true` and `canonical_locale: en`. It may be reused only while that exact English source is current. |

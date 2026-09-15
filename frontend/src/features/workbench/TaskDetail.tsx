@@ -80,6 +80,7 @@ export function TaskDetail({
   suppressInitialFocus,
   sessions,
   queueKnowledgeDraft,
+  queueImageSummary,
   ref,
 }: {
   taskId: string;
@@ -91,6 +92,7 @@ export function TaskDetail({
   suppressInitialFocus?: boolean;
   sessions?: Map<string, DetailSession>;
   queueKnowledgeDraft?: KnowledgeDraft;
+  queueImageSummary?: { entryId: string };
   ref?: Ref<TaskDetailHandle>;
 }) {
   const text = useTaskWorkbenchText();
@@ -103,6 +105,7 @@ export function TaskDetail({
   const [detailState, setDetailState] = useState<DetailState | undefined>(session?.detailState);
   const loaded = Boolean(detailState);
   const [error, setError] = useState("");
+  const [imageQueueError, setImageQueueError] = useState("");
   const [entry, setEntry] = useState(session?.entry ?? "");
   const [check, setCheck] = useState(session?.check ?? "");
   const [decision, setDecision] = useState(session?.decision ?? "");
@@ -203,6 +206,24 @@ export function TaskDetail({
     void load();
     return () => { ++sequences.current; };
   }, [load, refreshKey]);
+  const imageJobsPending = detailState?.persisted.workLog?.some(log =>
+    ["queued", "running", "retryable"].includes(log.imageSummaryJob?.status ?? ""));
+  useEffect(() => {
+    if (!imageJobsPending) return;
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const poll = async () => {
+      if (!mutationBusyRef.current) await load();
+      if (!stopped) timer = setTimeout(() => void poll(), 1000);
+    };
+    timer = setTimeout(() => void poll(), 1000);
+    return () => { stopped = true; clearTimeout(timer); };
+  }, [imageJobsPending, load]);
+  useEffect(() => {
+    const refresh = () => { if (!mutationBusyRef.current) void load(); };
+    window.addEventListener("llm-wiki:image-summary-updated", refresh);
+    return () => window.removeEventListener("llm-wiki:image-summary-updated", refresh);
+  }, [load]);
   useEffect(() => {
     if (!queueKnowledgeDraft) return;
     setKnowledgeQueued(false);
@@ -212,6 +233,15 @@ export function TaskDetail({
       : { ...queueKnowledgeDraft, savedBodyMarkdown: queueKnowledgeDraft.bodyMarkdown });
     setTab("review");
   }, [queueKnowledgeDraft]);
+  useEffect(() => {
+    if (queueImageSummary) setTab("work");
+  }, [queueImageSummary]);
+  useEffect(() => {
+    if (!queueImageSummary || tab !== "work" || !loaded) return;
+    const entry = [...(panelRef.current?.querySelectorAll<HTMLElement>("[data-work-log-entry]") ?? [])]
+      .find(node => node.dataset.workLogEntry === queueImageSummary.entryId);
+    entry?.focus();
+  }, [queueImageSummary, tab, loaded]);
   const update = (operation: () => Promise<TaskAggregate>) => {
     if (mutationBusyRef.current) return Promise.resolve();
     mutationBusyRef.current = true;
@@ -404,6 +434,7 @@ export function TaskDetail({
         update(() =>
           taskClient.workLog(task.id, revision, entry, file).then((next) => {
             setEntry("");
+            setImageQueueError(next.imageSummaryQueueError ?? "");
             setAttachment(undefined);
             return next;
           }),
@@ -726,12 +757,43 @@ export function TaskDetail({
         >
           {text.add}
         </button>
+        {imageQueueError && <p role="alert">{text.imageSummaryFailed} {imageQueueError}</p>}
         {orderedWorkLog(task.workLog).map((log) => (
-          <article className="log-entry" key={log.id}>
+          <article className="log-entry" key={log.id} data-work-log-entry={log.id} tabIndex={-1}>
             {log.createdAt && <time dateTime={log.createdAt}>{workLogTimestamp(log.createdAt)}</time>}
             <p>{log.body}</p>
             {log.attachment && (
               <small>{log.attachment.name ?? log.attachment.mediaType}</small>
+            )}
+            {log.attachment?.mediaType?.startsWith("image/") && log.attachment.data && (
+              <img
+                className="work-log-image"
+                src={`data:${log.attachment.mediaType};base64,${log.attachment.data}`}
+                alt={log.attachment.name || log.attachment.mediaType}
+              />
+            )}
+            {(log.imageSummaryVersions?.[document.documentElement.lang.startsWith("ko") ? "ko" : "en"]?.image_summary || log.imageSummary) && (
+              <section className="work-log-image-summary" aria-label={text.imageSummary}>
+                <small>{text.imageSummary}</small>
+                <p>{log.imageSummaryVersions?.[document.documentElement.lang.startsWith("ko") ? "ko" : "en"]?.image_summary || log.imageSummary}</p>
+              </section>
+            )}
+            {log.attachment?.mediaType?.startsWith("image/") && log.attachment.data && (
+              <div>
+                {["queued", "running", "retryable"].includes(log.imageSummaryJob?.status ?? "") ? (
+                  <p role="status">{text.imageSummaryPending}</p>
+                ) : (!log.imageSummaryVersions?.ko?.image_summary || !log.imageSummaryVersions?.en?.image_summary) && (
+                  <>
+                    {log.imageSummaryJob && ["failed", "cancelled", "stale"].includes(log.imageSummaryJob.status) && <p>{text.imageSummaryFailed}</p>}
+                    <button type="button" data-control="task-image-summary" data-record-id={log.id} disabled={mutationBusy} onClick={() => {
+                      void update(async () => {
+                        await taskClient.summarizeImage(log.id);
+                        return task;
+                      }).catch(() => undefined);
+                    }}>{text.summarizeImage}</button>
+                  </>
+                )}
+              </div>
             )}
             {log.comments?.map((comment) => (
               <p className="comment" key={comment.id}>

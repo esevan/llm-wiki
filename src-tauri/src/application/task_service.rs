@@ -682,11 +682,15 @@ impl TaskApplicationService {
             for entry in entries {
                 let entry_id = entry["id"].as_str().unwrap_or("");
                 let attachment=c.query_row("SELECT name,media_type,data FROM task_attachments WHERE entry_id=? LIMIT 1",[entry_id],|r|Ok(json!({"name":r.get::<_,String>(0)?,"mediaType":r.get::<_,String>(1)?,"data":r.get::<_,String>(2)?}))).optional().map_err(|e|e.to_string())?;
+                let localized = crate::native::localization::overlay(&c, "task_work_log_entries", json!({"id":entry_id}), "en")?;
+                let summary_job = c.query_row("SELECT id,status,error_message FROM ai_jobs_v2 WHERE task_kind='image_summary' AND entity_type='task_work_log_entries' AND entity_id=? ORDER BY rowid DESC LIMIT 1", [entry_id], |r| Ok(json!({"id":r.get::<_,String>(0)?,"status":r.get::<_,String>(1)?,"error":r.get::<_,String>(2)?}))).optional().map_err(|e|e.to_string())?;
                 let comments=c.prepare("SELECT id,body,created_at FROM task_work_log_comments WHERE entry_id=? ORDER BY created_at").map_err(|e|e.to_string())?.query_map([entry_id],|r|Ok(json!({"id":r.get::<_,String>(0)?,"body":r.get::<_,String>(1)?,"createdAt":r.get::<_,String>(2)?}))).map_err(|e|e.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|e|e.to_string())?;
                 if let Some(o) = entry.as_object_mut() {
                     if let Some(a) = attachment {
                         o.insert("attachment".into(), a);
                     }
+                    o.insert("imageSummaryVersions".into(), localized["localized_versions"].clone());
+                    if let Some(job) = summary_job { o.insert("imageSummaryJob".into(), job); }
                     o.insert("comments".into(), json!(comments));
                 }
             }

@@ -34,6 +34,18 @@ The Python/FastAPI browser delivery remains retired in Git history at `caef236`.
 
 ## Task-centered verification record
 
+### Work Log images and bilingual summaries (2026-09-15)
+
+Task detail renders saved and migrated image attachments inline. Image saves enqueue
+Korean and English summaries automatically; existing images can request them manually.
+Queue results open the owning entry, and summaries follow the interface language.
+Both languages and completion commit atomically with source, cancellation, and retry
+attempt guards. Automatic submission is idempotent for a saved entry.
+
+Verification is recorded in the task handoff. This environment requires the existing
+workspace ONNX library via `ORT_LIB_LOCATION` and `ORT_PREFER_DYNAMIC_LINK=1` for
+native builds because upstream has no prebuilt `x86_64-apple-darwin` binary.
+
 **UI/UX follow-up final package:** the signed `9b2b81082a43de0637bedd33a8cc670709ff2b21` bundle passed 32/32 scenarios. The generated inventory recorded 188 scanned source controls and 175 rendered/exercised/asserted controls; all six coverage-gap arrays were empty. Manual Korean IME, VoiceOver, OS reduced motion, Windows, zoom, and native quit/crash draft durability remain unverified or out of scope.
 
 Nine final native 1198×768 Korean-light captures from isolated `Dlnhjg` state were visually reviewed, including the Workbench, Task detail, Refinement, Task review, completion/Knowledge, Queue recovery, Vault search, Compass, and AI setup. Task Escape returned focus to its original trigger. This does not verify real Korean IME, VoiceOver, or OS reduced motion.

@@ -51,6 +51,8 @@ type Task = {
     id: string;
     body?: string;
     attachment?: { name?: string; mediaType?: string; data?: string };
+    imageSummaryVersions?: { ko?: { image_summary: string }; en?: { image_summary: string } };
+    imageSummaryJob?: { id: string; status: string };
     comments?: Array<{ body: string }>;
   }>;
   checklist?: Array<{ checked: boolean }>;
@@ -386,7 +388,22 @@ async function log(step: Step) {
   await waitFor(() => !document.querySelector<HTMLButtonElement>('[data-control="task-worklog-add"]')?.disabled, "screenshot-only entry enabled");
   await clickAfter("Work Log entry", "Save pasted screenshot");
   await waitForAsync(async () => (await task(title)).workLog?.some(item => item.body === "" && item.attachment?.name === "screenshot.png" && item.attachment?.mediaType === "image/png" && item.attachment?.data === screenshotData) ?? false, "pasted screenshot bytes persisted");
-  await step("Pasted an image through the Work Log clipboard handler and persisted exact screenshot bytes without requiring text.");
+  await waitFor(() => {
+    const preview = document.querySelector<HTMLImageElement>('.work-log-image[alt="screenshot.png"]');
+    return !!preview && preview.complete && preview.naturalWidth > 0;
+  }, "saved screenshot rendered inline");
+  await waitForAsync(async () => (await task(title)).workLog?.find(item => item.attachment?.name === "screenshot.png")?.imageSummaryJob?.status === "failed", "automatic image summary reports missing provider in the Queue");
+  await api("/provider/config", "PUT", { base_url: e2eProviderUrl, model: "deterministic", api_key: "desktop-e2e-key" });
+  await waitFor(() => !!document.querySelector('[data-control="task-image-summary"]'), "saved-image summary retry available");
+  click('[data-control="task-image-summary"]', "Generate both image summary languages");
+  await waitForAsync(async () => {
+    const saved = (await task(title)).workLog?.find(item => item.attachment?.name === "screenshot.png");
+    return saved?.imageSummaryJob?.status === "completed"
+      && saved.imageSummaryVersions?.ko?.image_summary === "결정론적 이미지 요약"
+      && saved.imageSummaryVersions?.en?.image_summary === "Deterministic image summary";
+  }, "bilingual image summary retry completed through the AI queue");
+  await waitFor(() => document.querySelector(".work-log-image-summary")?.textContent?.includes("Deterministic image summary") ?? false, "completed image summary rendered");
+  await step("Pasted an image through the Work Log clipboard handler, persisted exact screenshot bytes without requiring text, and rendered the saved image inline.");
   await revealTaskField("Checklist item");
   enter(field("Checklist item"), "verify result");
   await clickAfter("Checklist item", "Add checklist");

@@ -494,6 +494,12 @@ main:has(.task-workbench.active :is(.task-detail, .refinement-panel)) {
 .citation p {
   margin: 0;
 }
+.work-log-image {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin-top: var(--space-2);
+}
 .comment {
   margin-top: var(--space-2) !important;
   padding-left: var(--space-2);
@@ -982,4 +988,11 @@ main:has(.task-workbench.active :is(.task-detail, .refinement-panel)) {
 .workbench-completed .workbench-lane-cards { margin-top: var(--space-3); }
 @container (max-width: 700px) {
   .workbench-lanes { grid-template-columns: minmax(0, 1fr); }
+}
+.work-log-image-summary {
+  margin-top: var(--space-2);
+  padding: var(--space-2);
+  background: var(--color-bg-accent-subtle);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
