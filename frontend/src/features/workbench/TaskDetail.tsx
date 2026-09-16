@@ -695,6 +695,12 @@ export function TaskDetail({
             aria-label={text.checklistItem}
             value={check}
             onChange={(event) => setCheck(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && !event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229) {
+                event.preventDefault();
+                (event.currentTarget.nextElementSibling as HTMLButtonElement | null)?.click();
+              }
+            }}
           />
           <button
             type="button"
@@ -802,6 +808,12 @@ export function TaskDetail({
                 onChange={(event) =>
                   setComments({ ...comments, [log.id]: event.target.value })
                 }
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && !event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229) {
+                    event.preventDefault();
+                    (event.currentTarget.nextElementSibling as HTMLButtonElement | null)?.click();
+                  }
+                }}
               />
               <button
                 type="button"

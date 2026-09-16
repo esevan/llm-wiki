@@ -218,6 +218,29 @@ describe("Task detail", () => {
     expect(request.mock.calls.filter(([arg]) => arg.path === "/tasks/task-1/work-log")).toHaveLength(workLogsBeforeIme);
   });
 
+  it.each([
+    ["Checklist item", "/tasks/task-1/checklist"],
+    ["Comment log-1", "/work-log/log-1/comments"],
+  ])("submits %s on Enter, guarding empty input and IME composition", async (label, path) => {
+    const request = vi.fn().mockResolvedValue(response({
+      ...task, workLog: [{ id: "log-1", body: "Existing work" }],
+    }));
+    window.llmWikiApplication = { request };
+    render(<TaskDetail taskId="task-1" onClose={vi.fn()} onChanged={vi.fn()} />);
+    const field = await screen.findByLabelText(label);
+    fireEvent.change(field, { target: { value: "   " } });
+    fireEvent.keyDown(field, { key: "Enter" });
+    fireEvent.change(field, { target: { value: "추가할 내용" } });
+    fireEvent.keyDown(field, { key: "Enter", isComposing: true });
+    fireEvent.keyDown(field, { key: "Enter", keyCode: 229 });
+    expect(request.mock.calls.filter(([arg]) => arg.method === "POST")).toHaveLength(0);
+    expect(field).toHaveValue("추가할 내용");
+    fireEvent.keyDown(field, { key: "Enter" });
+    await waitFor(() => expect(request).toHaveBeenCalledWith(expect.objectContaining({ path, method: "POST" })));
+    await waitFor(() => expect(field).toHaveValue(""));
+    expect(request.mock.calls.filter(([arg]) => arg.method === "POST")).toHaveLength(1);
+  });
+
   it("attaches an image pasted from the clipboard and submits an image-only Work Log", async () => {
     const request = vi.fn().mockResolvedValue(response(task));
     window.llmWikiApplication = { request };
