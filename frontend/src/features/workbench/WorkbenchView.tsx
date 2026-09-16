@@ -221,6 +221,7 @@ export function WorkbenchView({ active }: { active: boolean }) {
       <h3>{item.kind === "task" && item.state === "in_progress" ? (
         <button className="active-task-title" data-control="task-shortcut-open" data-entity-id={item.id} onClick={(event) => selectDetail(item.id, event.currentTarget)}>{itemTitle(item)}</button>
       ) : itemTitle(item) || text.imageCapture}</h3>
+      {item.kind === "task" && item.originCaptureText && <p className="workbench-card-category">{text.originalCapture}: {item.originCaptureText}</p>}
       {item.kind === "capture" && item.hasImage && <small>{text.attachedImage}</small>}
       {item.kind === "task" && item.parentTaskId && <small>{text.subtask}</small>}
       <p className="workbench-card-category">{categoryLabels.get(`${item.kind}:${item.id}`)}</p>

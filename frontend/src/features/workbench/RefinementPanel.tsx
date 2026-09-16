@@ -445,6 +445,7 @@ export function RefinementPanel({
   const decide = async (
     proposal: RefinementProposal,
     decision: "accept" | "reject",
+    intent?: "split",
   ) => {
     if (!session || deciding) return;
     setDeciding(proposal.id);
@@ -459,6 +460,7 @@ export function RefinementPanel({
         decision === "accept"
           ? (edits[proposal.id] ?? normalizedPayload)
           : undefined,
+        intent,
       );
       setProposals((items) => items.filter((item) => item.id !== proposal.id));
       setEditing(undefined);
@@ -615,7 +617,7 @@ export function RefinementPanel({
                 onClick={() => setEditing(isEditing ? undefined : proposal.id)}>{isEditing ? text.previewFinishEdit : text.edit}</button>
               <button type="button" data-control="refinement-proposal-reject" disabled={Boolean(deciding)} onClick={() => void decide(proposal, "reject")}>{text.reject}</button>
               <button type="button" className="primary" data-control="refinement-proposal-accept" disabled={Boolean(deciding) || previewBusy || Boolean(session?.previewStatus && session.previewStatus !== "completed")}
-                onClick={() => void decide(proposal, "accept")}>{text.apply}</button>
+                onClick={() => void decide(proposal, "accept", proposal.type === "subtask" ? "split" : undefined)}>{proposal.type === "subtask" ? text.splitTask : text.apply}</button>
             </footer>
           </article>;
         })}

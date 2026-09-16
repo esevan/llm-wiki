@@ -316,8 +316,11 @@ fn refinement_open(db_path: &Path, input: &Value) -> Result<Value, String> {
     };
     let session_id = tx
         .query_row(
-            &format!("SELECT id FROM refinement_sessions WHERE {column}=?"),
-            [subject_id],
+            "SELECT s.id FROM refinement_sessions s WHERE
+             (?1='capture' AND s.capture_id=?2) OR (?1='task' AND (s.task_id=?2 OR
+             s.capture_id=(SELECT origin_capture_id FROM tasks WHERE id=?2)))
+             ORDER BY (s.task_id IS NOT NULL) DESC LIMIT 1",
+            params![kind, subject_id],
             |row| row.get::<_, String>(0),
         )
         .optional()
@@ -349,15 +352,13 @@ fn refinement_open(db_path: &Path, input: &Value) -> Result<Value, String> {
 fn refinement_get_for_subject(db_path: &Path, input: &Value) -> Result<Value, String> {
     let (kind, subject_id) = subject(input)?;
     let connection = database::open(db_path)?;
-    let column = if kind == "capture" {
-        "capture_id"
-    } else {
-        "task_id"
-    };
     let session_id = connection
         .query_row(
-            &format!("SELECT id FROM refinement_sessions WHERE {column}=?"),
-            [subject_id],
+            "SELECT s.id FROM refinement_sessions s WHERE
+             (?1='capture' AND s.capture_id=?2) OR (?1='task' AND (s.task_id=?2 OR
+             s.capture_id=(SELECT origin_capture_id FROM tasks WHERE id=?2)))
+             ORDER BY (s.task_id IS NOT NULL) DESC LIMIT 1",
+            params![kind, subject_id],
             |row| row.get::<_, String>(0),
         )
         .optional()
@@ -385,7 +386,7 @@ fn session_value(connection: &rusqlite::Connection, session_id: &str) -> Result<
         .map_err(|error| error.to_string())?
         .ok_or("Refinement session not found")?;
     if value["taskId"].is_null() {
-        let applied: Option<String> = connection.query_row("SELECT json_extract(result_json,'$.id') FROM refinement_proposal_decisions WHERE session_id=? AND decision!='reject' AND json_extract(result_json,'$.taskRevision') IS NOT NULL ORDER BY created_at DESC,rowid DESC LIMIT 1", [session_id], |r| r.get(0)).optional().map_err(|e| e.to_string())?;
+        let applied: Option<String> = connection.query_row("SELECT json_extract(result_json,'$.id') FROM refinement_proposal_decisions WHERE session_id=? AND decision!='reject' AND json_extract(result_json,'$.taskRevision') IS NOT NULL AND NOT EXISTS(SELECT 1 FROM task_subtasks h WHERE h.child_task_id=json_extract(result_json,'$.id')) ORDER BY created_at DESC,rowid DESC LIMIT 1", [session_id], |r| r.get(0)).optional().map_err(|e| e.to_string())?;
         if let Some(task_id) = applied { value["taskId"] = json!(task_id); }
     }
     let mut statement = connection
@@ -473,7 +474,7 @@ fn refinement_context(
 fn refinement_prompt(connection: &Connection, session_id: &str) -> Result<String, String> {
     let (session, _) = image_context(&refinement_context(connection, session_id)?);
     Ok(format!(
-        "Return JSON only as {{\"proposals\":[{{\"id\":string,\"type\":\"task_patch|new_task|subtask|problem_snapshot|task_problem_link\",\"payload\":object}}]}}. When taskSnapshot exists, refine that SAME Task with task_patch by default. Never create a replacement or duplicate Task. Only propose subtask when independently completable work genuinely needs its own boundary; include boundaryReason, parentTaskId=taskSnapshot.id, expectedTaskRevision, and all Task fields. Respect hierarchyContext: read parent, siblings and children scope/nonGoals; do not overlap sibling work or extend beyond the parent boundary. If boundaries are unclear ask before proposing a split. new_task is only for a Capture without a Task. For new_task, include every available Task field in payload: title, detail, outcome, scope, nonGoals, and validationCriteria. For task_patch, put only the changed Task values in payload.patch using those field names and include the exact taskSnapshot.taskRevision as expectedTaskRevision; the UI combines the patch with taskSnapshot for a complete review preview. Use detail for the full Task description, never an unlabelled summary. For problem_snapshot include statement, detail, category, and note when available; for task_problem_link include problemId, problemRevision, relationship, and note when available. Propose durable changes but do not apply them. Use only the supplied local session. A Capture may already contain a proposed solution: preserve it as the starting Task draft and ask only for details that are actually missing; do not restart broad problem or solution discovery.\n\n{}",
+        "Return JSON only as {{\"proposals\":[{{\"id\":string,\"type\":\"task_patch|new_task|subtask|problem_snapshot|task_problem_link\",\"payload\":object}}]}}. When taskSnapshot exists, refine that SAME Task with task_patch by default. Never create a replacement or duplicate Task. Only propose subtask when the user explicitly asks to split out independently completable work; include boundaryReason, parentTaskId=taskSnapshot.id, expectedTaskRevision, and all Task fields. Respect hierarchyContext: read parent, siblings and children scope/nonGoals; do not overlap sibling work or extend beyond the parent boundary. If boundaries are unclear ask before proposing a split. new_task is only for promoting a Capture without a Task into the same work item, never an additional independent Task. Propose one coherent refinement of that Capture. Splitting is a separate explicit user action after promotion. For new_task, include every available Task field in payload: title, detail, outcome, scope, nonGoals, and validationCriteria. For task_patch, put only the changed Task values in payload.patch using those field names and include the exact taskSnapshot.taskRevision as expectedTaskRevision; the UI combines the patch with taskSnapshot for a complete review preview. Use detail for the full Task description, never an unlabelled summary. For problem_snapshot include statement, detail, category, and note when available; for task_problem_link include problemId, problemRevision, relationship, and note when available. Propose durable changes but do not apply them. Use only the supplied local session. A Capture may already contain a proposed solution: preserve it as the starting Task draft and ask only for details that are actually missing; do not restart broad problem or solution discovery.\n\n{}",
         session
     ))
 }
@@ -970,6 +971,9 @@ pub(crate) fn refinement_decision_tx(tx: &Transaction<'_>, input: &Value) -> Res
                 if hash != super::task_hierarchy::context_hash(tx,task)? { return Err("head_conflict: parent or sibling Task changed; refine again".into()); }
             }
         }
+        if proposal["type"] == "subtask" && input["intent"] != "split" {
+            return Err("invalid_input: use the explicit split action to create a Subtask".into());
+        }
         apply_proposal_tx(
             tx,
             proposal["type"].as_str().unwrap_or(""),
@@ -1039,7 +1043,12 @@ fn apply_proposal_tx(
     match kind {
         "new_task" => {
             if let Some(task) = session_task_id { return revise_task_tx(tx,task,payload,timestamp); }
-            create_task_tx(tx, payload, capture_id, None, timestamp)
+            // Promotion preserves the work item's identity; the Capture remains provenance.
+            let capture = capture_id.ok_or("invalid_input: Capture required for promotion")?;
+            let mut promoted = payload.clone();
+            let category: Option<String> = tx.query_row("SELECT category FROM workbench_category_overrides WHERE entity_type='captures' AND entity_id=?", [capture], |r| r.get(0)).optional().map_err(|e| e.to_string())?;
+            if let Some(category) = category { promoted["category"] = json!(category); }
+            create_task_tx(tx, &promoted, Some(capture), Some(capture), timestamp)
         },
         "subtask" => {
             let parent = session_task_id.ok_or("subtask requires a Task session")?;
@@ -2679,7 +2688,8 @@ mod tests {
         assert_eq!(session_value(&c,session_id).unwrap()["state"],"completed");
         let hash = super::super::task_hierarchy::context_hash(&c,parent_id).unwrap();
         save(2,json!({"id":"child","type":"subtask","payload":{"title":"Collect agenda","scope":"Collect topics","nonGoals":"Prioritizing topics","validationCriteria":"Topic list exists","boundaryReason":"Independent collection result","expectedTaskRevision":2,"parentTaskId":parent_id,"hierarchyContextHash":hash}}));
-        let child = refinement_decision(&db,&json!({"operationId":"apply-child","sessionId":session_id,"proposalId":"child","draftRevision":2,"decision":"accept"})).unwrap();
+        assert!(refinement_decision(&db,&json!({"operationId":"implicit-child","sessionId":session_id,"proposalId":"child","draftRevision":2,"decision":"accept"})).unwrap_err().contains("explicit split"));
+        let child = refinement_decision(&db,&json!({"operationId":"apply-child","sessionId":session_id,"proposalId":"child","draftRevision":2,"decision":"accept","intent":"split"})).unwrap();
         let child_id = child["id"].as_str().unwrap();
         assert_eq!(super::super::task_hierarchy::parent(&c,child_id).unwrap().as_deref(),Some(parent_id));
         let prompt = refinement_prompt(&c,session_id).unwrap();
@@ -2689,6 +2699,36 @@ mod tests {
         let child_session = refinement_open(&db,&json!({"operationId":"open-child","taskId":child_id})).unwrap();
         let prompt = refinement_prompt(&c,child_session["id"].as_str().unwrap()).unwrap();
         assert!(prompt.contains("Refined agenda") && prompt.contains("Meeting agenda"));
+    }
+
+    #[test]
+    fn legacy_capture_task_keeps_identity_and_resumes_original_session() {
+        let (_root, db, _vault, _settings) = fixture();
+        let capture_id = capture(&db);
+        let session = refinement_open(&db, &json!({"operationId":"legacy-open","captureId":capture_id})).unwrap();
+        let session_id = session["id"].as_str().unwrap();
+        let repo = SqliteTaskRepository::new(&db);
+        let task = repo.transaction(|tx| {
+            let task = create_task_tx(tx, &json!({"title":"Legacy refined meeting"}), Some(&capture_id), None, &now())?;
+            tx.execute("INSERT INTO refinement_proposal_decisions(id,session_id,draft_revision,proposal_id,decision,result_json,operation_id) VALUES('legacy-decision',?,1,'legacy-proposal','accept',?,'legacy-apply')", params![session_id,task.to_string()]).map_err(|e|e.to_string())?;
+            tx.execute("UPDATE refinement_sessions SET state='completed' WHERE id=?", [session_id]).map_err(|e|e.to_string())?;
+            Ok(task)
+        }).unwrap();
+        assert_ne!(task["id"], capture_id);
+        let reopened = refinement_open(&db, &json!({"operationId":"legacy-resume","taskId":task["id"]})).unwrap();
+        assert_eq!(reopened["id"], session_id);
+        assert_eq!(reopened["taskId"], task["id"]);
+        assert_eq!(refinement_get_for_subject(&db, &json!({"taskId":task["id"]})).unwrap()["id"], session_id);
+        let service = crate::application::task_service::TaskApplicationService::new(&db);
+        let board = service.execute("workbench.get", &json!({})).unwrap();
+        let items: Vec<&Value> = board["categories"].as_array().unwrap().iter().flat_map(|c| c["items"].as_array().unwrap()).collect();
+        assert!(!items.iter().any(|item| item["kind"] == "capture" && item["id"] == capture_id));
+        assert!(items.iter().any(|item| item["kind"] == "task" && item["id"] == task["id"]));
+        let connection = database::open(&db).unwrap();
+        connection.execute("UPDATE refinement_sessions SET state='active' WHERE id=?", [session_id]).unwrap();
+        let active = service.execute("workbench.get", &json!({})).unwrap();
+        assert_eq!(active["refiningShortcuts"][0]["kind"], "task");
+        assert_eq!(active["refiningShortcuts"][0]["id"], task["id"]);
     }
 
     fn fixture() -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf) {
@@ -2910,6 +2950,17 @@ mod tests {
             .unwrap();
         let accepted=execute(&db,&settings,&vault,SemanticEngine::new(None),"task-refinement.decision",&json!({"operationId":"decide-1","sessionId":session,"proposalId":"p1","draftRevision":1,"decision":"accept"})).await.unwrap();
         assert_eq!(accepted["title"], "Accepted Task");
+        assert_eq!(accepted["id"], capture);
+        let reopened = refinement_open(&db, &json!({"operationId":"resume-promoted","taskId":capture})).unwrap();
+        assert_eq!(reopened["id"], session);
+        assert_eq!(reopened["taskId"], capture);
+        let service = crate::application::task_service::TaskApplicationService::new(&db);
+        let board = service.execute("workbench.get", &json!({})).unwrap();
+        let items: Vec<&Value> = board["categories"].as_array().unwrap().iter().flat_map(|c| c["items"].as_array().unwrap()).collect();
+        assert!(!items.iter().any(|item| item["kind"] == "capture" && item["id"] == capture));
+        assert!(items.iter().any(|item| item["kind"] == "task" && item["id"] == capture));
+        let task = service.execute("task.get", &json!({"taskId":capture})).unwrap();
+        assert_eq!(task["originCapture"]["id"], capture);
         execute(&db,&settings,&vault,SemanticEngine::new(None),"task-refinement.decision",&json!({"operationId":"decide-2","sessionId":session,"proposalId":"p2","draftRevision":1,"decision":"reject"})).await.unwrap();
         let count: i64 = database::open(&db)
             .unwrap()

@@ -12,6 +12,7 @@ export interface CaptureCard {
   lastUserActivityAt?: string;
 }
 export interface TaskCard {
+  originCaptureText?: string | null;
   kind: "task";
   id: string;
   taskRevision: number;
@@ -75,6 +76,7 @@ export interface ReadinessEntry {
   provenance?: string;
 }
 export interface TaskAggregate extends TaskCard {
+  originCapture?: { id: string; text: string; createdAt: string } | null;
   autoPublicationError?: string;
   hierarchy?: { parent?: TaskAggregate; siblings: TaskAggregate[]; children: TaskAggregate[] };
   detail?: string;

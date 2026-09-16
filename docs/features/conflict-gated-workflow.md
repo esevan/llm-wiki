@@ -23,7 +23,7 @@ Related work is visible and can be unlinked from either Task; prerequisites reta
 ## Resume from the board
 
 Workbench shows all in-progress Tasks at the top, followed by a compact entry form and three vertical lanes:
-**Inbox** for Captures without an ongoing refinement, **Refining** for saved refinements and migrated
+**Inbox** for Captures that have not become Tasks and have no ongoing refinement, **Refining** for saved refinements and migrated
 Problem-only items, and **Refined Tasks** for registered Tasks without an ongoing refinement.
 Each item appears once; in-progress Tasks stay at the top even when they have a refinement session.
 Completed Tasks are available in a collapsed section in the right lane. Category names remain on cards.

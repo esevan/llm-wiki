@@ -168,3 +168,15 @@ This focused verification does not replace the full release gate noted above.
   whitespace checks, and the signed release build. Packaged `task-publication` and `task-review`
   passed on that build. `task-controls` timed out after lineage loading, so the full desktop gate
   remains unmet. Diagnostics: `.tmp/desktop-e2e-artifacts-919VQg/results.json` in this worktree.
+
+
+## Refinement continuity (2026-09-16)
+
+Capture refinement now promotes the same ID, removes the original from Inbox,
+shows its text on the Task card and in details, and resumes the Capture session
+from the Task. Existing differently identified Tasks retain their origin links.
+Subtask acceptance requires the explicit split action (`intent: "split"`).
+Regression coverage was updated for promotion, legacy continuity, and split
+intent. At the user's request, tests, builds, and rendered UI verification were
+not run before merging to main. Run the combined verification after the pending
+work is integrated. The live application database was not edited.

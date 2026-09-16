@@ -48,8 +48,11 @@ accepting the proposal preserves those values in the Task detail.
 
 ## Refine the same Task and focus active work
 
-Refinement updates the existing Task ID and creates a new definition revision. A Capture creates
-its first Task; subsequent refinement continues that Task. A provider response labelled “new Task”
+Refinement updates the existing Task ID and creates a new definition revision. A Capture is promoted
+to a Task with the same ID; subsequent refinement continues that Task. The original leaves Inbox
+and is shown on its card and under **Original capture** in Task details. Reopening refinement from
+the Task resumes the original Capture conversation. Tasks created with different IDs by earlier
+versions retain their IDs and use their existing Capture links. A provider response labelled “new Task”
 in an existing Task session is treated as a Task revision, so Apply does not create an unrelated copy.
 After Apply, **Work status** opens beside **Preview** and shows **Refined - Revision N**. Refinement
 is separate from execution state: **Start work** moves the Task to **In progress**. Applied sessions
@@ -58,7 +61,9 @@ active work** to hide the other sections without losing selection or drafts.
 
 ## Explicit Subtasks
 
-Create a Subtask only for independently completable work. The preview states why it needs a separate
+Propose a Subtask only when the user asks to split out independently completable work.
+The **Split into a subtask** action explicitly creates it; ordinary refinement cannot create a child.
+API clients must include the top-level `intent: "split"` when applying a Subtask. The preview states why it needs a separate
 boundary, its parent, scope, non-goals and validation criteria. Accepting it also accepts the parent
 Knowledge rollup described below. The parent and children appear as an expandable, indented tree;
 Task detail links to the parent, siblings and children. Historical `split_from` links remain provenance,

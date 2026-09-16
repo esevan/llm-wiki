@@ -8,6 +8,8 @@ Product Spirit is the first test for every product and engineering decision. The
 
 Explicit Subtask acceptance authorizes cumulative parent Knowledge publication on each child completion. All children must finish before the parent closes. Refinement preserves Task identity; separate work has visible parent/child boundaries. Standalone Knowledge keeps its review-before-publication flow.
 
+Refining a Capture promotes the same work item, preserving its ID and original text. The original is provenance, not a second Inbox item. Older Tasks retain their existing IDs and Capture links. Additional work is created only through the explicit subtask split action; ordinary refinement revises the current work.
+
 ## 1. You talk. The work organizes itself.
 
 Capture accepts natural thought. AI conversation and Refinement discover structure, preserve the

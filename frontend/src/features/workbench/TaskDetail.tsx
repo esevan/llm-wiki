@@ -1228,6 +1228,11 @@ export function TaskDetail({
       </section>
       </div>
       <div className="task-tab-panel" data-task-tab="details" hidden={tab !== "details"}>
+      {task.originCapture && <details className="task-panel" data-control="task-origin-capture">
+        <summary>{text.originalCapture}</summary>
+        <p style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{task.originCapture.text}</p>
+        <small>{formatSystemTime(task.originCapture.createdAt, document.documentElement.lang || navigator.language)}</small>
+      </details>}
       <details className="task-panel" data-control="task-lineage-details"><summary>{text.flow}</summary>
         <header>
           <button

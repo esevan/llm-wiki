@@ -224,11 +224,12 @@ export const taskClient = {
     draftRevision: number,
     decision: "accept" | "reject",
     editedPayload?: Record<string, unknown>,
+    intent?: "split",
   ) =>
     request(
       `/refinement/${encodeURIComponent(id)}/proposal-decisions`,
       "POST",
-      { proposalId, draftRevision, decision, editedPayload },
+      { proposalId, draftRevision, decision, editedPayload, ...(intent ? { intent } : {}) },
     ),
   review: (subject: Record<string, unknown>) =>
     request<ConflictReview>("/conflict-reviews", "POST", {
