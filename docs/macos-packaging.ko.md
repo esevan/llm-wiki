@@ -35,6 +35,28 @@ certificate나 private key를 export하지 않습니다. 패키지 명령은 그
 override할 수 있습니다. `npm run tauri:build -- --no-bundle`은 unsigned compile-only CI 확인에 계속
 사용할 수 있습니다.
 
+## Intel macOS 런타임 의존성
+
+상위 패키지가 `x86_64-apple-darwin` 사전 빌드 아카이브를 제공하지 않으므로 Intel macOS에서는
+설치된 ONNX Runtime을 사용합니다. 빌드 전에 Homebrew로 `onnxruntime`을 설치하세요.
+패키지 명령은 `/usr/local/opt/onnxruntime/lib`를 감지하며, 명시한 `ORT_LIB_LOCATION`이나
+`ORT_LIB_PATH`를 우선합니다. 해당 설치 경로로 네이티브 테스트를 실행하려면 다음을 사용하세요.
+
+```sh
+export ORT_LIB_LOCATION=/usr/local/opt/onnxruntime/lib
+export ORT_PREFER_DYNAMIC_LINK=1
+cargo test --manifest-path src-tauri/Cargo.toml
+```
+
+패키징은 시스템 라이브러리를 제외한 동적 라이브러리 의존성을 모두 앱의 `Contents/Frameworks`에
+복사하고 참조를 번들 상대 경로로 바꾼 뒤, 설치 파일 생성 전에 서명합니다. 검증은 누락된 라이브러리와
+외부 런타임 참조를 거부합니다. 시스템 라이브러리와 Cargo 원본 실행 파일은 보존하며, 준비 파일은
+worktree의 `.tmp`에 저장합니다. 완성된 앱은 실행 시 Homebrew 라이브러리가 필요하지 않습니다.
+
+Apple Team ID가 없는 로컬 서명 인증서에는 `Entitlements.local.plist`를 적용해 hardened runtime을
+유지하면서 포함된 라이브러리를 로드할 수 있게 합니다. Developer ID 및 Apple Distribution 빌드는
+라이브러리 검증을 유지합니다. 앱의 entitlement만 바뀌며 macOS 보안 설정이나 서명 identity는 바뀌지 않습니다.
+
 ## 격리된 UI 검토
 
 ad-hoc `.app`을 복사·재서명하거나 직접 실행하는 대신 review launcher를 사용하세요.

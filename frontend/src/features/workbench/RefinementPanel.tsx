@@ -382,7 +382,6 @@ export function RefinementPanel({
     const current = latest.current;
     if (!current.session) {
       proceed();
-      requestAnimationFrame(restoreFocus);
       return;
     }
     closing.current = true;
@@ -391,14 +390,20 @@ export function RefinementPanel({
       await persistCurrent();
       skipCleanupFlush.current = true;
       proceed();
-      requestAnimationFrame(restoreFocus);
     } catch (e) {
       setError(String(e instanceof Error ? e.message : e));
     } finally {
       closing.current = false;
     }
-  }, [onClose, restoreFocus, persistCurrent]);
+  }, [onClose, persistCurrent]);
   useModalInteraction(panelRef, 20, () => { void close(); });
+  useEffect(() => () => {
+    // Wait for unmount to release the focus trap and background inert state.
+    // Strict Mode's effect replay must not move focus out of a mounted panel.
+    requestAnimationFrame(() => {
+      if (!panelRef.current?.isConnected) restoreFocus();
+    });
+  }, [restoreFocus]);
   useImperativeHandle(ref, () => ({ requestLeave: (proceed) => { void close(proceed); } }), [close]);
   useEffect(() => {
     headingRef.current?.focus();

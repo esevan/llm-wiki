@@ -2,11 +2,22 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import { beforeAll, afterAll, describe, expect, it, vi } from "vitest";
 import { WorkbenchView } from "./WorkbenchView";
 
+const nativeDialogs = new Set<HTMLDialogElement>();
+const querySelector = document.querySelector.bind(document);
 beforeAll(() => {
-  Object.defineProperty(HTMLDialogElement.prototype, "showModal", { configurable: true, value: function (this: HTMLDialogElement) { this.open = true; } });
-  Object.defineProperty(HTMLDialogElement.prototype, "close", { configurable: true, value: function (this: HTMLDialogElement) { this.open = false; } });
+  // jsdom's open attribute does not place a dialog in the native modal top layer.
+  Object.defineProperty(HTMLDialogElement.prototype, "showModal", { configurable: true, value: function (this: HTMLDialogElement) { nativeDialogs.add(this); this.open = true; } });
+  Object.defineProperty(HTMLDialogElement.prototype, "close", { configurable: true, value: function (this: HTMLDialogElement) { nativeDialogs.delete(this); this.open = false; } });
+  vi.spyOn(document, "querySelector").mockImplementation(selector => selector === "dialog:modal"
+    ? [...nativeDialogs].find(dialog => dialog.isConnected && dialog.open) ?? null
+    : querySelector(selector));
 });
-afterAll(() => { Reflect.deleteProperty(HTMLDialogElement.prototype, "showModal"); Reflect.deleteProperty(HTMLDialogElement.prototype, "close"); });
+afterAll(() => {
+  vi.mocked(document.querySelector).mockRestore();
+  nativeDialogs.clear();
+  Reflect.deleteProperty(HTMLDialogElement.prototype, "showModal");
+  Reflect.deleteProperty(HTMLDialogElement.prototype, "close");
+});
 
 const snapshot = {
   revision: 1,
@@ -270,7 +281,7 @@ describe("Task Workbench", () => {
     fireEvent.click(screen.getByRole("alertdialog").querySelector('[data-control="task-delete-confirm"]')!);
     await waitFor(() => expect(screen.queryByText("Keep this thought")).not.toBeInTheDocument());
     expect(request.mock.calls.filter(([arg]) => arg.method === "DELETE")).toHaveLength(1);
-    expect(document.querySelector("#workbench h1")).toHaveFocus();
+    await waitFor(() => expect(document.querySelector("#workbench h1")).toHaveFocus());
   });
   it("retains a Task and its active shortcut when deletion fails, then permits retry", async () => {
     let attempts = 0;
@@ -294,6 +305,8 @@ describe("Task Workbench", () => {
 });
 
 const draftControl = (id: string) => {
+  const current = document.querySelector<HTMLElement>(`[data-control="${id}"]`);
+  if (current && !current.closest("[hidden]")) return current;
   if (id.startsWith("task-revision-")) {
     const details = document.querySelector('[data-control="task-detail-tab-details"]') as HTMLElement | null;
     if (details) fireEvent.click(details);

@@ -246,8 +246,24 @@ impl SqliteWorkTrackingStore {
         duration_ms: u128,
     ) {
         if let Ok(connection) = database::open(&self.path) {
-            let _=connection.execute("INSERT INTO work_tracking_activity_events(id,source_interface,connection_id,session_id,operation,outcome,safe_error_code,duration_ms,created_at) VALUES (?,?,?,?,?,?,?,?,?)",params![Uuid::new_v4().to_string(),source,connection_id,session_id,operation,outcome,error,duration_ms.min(i64::MAX as u128) as i64,now()]);
+            Self::record_activity_on(
+                &connection, source, connection_id, session_id, operation, outcome, error, duration_ms,
+            );
         }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn record_activity_on(
+        connection: &Connection,
+        source: &str,
+        connection_id: Option<&str>,
+        session_id: Option<&str>,
+        operation: &str,
+        outcome: &str,
+        error: Option<&str>,
+        duration_ms: u128,
+    ) {
+        let _=connection.execute("INSERT INTO work_tracking_activity_events(id,source_interface,connection_id,session_id,operation,outcome,safe_error_code,duration_ms,created_at) VALUES (?,?,?,?,?,?,?,?,?)",params![Uuid::new_v4().to_string(),source,connection_id,session_id,operation,outcome,error,duration_ms.min(i64::MAX as u128) as i64,now()]);
     }
 
     pub fn connection_scopes(&self, connection_id: &str) -> Result<Vec<String>, AppError> {
@@ -890,7 +906,7 @@ impl SqliteWorkTrackingStore {
         observed_at: Option<&str>,
         supersedes_event_id: Option<&str>,
     ) -> Result<Value, AppError> {
-        self.connection_scopes(connection_id)?;
+        let started = std::time::Instant::now();
         let canonical = payload.to_string();
         if canonical.len() > 16 * 1024 {
             return Err(AppError::new(
@@ -912,6 +928,11 @@ impl SqliteWorkTrackingStore {
             operation_id,
             &request_hash,
         )? {
+            Self::record_activity_on(
+                &transaction, "chat", Some(connection_id), Some(session_id),
+                "inbound_work_append", "accepted", None, started.elapsed().as_millis(),
+            );
+            transaction.commit().map_err(storage_error)?;
             return Ok(response);
         }
         let (head_event, head_revision, state) = transaction.query_row(
@@ -982,6 +1003,10 @@ impl SqliteWorkTrackingStore {
             &response,
             &timestamp,
         )?;
+        Self::record_activity_on(
+            &transaction, "chat", Some(connection_id), Some(session_id),
+            "inbound_work_append", "accepted", None, started.elapsed().as_millis(),
+        );
         transaction.commit().map_err(storage_error)?;
         Ok(response)
     }

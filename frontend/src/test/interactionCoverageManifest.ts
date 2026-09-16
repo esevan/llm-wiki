@@ -10,7 +10,8 @@ const task = (id: string, family: `F${number}`, source: string, effect: string, 
 const existing = (id: string, family: `F${number}`, selector: string, source: string, evidence: string, effect: string, disabledReason?: string): ControlSpec => ({ id, family, kind: 'button', selector, source, sourceEvidence: evidence, scenario: 'designated-interactive-suite', effect, disabledReason });
 
 const manifest: readonly ControlSpec[] = [
-  ...['input-image-file', 'input-image-choose', 'input-image-remove'].map(id => task(id, 'F3', 'frontend/src/features/workbench/InputImageAttachment.tsx', 'image selection, preview, or removal updates the unsent entry')),
+  { ...task('input-image-file', 'F3', 'frontend/src/features/workbench/InputImageAttachment.tsx', 'selected file updates the unsent image preview', 'disabled while reading an attachment or saving/sending the entry'), kind: 'input', delegatedBy: 'input-image-choose' },
+  ...['input-image-choose', 'input-image-remove'].map(id => task(id, 'F3', 'frontend/src/features/workbench/InputImageAttachment.tsx', 'image selection, preview, or removal updates the unsent entry', 'disabled while reading an attachment or saving/sending the entry')),
   ...['refinement-tab-preview','refinement-tab-status','refinement-start-work','refinement-boundaries'].map(id => task(id,'F35','frontend/src/features/workbench/RefinementPanel.tsx','refinement status, work transition, or Task boundaries appear')),
   ...['task-hierarchy-details','task-parent-open','task-family-open'].map(id => task(id,'F24','frontend/src/features/workbench/TaskDetail.tsx','explicit Task hierarchy opens or navigates')),
   ...['task-subtasks-expand','workbench-focus-active'].map(id => task(id,'F3','frontend/src/features/workbench/WorkbenchView.tsx','Subtasks expand or active work receives focus')),
@@ -65,6 +66,7 @@ const manifest: readonly ControlSpec[] = [
   existing('task-card-refine', 'F8', '[data-control="task-card-refine"]', 'frontend/src/features/workbench/WorkbenchView.tsx', '"task-card-refine"', 'canonical refinement opens'),
   task('task-card-delete', 'F8', 'frontend/src/features/workbench/WorkbenchView.tsx', 'deletion confirmation opens'),
   task('task-detail-close', 'F9', 'frontend/src/features/workbench/TaskDetail.tsx', 'detail closes without mutation'),
+  { ...task('task-origin-capture', 'F9', 'frontend/src/features/workbench/TaskDetail.tsx', 'original Capture content is disclosed'), kind: 'details' },
   task('task-detail-retry', 'F9', 'frontend/src/features/workbench/TaskDetail.tsx', 'failed Task detail load retries'),
   ...['decisions', 'lineage'].map(name => task(`task-${name}-details`, 'F9', 'frontend/src/features/workbench/TaskDetail.tsx', 'secondary Task detail section discloses')),
   ...['work', 'details', 'review'].map(name => task(`task-detail-tab-${name}`, 'F9', 'frontend/src/features/workbench/TaskDetail.tsx', 'Task detail section changes without losing drafts')),
@@ -147,7 +149,9 @@ const disabledPreconditions = new Map<string, string>([
   ['task-relationship-link', 'relationship target is missing or save is in progress'],
   ['task-completion-complete', 'blank completion evidence, invalid Task state, or save in progress'],
   ['task-knowledge-draft', 'Task is incomplete or save in progress'],
+  ['task-knowledge-correct', 'draft source is absent, its Task revision is stale/loading, or save is in progress'],
   ['task-knowledge-publish', 'draft is absent, stale, or save in progress'],
+  ['task-knowledge-withdraw', 'published source is absent or a Knowledge operation is in progress'],
   ['refinement-send', 'blank message or request in progress'],
   ['chat-propose', 'tracking request in progress'],
   ['tracking-accept', 'tracking request in progress'],

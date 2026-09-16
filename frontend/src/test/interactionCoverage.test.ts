@@ -6,6 +6,23 @@ const controls: readonly ControlSpec[] = [{ id: 'F04.save-capture', family: 'F4'
 const sources = new Map([['fixture.tsx', '<button data-control="F04.save-capture" id="save">Save</button>']]);
 
 describe('interactive control coverage', () => {
+  it('observes a hidden native file input only through its visible declared sibling chooser', () => {
+    const file = { ...controls[0], id: 'file', kind: 'input' as const, selector: '#file', delegatedBy: 'F04.save-capture' };
+    const mapped = [...controls, file];
+    document.body.innerHTML = '<div><button id="save">Choose</button><input id="file" type="file" hidden></div>';
+    const coverage = new InteractionCoverage(mapped, sources);
+    coverage.observe(document, 'file-picker');
+    expect(coverage.report().renderedIds).toEqual(['F04.save-capture', 'file']);
+    document.querySelector('div')!.hidden = true;
+    const hidden = new InteractionCoverage(mapped, sources);
+    hidden.observe(document, 'hidden-picker');
+    expect(hidden.report().renderedIds).toEqual([]);
+    document.body.innerHTML = '<button id="save">Choose</button><div><input id="file" type="file" hidden></div>';
+    const unrelated = new InteractionCoverage(mapped, sources);
+    unrelated.observe(document, 'unrelated-picker');
+    expect(unrelated.report().notRendered).toContain('file');
+  });
+
   it('keeps individual Task controls distinct from the 68-family inventory', () => {
     expect(inventoryFamilyCount).toBe(68);
     expect(taskInteractiveManifest.length).toBeGreaterThan(68);

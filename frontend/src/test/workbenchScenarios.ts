@@ -40,11 +40,14 @@ function observe(h: WorkbenchScenarioHarness, state: string) {
 }
 
 async function clickControl(h: WorkbenchScenarioHarness, name: string, label: string, recordId?: string) {
+  const suffix = recordId ? `[data-record-id="${CSS.escape(recordId)}"]` : "";
+  await h.waitFor(() => Boolean(document.querySelector(`[data-control="${name}"]${suffix}`)), `rendered ${label}`);
   await h.waitFor(
     () => document.querySelector(".task-detail")?.getAttribute("aria-busy") !== "true",
     `idle Task detail before ${label}`,
   );
   await prepareTaskControl(h, name);
+  await h.waitFor(() => !control(name, recordId).matches(":disabled"), `enabled ${label}`);
   await h.prepareClick(control(name, recordId), label);
   h.coverage.interact(name, () => h.click(control(name, recordId), label));
 }
@@ -153,6 +156,29 @@ export async function runTaskControlMatrixScenario(h: WorkbenchScenarioHarness) 
   assertDisabled("task-entry-save", true);
   await clickControl(h, "task-entry-capture-mode", "Select Capture entry mode");
   effect(h, ["task-entry-capture-mode"], () => control<HTMLInputElement>("task-entry-capture-mode").checked);
+  const imageFile = control<HTMLInputElement>("input-image-file");
+  let pickerRequested = false;
+  // The real chooser delegates to this input; replace only the OS file selection.
+  imageFile.addEventListener("click", event => { pickerRequested = true; event.preventDefault(); }, { once: true });
+  await clickControl(h, "input-image-choose", "Choose a Capture image");
+  effect(h, ["input-image-choose"], () => pickerRequested);
+  const imageFiles = new DataTransfer();
+  const png = Uint8Array.from(atob("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII="), char => char.charCodeAt(0));
+  imageFiles.items.add(new File([png], "capture-evidence.png", { type: "image/png" }));
+  h.coverage.interact("input-image-file", () => {
+    Object.defineProperty(imageFile, "files", { configurable: true, value: imageFiles.files });
+    imageFile.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  await h.waitFor(() => {
+    const preview = document.querySelector<HTMLImageElement>('.input-image-preview img[alt="capture-evidence.png"]');
+    return Boolean(preview?.complete && preview.naturalWidth > 0) && !control<HTMLButtonElement>("task-entry-save").disabled;
+  }, "selected Capture image preview and image-only save");
+  effect(h, ["input-image-file"], () => Boolean(document.querySelector('.input-image-preview img[alt="capture-evidence.png"]')) && !control<HTMLButtonElement>("task-entry-save").disabled);
+  observe(h, "selected Capture image");
+  await clickControl(h, "input-image-remove", "Remove unsent Capture image");
+  await h.waitFor(() => !document.querySelector(".input-image-preview") && control<HTMLButtonElement>("task-entry-save").disabled, "removed Capture image");
+  effect(h, ["input-image-remove"], () => !document.querySelector(".input-image-preview") && control<HTMLButtonElement>("task-entry-save").disabled);
+
   await clickControl(h, "task-entry-task-mode", "Select Task entry mode");
   effect(h, ["task-entry-task-mode"], () => control<HTMLInputElement>("task-entry-task-mode").checked);
   await enterControl(h, "task-entry-text", title);
@@ -206,15 +232,10 @@ export async function runTaskControlMatrixScenario(h: WorkbenchScenarioHarness) 
   await selectTaskTab(h, "Details", "Return to Task Details tab");
   if (control<HTMLTextAreaElement>("task-revision-detail").value !== "Keep this draft while comparing another Task")
     throw new Error("Work Log refresh lost the dirty Task definition");
-  const targetCard = [...document.querySelectorAll<HTMLElement>(".canonical-card")].find(
-    card => card.querySelector("h3")?.textContent === targetTitle,
-  );
-  const targetOpen = targetCard?.querySelector<HTMLElement>('[data-control="task-card-open"]');
-  if (!targetOpen) throw new Error("Second Task open control missing");
-  h.click(targetOpen, "Compare another Task while the first draft is dirty");
-  await h.waitFor(() => Boolean(document.querySelector(".task-draft-guard")), "Task switch leave guard");
-  observe(h, "Task switch leave guard");
-  await clickControl(h, "task-draft-guard-keep-editing", "Keep the current Task draft while comparing");
+  await clickControl(h, "task-detail-close", "Request close while the Task draft is dirty");
+  await h.waitFor(() => Boolean(document.querySelector(".task-draft-guard")), "Task close leave guard");
+  observe(h, "Task close leave guard");
+  await clickControl(h, "task-draft-guard-keep-editing", "Keep editing the current Task draft");
   effect(h, ["task-draft-guard-keep-editing"], () => document.querySelector(".task-detail")?.textContent?.includes(title) === true && !document.querySelector(".task-draft-guard"));
   await clickControl(h, "task-detail-close", "Request close for dirty Task");
   await h.waitFor(() => Boolean(document.querySelector(".task-draft-guard")), "Task close leave guard");
@@ -444,6 +465,7 @@ export async function runTaskControlMatrixScenario(h: WorkbenchScenarioHarness) 
   await clickControl(h, "task-detail-close", "Close active Task detail");
   await h.waitFor(() => !document.querySelector(".task-detail"), "closed active Task detail");
   effect(h, ["task-detail-close"], () => !document.querySelector(".task-detail"));
+  await h.waitFor(() => Boolean(document.querySelector('[data-control="task-shortcut-open"]')), "rendered active Task shortcut");
   observe(h, "active Task shortcut");
   await h.step("Task controls: closed active Task detail");
   await clickControl(h, "task-shortcut-open", "Resume active Task");
@@ -467,6 +489,7 @@ export async function runTaskControlMatrixScenario(h: WorkbenchScenarioHarness) 
 
   await clickControl(h, "task-detail-close", "Close completed Task");
   await h.waitFor(() => !document.querySelector(".task-detail"), "closed completed detail");
+  await h.waitFor(() => Boolean(document.querySelector('[data-control="workbench-completed-details"]')), "rendered completed Tasks disclosure");
   observe(h, "completed Tasks disclosure");
   const completed = control<HTMLDetailsElement>("workbench-completed-details");
   await h.prepareClick(completed.querySelector("summary")!, "Show completed Tasks");
@@ -497,9 +520,11 @@ export async function runTaskControlMatrixScenario(h: WorkbenchScenarioHarness) 
     return job?.status === "completed";
   }, "completed exact Knowledge Queue job");
   await h.step("Task controls: Knowledge Queue job completed");
-  document.querySelector<HTMLButtonElement>("#queue-toggle")?.click();
+  await clickControl(h, "task-detail-close", "Close Task before opening Queue result");
+  await h.waitFor(() => !document.querySelector(".task-detail") && !document.querySelector<HTMLElement>(".app")?.inert, "interactive shell before Queue result");
+  h.click(document.querySelector<HTMLButtonElement>("#queue-toggle")!, "Open Knowledge Queue");
   const resultSelector = `#queue-list [data-job-id="${knowledgeJobId}"] [data-job-action="result"]`;
-  await h.waitFor(() => Boolean(document.querySelector(resultSelector)), "completed Knowledge Queue result button");
+  await h.waitFor(() => { const button = document.querySelector<HTMLButtonElement>(resultSelector); return Boolean(button && !button.disabled); }, "enabled completed Knowledge Queue result button");
   h.click(document.querySelector<HTMLButtonElement>(resultSelector)!, "Open exact Knowledge Queue result");
   await h.waitFor(() => Boolean(document.querySelector(".knowledge-draft")), "exact Knowledge draft preview");
   effect(h, ["task-knowledge-draft", "task-knowledge-draft-retry"], () => Boolean(document.querySelector(".knowledge-draft-preview")));
@@ -525,6 +550,7 @@ export async function runTaskControlMatrixScenario(h: WorkbenchScenarioHarness) 
   observe(h, "regenerated Knowledge draft");
   const regeneratedPublish = document.querySelector<HTMLButtonElement>('.knowledge-draft [data-control="task-knowledge-publish"]');
   if (!regeneratedPublish) throw new Error("Regenerated Knowledge publish control missing");
+  await h.waitFor(() => !regeneratedPublish.disabled, "regenerated Knowledge revision loaded");
   h.click(regeneratedPublish, "Publish regenerated Knowledge");
   await h.waitFor(() => !document.querySelector(".knowledge-draft"), "republished Knowledge");
   await clickControl(h, "task-knowledge-withdraw", "Withdraw Knowledge");
@@ -539,7 +565,7 @@ export async function runTaskControlMatrixScenario(h: WorkbenchScenarioHarness) 
   await h.waitFor(() => Boolean(document.querySelector(".refinement-panel")), "Task refinement panel");
   effect(h, ["task-detail-refine"], () => Boolean(document.querySelector(".refinement-panel")));
   h.click(control("refinement-close"), "Close Task refinement");
-  await h.waitFor(() => Boolean(document.querySelector(".task-detail")), "restored Task detail");
+  await h.waitFor(() => !document.querySelector(".refinement-panel") && Boolean(document.querySelector(".task-detail")), "restored Task detail");
   observe(h, "restored Task detail");
   await clickControl(h, "task-detail-close", "Close Task detail");
   await h.waitFor(() => !document.querySelector(".task-detail"), "closed Task detail");
@@ -561,7 +587,8 @@ export async function runTaskControlMatrixScenario(h: WorkbenchScenarioHarness) 
   effect(h, ["task-shortcut-refine"], () => Boolean(document.querySelector(".refinement-panel")));
   h.click(control("refinement-close"), "Close resumed Task refinement");
   await h.waitFor(() => !document.querySelector(".refinement-panel"), "closed refinement before deletion");
-  const captureDelete = captureCard?.querySelector<HTMLElement>('[data-control="task-card-delete"]');
+  const savedCaptureCard = [...document.querySelectorAll<HTMLElement>(".canonical-card")].find(card => card.textContent?.includes(shortcutCapture));
+  const captureDelete = savedCaptureCard?.querySelector<HTMLElement>('[data-control="task-card-delete"]');
   if (!captureDelete) throw new Error("Capture delete control missing");
   observe(h, "Workbench deletion controls");
   h.coverage.interact("task-card-delete", () => h.click(captureDelete, "Ask to delete Capture"));

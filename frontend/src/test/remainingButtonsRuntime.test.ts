@@ -239,6 +239,30 @@ describe('production manual, search, and provider controls', () => {
 });
 
 describe('production Explore controls', () => {
+  it('releases the sender after receiving a response even when animation timers are paused', async () => {
+    document.body.innerHTML = '<div id="chat-log"></div><form id="chat-form"><textarea id="chat-message"></textarea><button class="primary">Send</button></form>';
+    const request = vi.fn(async () => new Response('data: A complete response that still has text waiting to animate.\n\nevent: done\ndata: done\n\n'));
+    const timer = vi.fn();
+    const visibility = vi.spyOn(document, 'hidden', 'get').mockReturnValue(false);
+    try {
+      runModule(exploreSource.slice(exploreSource.indexOf("$('#chat-form').onsubmit=")), {
+        $, esc: String, chatTarget: { type: 'captures', id: 'c', mode: 'refine' },
+        applicationRequest: request, activeLocale: 'en', cleanChatText: String,
+        setTimeout: timer,
+      }, []);
+      const form = document.querySelector<HTMLFormElement>('#chat-form')!;
+      const message = document.querySelector<HTMLTextAreaElement>('#chat-message')!;
+      message.value = 'First turn';
+      await form.onsubmit!(new Event('submit', { cancelable: true }) as SubmitEvent);
+      expect(timer).toHaveBeenCalled();
+      expect(document.querySelector('#chat-log article:last-child p')!.textContent!.length).toBeLessThan(20);
+      expect(form.dataset.sending).toBe('false');
+      expect(document.querySelector<HTMLButtonElement>('#chat-form button')!.disabled).toBe(false);
+      message.value = 'Second turn';
+      await form.onsubmit!(new Event('submit', { cancelable: true }) as SubmitEvent);
+      expect(request).toHaveBeenCalledTimes(2);
+    } finally { visibility.mockRestore(); }
+  });
   it('clicks draft, tabs, apply, chat send, and preview retry through the rendered handlers', async () => {
     document.body.innerHTML = `
       <dialog id="chat-modal"><section class="modal"><button id="refinement-preview-warning" hidden>!</button><h2 id="chat-title"></h2><div id="chat-log"></div><form id="chat-form"><label></label><textarea id="chat-message"></textarea><button class="primary">Send</button></form></section></dialog>

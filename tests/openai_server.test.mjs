@@ -12,6 +12,28 @@ async function startFakeProvider() {
   return { child, port: Number.parseInt(String(chunk).trim(), 10) };
 }
 
+test("current refinement protocol preserves Task identity and only splits on an explicit request", async (context) => {
+  const { child, port } = await startFakeProvider();
+  context.after(() => child.kill("SIGTERM"));
+  const preview = async (session) => {
+    const response = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "deterministic-test-model", messages: [{ role: "user", content:
+        `Return JSON with type "task_patch|new_task|subtask|problem_snapshot|task_problem_link".\n\n${JSON.stringify(session)}` }] }),
+    });
+    return JSON.parse((await response.json()).choices[0].message.content).proposals[0];
+  };
+  assert.equal((await preview({ messages: [] })).type, "new_task");
+  const taskSnapshot = { id: "parent", taskRevision: 7 };
+  const patch = await preview({ taskSnapshot, messages: [] });
+  assert.equal(patch.type, "task_patch");
+  assert.equal(patch.payload.expectedTaskRevision, 7);
+  const split = await preview({ taskSnapshot, messages: [{ body: "Split a deterministic Subtask" }] });
+  assert.equal(split.type, "subtask");
+  assert.equal(split.payload.parentTaskId, "parent");
+  assert.equal(split.payload.expectedTaskRevision, 7);
+});
+
 test("multimodal image-summary prompts return both localized summaries", async (context) => {
   const { child, port } = await startFakeProvider();
   context.after(() => child.kill("SIGTERM"));

@@ -40,6 +40,11 @@ function control<T extends HTMLElement>(selector: string, label: string) {
   return element;
 }
 
+function readyControl(selector: string) {
+  const element = document.querySelector<HTMLElement>(selector);
+  return Boolean(element && !element.matches(":disabled"));
+}
+
 function observeCoverage(harness: Pick<ChatScenarioHarness, "coverage">, root: ParentNode, scenario: string) {
   harness.coverage?.observe(root, scenario);
 }
@@ -62,10 +67,11 @@ async function providerRequests(providerUrl: string): Promise<ProviderRequest[]>
 }
 
 async function openCaptureRefinement(harness: ChatScenarioHarness, captureText: string) {
-  const snapshot = await harness.api<{ categories: Array<{ items: Array<{ kind: string; id: string; text?: string }> }> }>("/workbench");
-  const capture = snapshot.categories.flatMap(category => category.items).find(item => item.kind === "capture" && item.text === captureText);
+  const snapshot = await harness.api<{ categories: Array<{ items: Array<{ kind: string; id: string; text?: string; originCaptureText?: string }> }> }>("/workbench");
+  const capture = snapshot.categories.flatMap(category => category.items).find(item => item.kind === "capture" ? item.text === captureText : item.kind === "task" && item.originCaptureText === captureText);
   if (!capture) throw new Error("Saved Capture was not present before opening refinement");
-  const button = control<HTMLButtonElement>(`[data-entity-id="${CSS.escape(capture.id)}"][data-control="task-card-refine"]`, "Capture refinement entry");
+  await harness.waitFor(() => !document.querySelector<HTMLElement>(".app")?.inert, "interactive Workbench before refinement");
+  const button = control<HTMLButtonElement>(`[data-entity-id="${CSS.escape(capture.id)}"]:is([data-control="task-card-refine"],[data-control="task-shortcut-refine"])`, "Capture refinement entry");
   harness.click(button, "Open Capture refinement");
   await harness.waitFor(() => Boolean(document.querySelector('.refinement-panel[data-refinement-session]:not([data-refinement-session=""])')), "loaded Capture refinement panel");
   return capture.id;
@@ -168,6 +174,15 @@ export async function runTaskChatScenario(harness: ChatScenarioHarness): Promise
   coverEffect(harness, "refinement-proposal-accept", () => !proposal.isConnected);
   const accepted = await harness.api<{ categories: Array<{ items: Array<{ kind: string; title?: string }> }> }>("/workbench");
   if (!accepted.categories.flatMap(category => category.items).some(item => item.kind === "task" && item.title === "Edited deterministic Task")) throw new Error("Accepted refinement proposal did not create its edited Task");
+  await harness.waitFor(() => Boolean(document.querySelector('[data-control="refinement-tab-status"]')), "promoted Task status loaded");
+  const statusTab = control<HTMLButtonElement>('[data-control="refinement-tab-status"]', "refinement status tab");
+  coverInteract(harness, "refinement-tab-status", () => harness.click(statusTab, "Review promoted Task status"));
+  await harness.waitFor(() => statusTab.getAttribute("aria-selected") === "true", "Task status selected");
+  coverEffect(harness, "refinement-tab-status", () => statusTab.getAttribute("aria-selected") === "true");
+  const startWork = control<HTMLButtonElement>('[data-control="refinement-start-work"]', "start refined Task");
+  coverInteract(harness, "refinement-start-work", () => harness.click(startWork, "Start refined Task"));
+  await harness.waitFor(() => !document.querySelector('[data-control="refinement-start-work"]'), "refined Task is in progress");
+  coverEffect(harness, "refinement-start-work", () => document.querySelector('#refinement-result-status')?.textContent?.includes("In progress") === true);
 
   coverInteract(harness, "refinement-close", () => harness.click(control<HTMLButtonElement>("[data-control=refinement-close]", "refinement close"), "Close refinement after saving workspace"));
   await harness.waitFor(() => !document.querySelector(".refinement-panel"), "closed refinement panel");
@@ -187,6 +202,10 @@ export async function runTaskChatScenario(harness: ChatScenarioHarness): Promise
   await harness.waitFor(() => Boolean(document.querySelector(".refinement-panel [role=alert]")), "visible refinement failure");
   await send(harness, "Retry after a deterministic provider failure.");
   await waitForTerminal(harness, sessionPath, "completed");
+  const previewTab = control<HTMLButtonElement>('[data-control="refinement-tab-preview"]', "refinement preview tab");
+  coverInteract(harness, "refinement-tab-preview", () => harness.click(previewTab, "Review proposed Task patch"));
+  await harness.waitFor(() => previewTab.getAttribute("aria-selected") === "true", "Task preview selected");
+  coverEffect(harness, "refinement-tab-preview", () => previewTab.getAttribute("aria-selected") === "true");
   await harness.waitFor(() => Boolean(document.querySelector(".proposal")), "retry proposal");
   const rejected = control<HTMLElement>(".proposal", "proposal to reject");
   const rejectProposal = control<HTMLButtonElement>("[data-control=refinement-proposal-reject]", "proposal reject");
@@ -194,7 +213,73 @@ export async function runTaskChatScenario(harness: ChatScenarioHarness): Promise
   coverInteract(harness, "refinement-proposal-reject", () => harness.click(rejectProposal, "Reject proposal"));
   await harness.waitFor(() => !rejected.isConnected, "rejected proposal removed without application");
   coverEffect(harness, "refinement-proposal-reject", () => !rejected.isConnected);
+  await closeRefinement(harness, "Close refinement to inspect the original Capture");
+  await harness.waitFor(() => !document.querySelector(".refinement-panel"), "closed refinement before Task detail");
+  await harness.detail("Edited deterministic Task");
+  const detailsTab = control<HTMLButtonElement>('[data-control="task-detail-tab-details"]', "Task details tab");
+  harness.click(detailsTab, "Inspect original Capture");
+  await harness.waitFor(() => detailsTab.getAttribute("aria-selected") === "true", "Task details selected");
+  const origin = control<HTMLDetailsElement>('[data-control="task-origin-capture"]', "original Capture disclosure");
+  observeCoverage(harness, origin, "task-chat-controls-origin");
+  await harness.prepareClick(origin.querySelector("summary")!, "Expand original Capture");
+  coverInteract(harness, "task-origin-capture", () => harness.click(origin.querySelector("summary")!, "Expand original Capture"));
+  await harness.waitFor(() => origin.open, "original Capture expanded");
+  coverEffect(harness, "task-origin-capture", () => origin.open && origin.textContent?.includes(captureText) === true);
+  await runHierarchyControls(harness);
   await harness.step("Packaged Capture refinement retained three turns through the native provider, preserved an existing Solution, accepted one edited proposal, rejected a later proposal, restored an unsent note after close/reopen, and retried a provider failure through rendered controls.");
+}
+
+async function runHierarchyControls(harness: ChatScenarioHarness) {
+  const click = async (id: string, label: string) => {
+    await harness.waitFor(() => readyControl(`[data-control="${id}"]`) && document.querySelector(".task-detail")?.getAttribute("aria-busy") !== "true", `ready ${label}`);
+    const element = control<HTMLElement>(`[data-control="${id}"]`, label);
+    await harness.prepareClick(element, label);
+    coverInteract(harness, id, () => harness.click(element, label));
+  };
+  const expand = async (id: string) => {
+    await harness.waitFor(() => readyControl(`[data-control="${id}"]`), `rendered ${id}`);
+    const element = control<HTMLDetailsElement>(`[data-control="${id}"]`, id);
+    observeCoverage(harness, document, "Task hierarchy");
+    if (!element.open) {
+      await harness.prepareClick(element.querySelector("summary")!, id);
+      coverInteract(harness, id, () => harness.click(element.querySelector("summary")!, id));
+    }
+    await harness.waitFor(() => element.open, `expanded ${id}`);
+    coverEffect(harness, id, () => element.open);
+  };
+  await click("task-detail-refine", "Refine the promoted Task");
+  await harness.waitFor(() => Boolean(document.querySelector('.refinement-panel[data-refinement-session]:not([data-refinement-session=""])')), "Task refinement loaded");
+  await harness.api("/provider/config", "PUT", { base_url: harness.providerUrl, model: "deterministic-test-model", api_key: "desktop-e2e-key" });
+  await send(harness, "Split a deterministic Subtask for an independent evidence check.");
+  await harness.waitFor(() => document.querySelector('[data-control="refinement-proposal-accept"]')?.textContent === "Split into a subtask"
+    && !document.querySelector<HTMLButtonElement>('[data-control="refinement-proposal-accept"]')?.disabled, "reviewable Subtask split");
+  await click("refinement-proposal-accept", "Accept explicit Subtask split");
+  await harness.waitFor(() => !document.querySelector(".proposal"), "Subtask split applied");
+  await closeRefinement(harness, "Close split preview");
+  await harness.waitFor(() => !document.querySelector(".refinement-panel"), "split preview closed");
+  await click("task-detail-close", "Close parent Task detail");
+  await harness.waitFor(() => !document.querySelector(".task-detail"), "parent detail closed");
+  const focus = control<HTMLButtonElement>('[data-control="workbench-focus-active"]', "active work focus");
+  const previous = focus.getAttribute("aria-pressed");
+  await click("workbench-focus-active", "Toggle active work focus");
+  await harness.waitFor(() => focus.getAttribute("aria-pressed") !== previous, "active focus toggled");
+  coverEffect(harness, "workbench-focus-active", () => focus.getAttribute("aria-pressed") !== previous);
+  if (focus.getAttribute("aria-pressed") === "true") await click("workbench-focus-active", "Show all work");
+  await expand("task-subtasks-expand");
+  await harness.detail("Deterministic child Task");
+  await expand("task-hierarchy-details");
+  await click("task-parent-open", "Open parent Task");
+  await harness.waitFor(() => document.querySelector(".task-detail h2")?.textContent === "Edited deterministic Task", "parent Task opened");
+  coverEffect(harness, "task-parent-open", () => document.querySelector(".task-detail h2")?.textContent === "Edited deterministic Task");
+  await expand("task-hierarchy-details");
+  await click("task-family-open", "Open child Task");
+  await harness.waitFor(() => document.querySelector(".task-detail h2")?.textContent === "Deterministic child Task", "child Task opened");
+  coverEffect(harness, "task-family-open", () => document.querySelector(".task-detail h2")?.textContent === "Deterministic child Task");
+  await click("task-detail-refine", "Review child Task boundaries");
+  await harness.waitFor(() => Boolean(document.querySelector('[data-control="refinement-boundaries"]')), "refinement family boundaries");
+  await expand("refinement-boundaries");
+  coverEffect(harness, "refinement-boundaries", () => document.querySelector('[data-control="refinement-boundaries"]')?.textContent?.includes("Edited deterministic Task") === true);
+  await harness.step("Explicit Subtask split retained the parent and rendered Task family navigation and refinement boundaries.");
 }
 
 /** Provider absence is a recoverable terminal refinement failure, surfaced in the panel. */
@@ -242,7 +327,7 @@ export async function runRefinementCloseRetryScenario(harness: ChatScenarioHarne
   if (saved.inputDraft !== noteText) throw new Error("Successful close retry did not persist the exact workspace note");
   await harness.step("A one-shot native workspace-save failure kept the panel and error visible; the rendered Close retry persisted the exact note before closing.");
   await invoke("desktop_e2e_arm_one_shot_failure", { operation: "task-refinement.open" });
-  harness.click(control<HTMLButtonElement>(`[data-entity-id="${CSS.escape(captureId)}"][data-control="task-card-refine"]`, "Capture refinement entry"), "Reopen refinement with failed read");
+  harness.click(control<HTMLButtonElement>(`[data-entity-id="${CSS.escape(captureId)}"]:is([data-control="task-card-refine"],[data-control="task-shortcut-refine"])`, "Capture refinement entry"), "Reopen refinement with failed read");
   await harness.waitFor(() => Boolean(document.querySelector('[data-control="refinement-retry"]')), "visible refinement read retry");
   const messageDraft = "Keep this message while retrying the read";
   harness.enter(control<HTMLTextAreaElement>('[data-control="refinement-message"]', "refinement message"), messageDraft);
@@ -331,8 +416,9 @@ export async function runLegacyChatTrackingScenario(harness: Pick<ChatScenarioHa
   coverEffect(harness, "chat-prompt", () => document.querySelectorAll("#chat-log > *").length > starterCount);
   const previewStatus = control<HTMLButtonElement>("[data-control=chat-preview-status]", "legacy preview status");
   coverInteract(harness, "chat-preview-status", () => harness.click(previewStatus, "Inspect legacy preview status"));
-  await harness.waitFor(() => contextTab.getAttribute("aria-selected") === "true", "preview status opens context");
-  coverEffect(harness, "chat-preview-status", () => contextTab.getAttribute("aria-selected") === "true");
+  const contextVisible = () => workspaceDock ? contextTab.getAttribute("aria-expanded") === "true" : contextTab.getAttribute("aria-selected") === "true";
+  await harness.waitFor(contextVisible, "preview status opens context");
+  coverEffect(harness, "chat-preview-status", contextVisible);
   const detailTab = control<HTMLButtonElement>("[data-control=chat-preview-detail]", "legacy preview detail tab");
   await harness.waitFor(() => !detailTab.disabled, "generated legacy preview detail");
   if (harness.prepareClick) await harness.prepareClick(detailTab, "Show generated legacy preview detail");
@@ -412,14 +498,14 @@ export async function runLegacyChatTrackingScenario(harness: Pick<ChatScenarioHa
   await harness.waitFor(() => !control<HTMLButtonElement>("#chat-form .primary", "legacy Ask").disabled && document.querySelector<HTMLFormElement>("#chat-form")?.dataset.sending === "false", "settled legacy sender before checkpoint");
   coverInteract(harness, "chat-message", () => harness.enter(message, "Record this checkpoint without changing the Problem."));
   coverInteract(harness, "chat-ask", () => message.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })));
-  await harness.waitFor(() => Boolean(document.querySelector('[data-control=tracking-accept]')), "tracked checkpoint card");
+  await harness.waitFor(() => readyControl('[data-control=tracking-accept]'), "tracked checkpoint card");
   await harness.step("Rendered checkpoint card followed a real tracked chat response.");
   coverEffect(harness, "chat-message", () => message.value === "");
   coverEffect(harness, "chat-ask", () => Boolean(document.querySelector("[data-control=tracking-accept]")));
 
   const edit = control<HTMLButtonElement>("[data-control=tracking-edit]", "tracked card edit");
   coverInteract(harness, "tracking-edit", () => harness.click(edit, "Open tracked JSON editor"));
-  await harness.waitFor(() => Boolean(document.querySelector("[data-control=tracking-json-edit]")), "opened tracked JSON editor");
+  await harness.waitFor(() => readyControl("[data-control=tracking-json-edit]"), "opened tracked JSON editor");
   observeCoverage(harness, dialog, "task-legacy-chat-controls-json-editor");
   await harness.step("Rendered tracked checkpoint JSON editor opened.");
   const editor = control<HTMLTextAreaElement>("[data-control=tracking-json-edit]", "tracked JSON editor");
@@ -434,7 +520,7 @@ export async function runLegacyChatTrackingScenario(harness: Pick<ChatScenarioHa
   coverEffect(harness, "tracking-json-cancel", () => !document.querySelector("[data-control=tracking-json-edit]"));
 
   coverInteract(harness, "tracking-edit", () => harness.click(control<HTMLButtonElement>("[data-control=tracking-edit]", "tracked card edit"), "Reopen tracked JSON editor"));
-  await harness.waitFor(() => Boolean(document.querySelector("[data-control=tracking-json-edit]")), "reopened tracked JSON editor");
+  await harness.waitFor(() => readyControl("[data-control=tracking-json-edit]"), "reopened tracked JSON editor");
   harness.enter(control<HTMLTextAreaElement>("[data-control=tracking-json-edit]", "tracked JSON editor"), '{"summary":"Edited checkpoint"}');
   coverInteract(harness, "tracking-json-preview", () => harness.click(control<HTMLButtonElement>("[data-control=tracking-json-preview]", "tracked JSON preview"), "Preview edited checkpoint"));
   await harness.waitFor(() => !document.querySelector("[data-control=tracking-json-edit]"), "edited checkpoint preview");
@@ -448,14 +534,14 @@ export async function runLegacyChatTrackingScenario(harness: Pick<ChatScenarioHa
   await harness.waitFor(() => !control<HTMLButtonElement>("#chat-form .primary", "legacy Ask").disabled && document.querySelector<HTMLFormElement>("#chat-form")?.dataset.sending === "false", "settled legacy sender before accepted checkpoint");
   coverInteract(harness, "chat-message", () => harness.enter(message, "Record the accepted checkpoint."));
   coverInteract(harness, "chat-ask", () => harness.click(control<HTMLButtonElement>("#chat-form .primary", "legacy Ask"), "Ask legacy chat"));
-  await harness.waitFor(() => Boolean(document.querySelector('[data-control=tracking-accept]')), "second tracked checkpoint card");
+  await harness.waitFor(() => readyControl('[data-control=tracking-accept]'), "second tracked checkpoint card");
   coverInteract(harness, "tracking-accept", () => harness.click(control<HTMLButtonElement>("[data-control=tracking-accept]", "tracked card accept"), "Accept tracked checkpoint"));
   await harness.waitFor(() => !document.querySelector('[data-control=tracking-accept]'), "accepted tracked card removed");
 
   const resumeCompletedFixture = async () => {
     const seeded = await invoke<{ sessionId: string }>("desktop_e2e_seed_completed_tracking");
     window.dispatchEvent(new CustomEvent("llm-wiki:tracked-resume", { detail: { sessionId: seeded.sessionId } }));
-    await harness.waitFor(() => Boolean(document.querySelector("[data-control=tracking-review-draft]")), "offered Knowledge review card");
+    await harness.waitFor(() => readyControl("[data-control=tracking-review-draft]"), "offered Knowledge review card");
   };
   // The fixture establishes only the completed session. Each reviewed Knowledge
   // decision below is made through its rendered card.
@@ -466,10 +552,10 @@ export async function runLegacyChatTrackingScenario(harness: Pick<ChatScenarioHa
 
   await resumeCompletedFixture();
   coverInteract(harness, "tracking-review-draft", () => harness.click(control<HTMLButtonElement>("[data-control=tracking-review-draft]", "review Knowledge draft"), "Review Knowledge draft"));
-  await harness.waitFor(() => Boolean(document.querySelector("[data-control=tracking-accept]")), "Knowledge draft review card");
+  await harness.waitFor(() => readyControl("[data-control=tracking-accept]"), "Knowledge draft review card");
   coverEffect(harness, "tracking-review-draft", () => Boolean(document.querySelector("[data-control=tracking-accept]")));
   coverInteract(harness, "tracking-accept", () => harness.click(control<HTMLButtonElement>("[data-control=tracking-accept]", "accept Knowledge draft"), "Accept Knowledge draft"));
-  await harness.waitFor(() => Boolean(document.querySelector("[data-control=tracking-publish]")), "saved Knowledge draft card");
+  await harness.waitFor(() => readyControl("[data-control=tracking-publish]"), "saved Knowledge draft card");
   coverEffect(harness, "tracking-accept", () => Boolean(document.querySelector("[data-control=tracking-publish]")));
   const draftDetails = control<HTMLDetailsElement>("[data-control=tracking-knowledge-draft-details]", "saved Knowledge draft details");
   const draftSummary = draftDetails.querySelector<HTMLElement>("summary");
@@ -483,14 +569,14 @@ export async function runLegacyChatTrackingScenario(harness: Pick<ChatScenarioHa
 
   await resumeCompletedFixture();
   coverInteract(harness, "tracking-review-draft", () => harness.click(control<HTMLButtonElement>("[data-control=tracking-review-draft]", "review editable Knowledge draft"), "Review editable Knowledge draft"));
-  await harness.waitFor(() => Boolean(document.querySelector("[data-control=tracking-accept]")), "editable Knowledge draft review");
+  await harness.waitFor(() => readyControl("[data-control=tracking-accept]"), "editable Knowledge draft review");
   coverInteract(harness, "tracking-accept", () => harness.click(control<HTMLButtonElement>("[data-control=tracking-accept]", "accept editable Knowledge draft"), "Accept editable Knowledge draft"));
-  await harness.waitFor(() => Boolean(document.querySelector("[data-control=tracking-edit-draft]")), "editable saved Knowledge draft");
+  await harness.waitFor(() => readyControl("[data-control=tracking-edit-draft]"), "editable saved Knowledge draft");
   coverInteract(harness, "tracking-edit-draft", () => harness.click(control<HTMLButtonElement>("[data-control=tracking-edit-draft]", "edit saved Knowledge draft"), "Edit saved Knowledge draft"));
-  await harness.waitFor(() => Boolean(document.querySelector("[data-control=tracking-json-edit]")), "Knowledge draft JSON editor");
+  await harness.waitFor(() => readyControl("[data-control=tracking-json-edit]"), "Knowledge draft JSON editor");
   coverEffect(harness, "tracking-edit-draft", () => Boolean(document.querySelector("[data-control=tracking-json-edit]")));
   coverInteract(harness, "tracking-json-preview", () => harness.click(control<HTMLButtonElement>("[data-control=tracking-json-preview]", "preview edited Knowledge draft"), "Preview edited Knowledge draft"));
-  await harness.waitFor(() => Boolean(document.querySelector("[data-control=tracking-accept]")), "edited Knowledge draft review");
+  await harness.waitFor(() => readyControl("[data-control=tracking-accept]"), "edited Knowledge draft review");
   await harness.step("The rendered legacy Problem chat attached tracking, created checkpoint cards from actual chat responses, rejected and accepted separate cards, and exercised invalid, cancelled, and valid JSON editor states.");
 }
 

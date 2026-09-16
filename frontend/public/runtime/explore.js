@@ -31,7 +31,7 @@ $('#chat-form').onsubmit=async event=>{
   const answerCard=log.lastElementChild,answer=answerCard.querySelector('p'),thinking=answerCard.querySelector('.thinking');
   log.scrollTop=log.scrollHeight;$('#chat-message').value='';send.disabled=true;$('#chat-form').dataset.sending='true';
   const readyMessage='✅ Ready. Your AI refinement is ready to review.';let raw='',pending='',animating=false,chatSucceeded=false,readinessProbe='';
-  const reveal=()=>{if(!pending){animating=false;return}const pace=pending.length>60?3:1;raw+=pending.slice(0,pace);pending=pending.slice(pace);answer.textContent=cleanChatText(raw);log.scrollTop=log.scrollHeight;setTimeout(reveal,18)};
+  const reveal=()=>{if(!pending){animating=false;return}const pace=document.hidden?pending.length:pending.length>60?3:1;raw+=pending.slice(0,pace);pending=pending.slice(pace);answer.textContent=cleanChatText(raw);log.scrollTop=log.scrollHeight;setTimeout(reveal,18)};
   const queue=text=>{pending+=text;if(!animating){animating=true;reveal()}};
   const queueChatText=text=>{if(readinessProbe===null){queue(text);return}readinessProbe+=text;if(readyMessage.startsWith(readinessProbe)){if(readinessProbe===readyMessage)readinessProbe=null;return}queue(readinessProbe);readinessProbe=null};
   try{
@@ -61,6 +61,6 @@ $('#chat-form').onsubmit=async event=>{
     if(thinking.isConnected)thinking.remove();
     if(readinessProbe===null&&!raw&&!pending)answerCard.remove();
     if(chatSucceeded&&((target.mode==='refine'&&(target.type==='problems'||target.type==='features'))||(target.mode==='next'&&(target.type==='captures'||target.type==='problems')))&&chatTargetMatches(target))void startBackgroundRefinement(target);
-    const wait=()=>{if(animating)return setTimeout(wait,18);send.disabled=false;$('#chat-form').dataset.sending='false';log.scrollTop=log.scrollHeight};wait();
+    send.disabled=false;$('#chat-form').dataset.sending='false';log.scrollTop=log.scrollHeight;
   }
 }

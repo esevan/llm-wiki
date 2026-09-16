@@ -25,7 +25,7 @@ reopening the panel during the current app session, and failed sends retain the 
 Open **Refine** from a Capture or Task, or resume the saved refinement shortcut in Workbench.
 Refinement opens in a focused dialog: the proposed result stays in a scrollable left pane while the
 full conversation history and composer stay together in a right-hand chat pane. The rest of Workbench
-is unavailable until the dialog closes. Keep working notes with the proposed result; the saved notes,
+is unavailable until the dialog closes. Closing restores keyboard focus after the dialog has been removed. The docked conversation’s Context control expands or collapses context independently of its preview selection. The docked conversation permits the next message as soon as the response is received, without waiting for its text animation. Keep working notes with the proposed result; the saved notes,
 scroll position, and conversation history support returning later.
 
 **Send**, `Ctrl+Enter`, and `Cmd+Enter` submit a message. Plain Enter writes another line. Send is

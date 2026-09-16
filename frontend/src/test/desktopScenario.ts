@@ -70,14 +70,16 @@ type RefinementSnapshot = {
 const pause = (ms: number) =>
   new Promise((resolve) => window.setTimeout(resolve, ms));
 async function waitFor(check: () => boolean, label: string) {
-  for (let i = 0; i < 200; i += 1) {
+  const deadline = performance.now() + 10_000;
+  while (performance.now() < deadline) {
     if (check()) return;
     await pause(50);
   }
   throw new Error(`Timed out waiting for ${label}`);
 }
 async function waitForAsync(check: () => Promise<boolean>, label: string) {
-  for (let i = 0; i < 200; i += 1) {
+  const deadline = performance.now() + 10_000;
+  while (performance.now() < deadline) {
     if (await check()) return;
     await pause(50);
   }
@@ -236,6 +238,7 @@ async function taskDetailIdle(label: string) {
   );
 }
 async function create(title: string, kind: "capture" | "task" = "task") {
+  await waitFor(() => !document.querySelector<HTMLElement>(".app")?.inert, "interactive Workbench entry");
   const mode = [
     ...document.querySelectorAll<HTMLInputElement>('input[name="entry-mode"]'),
   ].find((input) => input.value === kind);
@@ -287,6 +290,11 @@ async function task(title: string) {
   return api<Task>(`/tasks/${item.id}`);
 }
 async function detail(title: string) {
+  await waitFor(() => !document.querySelector(".task-detail") || document.querySelector(".task-detail h2")?.textContent === title, "previous Task detail closed or matching Task restored");
+  if (document.querySelector(".task-detail")) {
+    await taskDetailIdle("using restored Task detail");
+    return;
+  }
   const card = [
     ...document.querySelectorAll<HTMLElement>(".canonical-card"),
   ].find((card) => card.querySelector("h3")?.textContent?.trim() === title);
@@ -339,7 +347,7 @@ async function capture(step: Step) {
     "Rendered Capture and direct-Task controls created canonical records; the Task was independently read back.",
   );
 }
-async function log(step: Step) {
+async function log(step: Step, interactionCoverage: ReturnType<typeof createInteractionCoverage>) {
   const title = `work log ${Date.now()}`;
   await create(title);
   await detail(title);
@@ -395,7 +403,8 @@ async function log(step: Step) {
   await waitForAsync(async () => (await task(title)).workLog?.find(item => item.attachment?.name === "screenshot.png")?.imageSummaryJob?.status === "failed", "automatic image summary reports missing provider in the Queue");
   await api("/provider/config", "PUT", { base_url: e2eProviderUrl, model: "deterministic", api_key: "desktop-e2e-key" });
   await waitFor(() => !!document.querySelector('[data-control="task-image-summary"]'), "saved-image summary retry available");
-  click('[data-control="task-image-summary"]', "Generate both image summary languages");
+  interactionCoverage.observe(document, "task-worklog", "saved image retry");
+  interactionCoverage.interact("task-image-summary", () => click('[data-control="task-image-summary"]', "Generate both image summary languages"));
   await waitForAsync(async () => {
     const saved = (await task(title)).workLog?.find(item => item.attachment?.name === "screenshot.png");
     return saved?.imageSummaryJob?.status === "completed"
@@ -403,6 +412,7 @@ async function log(step: Step) {
       && saved.imageSummaryVersions?.en?.image_summary === "Deterministic image summary";
   }, "bilingual image summary retry completed through the AI queue");
   await waitFor(() => document.querySelector(".work-log-image-summary")?.textContent?.includes("Deterministic image summary") ?? false, "completed image summary rendered");
+  interactionCoverage.assertEffect("task-image-summary", () => document.querySelector(".work-log-image-summary")?.textContent?.includes("Deterministic image summary") === true);
   await step("Pasted an image through the Work Log clipboard handler, persisted exact screenshot bytes without requiring text, and rendered the saved image inline.");
   await revealTaskField("Checklist item");
   enter(field("Checklist item"), "verify result");
@@ -572,13 +582,13 @@ async function review(step: Step) {
   await api("/index", "POST", {});
   await api("/provider/config", "PUT", {
     base_url: e2eProviderUrl,
-    model: "deterministic-timeout",
+    model: "deterministic-review-pending",
     api_key: "desktop-e2e-key",
   });
   await create(title);
   await detail(title);
   await selectTaskTab("Review", "Open Task Review tab");
-  click('[data-control="conflict-review-run"], .review-panel button', "Run review");
+  click('[data-control="conflict-review-run"]', "Run review");
   await waitFor(
     () =>
       !!document.querySelector(
@@ -595,7 +605,7 @@ async function review(step: Step) {
   );
   await taskDetailIdle("cancelling review");
   await selectTaskTab("Review", "Return to review after recording work");
-  click('[data-control="conflict-review-cancel"], .review-panel button', "Cancel review");
+  click('[data-control="conflict-review-cancel"]', "Cancel review");
   await waitFor(
     () =>
       !!document.querySelector(
@@ -603,7 +613,12 @@ async function review(step: Step) {
       ),
     "cancelled review",
   );
-  click('[data-control="conflict-review-retry"], .review-panel button', "Retry delayed review");
+  await api("/provider/config", "PUT", {
+    base_url: e2eProviderUrl,
+    model: "deterministic-review-stale",
+    api_key: "desktop-e2e-key",
+  });
+  click('[data-control="conflict-review-retry"]', "Retry delayed review");
   await waitFor(
     () =>
       !!document.querySelector(
@@ -618,6 +633,7 @@ async function review(step: Step) {
   enter(titleField, `${title} revised`);
   const save = document.querySelector<HTMLButtonElement>('[data-control="task-revision-save"]');
   if (!save) throw new Error("Missing Task revision action");
+  await waitFor(() => !save.disabled, "committed Task revision draft");
   clickElement(save, "Save Task revision");
   await waitFor(
     () =>
@@ -631,7 +647,7 @@ async function review(step: Step) {
   });
   const retriedAt = performance.now();
   await selectTaskTab("Review", "Return to Task Review");
-  click('[data-control="conflict-review-retry"], .review-panel button', "Retry cited review");
+  click('[data-control="conflict-review-retry"]', "Retry cited review");
   await waitFor(
     () =>
       !!document.querySelector(
@@ -712,6 +728,17 @@ async function taskMcpContinuation(step: Step) {
   await step("Revoked connection failed closed in the packaged stdio/GUI IPC boundary.");
 }
 async function publication(step: Step) {
+  const activate = async (selector: string, label: string) => {
+    await waitFor(() => {
+      const button = document.querySelector<HTMLElement>(selector);
+      return Boolean(button && !button.matches(":disabled") && !button.closest("[inert]")
+        && document.querySelector(".task-detail")?.getAttribute("aria-busy") !== "true"
+        && !document.querySelector('[data-control="task-knowledge-draft"][aria-busy="true"]'));
+    }, `ready ${label}`);
+    const button = document.querySelector<HTMLElement>(selector)!;
+    await prepareClick(button, label);
+    clickElement(button, label);
+  };
   const title = `publish ${Date.now()}`;
   await create(title);
   await detail(title);
@@ -745,6 +772,7 @@ async function publication(step: Step) {
     () => document.querySelector<HTMLElement>(".task-detail")?.dataset.taskRevision === "2",
     "rendered authored publication revision",
   );
+  await taskDetailIdle("authored publication revision settled");
   await selectTaskTab("Work", "Open Task Work for publication evidence");
   const publicationWorkLogText = document.querySelector<HTMLTextAreaElement>('[data-control="task-worklog-text"]');
   if (!publicationWorkLogText) throw new Error("Missing publication Work Log field");
@@ -765,6 +793,7 @@ async function publication(step: Step) {
         ?.textContent?.includes("Validated the signed desktop release") ?? false,
     "publication Work Log",
   );
+  await taskDetailIdle("publication Work Log settled");
   await revealTaskField("Checklist item");
   enter(field("Checklist item"), "Verify packaged acceptance scenarios");
   await clickAfter("Checklist item", "Add publication checklist");
@@ -772,12 +801,7 @@ async function publication(step: Step) {
     () => !!document.querySelector('.task-detail input[type="checkbox"]'),
     "publication checklist",
   );
-  clickElement(
-    document.querySelector<HTMLInputElement>(
-      '.task-detail input[type="checkbox"]',
-    )!,
-    "Check publication evidence",
-  );
+  await activate('.task-detail input[type="checkbox"]', "Check publication evidence");
   await revealTaskField("Decision");
   enter(field("Decision"), "Publish only the reviewed revision");
   await clickAfter("Decision", "Add publication decision");
@@ -801,7 +825,7 @@ async function publication(step: Step) {
         ?.textContent?.includes("revision 1") ?? false,
     "publication Problem revision",
   );
-  click('[data-control="task-transition-start"]', "Start Task");
+  await activate('[data-control="task-transition-start"]', "Start Task");
   await waitFor(
     () =>
       document
@@ -809,10 +833,11 @@ async function publication(step: Step) {
         ?.getAttribute("data-task-state") === "in_progress",
     "Task start",
   );
+  await taskDetailIdle("publication Task start settled");
   await selectTaskTab("Review", "Open Task Review for publication");
   await revealTaskField("Completion evidence");
   enter(field("Completion evidence"), "verified in packaged E2E");
-  click("#task-completion-evidence + button", "Complete Task");
+  await activate("#task-completion-evidence + button", "Complete Task");
   await waitFor(
     () =>
       document
@@ -827,7 +852,7 @@ async function publication(step: Step) {
     /create draft/i.test(button.textContent ?? ""),
   );
   if (!draft) throw new Error("Missing Knowledge draft action");
-  clickElement(draft, "Create Knowledge draft");
+  await activate('[data-control="task-knowledge-draft"]', "Create Knowledge draft");
   const completedTask = await task(title);
   let knowledgeJobId = "";
   await waitForAsync(async () => {
@@ -836,14 +861,21 @@ async function publication(step: Step) {
     knowledgeJobId = job?.id ?? "";
     return job?.status === "completed";
   }, "completed Knowledge Queue job");
+  click('[data-control="task-detail-close"]', "Close Task detail before opening Queue");
+  await waitFor(() => !document.querySelector(".task-detail"), "Task detail closed for Queue navigation");
   clickElement(document.querySelector<HTMLButtonElement>("#queue-toggle")!, "Open AI Queue");
   const resultSelector = `#queue-list [data-job-id="${knowledgeJobId}"] [data-job-action="result"]`;
-  await waitFor(() => Boolean(document.querySelector(resultSelector)), "exact Knowledge Queue result");
-  clickElement(document.querySelector<HTMLButtonElement>(resultSelector)!, "Open exact Knowledge Queue result");
+  await waitFor(() => { const button = document.querySelector<HTMLButtonElement>(resultSelector); return Boolean(button && !button.disabled); }, "enabled exact Knowledge Queue result");
+  await activate(resultSelector, "Open exact Knowledge Queue result");
   await waitFor(
     () => !!document.querySelector(".knowledge-draft"),
     "Knowledge preview",
   );
+  await waitFor(() => {
+    const body = document.querySelector<HTMLTextAreaElement>('[data-control="task-knowledge-draft-body"]');
+    const save = document.querySelector<HTMLButtonElement>('[data-control="task-knowledge-correct"]');
+    return Boolean(body && !body.readOnly && save && !save.disabled);
+  }, "editable current Knowledge draft");
   await revealTaskField("Knowledge draft body");
   const correction = field("Knowledge draft body") as HTMLTextAreaElement;
   for (const expected of [
@@ -865,10 +897,12 @@ async function publication(step: Step) {
   const correctionButton = document.querySelector<HTMLButtonElement>(
     ".knowledge-draft button",
   )!;
-  clickElement(correctionButton, "Save Knowledge draft correction");
+  await waitFor(() => !correctionButton.disabled, "committed Knowledge draft correction");
+  await activate('[data-control="task-knowledge-correct"]', "Save Knowledge draft correction");
   await waitFor(
     () =>
-      !correctionButton.disabled &&
+      document.querySelector<HTMLButtonElement>('[data-control="task-knowledge-correct"]')?.disabled === false &&
+      Boolean(document.querySelector(".knowledge-draft")?.getAttribute("data-content-hash")) &&
       document
         .querySelector(".knowledge-draft")
         ?.getAttribute("data-content-hash") !== initialHash &&
@@ -882,7 +916,7 @@ async function publication(step: Step) {
   ].find((button) => /publish/i.test(button.textContent ?? ""));
   if (!publishDraft)
     throw new Error("Missing corrected Knowledge publish action");
-  clickElement(publishDraft, "Publish corrected Knowledge draft");
+  await activate('.knowledge-draft [data-control="task-knowledge-publish"]', "Publish corrected Knowledge draft");
   await waitFor(
     () =>
       document
@@ -894,7 +928,7 @@ async function publication(step: Step) {
     ...document.querySelectorAll<HTMLButtonElement>(".task-detail button"),
   ].find((button) => /regenerate draft/i.test(button.textContent ?? ""));
   if (!regenerate) throw new Error("Missing regenerate action");
-  clickElement(regenerate, "Regenerate Knowledge draft");
+  await activate('[data-control="task-knowledge-regenerate"]', "Regenerate Knowledge draft");
   await waitFor(
     () => !!document.querySelector(".knowledge-draft"),
     "regenerated Knowledge preview",
@@ -908,7 +942,7 @@ async function publication(step: Step) {
     ...document.querySelectorAll<HTMLButtonElement>(".knowledge-draft button"),
   ].find((button) => /publish/i.test(button.textContent ?? ""));
   if (!publish) throw new Error("Missing regenerated publish action");
-  clickElement(publish, "Publish regenerated Knowledge draft");
+  await activate('.knowledge-draft [data-control="task-knowledge-publish"]', "Publish regenerated Knowledge draft");
   await waitFor(
     () =>
       !document.querySelector(".knowledge-draft") &&
@@ -924,7 +958,7 @@ async function publication(step: Step) {
     ...document.querySelectorAll<HTMLButtonElement>(".task-detail button"),
   ].find((button) => /withdraw knowledge/i.test(button.textContent ?? ""));
   if (!withdraw) throw new Error("Missing withdraw action");
-  clickElement(withdraw, "Withdraw Knowledge");
+  await activate('[data-control="task-knowledge-withdraw"]', "Withdraw Knowledge");
   await waitFor(
     () =>
       document
@@ -933,7 +967,7 @@ async function publication(step: Step) {
     "withdrawn Knowledge",
   );
   const saved = await task(title);
-  if (!saved.completion || saved.publication?.state === "published")
+  if (!saved.completion || saved.publication?.state !== "withdrawn" || saved.publication.draftRevision !== Number(regeneratedRevision))
     throw new Error(
       "Completion, regenerate, publish, and withdraw did not persist separately",
     );
@@ -1059,7 +1093,7 @@ async function restoredRefinement(token: string, steps: string[]) {
       throw new Error("Refinement workspace did not survive the packaged-app relaunch");
     if (JSON.stringify(snapshot.messages?.map(message => message.id) ?? []) !== JSON.stringify(restored.messageIds))
       throw new Error("Refinement message identities changed across the packaged-app relaunch");
-    click(`[data-entity-id="${CSS.escape(restored.captureId)}"][data-control="task-card-refine"]`, "Reopen persisted refinement after relaunch");
+    click(`[data-entity-id="${CSS.escape(restored.captureId)}"]:is([data-control="task-card-refine"],[data-control="task-shortcut-refine"])`, "Reopen persisted refinement after relaunch");
     await waitFor(() => Boolean(document.querySelector(".refinement-panel")), "restored refinement panel");
     await waitFor(() => Boolean(document.querySelector(".refinement-panel .refinement-messages")), "rendered relaunch conversation");
     await waitFor(() => document.querySelector<HTMLTextAreaElement>('[data-control="refinement-note"]')?.value === snapshot.inputDraft, "rendered relaunch note");
@@ -1145,15 +1179,18 @@ async function localization(step: Step) {
   await detail(longTitle);
   for (const width of [1200, 900]) {
     const size = await invoke<{ windowWidth: number }>("desktop_e2e_resize_window", { width, height: 820 });
-    await waitFor(() => Math.abs(window.innerWidth - size.windowWidth) < 3, "settled split layout resize");
+    await waitFor(() => Math.abs(window.innerWidth - size.windowWidth) < 3, "settled Task modal resize");
     await waitFor(() => {
-      const main = document.querySelector<HTMLElement>(".workbench-main");
-      const panel = document.querySelector<HTMLElement>(".task-detail");
-      if (!main || !panel) return false;
-      const left = main.getBoundingClientRect(), right = panel.getBoundingClientRect();
-      if (window.innerWidth <= 1100) return getComputedStyle(main).display === "none" && right.width > 0;
-      return left.width > 0 && Math.abs(left.width - right.width) < 2 && left.right <= right.left && getComputedStyle(panel).position !== "fixed";
-    }, "equal split or narrow replacement layout");
+      const layer = document.querySelector<HTMLElement>(".task-detail-modal-layer");
+      const panel = document.querySelector<HTMLElement>(".task-detail[role='dialog']");
+      const app = document.querySelector<HTMLElement>(".app");
+      if (!layer || !panel || !app?.inert) return false;
+      const rect = panel.getBoundingClientRect();
+      return getComputedStyle(layer).position === "fixed" && panel.getAttribute("aria-modal") === "true"
+        && rect.width > 0 && rect.height > 0 && rect.left >= -1 && rect.top >= -1
+        && rect.right <= window.innerWidth + 1 && rect.bottom <= window.innerHeight + 1
+        && getComputedStyle(panel).overflowY === "auto";
+    }, "bounded Task detail modal with inert background and independent scrolling");
   }
   await invoke("desktop_e2e_resize_window", { width: 1280, height: 820 });
   await taskDetailIdle("opening Task refinement dialog");
@@ -1193,7 +1230,7 @@ async function localization(step: Step) {
   await step("Task refinement opened as a bounded modal with an inert Workbench, side-by-side preview and chat panes, a visible composer, and independent scroll containers at 1200px and 900px; it retained the original Task context on return.");
   click('[data-control="task-detail-close"]', "Close responsive Task detail");
   await waitFor(() => !document.querySelector(".task-detail"), "returned to responsive Workbench");
-  await step("Task detail resized the Workbench into equal non-overlapping columns at 1200px and replaced it at 900px.");
+  await step("Task detail remained a bounded, independently scrollable modal with an inert Workbench at 1200px and 900px.");
   await step(
     "Korean and English long-title active Tasks kept their action inside the card and above the responsive workflow lanes at the recorded native-window and WebKit viewport sizes; the Task title editor used the panel width and Korean AI privacy copy was exact.",
   );
@@ -1248,7 +1285,7 @@ export function installDesktopScenario() {
       };
       const cases: Record<string, (step: Step) => Promise<void>> = {
         "task-capture": capture,
-        "task-worklog": log,
+        "task-worklog": step => log(step, coverage),
         "task-refinement": refinement,
         "task-relationships": relationships,
         "task-review": review,

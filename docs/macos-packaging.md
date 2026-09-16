@@ -36,6 +36,30 @@ requirement, the wrong bundle identifier, or `Signature=adhoc`. An explicit
 `LLM_WIKI_CODESIGN_IDENTITY` environment value can temporarily override the registered fingerprint.
 `npm run tauri:build -- --no-bundle` remains available for unsigned compile-only CI checks.
 
+## Intel macOS runtime dependencies
+
+Intel macOS uses an installed ONNX Runtime because the upstream package does not provide
+an `x86_64-apple-darwin` prebuilt archive. Install `onnxruntime` with Homebrew before building.
+The package command detects `/usr/local/opt/onnxruntime/lib`; an explicit `ORT_LIB_LOCATION`
+or `ORT_LIB_PATH` takes precedence. For native tests with that installation:
+
+```sh
+export ORT_LIB_LOCATION=/usr/local/opt/onnxruntime/lib
+export ORT_PREFER_DYNAMIC_LINK=1
+cargo test --manifest-path src-tauri/Cargo.toml
+```
+
+Packaging copies the complete non-system dynamic-library dependency chain into the app's
+`Contents/Frameworks`, rewrites references to bundle-relative paths, and signs it before
+creating installers. Verification rejects missing libraries and external runtime references.
+System libraries and Cargo's original executable are preserved; staging uses the worktree's
+`.tmp` directory. The resulting app does not need Homebrew libraries at runtime.
+
+For a local signing certificate without an Apple Team ID, the build applies
+`Entitlements.local.plist` to permit loading these bundled libraries while retaining hardened
+runtime. Developer ID and Apple Distribution builds retain library validation. This changes
+only the app's entitlement, not macOS security settings or its signing identity.
+
 ## Isolated UI review
 
 Use the review launcher instead of copying, re-signing, or directly launching an ad-hoc `.app`:

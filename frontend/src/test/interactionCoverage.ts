@@ -11,6 +11,7 @@ export type ControlSpec = {
   scenario: string;
   effect: string;
   disabledReason?: string;
+  delegatedBy?: string;
 };
 
 export type CoverageReport = {
@@ -126,8 +127,17 @@ export class InteractionCoverage {
 
   observe(root: ParentNode, scenario: string, state = 'rendered') {
     for (const element of root.querySelectorAll(INTERACTIVE)) {
-      if (element.closest('dialog:not([open]),[hidden],.view:not(.active)')) continue;
       const matches = this.controls.filter(control => element.matches(control.selector));
+      // Native file pickers use a hidden input reached through a visible button.
+      // Count that real input only while its declared sibling delegate is visible.
+      const hidden = 'dialog:not([open]),[hidden],.view:not(.active)';
+      const delegatedFile = element instanceof HTMLInputElement && element.type === 'file' && element.hidden
+        && matches.some(control => {
+          const delegate = this.controls.find(candidate => candidate.id === control.delegatedBy);
+          return delegate && [...(element.parentElement?.querySelectorAll(delegate.selector) ?? [])]
+            .some(button => !button.closest(hidden));
+        });
+      if (element.closest(hidden) && !delegatedFile) continue;
       const disabled = (element as HTMLButtonElement).disabled || element.getAttribute('aria-disabled') === 'true';
       if (!matches.length && !disabled) this.unknown.add(`${scenario}:${element.tagName.toLowerCase()}#${element.id || 'anonymous'}`);
       for (const control of matches) {

@@ -138,9 +138,9 @@ impl NativeApplication {
         if let Some(response) = self.recovery_block() {
             return response;
         }
-        let response = work_tracking::execute(&self.work_tracking, operation);
-        if !self.vault_setup_required { let _ = task_hierarchy::publish_pending(&self.db_path,&self.vault); }
-        response
+        // finish_advance owns publication after an accepted completion. Ordinary
+        // checkpoints and reads do not need another database/outbox round trip.
+        work_tracking::execute(&self.work_tracking, operation)
     }
 
     pub fn work_tracking_service(
@@ -289,9 +289,20 @@ impl NativeApplication {
         {
             return response;
         }
-        if !self.vault_setup_required { let _ = task_hierarchy::publish_pending(&self.db_path,&self.vault); }
+        // Completion enqueues parent publications; opening Task detail retries failures.
+        // Unrelated capture/workbench requests must not open and scan the outbox twice.
+        let publish_subtasks = !self.vault_setup_required
+            && matches!(
+                operation.name.as_str(),
+                "task.completion.create" | "task.get"
+            );
+        if publish_subtasks {
+            let _ = task_hierarchy::publish_pending(&self.db_path, &self.vault);
+        }
         let result = self.dispatch(&operation.name, &operation.input);
-        if !self.vault_setup_required { let _ = task_hierarchy::publish_pending(&self.db_path,&self.vault); }
+        if publish_subtasks {
+            let _ = task_hierarchy::publish_pending(&self.db_path, &self.vault);
+        }
         match result {
             Ok((status, body)) => NativeResponse { status, body },
             Err(error) => NativeResponse {

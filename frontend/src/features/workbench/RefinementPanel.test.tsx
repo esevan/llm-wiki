@@ -28,6 +28,7 @@ describe("Refinement panel", () => {
     expect(screen.getByText("Chat is already ready.")).toBeInTheDocument();
     expect(message).toHaveValue("");
     expect(document.querySelector(".refinement-thinking")).toBeNull();
+    await waitFor(() => expect(document.querySelector(".refinement-panel")).toHaveAttribute("data-refinement-polling", "false"));
     previewStatus = "running";
     act(() => { window.dispatchEvent(new CustomEvent("llm-wiki:queue-changed", { detail: [{ id: "preview", entity_id: "independent", task_kind: "refinement_preview", status: "running" }] })); });
     await waitFor(() => expect(document.querySelector(".refinement-preview")).toHaveAttribute("aria-busy", "true"), { timeout: 2000 });
@@ -511,6 +512,9 @@ describe("Refinement panel", () => {
     expect(document.activeElement).toBe(send);
     fireEvent.keyDown(screen.getByRole("region", { name: "Conversation" }), { key: 'Escape' });
     await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
+    // The parent may defer removal beyond the frame in which save completes.
+    await act(() => new Promise<void>(resolve => requestAnimationFrame(() => resolve())));
+    expect(document.activeElement?.closest('.refinement-panel')).not.toBeNull();
     view.unmount();
     await waitFor(() => expect(document.activeElement).toBe(opener));
     expect(app.inert).not.toBe(true);

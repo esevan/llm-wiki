@@ -294,3 +294,46 @@ fn checkpoint_and_closed_state_survive_a_full_application_restart() {
     assert_eq!(closed.status, 409);
     assert_eq!(closed.body["error"]["code"], "session_closed");
 }
+
+#[test]
+fn append_and_replay_recheck_transactional_authorization_and_keep_audit() {
+    let root = tempdir().unwrap();
+    let db = root.path().join("db.sqlite");
+    let app = NativeApplication::isolated(&root.path().join("vault"), &db).unwrap();
+    let opened = call(
+        &app,
+        "work_tracking.open",
+        json!({"operationId":"auth-open","lineageKey":"auth","mode":"create","capture":{"title":"Authorization","summary":"Keep writes protected"}}),
+    );
+    let service = app.work_tracking_service();
+    let input = json!({"operationId":"auth-append","sessionId":opened["sessionId"],"expectedHeadRevision":1,"event":{"kind":"work_log_checkpoint","summary":"Private checkpoint"}});
+    service.append("native-in-app-chat", &input).unwrap();
+    assert_eq!(
+        service.append("native-in-app-chat", &input).unwrap()["deduplicated"],
+        true
+    );
+    let connection = rusqlite::Connection::open(&db).unwrap();
+    for update in [
+        "UPDATE mcp_connections SET scopes_json='[]' WHERE id='native-in-app-chat'",
+        "UPDATE mcp_connections SET scopes_json='[\"session:write\"]',state='revoked' WHERE id='native-in-app-chat'",
+    ] {
+        connection.execute(update, []).unwrap();
+        assert_eq!(service.append("native-in-app-chat", &input).unwrap_err().code, "not_found_or_not_visible");
+        let mut fresh = input.clone();
+        fresh["operationId"] = json!("unauthorized-fresh");
+        fresh["expectedHeadRevision"] = json!(2);
+        assert_eq!(service.append("native-in-app-chat", &fresh).unwrap_err().code, "not_found_or_not_visible");
+    }
+    let head: i64 = connection
+        .query_row(
+            "SELECT head_revision FROM work_tracking_sessions WHERE id=?",
+            [opened["sessionId"].as_str().unwrap()],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(head, 2);
+    for (outcome, count) in [("accepted", 2), ("rejected", 4)] {
+        let actual: i64 = connection.query_row("SELECT count(*) FROM work_tracking_activity_events WHERE operation='inbound_work_append' AND outcome=?", [outcome], |row| row.get(0)).unwrap();
+        assert_eq!(actual, count);
+    }
+}

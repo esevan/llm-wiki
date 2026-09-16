@@ -59,6 +59,31 @@ function load(api: ReturnType<typeof vi.fn>): Runtime {
 afterEach(() => { vi.restoreAllMocks(); document.body.innerHTML = ''; const globals = window as unknown as Window & Record<string, unknown>; delete globals.boardItems; delete globals.workbenchBoard; delete globals.completedSolutions; });
 
 describe('production completed-work button bindings', () => {
+  it('preserves docked refinement context disclosure after loading completed-work handlers', async () => {
+    fixture();
+    document.body.insertAdjacentHTML('beforeend', '<section id="workbench" class="active"></section>');
+    const chat = $('#chat-modal') as HTMLDialogElement;
+    chat.show = function show() { this.open = true; };
+    const runtime = load(vi.fn(async (path: string) => {
+      if (path.startsWith('/workbench/recent-archive')) return { documents: [] };
+      if (path.startsWith('/workbench/completed-solutions')) return { solutions: [] };
+      return { entries: [], current_detail: { kind: 'problem', title: 'Saved Problem', detail: 'Retained context' } };
+    }));
+    runtime.openChat('problems', 'problem-dock', { workspaceDock: true });
+    await flush();
+    const context = $('#preview-context-tab') as HTMLButtonElement;
+    expect($('#explore-preview-detail').hidden).toBe(false);
+    expect(context).toHaveAttribute('aria-expanded', 'false');
+    context.click();
+    expect(context).toHaveAttribute('aria-expanded', 'true');
+    expect($('#explore-preview-content').hidden).toBe(false);
+    expect($('#explore-preview-detail').hidden).toBe(false);
+    context.click();
+    expect(context).toHaveAttribute('aria-expanded', 'false');
+    expect($('#explore-preview-content').hidden).toBe(true);
+    expect(context).not.toHaveAttribute('aria-selected');
+  });
+
   it('forwards migrated Problem revision context through the completed-work chat override', async () => {
     fixture();
     const selected = vi.fn(async () => undefined);

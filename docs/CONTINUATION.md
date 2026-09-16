@@ -6,6 +6,61 @@ Capture remains a lightweight input; Work Log, refinement, exact Problem revisio
 relationships, advisory review, completion, and Knowledge publication are independent decisions.
 The Python/FastAPI browser delivery remains retired in Git history at `caef236`.
 
+## Main verification and installation fixes (2026-09-16)
+
+- Refinement restores its opener after the panel unmounts and releases its focus trap,
+  including when a parent defers removal after saving. The interactive source registry
+  includes the shared modal keyboard handler and the original-Capture disclosure.
+  Packaged scenarios follow Task detail modal navigation, resumed-refinement controls,
+  asynchronous close/status updates, and docked legacy-preview disclosure semantics.
+  Docked Context toggles retain their own disclosure handler when the completed-work
+  runtime is loaded. Legacy chat releases Send when the response finishes, even
+  while presentation animation is pending, and flushes animation in hidden windows.
+  Capture attachment coverage follows the visible chooser through
+  its hidden native file input, image preview, and removal.
+  Review cancellation uses a separately delayed fake response and exact buttons;
+  polling deadlines use elapsed time so background WebKit timers cannot stretch them.
+- Workbench collects Task-origin Capture IDs once instead of scanning all Tasks for
+  each Capture. Null origins remain excluded from that set. Category responses move
+  their JSON arrays without duplicate serialization. Native outbox checks run on
+  completion and Task detail access, retaining startup/MCP retries while avoiding
+  extra database connections on unrelated Capture and Workbench requests.
+- Checkpoint appends enforce write authorization in the transaction before replay
+  lookup and record successful activity in that same transaction. Rejected requests
+  retain separate audit entries. The native adapter no longer drains publication
+  after every checkpoint; accepted completion retains its service-owned drain.
+  Native release verification uses `RUST_TEST_THREADS=1` so latency budgets are not
+  measured concurrently with the independent 10,000-event stress fixture.
+- The macOS package command detects the installed Intel ONNX Runtime, copies its
+  transitive libraries into the bundle, rewrites their references, signs them through
+  Tauri, and verifies that no non-system dependency remains outside the app. Local
+  certificates use the documented app-scoped entitlement. This replaces the manual
+  artifact repair described in the historical installation record below.
+- Verification and reinstall work is isolated in `chore/main-verify-reinstall`, based
+  on `main` at `38b12e2`. Packaged E2E evidence is retained under that worktree's `.tmp`.
+
+## Latest local installation verification (2026-09-16)
+
+- Reinstalled `/Applications/LLM Wiki.app` from `main` at `38b12e2` plus the
+  verification fixes above. The guarded installer preserved the prior bundle at
+  `/Applications/LLM Wiki.app.previous-1789580338205-70531`; it did not reset app
+  data, provider settings, Keychain items, or TCC permissions.
+- Validation passed: 245 frontend/runtime tests, 6 desktop-runner tests, 3 fake
+  provider tests, 5 signing/runtime tests, runtime/native-boundary guards, type
+  checking, lint, whitespace checks, and all 149 native tests. Native performance
+  thresholds were unchanged and checked with sequential test execution.
+- The final signed package passed all 33 desktop E2E scenarios and all 205
+  interactive controls (rendered, exercised, and asserted), with no missing
+  source evidence, unknown controls, or undocumented disabled states. Evidence:
+  `.worktrees/main-verify-reinstall/.tmp/main-release-install-gate/`.
+- Verified all 86 bundled runtime libraries have no external non-system
+  dependency. The installed bundle retained the same local signing identity and
+  designated requirement. Installed and tested executable SHA-256:
+  `8999b02b4384ee8a2dead23f64dd6302e629fd0e503ec0a05300caf4cee0c8da`.
+- Launched the installed app normally and confirmed a visible 1280×820 window.
+  The launch/hash report is retained in the worktree at
+  `.tmp/installed-launch-verification.json`.
+
 ## Work Log image merge (2026-09-16)
 
 - Integrated `e3a684e` into the current main history, restoring saved Work Log
@@ -30,7 +85,7 @@ The Python/FastAPI browser delivery remains retired in Git history at `caef236`.
   loading/error states, unsaved-change prompts, and saving failures.
 - This change does not update the installed application described below.
 
-## Latest local installation verification
+## Historical local installation verification (2026-09-15)
 
 - Installed the application built from `7eac07c` (Capture/refinement images) at
   `/Applications/LLM Wiki.app` on 2026-09-15. The guarded installer retained the

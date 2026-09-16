@@ -366,13 +366,21 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("source_changed"));
+        // Startup cannot publish over the external edit. After it is restored,
+        // opening Task detail must retry through the real command boundary.
+        let app = super::super::NativeApplication::isolated(&vault, &db).unwrap();
         std::fs::write(vault.join(&path), &document).unwrap();
-        publish_pending(&db, &vault).unwrap();
-        assert_eq!(
-            service
-                .execute("task.get", &json!({"taskId":parent}))
-                .unwrap()["publication"]["state"],
-            "published"
-        );
+        let refreshed = app.execute(super::super::NativeOperation {
+            name: "task.get".into(),
+            input: json!({"taskId":parent}),
+        });
+        assert_eq!(refreshed.status, 200);
+        assert_eq!(refreshed.body["publication"]["state"], "published");
+        let updated = std::fs::read_to_string(vault.join(&path)).unwrap();
+        app.execute(super::super::NativeOperation {
+            name: "task.get".into(),
+            input: json!({"taskId":parent}),
+        });
+        assert_eq!(updated, std::fs::read_to_string(vault.join(&path)).unwrap());
     }
 }

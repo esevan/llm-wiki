@@ -448,7 +448,6 @@ impl WorkTrackingApplicationService {
 
     pub fn append(&self, connection_id: &str, input: &Value) -> Result<Value, AppError> {
         let started = Instant::now();
-        self.require_scope(connection_id, "session:write")?;
         let event = input
             .get("event")
             .and_then(Value::as_object)
@@ -475,19 +474,19 @@ impl WorkTrackingApplicationService {
             input.get("observedAt").and_then(Value::as_str),
             input.get("supersedesEventId").and_then(Value::as_str),
         );
-        self.store.record_activity(
-            "chat",
-            Some(connection_id),
-            input.get("sessionId").and_then(Value::as_str),
-            "inbound_work_append",
-            if result.is_ok() {
-                "accepted"
-            } else {
-                "rejected"
-            },
-            result.as_ref().err().map(|error| error.code.as_str()),
-            started.elapsed().as_millis(),
-        );
+        // Successful appends and replays record activity in the durable transaction.
+        // Failed transactions have rolled back, so rejection activity is separate.
+        if let Err(error) = &result {
+            self.store.record_activity(
+                "chat",
+                Some(connection_id),
+                input.get("sessionId").and_then(Value::as_str),
+                "inbound_work_append",
+                "rejected",
+                Some(error.code.as_str()),
+                started.elapsed().as_millis(),
+            );
+        }
         result
     }
 
