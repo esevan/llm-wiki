@@ -6,6 +6,7 @@ import type { LineageSnapshot, TaskAggregate } from "../../types/taskWorkbench";
 import { ConflictReviewPanel } from "./ConflictReviewPanel";
 import { RefinementPanel } from "./RefinementPanel";
 import { useTaskWorkbenchText } from "./taskWorkbenchText";
+import { useModalInteraction } from "./useModalInteraction";
 
 import { acknowledgeSave, baseline, definitionOf, editDraft, keepEdits, mergeSnapshot, type DefinitionField, type DetailState } from "./taskDraft";
 
@@ -143,6 +144,7 @@ export function TaskDetail({
   const [closePrompt, setClosePrompt] = useState(false);
   const pendingLeave = useRef<(() => void) | undefined>(undefined);
   const panelRef = useRef<HTMLElement>(null);
+  const modalRef = useRef<HTMLDivElement>(null);
   const headingRef = useRef<HTMLHeadingElement>(null);
   const pendingTabFocus = useRef<string | undefined>(undefined);
   const focusInTab = (nextTab: DetailTab, selector: string) => {
@@ -246,6 +248,11 @@ export function TaskDetail({
     } else proceed();
   }, [detailState]);
   useImperativeHandle(ref, () => ({ requestLeave }), [requestLeave]);
+  useModalInteraction(modalRef, 10, () => {
+    if (refining || mutationBusyRef.current) return;
+    if (closePrompt) { pendingLeave.current = undefined; setClosePrompt(false); }
+    else requestLeave(onClose);
+  });
   const finishLeave = () => {
     const proceed = pendingLeave.current;
     pendingLeave.current = undefined;
@@ -259,9 +266,6 @@ export function TaskDetail({
     if (loaded && !suppressInitialFocus && !panelRef.current?.closest(".view:not(.active)")) headingRef.current?.focus({ preventScroll: true });
   }, [loaded, suppressInitialFocus]);
   useEffect(() => {
-    const application = document.querySelector<HTMLElement>(".app");
-    const wasInert = application?.inert;
-    if (application) application.inert = true;
     const root = document.documentElement;
     const body = document.body;
     if (detailScrollLock) detailScrollLock.count += 1;
@@ -275,7 +279,6 @@ export function TaskDetail({
       body.style.overflow = "hidden";
     }
     return () => {
-      if (application) application.inert = wasInert ?? false;
       const lock = detailScrollLock;
       if (!lock || --lock.count > 0) return;
       root.style.overflow = lock.rootOverflow;
@@ -447,7 +450,7 @@ export function TaskDetail({
     }
   };
   const modal = (content: ReactNode) => createPortal(
-    <div className="task-detail-modal-layer" data-task-detail-modal="true">
+    <div ref={modalRef} tabIndex={-1} className="task-detail-modal-layer" data-task-detail-modal="true">
       <div className="task-detail-modal-backdrop" aria-hidden="true" />
       {content}
     </div>,
@@ -479,27 +482,6 @@ export function TaskDetail({
   return modal(
     <aside
       ref={panelRef}
-      onKeyDown={(event) => {
-        if (event.key === "Escape" && !event.nativeEvent.isComposing && !event.defaultPrevented && !refining) {
-          event.preventDefault();
-          event.stopPropagation();
-          if (closePrompt) { pendingLeave.current = undefined; setClosePrompt(false); }
-          else requestLeave(onClose);
-        }
-        if (event.key !== "Tab") return;
-        const focusable = Array.from(event.currentTarget.querySelectorAll<HTMLElement>(
-          "button:not(:disabled), textarea, input, select, summary, [tabindex]:not([tabindex='-1'])",
-        )).filter((element) =>
-          !element.closest("[hidden], [inert]")
-          && !element.hasAttribute("disabled")
-          && (!element.closest("details:not([open])") || element.matches("summary")),
-        );
-        if (!focusable.length) return;
-        const first = focusable[0];
-        const last = focusable[focusable.length - 1];
-        if (event.shiftKey && (document.activeElement === first || document.activeElement === headingRef.current)) { event.preventDefault(); last.focus(); }
-        else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
-      }}
       className="task-detail"
       role="dialog"
       aria-modal="true"

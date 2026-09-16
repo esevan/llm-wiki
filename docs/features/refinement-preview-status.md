@@ -112,7 +112,16 @@ can be retried from the queue after restart. Changes still require explicit revi
 
 ## Keyboard behavior
 
-Refinement and Task detail open in focused modal dialogs. Tab and Shift+Tab stay within the active dialog, including the saved-note disclosure; `Escape` closes it and restores focus to its trigger when it remains available. `Cmd+Enter` and `Ctrl+Enter` send only outside an active IME composition. Automated checks cover the synthetic composition and focus contract; real Korean IME and VoiceOver verification remain manual work.
+Refinement and Task detail keep Tab and Shift+Tab inside the topmost dialog, including the saved-note
+disclosure. Focus that leaves the dialog, or is lost when a control is disabled or removed, returns
+inside. `Escape` is handled even when focus has fallen onto the page background; it applies only to
+the topmost dialog and cancels the default key action. Task detail also handles it while loading or
+showing a load error. A blocked close during a Task mutation still consumes the key. Unsaved Task
+changes retain their confirmation, and refinement saves its draft before closing; a save failure
+keeps the dialog open. Closing restores focus to the trigger when available. Native confirmation
+dialogs and IME composition retain their own Escape handling. `Cmd+Enter` and `Ctrl+Enter` send only
+outside an active IME composition. Real macOS fullscreen, Korean IME, and VoiceOver verification
+remain manual checks.
 
 ## Continue a migrated Problem
 

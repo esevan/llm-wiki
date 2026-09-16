@@ -39,7 +39,9 @@ resume work and does not create another mandatory approval gate.
 
 Opening a Task opens a focused modal over the Workbench. The background is unavailable while the
 dialog is open; `Escape` or **Close Task detail** returns focus to the opener when it remains
-available. The detail has **Work**, **Details**, and **Review** tabs: Work groups checklist, Work
+available. Escape applies only to the topmost dialog even if focus leaves it, including during
+loading or a load error. Unsaved-change confirmation and mutation-time close restrictions remain
+in effect. The detail has **Work**, **Details**, and **Review** tabs: Work groups checklist, Work
 Log, and decisions; Details reads the definition first and enters an explicit edit mode; Review
 groups readiness, conflict review, completion, and Knowledge. The dialog keeps its own scroll
 surface and uses the available window height on narrow screens. Task-local drafts and the selected

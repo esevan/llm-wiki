@@ -107,7 +107,15 @@ Subtask를 근거와 함께 완료할 때마다 부모에 누적 Knowledge 리�
 
 ## 키보드 동작
 
-Refinement와 Task 상세는 집중 모달 대화상자로 열립니다. 저장된 메모 펼치기를 포함해 Tab과 Shift+Tab은 활성 대화상자 안에 머물며, `Escape`는 대화상자를 닫고 trigger가 남아 있으면 그곳으로 포커스를 돌립니다. `Cmd+Enter`, `Ctrl+Enter`는 IME 조합 중에는 보내지 않습니다. 자동 검사는 synthetic composition과 포커스 계약을 다루며, 실제 한국어 IME와 VoiceOver 검증은 수동으로 남아 있습니다.
+Refinement와 Task 상세에서 Tab과 Shift+Tab은 저장된 메모 펼치기를 포함해 최상위 대화상자
+안에 머뭅니다. 포커스가 밖으로 나가거나 입력 요소의 비활성화·제거로 사라지면 안으로 복구합니다.
+`Escape`는 포커스가 페이지 배경으로 빠져도 최상위 대화상자에서만 처리하며 키의 기본 동작을
+차단합니다. Task 상세의 로딩·불러오기 오류 화면에서도 적용되며, Task 변경 처리 중 닫기가
+제한되어도 키 입력은 차단합니다. 저장하지 않은 Task 변경은 기존 확인 절차를 유지하고,
+Refinement는 초안 저장 후 닫히며 저장 실패 시 열린 상태로 남습니다. 닫으면 가능한 경우 열었던
+요소로 포커스를 돌립니다. 네이티브 확인창과 IME 조합 중 Escape는 각각의 기존 처리를 유지합니다.
+`Cmd+Enter`, `Ctrl+Enter`는 IME 조합 중에는 보내지 않습니다. 실제 macOS 전체 화면, 한국어 IME,
+VoiceOver 동작은 수동 검증 대상입니다.
 
 ## 이전 Problem 기록 이어가기
 

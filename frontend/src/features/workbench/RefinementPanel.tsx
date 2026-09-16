@@ -10,6 +10,7 @@ import type {
   TaskAggregate,
 } from "../../types/taskWorkbench";
 import { useTaskWorkbenchText } from "./taskWorkbenchText";
+import { useModalInteraction } from "./useModalInteraction";
 
 export type RefinementPanelHandle = { requestLeave: (proceed: () => void) => void };
 
@@ -139,6 +140,8 @@ export function RefinementPanel({
   });
   const scrollRef = useRef<HTMLDivElement>(null);
   const headingRef = useRef<HTMLHeadingElement>(null);
+  const panelRef = useRef<HTMLElement>(null);
+  const closing = useRef(false);
   const openerRef = useRef<HTMLElement | null>(null);
   useEffect(() => {
     if (!openerRef.current)
@@ -375,12 +378,14 @@ export function RefinementPanel({
     document.querySelector<HTMLElement>("#workbench h1")?.focus();
   }, []);
   const close = useCallback(async (proceed: () => void = onClose) => {
+    if (closing.current) return;
     const current = latest.current;
     if (!current.session) {
       proceed();
       requestAnimationFrame(restoreFocus);
       return;
     }
+    closing.current = true;
     if (timer.current) window.clearTimeout(timer.current);
     try {
       await persistCurrent();
@@ -389,18 +394,14 @@ export function RefinementPanel({
       requestAnimationFrame(restoreFocus);
     } catch (e) {
       setError(String(e instanceof Error ? e.message : e));
+    } finally {
+      closing.current = false;
     }
   }, [onClose, restoreFocus, persistCurrent]);
+  useModalInteraction(panelRef, 20, () => { void close(); });
   useImperativeHandle(ref, () => ({ requestLeave: (proceed) => { void close(proceed); } }), [close]);
   useEffect(() => {
     headingRef.current?.focus();
-  }, []);
-  useEffect(() => {
-    const application = document.querySelector<HTMLElement>(".app");
-    if (!application) return;
-    const wasInert = application.inert;
-    application.inert = true;
-    return () => { application.inert = wasInert; };
   }, []);
   useEffect(() => {
     const root = document.documentElement;
@@ -550,25 +551,7 @@ export function RefinementPanel({
   return createPortal(
     <div className="refinement-modal-layer">
       <div className="refinement-modal-backdrop" aria-hidden="true" />
-      <section className="refinement-panel" role="dialog" aria-modal="true" aria-label={text.refining}
-      onKeyDown={event => {
-        if (event.key === "Escape" && !event.nativeEvent.isComposing && !event.defaultPrevented) {
-          event.preventDefault(); event.stopPropagation(); void close(); return;
-        }
-        if (event.key !== "Tab") return;
-        const focusable = Array.from(event.currentTarget.querySelectorAll<HTMLElement>(
-          "button:not(:disabled), textarea, input, select, summary, [tabindex]:not([tabindex='-1'])",
-        )).filter((element) =>
-          !element.closest("[hidden], [inert]") &&
-          !element.hasAttribute("disabled") &&
-          (!element.closest("details:not([open])") || element.matches("summary")),
-        );
-        if (!focusable.length) return;
-        const first = focusable[0];
-        const last = focusable[focusable.length - 1];
-        if (event.shiftKey && (document.activeElement === first || document.activeElement === headingRef.current)) { event.preventDefault(); last.focus(); }
-        else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
-      }}
+      <section ref={panelRef} tabIndex={-1} className="refinement-panel" role="dialog" aria-modal="true" aria-label={text.refining}
       data-refinement-session={session?.id ?? ""} data-refinement-sending={String(saving)} data-refinement-polling={String(polling)} data-refinement-message-length={message.length}>
       <header className="refinement-header">
         <div><small>{text.optionalAssistance}</small><h2 ref={headingRef} tabIndex={-1}>{subjectTitle ?? text.refining}</h2></div>

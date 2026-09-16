@@ -1,10 +1,23 @@
 # LLM Wiki — Continuation handoff
 
-**Updated:** 2026-09-15
+**Updated:** 2026-09-16
 **Current status:** The React/Tauri/Rust desktop now uses the Task as the canonical unit of work.
 Capture remains a lightweight input; Work Log, refinement, exact Problem revisions, Task
 relationships, advisory review, completion, and Knowledge publication are independent decisions.
 The Python/FastAPI browser delivery remains retired in Git history at `caef236`.
+
+## Modal Escape and focus follow-up (2026-09-16)
+
+- Task detail and refinement now share document-level Escape handling and focus recovery.
+  Refinement takes priority over Task detail; native dialogs retain their own handling.
+  Background inert state is restored only after the last custom modal closes.
+- Regression cases were added for escaped focus, nested modal priority, disabled inputs,
+  repeated Escape, IME composition, native dialog ownership, and background restoration.
+- At the user's request, tests, type checking, lint, release build, and packaged desktop
+  E2E were not run for this change. Run the combined verification after the pending work
+  is collected. Manually verify macOS fullscreen Escape, Korean IME cancellation,
+  loading/error states, unsaved-change prompts, and saving failures.
+- This change does not update the installed application described below.
 
 ## Latest local installation verification
 

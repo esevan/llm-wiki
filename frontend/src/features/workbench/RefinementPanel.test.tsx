@@ -511,8 +511,8 @@ describe("Refinement panel", () => {
     expect(document.activeElement).toBe(send);
     fireEvent.keyDown(screen.getByRole("region", { name: "Conversation" }), { key: 'Escape' });
     await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
-    await waitFor(() => expect(document.activeElement).toBe(opener));
     view.unmount();
+    await waitFor(() => expect(document.activeElement).toBe(opener));
     expect(app.inert).not.toBe(true);
     app.remove();
     opener.remove();
