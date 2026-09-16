@@ -588,6 +588,7 @@
   "queue.entity.features": "Solution",
   "queue.target.knowledge": "Knowledge · {path}",
   "queue.target.capture_text": "Capture · Saved text",
+  "queue.target.task_work_log": "Task Work Log · Saved text",
   "queue.target.task_work_image": "Task Work Log · Image attachment",
   "queue.target.work_image": "Solution Work · Image attachment",
   "queue.target.work_log": "Solution Work · Work Log entry",

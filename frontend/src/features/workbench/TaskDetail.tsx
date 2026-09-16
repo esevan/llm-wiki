@@ -210,10 +210,11 @@ export function TaskDetail({
     void load();
     return () => { ++sequences.current; };
   }, [load, refreshKey]);
-  const imageJobsPending = detailState?.persisted.workLog?.some(log =>
-    ["queued", "running", "retryable"].includes(log.imageSummaryJob?.status ?? ""));
+  const workLogJobsPending = detailState?.persisted.workLog?.some(log =>
+    [log.imageSummaryJob, log.translationJob].some(job =>
+      ["queued", "running", "retryable"].includes(job?.status ?? "")));
   useEffect(() => {
-    if (!imageJobsPending) return;
+    if (!workLogJobsPending) return;
     let stopped = false;
     let timer: ReturnType<typeof setTimeout>;
     const poll = async () => {
@@ -222,7 +223,7 @@ export function TaskDetail({
     };
     timer = setTimeout(() => void poll(), 1000);
     return () => { stopped = true; clearTimeout(timer); };
-  }, [imageJobsPending, load]);
+  }, [workLogJobsPending, load]);
   useEffect(() => {
     const refresh = () => { if (!mutationBusyRef.current) void load(); };
     window.addEventListener("llm-wiki:image-summary-updated", refresh);
@@ -440,6 +441,7 @@ export function TaskDetail({
           taskClient.workLog(task.id, revision, entry, file).then((next) => {
             setEntry("");
             setImageQueueError(next.imageSummaryQueueError ?? "");
+            if (next.translationQueueError) setError(next.translationQueueError);
             setAttachment(undefined);
             return next;
           }),
@@ -760,7 +762,7 @@ export function TaskDetail({
         {orderedWorkLog(task.workLog).map((log) => (
           <article className="log-entry" key={log.id} data-work-log-entry={log.id} tabIndex={-1}>
             {log.createdAt && <time dateTime={log.createdAt}>{workLogTimestamp(log.createdAt)}</time>}
-            <p>{log.body}</p>
+            <p>{log.bodyVersions?.[document.documentElement.lang.startsWith("ko") ? "ko" : "en"]?.body || log.body}</p>
             {log.attachment && (
               <small>{log.attachment.name ?? log.attachment.mediaType}</small>
             )}

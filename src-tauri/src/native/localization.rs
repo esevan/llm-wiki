@@ -7,7 +7,7 @@ fn localized_fields(entity_type: &str) -> Option<&'static [&'static str]> {
         "problems" => Some(&["statement", "detail"]),
         "features" => Some(&["title", "outcome", "non_goals", "validation_criteria"]),
         "solution_progress_entries" => Some(&["body", "image_summary"]),
-        "task_work_log_entries" => Some(&["image_summary"]),
+        "task_work_log_entries" => Some(&["body", "image_summary"]),
         "solution_progress_comments" => Some(&["body"]),
         "solution_checklist_items" => Some(&["body"]),
         _ => None,

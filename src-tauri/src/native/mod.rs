@@ -419,6 +419,7 @@ impl NativeApplication {
 
         let derived = match name.as_str() {
             "capture.create" => Some(("captures", "text")),
+            "task.work-log.create" => Some(("task_work_log_entries", "body")),
             "solution.progress.add" => Some(("solution_progress_entries", "body")),
             "solution.comment.add" => Some(("solution_progress_comments", "body")),
             "solution.checklist.add" => Some(("solution_checklist_items", "body")),
@@ -434,14 +435,15 @@ impl NativeApplication {
                 .and_then(Value::as_str)
                 .unwrap_or("");
             if !source.trim().is_empty() {
-                let _ = self
+                let queued = self
                     .enqueue_job(json!({
                         "taskKind":"derived_translation","entityType":entity_type,
                         "entityId":response.body["id"],"entity_type":entity_type,
-                        "entity_id":response.body["id"],"field":field,"source":source,
-                        "source_locale":input.get("locale").and_then(Value::as_str).unwrap_or("en")
+                        "entity_id":response.body["id"],"field":field,"source":source
                     }))
                     .await;
+                if queued.status < 300 { response.body["translationJob"] = queued.body; }
+                else { response.body["translationQueueError"] = queued.body["detail"].clone(); }
             }
         }
         response

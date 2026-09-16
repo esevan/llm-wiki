@@ -142,7 +142,8 @@ pub(super) fn prepare_result(context: JobContext<'_>, result: Value) -> Result<V
             "captures" => "text",
             "solution_progress_entries"
             | "solution_progress_comments"
-            | "solution_checklist_items" => "body",
+            | "solution_checklist_items"
+            | "task_work_log_entries" => "body",
             _ => return Err("Unsupported derived translation target".into()),
         };
         let current: String = connection
@@ -155,6 +156,20 @@ pub(super) fn prepare_result(context: JobContext<'_>, result: Value) -> Result<V
         if format!("{:x}", Sha256::digest(current.as_bytes())) != expected_source_hash {
             return Err("Authored source changed during derived translation".into());
         }
+        if field != table_field {
+            return Err("Derived translation field does not match its target".into());
+        }
+        let needed = result.get("translation_needed").and_then(Value::as_bool)
+            .ok_or("Derived translation requires a translation-necessity review")?;
+        if !needed {
+            return Ok(json!({"entity_type":entity_type,"entity_id":entity_id,
+                "field":field,"translation_needed":false,"skipped":true}));
+        }
+        let source_locale = match result.get("source_locale").and_then(Value::as_str) {
+            Some("ko") => "ko",
+            Some("en") => "en",
+            _ => return Err("Derived translation requires the detected source language".into()),
+        };
         let mut versions = Map::new();
         for language in ["ko", "en"] {
             let value = result
@@ -164,13 +179,6 @@ pub(super) fn prepare_result(context: JobContext<'_>, result: Value) -> Result<V
                 .ok_or("Derived translation requires Korean and English versions")?;
             versions.insert(language.into(), json!({field:value.trim()}));
         }
-        let source_locale = crate::native::localization::normalize_locale(
-            input
-                .get("source_locale")
-                .or_else(|| input.get("sourceLocale"))
-                .and_then(Value::as_str)
-                .unwrap_or("en"),
-        );
         versions.insert(source_locale.into(), json!({field:source}));
         crate::native::localization::save_versions(
             connection,
@@ -179,7 +187,7 @@ pub(super) fn prepare_result(context: JobContext<'_>, result: Value) -> Result<V
             &Value::Object(versions),
         )?;
         return Ok(
-            json!({"entity_type":entity_type,"entity_id":entity_id,"field":field,"available_locales":["ko","en"]}),
+            json!({"entity_type":entity_type,"entity_id":entity_id,"field":field,"translation_needed":true,"source_locale":source_locale,"available_locales":["ko","en"]}),
         );
     }
     if task == "completion_report" {

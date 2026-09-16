@@ -93,7 +93,7 @@ export const taskClient = {
     body: string,
     attachment?: Record<string, string>,
   ) =>
-    request<TaskAggregate & { imageSummaryQueueError?: string }>(
+    request<TaskAggregate & { imageSummaryQueueError?: string; translationQueueError?: string }>(
       `/tasks/${encodeURIComponent(id)}/work-log`,
       "POST",
       { expectedTaskRevision, body, attachment },

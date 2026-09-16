@@ -588,6 +588,7 @@
   "queue.entity.features": "Solution",
   "queue.target.knowledge": "Knowledge · {path}",
   "queue.target.capture_text": "Capture · 저장된 본문",
+  "queue.target.task_work_log": "Task 작업 로그 · 저장된 본문",
   "queue.target.task_work_image": "Task Work Log · 이미지 첨부",
   "queue.target.work_image": "Solution Work · 이미지 첨부",
   "queue.target.work_log": "Solution Work · Work Log 항목",

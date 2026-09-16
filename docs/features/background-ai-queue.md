@@ -52,8 +52,14 @@ The retained Solution and Explore surfaces continue to support their legacy imag
 
 Knowledge translation resumes from paragraph checkpoints and publishes the completed translation
 to the Vault before deleting its SQLite working checkpoints. Capture and Work Log text enqueue
-derived translations immediately using the language active when the user saved them; authored source
-text is never overwritten. Queue cards distinguish
+derived translations immediately. The existing Content translation worker first reviews whether
+there is authored natural-language prose, then detects its predominant language independently of
+the interface setting: Korean prose gets an English version and English prose gets a Korean version.
+Code, commands, raw logs, and reference-only material are skipped; mixed entries translate only
+prose while preserving code and references. Authored source text is never overwritten. Task Work Log
+translations are stored separately and displayed in the selected interface language when ready;
+open Task details refresh while translation is pending. Missing AI configuration or provider failures
+leave the original readable and the failed job available for retry in the Queue. Queue cards distinguish
 Capture text, Work Log entries, comments, and checklist items so each translation target remains
 understandable without exposing its internal ID. Embedding refresh is durable and lexical search
 remains available while it runs.

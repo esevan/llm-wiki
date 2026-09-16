@@ -28,6 +28,15 @@ Raw Capture text, manual entries, Work Log bodies, comments, checklist items, fi
 identifiers, citations, and quoted source material remain as authored. The interface language does
 not change an item's identity or lineage.
 
+
+New Task Work Log prose is also translated in the background using the existing Content translation
+worker. It reviews translation necessity before translating and detects the source language from
+the prose, independently of the interface language. Korean is translated into English and English
+into Korean. Code and reference-only entries are skipped; code and references within prose are
+preserved. The original remains unchanged, and stored translations follow the interface language
+without a new request when switching languages. Pending or failed translations fall back to the
+original; failed jobs can be retried in the Queue. Existing entries are not backfilled automatically.
+
 ## Knowledge and failure safety
 
 Korean Knowledge is a reading aid, not a replacement for the English canonical Markdown. Changing
