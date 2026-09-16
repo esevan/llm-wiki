@@ -145,3 +145,28 @@ it('CB-038 restores a failed job retry when both retry and its queue refresh fai
   expect(document.querySelector('[data-job-id="failed"]')).toHaveTextContent('deterministic fixture failure');
   expect(notice).toHaveBeenCalledWith('Could not retry this job. Try again.', 'retry unavailable');
 });
+
+
+it('opens the Task owning a completed image summary from the Queue', async () => {
+  renderShell();
+  const open = vi.fn();
+  window.llmWikiOpenTaskImageSummary = open;
+  const updated = vi.fn();
+  window.addEventListener('llm-wiki:image-summary-updated', updated);
+  try {
+    startRuntime(async (path) => {
+      if (path === '/jobs') return { jobs: [{ id: 'image-job', task_kind: 'image_summary', entity_type: 'task_work_log_entries', entity_id: 'entry-1', status: 'completed', result_interface: 'task_work_summary' }] };
+      if (path.endsWith('/result')) return { result: { taskId: 'task-1', entry_id: 'entry-1', summary: 'Screenshot evidence' } };
+      return { notifications: [], unread_count: 0 };
+    });
+    await tick();
+    expect(document.querySelector('.queue-job')).toHaveTextContent('Task Work Log · Image attachment');
+    expect(updated).toHaveBeenCalledOnce();
+    document.querySelector<HTMLButtonElement>('[data-job-action="result"]')!.click();
+    await tick();
+    expect(open).toHaveBeenCalledWith('task-1', 'entry-1');
+  } finally {
+    window.removeEventListener('llm-wiki:image-summary-updated', updated);
+    delete window.llmWikiOpenTaskImageSummary;
+  }
+});

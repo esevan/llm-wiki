@@ -56,6 +56,7 @@ Press **Enter** in a Work Log entry to add it; use **Shift+Enter** for a line br
 Paste a screenshot into the Work Log entry to attach it directly; an image-only entry is allowed,
 and ordinary text paste continues to insert text normally. The selected attachment filename remains
 visible until the entry is added or replaced.
+Saved image attachments appear inline in their Work Log entries, including images imported from legacy records. Other attachments display their filenames. Saving an image also queues Korean and English AI summaries; existing images offer a summary action, and completed summaries follow the interface language.
 Work Log entries appear newest first, and each recorded entry shows its date and time in the local
 locale.
 Edits stay local until **Save changes**. An independent saved mutation or refresh preserves a dirty

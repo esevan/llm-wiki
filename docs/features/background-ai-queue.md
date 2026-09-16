@@ -39,11 +39,16 @@ Summary attaches to the exact
 Work Log entry without changing scroll position. Completion Review also creates a temporary toast
 and a persisted unread bell alert because it requires a user decision.
 
-Image-summary behavior on retained Solution and Explore surfaces is legacy compatibility. The current Task guide does not promise an image-summary control unless it is visible for that Task.
-It stays disabled while the queued summary is running, then refreshes the originating
-view when the summary completes. If the request fails, a notice explains the error and
-the button becomes available again. Moving to another item prevents a late result from
-replacing that item's view.
+Saving an image attachment in a Task Work Log automatically submits an **Image Summary** job.
+Existing images offer **Summarize image · Korean + English**. Each request generates and stores both
+languages together; the current interface language selects the displayed summary without another
+AI request. The image remains visible while the job runs. Failed or cancelled work can be submitted
+again from the entry or retried from Queue. Opening the completed Queue result opens the owning Task.
+
+Summary results are saved only while the job is active and the source image still matches. Both
+language versions and Queue completion commit together; cancelled, deleted, or changed targets do
+not receive late summaries. The same saved-entry request does not enqueue a second automatic job.
+The retained Solution and Explore surfaces continue to support their legacy image-summary flow.
 
 Knowledge translation resumes from paragraph checkpoints and publishes the completed translation
 to the Vault before deleting its SQLite working checkpoints. Capture and Work Log text enqueue

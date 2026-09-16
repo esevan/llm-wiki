@@ -4,7 +4,7 @@ pub(crate) mod database;
 mod job_results;
 pub mod jobs;
 pub(crate) mod lineage;
-mod localization;
+pub(crate) mod localization;
 mod migrations;
 mod patches;
 mod projection;
@@ -395,10 +395,17 @@ impl NativeApplication {
                 },
             };
         }
-        let response = self.execute_domain("workflow", operation);
+        let mut response = self.execute_domain("workflow", operation);
         if !(200..300).contains(&response.status) {
             return response;
         }
+        if name == "task.work-log.create" && input["attachment"]["mediaType"].as_str().is_some_and(|media| media.starts_with("image/")) && input["attachment"]["data"].as_str().is_some_and(|data| !data.is_empty()) {
+            let entry_id = response.body["id"].as_str().unwrap_or("");
+            let queued = self.enqueue_job(json!({"taskKind":"image_summary","entityType":"task_work_log_entries","entityId":entry_id,"automatic":true,"locale":input.get("locale").and_then(Value::as_str).unwrap_or("en")})).await;
+            if queued.status < 300 { response.body["imageSummaryJob"] = queued.body; }
+            else { response.body["imageSummaryQueueError"] = queued.body["detail"].clone(); }
+        }
+
         let derived = match name.as_str() {
             "capture.create" => Some(("captures", "text")),
             "solution.progress.add" => Some(("solution_progress_entries", "body")),

@@ -74,35 +74,21 @@ pub(super) fn prepare_result(context: JobContext<'_>, result: Value) -> Result<V
                 Ok((language.to_owned(), json!({"image_summary":summary})))
             })
             .collect::<Result<serde_json::Map<_, _>, String>>()?;
-        crate::native::localization::save_versions(
-            connection,
-            "solution_progress_entries",
-            entity_id,
-            &Value::Object(localized.clone()),
-        )?;
-        let summary = localized[locale]["image_summary"]
-            .as_str()
-            .ok_or("Image Summary is empty")?;
-        let (feature_id, current_image): (String, String) = connection
-            .query_row(
-                "SELECT feature_id,image_data FROM solution_progress_entries WHERE id=? AND image_data<>''",
-                [entity_id],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .map_err(|_| "Progress image is no longer available".to_string())?;
-        if format!("{:x}", Sha256::digest(current_image.as_bytes())) != expected_source_hash {
-            return Err("Progress image changed while its summary was running".into());
+        let entity_type = input.get("entityType").and_then(Value::as_str).unwrap_or("solution_progress_entries");
+        let (owner_id, current_image, media_type) = crate::native::jobs::image_source(connection, entity_type, entity_id)?;
+        if crate::native::jobs::image_source_hash(&current_image, &media_type) != expected_source_hash {
+            return Err("Work Log image changed while its summary was running".into());
         }
-        connection
-            .execute(
-                "UPDATE solution_progress_entries SET image_summary=? WHERE id=?",
-                params![summary, entity_id],
-            )
-            .map_err(|error| error.to_string())?;
-        return Ok(
-            json!({"summary":summary,"localized_versions":localized,"missing_locales":[],"entry_id":entity_id,"feature_id":feature_id}),
-        );
+        crate::native::localization::save_versions(connection, entity_type, entity_id, &Value::Object(localized.clone()))?;
+        let summary = localized[locale]["image_summary"].as_str().ok_or("Image Summary is empty")?;
+        let table = if entity_type == "task_work_log_entries" { "task_work_log_entries" } else { "solution_progress_entries" };
+        let canonical = if entity_type == "task_work_log_entries" { localized["en"]["image_summary"].as_str().unwrap_or(summary) } else { summary };
+        connection.execute(&format!("UPDATE {table} SET image_summary=? WHERE id=?"), params![canonical, entity_id]).map_err(|e| e.to_string())?;
+        let mut result = json!({"summary":summary,"localized_versions":localized,"missing_locales":[],"entry_id":entity_id});
+        result[if entity_type == "task_work_log_entries" { "taskId" } else { "feature_id" }] = json!(owner_id);
+        return Ok(result);
     }
+
     if task == "completion_review" {
         let (problem_id, exists): (String, i64) = connection
             .query_row(

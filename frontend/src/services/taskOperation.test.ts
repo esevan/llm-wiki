@@ -23,6 +23,10 @@ describe('Task contract routing', () => {
     expect(taskOperation('POST', '/tasks/t%201/knowledge/drafts', { expectedTaskRevision: 4 }, 'en'))
       .toEqual({ name: 'jobs.enqueue', input: expect.objectContaining({ taskKind: 'knowledge_draft', entityType: 'tasks', entityId: 't 1', taskId: 't 1', expectedTaskRevision: 4, locale: 'en' }) });
   });
+  it('queues image summaries for the URL Work Log entry without body overrides', () => {
+    expect(taskOperation('POST', '/work-log/entry%201/image-summary', { entityId: 'forged', entityType: 'features', taskKind: 'other' }, 'ko'))
+      .toEqual({ name: 'jobs.enqueue', input: { taskKind: 'image_summary', entityType: 'task_work_log_entries', entityId: 'entry 1', locale: 'ko' } });
+  });
   it('does not swallow unrelated routes or unsupported verbs', () => {
     expect(taskOperation('GET', '/provider/config', {}, 'en')).toBeUndefined();
     expect(taskOperation('DELETE', '/tasks/t1/completions', {}, 'en')).toBeUndefined();

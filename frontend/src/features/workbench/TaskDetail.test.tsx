@@ -1,4 +1,4 @@
-import { createEvent, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, createEvent, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { TaskDetail, type DetailSession } from "./TaskDetail";
 
@@ -25,6 +25,85 @@ const response = (body: unknown) => ({
 });
 
 describe("Task detail", () => {
+  it("renders saved and migrated image attachments while retaining file labels", async () => {
+    const data = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=";
+    const attachments = [
+      { name: "screenshot.png", mediaType: "image/png", data },
+      { name: "legacy-work-log-image", mediaType: "image/png", data },
+      { name: "evidence.txt", mediaType: "text/plain", data: "aGVsbG8=" },
+      { name: "missing.png", mediaType: "image/png", data: "" },
+    ];
+    window.llmWikiApplication = {
+      request: vi.fn().mockResolvedValue(response({
+        ...task,
+        workLog: attachments.map((attachment, index) => ({ id: `entry-${index}`, body: "", attachment })),
+      })),
+    };
+    render(<TaskDetail taskId="task-1" onClose={vi.fn()} onChanged={vi.fn()} />);
+
+    for (const name of ["screenshot.png", "legacy-work-log-image"]) {
+      expect(await screen.findByRole("img", { name })).toHaveAttribute("src", `data:image/png;base64,${data}`);
+    }
+    expect(screen.getAllByRole("img")).toHaveLength(2);
+    expect(screen.getByText("evidence.txt")).toBeVisible();
+    expect(screen.getByText("missing.png")).toBeVisible();
+  });
+
+  it("queues an existing image and refreshes both summaries without losing unsaved input", async () => {
+    const image = { id: "image-entry", attachment: { name: "legacy-work-log-image", mediaType: "image/png", data: "aGVsbG8=" } };
+    let queued = false;
+    let completed = false;
+    const request = vi.fn().mockImplementation(({ path, method }: { path: string; method?: string }) => {
+      if (path === "/work-log/image-entry/image-summary" && method === "POST") {
+        queued = true;
+        return Promise.resolve(response({ id: "image-job", status: "queued" }));
+      }
+      return Promise.resolve(response({ ...task, workLog: [{ ...image,
+        ...(queued ? { imageSummaryJob: { id: "image-job", status: completed ? "completed" : "running" } } : {}),
+        ...(completed ? { imageSummary: "Screenshot evidence", imageSummaryVersions: { en: { image_summary: "Screenshot evidence" }, ko: { image_summary: "스크린샷 작업 근거" } } } : {}),
+      }] }));
+    });
+    window.llmWikiApplication = { request };
+    render(<TaskDetail taskId="task-1" onClose={vi.fn()} onChanged={vi.fn()} />);
+    fireEvent.change(await screen.findByLabelText("Work Log entry"), { target: { value: "Unsent evidence" } });
+    fireEvent.click(screen.getByRole("button", { name: "Summarize image · Korean + English" }));
+    await screen.findByText("Generating Korean and English summaries in the AI queue…");
+    completed = true;
+    await screen.findByText("Screenshot evidence", {}, { timeout: 3000 });
+    expect(screen.getByLabelText("Work Log entry")).toHaveValue("Unsent evidence");
+    expect(request.mock.calls.filter(([input]) => input.path === "/work-log/image-entry/image-summary")).toHaveLength(1);
+    try {
+      await act(async () => { document.documentElement.lang = "ko"; });
+      expect(await screen.findByText("스크린샷 작업 근거")).toBeVisible();
+      expect(screen.queryByText("Screenshot evidence")).not.toBeInTheDocument();
+    } finally {
+      await act(async () => { document.documentElement.lang = "en"; });
+    }
+  });
+
+  it("keeps the saved image available after a failed summary and allows retry", async () => {
+    window.llmWikiApplication = { request: vi.fn().mockResolvedValue(response({ ...task, workLog: [{
+      id: "failed-image", attachment: { name: "screen.png", mediaType: "image/png", data: "aGVsbG8=" },
+      imageSummaryJob: { id: "failed-job", status: "failed", error: "Provider unavailable" },
+    }] })) };
+    render(<TaskDetail taskId="task-1" onClose={vi.fn()} onChanged={vi.fn()} />);
+    expect(await screen.findByRole("img", { name: "screen.png" })).toBeVisible();
+    expect(screen.getByText("Image summary was not completed. Retry here or in the AI queue.")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Summarize image · Korean + English" })).toBeEnabled();
+  });
+
+  it("opens the exact image entry from Queue even when the Task is already on Review", async () => {
+    window.llmWikiApplication = { request: vi.fn().mockResolvedValue(response({ ...task, workLog: [{ id: "image-entry", body: "Image evidence", imageSummary: "A saved summary" }] })) };
+    const props = { taskId: "task-1", onClose: vi.fn(), onChanged: vi.fn() };
+    const view = render(<TaskDetail {...props} />);
+    await screen.findByText("Image evidence");
+    fireEvent.click(screen.getByRole("tab", { name: "Review" }));
+    view.rerender(<TaskDetail {...props} queueImageSummary={{ entryId: "image-entry" }} />);
+    expect(await screen.findByText("A saved summary")).toBeVisible();
+    expect(screen.getByRole("tab", { name: "Work" })).toHaveAttribute("aria-selected", "true");
+    expect(document.querySelector('[data-work-log-entry="image-entry"]')).toHaveFocus();
+  });
+
   it("shows Work Log entries newest first with an explicit local date and time", async () => {
     const loggedTask = {
       ...task,

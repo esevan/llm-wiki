@@ -80,6 +80,7 @@ const manifest: readonly ControlSpec[] = [
   ...['title','detail','outcome','scope','non-goals','criteria'].map(name => existing(`task-revision-${name}`, 'F12', `[data-control="task-revision-${name}"]`, 'frontend/src/features/workbench/TaskDetail.tsx', `task-revision-${name}`, 'immutable task revision reflects the edit')),
   existing('task-revision-dynamic-control', 'F12', 'textarea[data-control^="task-revision-"]', 'frontend/src/features/workbench/TaskDetail.tsx', 'data-control={control}', 'definition field control resolves from its stable field id'),
   task('task-revision-save', 'F12', 'frontend/src/features/workbench/TaskDetail.tsx', 'immutable task revision reflects the edit', 'No definition changes, overlapping revision conflicts awaiting a choice, or a save is in progress.'),
+  task('task-image-summary', 'F13', 'frontend/src/features/workbench/TaskDetail.tsx', 'bilingual image summary job completes and renders', 'Task mutation is in progress'),
   ...['text','file','add'].map(name => task(`task-worklog-${name}`, 'F13', 'frontend/src/features/workbench/TaskDetail.tsx', 'work-log entry persists')),
   ...['text','add'].map(name => task(`task-comment-${name}`, 'F14', 'frontend/src/features/workbench/TaskDetail.tsx', 'comment persists')),
   ...['text','add','toggle'].map(name => task(`task-checklist-${name}`, 'F15', 'frontend/src/features/workbench/TaskDetail.tsx', 'checklist state persists')),

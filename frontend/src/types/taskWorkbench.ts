@@ -51,6 +51,9 @@ export interface WorkbenchSnapshot {
   categories: Array<{ id: string; label: string; items: WorkbenchItem[] }>;
 }
 export interface WorkLogEntry {
+  imageSummary?: string;
+  imageSummaryVersions?: Partial<Record<"ko" | "en", { image_summary: string }>>;
+  imageSummaryJob?: { id: string; status: string; error?: string };
   id: string;
   body?: string;
   createdAt?: string;

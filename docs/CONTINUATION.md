@@ -6,6 +6,17 @@ Capture remains a lightweight input; Work Log, refinement, exact Problem revisio
 relationships, advisory review, completion, and Knowledge publication are independent decisions.
 The Python/FastAPI browser delivery remains retired in Git history at `caef236`.
 
+## Work Log image merge (2026-09-16)
+
+- Integrated `e3a684e` into the current main history, restoring saved Work Log
+  images and queued bilingual image summaries alongside the latest Task UI.
+- Preserved both the current layout styles and the image-summary styles when
+  resolving the stylesheet conflict. Uncommitted changes in the original
+  `fix/work-log-images` worktree remain there and are not part of this merge.
+- At the user's request, no tests were run for this integration. No release
+  build, packaged desktop E2E, or installation was performed; the installed
+  application still needs an update to receive this fix.
+
 ## Modal Escape and focus follow-up (2026-09-16)
 
 - Task detail and refinement now share document-level Escape handling and focus recovery.
@@ -69,6 +80,18 @@ The Python/FastAPI browser delivery remains retired in Git history at `caef236`.
   the first release.
 
 ## Task-centered verification record
+
+### Work Log images and bilingual summaries (2026-09-15)
+
+Task detail renders saved and migrated image attachments inline. Image saves enqueue
+Korean and English summaries automatically; existing images can request them manually.
+Queue results open the owning entry, and summaries follow the interface language.
+Both languages and completion commit atomically with source, cancellation, and retry
+attempt guards. Automatic submission is idempotent for a saved entry.
+
+Verification is recorded in the task handoff. This environment requires the existing
+workspace ONNX library via `ORT_LIB_LOCATION` and `ORT_PREFER_DYNAMIC_LINK=1` for
+native builds because upstream has no prebuilt `x86_64-apple-darwin` binary.
 
 **UI/UX follow-up final package:** the signed `9b2b81082a43de0637bedd33a8cc670709ff2b21` bundle passed 32/32 scenarios. The generated inventory recorded 188 scanned source controls and 175 rendered/exercised/asserted controls; all six coverage-gap arrays were empty. Manual Korean IME, VoiceOver, OS reduced motion, Windows, zoom, and native quit/crash draft durability remain unverified or out of scope.
 
