@@ -119,6 +119,7 @@ export interface TaskAggregate extends TaskCard {
     report?: string;
     createdAt?: string;
   };
+  publishedKnowledge?: { draftRevision: number; bodyMarkdown: string };
   publication?: {
     state?: string;
     draftRevision?: number;

@@ -118,11 +118,8 @@ pub(crate) fn child_completed(
         let evidence: Value = tx.query_row("SELECT id,evidence,report FROM task_completions WHERE task_id=? AND task_revision=? ORDER BY created_at DESC,rowid DESC LIMIT 1", params![child_id,child["taskRevision"].as_i64()], |r| Ok(json!({"id":r.get::<_,String>(0)?,"evidence":r.get::<_,String>(1)?,"report":r.get::<_,String>(2)?})))
             .optional().map_err(|e| e.to_string())?.ok_or("Completed Subtask evidence not found")?;
         sections.push(format!(
-            "## {}\n\nTask: {} · Revision {} · Completion {}\n\n{}\n\n{}",
+            "## {}\n\n{}\n\n{}",
             child["title"].as_str().unwrap_or_default(),
-            child_id,
-            child["taskRevision"],
-            evidence["id"].as_str().unwrap_or_default(),
             evidence["evidence"].as_str().unwrap_or_default(),
             evidence["report"].as_str().unwrap_or_default()
         ));

@@ -26,12 +26,15 @@
     "verify:runtime": "node scripts/verify_runtime.mjs"
   },
   "dependencies": {
+    "@fontsource-variable/noto-sans-kr": "^5.3.0",
     "@fontsource/dm-mono": "^5.2.6",
     "@fontsource/nunito": "^5.2.6",
-    "@fontsource-variable/noto-sans-kr": "^5.3.0",
     "@tauri-apps/api": "^2.8.0",
     "react": "^19.1.1",
-    "react-dom": "^19.1.1"
+    "react-dom": "^19.1.1",
+    "react-markdown": "^10.1.0",
+    "remark-frontmatter": "^5.0.0",
+    "remark-gfm": "^4.0.1"
   },
   "devDependencies": {
     "@eslint/js": "^9.34.0",

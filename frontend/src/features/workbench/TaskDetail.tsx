@@ -1,3 +1,4 @@
+import { KnowledgeMarkdown } from "../../components/KnowledgeMarkdown";
 import { useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, type ReactNode, type Ref } from "react";
 import { createPortal } from "react-dom";
 import { taskClient } from "../../services/taskClient";
@@ -1188,6 +1189,12 @@ export function TaskDetail({
             </button>
           </div>
         )}
+        {task.publishedKnowledge && (
+          <section className="knowledge-published" aria-label={text.publishedVersion}>
+            <h4>{text.publishedVersion}</h4>
+            <KnowledgeMarkdown>{task.publishedKnowledge.bodyMarkdown}</KnowledgeMarkdown>
+          </section>
+        )}
         {knowledgeDraft && (
           <article
             className="knowledge-draft"
@@ -1198,7 +1205,7 @@ export function TaskDetail({
             </h4>
             <section className="knowledge-draft-preview" aria-label={text.draftPreview} tabIndex={-1}>
               <header><h5>{text.draftPreview}</h5><p>{text.draftPreviewHint}</p></header>
-              <pre>{knowledgeDraft.bodyMarkdown}</pre>
+              <KnowledgeMarkdown>{knowledgeDraft.bodyMarkdown}</KnowledgeMarkdown>
             </section>
             <label className="knowledge-draft-editor">
               <span>{text.editDraft}</span>

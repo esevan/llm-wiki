@@ -729,6 +729,11 @@ impl TaskApplicationService {
             let lineage: Value = serde_json::from_str(&r.get::<_,String>(3)?).unwrap_or(Value::Null);
             Ok(json!({"draftRevision":r.get::<_,i64>(0)?,"state":r.get::<_,String>(1)?,"contentHash":r.get::<_,String>(2)?,"sourceHash":lineage["sourceHash"],"bodyMarkdown":r.get::<_,String>(4)?}))
         }).optional().map_err(|e|e.to_string())?;
+        // A newer private draft must not hide the last published document. A
+        // withdrawal suppresses earlier revisions of the same published file.
+        let published_knowledge = c.query_row("SELECT revision,state,body_markdown FROM task_knowledge_drafts WHERE task_id=? AND state IN ('published','withdrawn') ORDER BY revision DESC LIMIT 1", [id], |r| {
+            Ok((r.get::<_,String>(1)?, json!({"draftRevision":r.get::<_,i64>(0)?,"bodyMarkdown":r.get::<_,String>(2)?})))
+        }).optional().map_err(|e|e.to_string())?;
         let problem_links=c.prepare("SELECT id,problem_id,problem_revision,relationship,note FROM task_problem_links WHERE task_id=? AND unlinked_at IS NULL").map_err(|e|e.to_string())?.query_map([id],|r|Ok(json!({"id":r.get::<_,String>(0)?,"problemId":r.get::<_,String>(1)?,"problemRevision":r.get::<_,i64>(2)?,"relationship":r.get::<_,String>(3)?,"note":r.get::<_,String>(4)?}))).map_err(|e|e.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|e|e.to_string())?;
         let relationships=c.prepare("SELECT id,CASE WHEN source_task_id=? THEN target_task_id ELSE source_task_id END,kind,note FROM task_relationships WHERE (source_task_id=? OR (kind='related' AND target_task_id=?)) AND unlinked_at IS NULL").map_err(|e|e.to_string())?.query_map(params![id,id,id],|r|Ok(json!({"id":r.get::<_,String>(0)?,"targetTaskId":r.get::<_,String>(1)?,"kind":r.get::<_,String>(2)?,"note":r.get::<_,String>(3)?}))).map_err(|e|e.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|e|e.to_string())?;
         let readiness = self.readiness(id)?;
@@ -744,6 +749,9 @@ impl TaskApplicationService {
         }
         let auto_error: Option<String> = c.query_row("SELECT error FROM task_auto_publications WHERE task_id=? AND state='pending' AND error!='' ORDER BY revision LIMIT 1",[id],|r|r.get(0)).optional().map_err(|e|e.to_string())?;
         object.insert("autoPublicationError".into(),json!(auto_error));
+        if let Some((state, published)) = published_knowledge {
+            if state == "published" { object.insert("publishedKnowledge".into(), published); }
+        }
         if let Some(publication) = publication {
             object.insert("publication".into(), publication);
         }

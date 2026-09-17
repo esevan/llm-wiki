@@ -883,11 +883,16 @@ async function publication(step: Step) {
     "Verify packaged acceptance scenarios",
     "Publish only the reviewed revision",
     "Release evidence must remain traceable",
-    "source `",
   ]) {
     if (!correction.value.includes(expected))
       throw new Error(`Knowledge draft omitted rich evidence: ${expected}`);
   }
+  if (/Not recorded|None recorded| — source `|## Provenance/.test(correction.value))
+    throw new Error("Knowledge draft exposed internal metadata or empty placeholders");
+  if (getComputedStyle(correction).fontWeight !== "400")
+    throw new Error("Knowledge editor must use normal-weight text");
+  if (!document.querySelector(".knowledge-draft-preview .knowledge-markdown h1"))
+    throw new Error("Knowledge preview did not render Markdown headings");
   const initialHash = document
     .querySelector(".knowledge-draft")
     ?.getAttribute("data-content-hash");
@@ -924,6 +929,7 @@ async function publication(step: Step) {
         ?.getAttribute("data-publication-state") === "published",
     "published Knowledge controls",
   );
+  await waitFor(() => document.querySelector(".knowledge-published .knowledge-markdown")?.textContent?.includes("Corrected by packaged desktop E2E.") ?? false, "current published article");
   const regenerate = [
     ...document.querySelectorAll<HTMLButtonElement>(".task-detail button"),
   ].find((button) => /regenerate draft/i.test(button.textContent ?? ""));
@@ -933,6 +939,8 @@ async function publication(step: Step) {
     () => !!document.querySelector(".knowledge-draft"),
     "regenerated Knowledge preview",
   );
+  if (!document.querySelector(".knowledge-published")?.textContent?.includes("Corrected by packaged desktop E2E."))
+    throw new Error("Regeneration hid or replaced the current published version");
   const regeneratedRevision = document
     .querySelector(".knowledge-draft h4")
     ?.textContent?.match(/r(\d+)/)?.[1];
@@ -966,6 +974,8 @@ async function publication(step: Step) {
         ?.getAttribute("data-publication-state") === "withdrawn",
     "withdrawn Knowledge",
   );
+  if (document.querySelector(".knowledge-published"))
+    throw new Error("Withdrawn Knowledge still appears as published");
   const saved = await task(title);
   if (!saved.completion || saved.publication?.state !== "withdrawn" || saved.publication.draftRevision !== Number(regeneratedRevision))
     throw new Error(
