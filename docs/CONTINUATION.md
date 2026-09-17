@@ -258,3 +258,15 @@ Regression coverage was updated for promotion, legacy continuity, and split
 intent. At the user's request, tests, builds, and rendered UI verification were
 not run before merging to main. Run the combined verification after the pending
 work is integrated. The live application database was not edited.
+
+### Image-only Capture initial refinement (2026-09-17)
+
+Image-only Captures automatically start the existing conversation and preview
+flow after saving. Older Captures without conversation history start on opening
+Refine. Reopening does not repeat the initial request; proposal application
+remains a user decision. English and Korean feature guides are updated.
+
+`npm test` passed, including 247 frontend tests and the supporting runtime,
+provider, and signing checks. Native tests and release packaging were stopped
+at the user's request; packaged desktop E2E was skipped. Native verification
+remains outstanding for this change.

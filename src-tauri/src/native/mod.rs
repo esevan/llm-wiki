@@ -417,6 +417,18 @@ impl NativeApplication {
             else { response.body["imageSummaryQueueError"] = queued.body["detail"].clone(); }
         }
 
+        if name == "capture.create" && input["text"].as_str().unwrap_or("").trim().is_empty() && input["image"].is_object() {
+            let capture_id = response.body["id"].as_str().unwrap_or("");
+            let prepared = task_assistance::execute_with_registry(
+                &self.db_path, &self.settings_path, &self.vault, self.semantic.clone(), self.jobs.clone(),
+                "task-refinement.open", &json!({"operationId":format!("image-capture-open:{capture_id}"),"captureId":capture_id,"locale":input.get("locale").cloned().unwrap_or(json!("en"))}),
+            ).await;
+            match prepared {
+                Ok(session) => response.body["refinementSession"] = session,
+                Err(error) => response.body["refinementQueueError"] = json!(error),
+            }
+        }
+
         let derived = match name.as_str() {
             "capture.create" => Some(("captures", "text")),
             "task.work-log.create" => Some(("task_work_log_entries", "body")),

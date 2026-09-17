@@ -207,7 +207,11 @@ pub(crate) async fn execute_with_registry(
     input: &Value,
 ) -> Result<Value, String> {
     match name {
-        "task-refinement.open" => refinement_open(db_path, input),
+        "task-refinement.open" => {
+            let session = refinement_open(db_path, input)?;
+            prepare_image_capture(db_path, settings_path, vault_root, semantic, registry, &session, input).await?;
+            session_value(&database::open(db_path)?, required(&session, "id")?)
+        },
         "task-refinement.get" => refinement_get_for_subject(db_path, input),
         "task-refinement.message" => {
             refinement_message(
@@ -520,6 +524,36 @@ fn refinement_workspace(db_path: &Path, input: &Value) -> Result<Value, String> 
     record_operation(&tx, input, &result)?;
     tx.commit().map_err(|error| error.to_string())?;
     Ok(result)
+}
+
+// Reuse the normal durable conversation/preview flow, including retry and review boundaries.
+async fn prepare_image_capture(
+    db_path: &Path,
+    settings_path: &Path,
+    vault_root: &Path,
+    semantic: SemanticEngine,
+    registry: crate::native::jobs::JobRegistry,
+    session: &Value,
+    input: &Value,
+) -> Result<(), String> {
+    let session_id = required(session, "id")?;
+    let connection = database::open(db_path)?;
+    let eligible: bool = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM refinement_sessions s JOIN captures c ON c.id=s.capture_id WHERE s.id=? AND s.task_id IS NULL AND trim(c.text)='' AND NOT EXISTS(SELECT 1 FROM refinement_messages m WHERE m.session_id=s.id))",
+        [session_id], |row| row.get(0),
+    ).map_err(|error| error.to_string())?;
+    if !eligible || session.get("captureImage").is_none() { return Ok(()); }
+    drop(connection);
+    let message = if input["locale"].as_str() == Some("ko") {
+        "첨부한 이미지의 텍스트, 표, 핵심 내용을 분석해 1차 정제해 주세요. 확인되는 사실과 요청 사항을 정리하고 검토 가능한 작업 초안을 제안해 주세요. 읽을 수 없거나 불확실한 내용은 명시하고 추측하지 마세요."
+    } else {
+        "Analyze the attached image, including its text, tables, and key content, for an initial refinement. Summarize observable facts and requests and prepare a reviewable task draft. Identify unreadable or uncertain details without guessing."
+    };
+    refinement_message(db_path, settings_path, vault_root, semantic, registry, &json!({
+        "operationId":format!("image-capture-initial:{session_id}"),
+        "sessionId":session_id,"message":message
+    })).await?;
+    Ok(())
 }
 
 async fn refinement_message(
@@ -2750,6 +2784,32 @@ mod tests {
     fn completed_task(db: &Path) -> String {
         let repo = SqliteTaskRepository::new(db);
         repo.transaction(|tx|{let at=now();let value=create_task_tx(tx,&json!({"title":"Evidence Task","outcome":"A verified outcome","scope":"Local files","validationCriteria":"Evidence exists"}),None,None,&at)?;let task=value["id"].as_str().unwrap().to_owned();tx.execute("UPDATE tasks SET state='completed',completed_at=? WHERE id=?",params![at,task]).map_err(|error|error.to_string())?;tx.execute("INSERT INTO task_work_log_entries(id,task_id,body,created_at) VALUES(?,?,?,?)",params![id(),task,"Observed exact behavior",at]).map_err(|error|error.to_string())?;tx.execute("INSERT INTO task_completions(id,task_id,task_revision,evidence,report,operation_id,created_at) VALUES(?,?,1,'Passing contract test','No open issue',?,?)",params![id(),task,id(),at]).map_err(|error|error.to_string())?;Ok(task)}).unwrap()
+    }
+
+    #[tokio::test]
+    async fn image_capture_initial_refinement_runs_once_and_preserves_original() {
+        let (_root, db, vault, settings) = fixture();
+        let capture_id = capture(&db);
+        let connection = database::open(&db).unwrap();
+        connection.execute("UPDATE captures SET text='' WHERE id=?", [&capture_id]).unwrap();
+        let image = json!({"name":"shot.png","mediaType":"image/png","data":"iVBORw0KGgo="});
+        input_images::save(&connection, true, &capture_id, &image).unwrap();
+        for operation in ["auto-open", "reopen"] {
+            let session = execute(&db, &settings, &vault, SemanticEngine::new(None), "task-refinement.open",
+                &json!({"operationId":operation,"captureId":capture_id,"locale":"ko"})).await.unwrap();
+            assert_eq!(session["messages"].as_array().unwrap().len(), 1);
+            assert!(session["messages"][0]["body"].as_str().unwrap().contains("1차 정제"));
+            assert_eq!(session["captureImage"], image);
+            let (_, images) = image_context(&refinement_context(&connection, session["id"].as_str().unwrap()).unwrap());
+            assert!(!images.is_empty());
+        }
+        assert_eq!(connection.query_row("SELECT count(*) FROM task_assistance_jobs", [], |r| r.get::<_,i64>(0)).unwrap(), 1);
+        assert_eq!(connection.query_row("SELECT text FROM captures WHERE id=?", [&capture_id], |r| r.get::<_,String>(0)).unwrap(), "");
+        let text_capture = capture(&db);
+        input_images::save(&connection, true, &text_capture, &image).unwrap();
+        let session = execute(&db, &settings, &vault, SemanticEngine::new(None), "task-refinement.open",
+            &json!({"operationId":"text-open","captureId":text_capture})).await.unwrap();
+        assert!(session["messages"].as_array().unwrap().is_empty());
     }
 
     #[tokio::test]

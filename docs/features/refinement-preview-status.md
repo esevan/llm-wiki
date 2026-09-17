@@ -19,6 +19,8 @@ proposal generation; these requests need a model that supports image input. Prov
 remain visible and do not discard saved images. Unsent refinement images survive closing and
 reopening the panel during the current app session, and failed sends retain the attachment.
 
+Saving an image-only Capture automatically starts AI analysis of its text, tables, and key content, then prepares an initial refinement preview. Open Refine to review the result; no extra message is required. Older image-only Captures start this analysis on their first refinement open if no conversation exists. Reopening does not repeat the analysis. Uncertain details should be identified instead of guessed, and applying the proposal remains a user decision.
+
 
 ## Work in the refinement panel
 
