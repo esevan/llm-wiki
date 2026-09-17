@@ -1,3 +1,4 @@
+import { localizedTask } from "./taskContent";
 import { InputImageAttachment, InputImagePreview } from "./InputImageAttachment";
 import { useInputImage } from "./useInputImage";
 import type { InputImage } from "../../types/taskWorkbench";
@@ -540,6 +541,12 @@ export function RefinementPanel({
         }
       : { ...source };
     if (values.body !== undefined && values.detail === undefined) values.detail = values.body;
+    if (proposal && !edits[proposal.id] && editing !== proposal.id) {
+      const translated = localizedTask({ contentVersions: proposal.localizedFields });
+      const { contentVersions: _versions, ...fields } = translated;
+      void _versions;
+      return { ...values, ...fields };
+    }
     return values;
   };
   const fieldsFor = (payload: Record<string, unknown>, proposal?: RefinementProposal) => {
@@ -583,7 +590,7 @@ export function RefinementPanel({
         </nav>
         {currentTask && resultTab === "status" && <div id="refinement-result-status" role="tabpanel" aria-labelledby="refinement-tab-status" hidden={resultTab !== "status"}>
           <p className="refined-status">{currentTask.refinedRevision ? `${text.refined} ${currentTask.refinedRevision}` : text.ready}</p>
-          <h3>{currentTask.title}</h3>
+          <h3>{localizedTask(currentTask).title}</h3>
           <p>{currentTask.state === "in_progress" ? text.inProgress : currentTask.state === "completed" ? text.completed : text.ready}</p>
           <dl className="proposal-fields">{["detail", "outcome", "scope", "nonGoals", "validationCriteria"].map(key => {
             const value = currentTask[key as keyof TaskAggregate];

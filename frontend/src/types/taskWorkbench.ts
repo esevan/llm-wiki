@@ -11,7 +11,10 @@ export interface CaptureCard {
   category?: string;
   lastUserActivityAt?: string;
 }
+export type TaskContentVersions = Partial<Record<"ko" | "en", Partial<Record<"title" | "detail" | "outcome" | "scope" | "nonGoals" | "validationCriteria", string>>>>;
+
 export interface TaskCard {
+  contentVersions?: TaskContentVersions;
   completedAt?: string | null;
   originCaptureText?: string | null;
   kind: "task";
@@ -143,6 +146,7 @@ export interface RefinementSession {
   responseStatus?: "queued" | "running" | "completed" | "failed" | "cancelled";
 }
 export interface RefinementProposal {
+  localizedFields?: TaskContentVersions;
   id: string;
   type: string;
   payload: Record<string, unknown>;

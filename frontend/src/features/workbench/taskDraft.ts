@@ -47,7 +47,7 @@ export function acknowledgeSave(current: DetailState, saved: TaskRevisionResult,
       !definitionFields.every((field) => typeof saved[field] === "string")) {
     throw new Error("Invalid Task revision response");
   }
-  const acknowledged = baseline({ ...latestPersisted, ...saved });
+  const acknowledged = baseline({ ...latestPersisted, ...saved, contentVersions: undefined });
   // A GET may have completed during the save. Preserve that newer knowledge.
   return latestPersisted.taskRevision > saved.taskRevision
     ? mergeSnapshot(acknowledged, latestPersisted)

@@ -13,6 +13,7 @@ import {
   runRefinementCloseRetryScenario,
   runRefinementProviderRecoveryScenario,
   runTaskChatScenario,
+  runBilingualRefinementScenario,
 } from "./chatScenarios";
 import {
   runLegacyProblemRefinementScenario,
@@ -1311,6 +1312,7 @@ export function installDesktopScenario() {
           await runLegacyPreviewWarningRetryScenario(scenarioHarness);
           await closeLegacyChat("Close recovered migrated Problem refinement");
         },
+        "task-bilingual-refinement": () => runBilingualRefinementScenario({ ...scenarioHarness, providerUrl: e2eProviderUrl }),
         "task-chat-controls": () =>
           runTaskChatScenario({ ...scenarioHarness, providerUrl: e2eProviderUrl }),
         "task-refinement-provider-recovery": () =>

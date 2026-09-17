@@ -478,7 +478,7 @@ fn refinement_context(
 fn refinement_prompt(connection: &Connection, session_id: &str) -> Result<String, String> {
     let (session, _) = image_context(&refinement_context(connection, session_id)?);
     Ok(format!(
-        "Return JSON only as {{\"proposals\":[{{\"id\":string,\"type\":\"task_patch|new_task|subtask|problem_snapshot|task_problem_link\",\"payload\":object}}]}}. When taskSnapshot exists, refine that SAME Task with task_patch by default. Never create a replacement or duplicate Task. Only propose subtask when the user explicitly asks to split out independently completable work; include boundaryReason, parentTaskId=taskSnapshot.id, expectedTaskRevision, and all Task fields. Respect hierarchyContext: read parent, siblings and children scope/nonGoals; do not overlap sibling work or extend beyond the parent boundary. If boundaries are unclear ask before proposing a split. new_task is only for promoting a Capture without a Task into the same work item, never an additional independent Task. Propose one coherent refinement of that Capture. Splitting is a separate explicit user action after promotion. For new_task, include every available Task field in payload: title, detail, outcome, scope, nonGoals, and validationCriteria. For task_patch, put only the changed Task values in payload.patch using those field names and include the exact taskSnapshot.taskRevision as expectedTaskRevision; the UI combines the patch with taskSnapshot for a complete review preview. Use detail for the full Task description, never an unlabelled summary. For problem_snapshot include statement, detail, category, and note when available; for task_problem_link include problemId, problemRevision, relationship, and note when available. Propose durable changes but do not apply them. Use only the supplied local session. A Capture may already contain a proposed solution: preserve it as the starting Task draft and ask only for details that are actually missing; do not restart broad problem or solution discovery.\n\n{}",
+        "Return JSON only as {{\"proposals\":[{{\"id\":string,\"type\":\"task_patch|new_task|subtask|problem_snapshot|task_problem_link\",\"payload\":object}}]}}. When taskSnapshot exists, refine that SAME Task with task_patch by default. Never create a replacement or duplicate Task. Only propose subtask when the user explicitly asks to split out independently completable work; include boundaryReason, parentTaskId=taskSnapshot.id, expectedTaskRevision, and all Task fields. Respect hierarchyContext: read parent, siblings and children scope/nonGoals; do not overlap sibling work or extend beyond the parent boundary. If boundaries are unclear ask before proposing a split. new_task is only for promoting a Capture without a Task into the same work item, never an additional independent Task. Propose one coherent refinement of that Capture. Splitting is a separate explicit user action after promotion. For new_task, include every available Task field in payload: title, detail, outcome, scope, nonGoals, and validationCriteria. For task_patch, put only the changed Task values in payload.patch using those field names and include the exact taskSnapshot.taskRevision as expectedTaskRevision; the UI combines the patch with taskSnapshot for a complete review preview. Use detail for the full Task description, never an unlabelled summary. For problem_snapshot include statement, detail, category, and note when available; for task_problem_link include problemId, problemRevision, relationship, and note when available. For every new_task, subtask, or task_patch proposal, also include localizedFields alongside payload: an object with ko and en objects, each containing all six complete resulting Task fields (title, detail, outcome, scope, nonGoals, validationCriteria), including unchanged taskSnapshot fields for a sparse patch. Korean and English must have equivalent meaning. Use empty strings for absent fields. Preserve code, paths, identifiers, URLs and quotations exactly. Use 사용자 for user/human in Korean prose. Never put translations inside payload.patch. Propose durable changes but do not apply them. Use only the supplied local session. A Capture may already contain a proposed solution: preserve it as the starting Task draft and ask only for details that are actually missing; do not restart broad problem or solution discovery.\n\n{}",
         session
     ))
 }
@@ -668,13 +668,19 @@ async fn run_refinement_response(
     auto_review: bool,
 ) -> Result<(), String> {
     update_refinement_job_status(db_path, job_id, "running", None)?;
-    let (context, images) = image_context(&refinement_context(&database::open(db_path)?, session_id)?);
+    let connection = database::open(db_path)?;
+    let request: String = connection.query_row("SELECT input_json FROM task_assistance_jobs WHERE id=?", [job_id], |row| row.get(0)).map_err(|error| error.to_string())?;
+    let request: Value = serde_json::from_str(&request).map_err(|error| error.to_string())?;
+    let locale = super::localization::normalize_locale(request["locale"].as_str().unwrap_or("en"));
+    let (context, images) = image_context(&refinement_context(&connection, session_id)?);
+    drop(connection);
     let task_kind = if context["taskId"].is_string() {
         "solution_assistance"
     } else {
         "capture_assistance"
     };
     let prompt = format!("Return JSON only as {{\"message\":string}}. Reply briefly to the latest user message using the supplied local conversation. Ask only for missing details. Preserve the original Capture and Task facts. Do not generate proposals or a full preview; a separate background job handles that.\n\n{}", context);
+    let prompt = format!("Respond in {locale}. {prompt}");
     let response = provider_json_with_images(settings_path, task_kind, prompt, &images, None).await?;
     let assistant = required(&response, "message")?;
     let preview_id = id();
@@ -696,7 +702,7 @@ async fn run_refinement_response(
         let preview_context = refinement_context(&tx,session_id)?;
         let task_binding = preview_context["taskSnapshot"].clone();
         let family_hash = digest(&preview_context["hierarchyContext"].to_string());
-        let preview_input = json!({"images":image_context(&preview_context).1,"taskBinding":task_binding,"hierarchyContextHash":family_hash,"sessionId":session_id,"responseJobId":job_id,"autoReview":auto_review,"prompt":refinement_prompt(&tx,session_id)?,"modelTask":task_kind});
+        let preview_input = json!({"images":image_context(&preview_context).1,"taskBinding":task_binding,"hierarchyContextHash":family_hash,"sessionId":session_id,"responseJobId":job_id,"autoReview":auto_review,"locale":locale,"prompt":format!("Write the primary payload in {locale}. {}",refinement_prompt(&tx,session_id)?),"modelTask":task_kind});
         tx.execute("INSERT INTO ai_jobs_v2(id,task_kind,entity_type,entity_id,status,input_json,execution_mode,idempotency_key,result_interface,progress_total,available_at,created_at) VALUES(?,'refinement_preview','refinement_sessions',?,'queued',?,'native',?,'inline_preview',1,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)", params![preview_id,session_id,preview_input.to_string(),format!("refinement-preview:{job_id}")]).map_err(|error| error.to_string())?;
         tx.execute("UPDATE task_assistance_jobs SET status='completed',result_json=?,finished_at=? WHERE id=?", params![json!({"message":assistant,"previewJobId":preview_id}).to_string(),now(),job_id]).map_err(|error| error.to_string())?;
         tx.commit().map_err(|error| error.to_string())?;
@@ -733,7 +739,47 @@ pub(crate) async fn prepare_refinement_preview(
         for proposal in &mut proposals { normalize_task_proposal(proposal,task,revision,hash.as_ref()); }
     }
     validate_proposals(&proposals)?;
+    for proposal in &mut proposals {
+        normalize_proposal_translations(proposal, &input["taskBinding"], input["locale"].as_str().unwrap_or("en"));
+    }
     Ok(json!({"proposals":proposals}))
+}
+
+// Translations describe the complete resulting Task, never executable proposal metadata.
+fn normalize_proposal_translations(proposal: &mut Value, baseline: &Value, locale: &str) {
+    if !matches!(proposal["type"].as_str(), Some("new_task" | "subtask" | "task_patch")) {
+        return;
+    }
+    let mut source = serde_json::Map::new();
+    let payload = proposal["payload"].get("patch").unwrap_or(&proposal["payload"]);
+    for field in super::localization::TASK_FIELDS {
+        let old = if proposal["type"] == "task_patch" { baseline[field].as_str().unwrap_or("") } else { "" };
+        source.insert(field.into(), json!(payload[field].as_str().unwrap_or(old).trim()));
+    }
+    let valid = ["ko", "en"].iter().all(|locale| super::localization::TASK_FIELDS.iter().all(|field| {
+        proposal["localizedFields"][*locale][*field].as_str().is_some_and(|value|
+            source[*field].as_str().unwrap_or("").is_empty() || !value.trim().is_empty())
+    }));
+    let mut versions = json!({});
+    if valid {
+        for language in ["ko", "en"] {
+            let mut fields = serde_json::Map::new();
+            for field in super::localization::TASK_FIELDS {
+                fields.insert(field.into(), if source[field] == "" { json!("") } else { proposal["localizedFields"][language][field].clone() });
+            }
+            versions[language] = Value::Object(fields);
+        }
+        // Generated fields keep their exact requested-language wording. Unchanged
+        // baseline fields may be in another language, so retain their translations.
+        let language = super::localization::normalize_locale(locale);
+        for field in super::localization::TASK_FIELDS {
+            if payload[field].is_string() {
+                versions[language][field] = source[field].clone();
+            }
+        }
+    }
+    proposal["localizedFields"] = versions;
+    proposal["translationSource"] = Value::Object(source);
 }
 
 pub(crate) fn finalize_refinement_preview(
@@ -1008,14 +1054,23 @@ pub(crate) fn refinement_decision_tx(tx: &Transaction<'_>, input: &Value) -> Res
         if proposal["type"] == "subtask" && input["intent"] != "split" {
             return Err("invalid_input: use the explicit split action to create a Subtask".into());
         }
-        apply_proposal_tx(
+        let applied = apply_proposal_tx(
             tx,
             proposal["type"].as_str().unwrap_or(""),
             &payload,
             capture_id.as_deref(),
             session_task_id.as_deref(),
             &timestamp,
-        )?
+        )?;
+        if applied["taskRevision"].is_number() && proposal["translationSource"].is_object() {
+            let matches = super::localization::TASK_FIELDS.iter().all(|field|
+                applied[*field].as_str().unwrap_or("").trim() == proposal["translationSource"][*field].as_str().unwrap_or("").trim());
+            if matches && proposal["localizedFields"].is_object() {
+                let key = super::localization::task_content_key(tx, required(&applied, "id")?)?;
+                super::localization::save_versions(tx, "task_content", &key, &proposal["localizedFields"])?;
+            }
+        }
+        applied
     };
     if decision != "reject" {
         let operation_id = required(input, "operationId")?;
@@ -2695,6 +2750,64 @@ fn slug(title: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bilingual_refinement_preserves_source_and_binds_translations_to_content() {
+        let (_root, db, _vault, _settings) = fixture();
+        let repo = SqliteTaskRepository::new(&db);
+        let task = repo.transaction(|tx| create_task_tx(tx, &json!({"title":"원래 제목","scope":"원래 범위"}), None, None, &now())).unwrap();
+        let task_id = task["id"].as_str().unwrap();
+        let service = crate::application::task_service::TaskApplicationService::new(&db);
+        for (turn, edited) in [(1, false), (2, true)] {
+            let current = service.execute("task.get", &json!({"taskId":task_id})).unwrap();
+            let session = refinement_open(&db, &json!({"operationId":format!("open-{turn}"),"taskId":task_id})).unwrap();
+            let sid = session["id"].as_str().unwrap();
+            let mut proposal = json!({"id":"patch","type":"task_patch","payload":{"expectedTaskRevision":current["taskRevision"],"patch":{"title":"정제된 제목"}},
+                "localizedFields":{"ko":{"title":"정제된 제목","detail":"","outcome":"","scope":"원래 범위","nonGoals":"","validationCriteria":""},
+                "en":{"title":"Refined title","detail":"","outcome":"","scope":"Original scope","nonGoals":"","validationCriteria":"","taskRevision":"malicious"}}});
+            normalize_proposal_translations(&mut proposal, &current, "ko");
+            assert!(proposal["localizedFields"]["en"].get("taskRevision").is_none());
+            let c = database::open(&db).unwrap();
+            let revision: i64 = c.query_row("SELECT current_draft_revision+1 FROM refinement_sessions WHERE id=?", [sid], |r| r.get(0)).unwrap();
+            let draft = json!({"proposals":[proposal.clone()]});
+            c.execute("INSERT INTO refinement_drafts(session_id,revision,material_hash,payload_json) VALUES(?,?,?,?)", params![sid,revision,digest(&draft.to_string()),draft.to_string()]).unwrap();
+            c.execute("UPDATE refinement_sessions SET current_draft_revision=? WHERE id=?", params![revision,sid]).unwrap();
+            let mut input = json!({"operationId":format!("accept-{turn}"),"sessionId":sid,"proposalId":"patch","draftRevision":revision,"decision":"accept","editedPayload":proposal["payload"]});
+            if edited { input["editedPayload"]["patch"]["title"] = json!("사용자 수정"); }
+            let applied = refinement_decision(&db, &input).unwrap();
+            assert_eq!(refinement_decision(&db, &input).unwrap(), applied);
+            let loaded = service.execute("task.get", &json!({"taskId":task_id})).unwrap();
+            if edited {
+                assert_eq!(loaded["title"], "사용자 수정");
+                assert_eq!(loaded["contentVersions"], json!({}));
+            } else {
+                assert_eq!(loaded["title"], "정제된 제목");
+                assert_eq!(loaded["contentVersions"]["en"]["title"], "Refined title");
+                assert_eq!(loaded["contentVersions"]["en"]["scope"], "Original scope");
+                let board = service.execute("workbench.get", &json!({})).unwrap();
+                assert_eq!(board["categories"][0]["items"][0]["contentVersions"]["en"]["title"], "Refined title");
+            }
+        }
+    }
+
+    #[test]
+    fn english_patch_translates_unchanged_korean_baseline_fields() {
+        let mut proposal = json!({"type":"task_patch","payload":{"patch":{"title":"New title"}},
+            "localizedFields":{"en":{"title":"New title","detail":"","outcome":"","scope":"Original scope","nonGoals":"","validationCriteria":""},
+            "ko":{"title":"새 제목","detail":"","outcome":"","scope":"원래 범위","nonGoals":"","validationCriteria":""}}});
+        normalize_proposal_translations(&mut proposal, &json!({"title":"원래 제목","scope":"원래 범위"}), "en");
+        assert_eq!(proposal["localizedFields"]["en"]["scope"], "Original scope");
+        assert_eq!(proposal["translationSource"]["scope"], "원래 범위");
+        assert_eq!(proposal["localizedFields"]["ko"]["title"], "새 제목");
+    }
+
+    #[test]
+    fn incomplete_preview_translation_falls_back_to_original() {
+        let mut proposal = json!({"type":"new_task","payload":{"title":"원문"},"localizedFields":{"en":{"title":"Original"}}});
+        normalize_proposal_translations(&mut proposal, &Value::Null, "ko");
+        assert_eq!(proposal["localizedFields"], json!({}));
+        assert_eq!(proposal["payload"]["title"], "원문");
+    }
 
     #[test]
     fn existing_task_refinement_updates_identity_and_explicit_subtasks_bind_family() {

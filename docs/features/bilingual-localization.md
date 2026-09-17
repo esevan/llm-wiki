@@ -18,7 +18,8 @@ An explicit choice is stored in local application settings and restored for late
 | Content | Korean and English behavior |
 | --- | --- |
 | Menus, controls, guidance, and status text | Switch immediately from the packaged language resources. Missing Korean text falls back to English. |
-| Task and Problem records | Keep their authored or generated stored content. A language change does not rewrite a record or make a new AI request. |
+| Refined Task previews and applied Tasks | New previews generate Korean and English definitions together. Preview, Workbench cards, and Task details select the stored language without another AI request or changes to the original. |
+| Problem records | Keep their authored or generated stored content. A language change does not rewrite a record or make a new AI request. |
 | AI Image Summaries | New image jobs save Korean and English together. The displayed summary follows the interface language without another AI request; older single-language summaries remain available as a fallback. |
 | Existing records and Vault files | Remain unchanged. If the selected-language version is missing, LLM Wiki shows the stored original and does not translate it automatically. |
 | Live AI conversation and reviews | Use only the language that was active when the request started. Existing responses are not regenerated after a switch. |
@@ -36,6 +37,14 @@ into Korean. Code and reference-only entries are skipped; code and references wi
 preserved. The original remains unchanged, and stored translations follow the interface language
 without a new request when switching languages. Pending or failed translations fall back to the
 original; failed jobs can be retried in the Queue. Existing entries are not backfilled automatically.
+
+Task translations cover title, description, outcome, scope, non-goals, and validation criteria,
+including unchanged fields in a refinement patch. They are saved only when the accepted content
+matches the generated preview and are bound to that exact Task content. Manual edits use the
+original definition; switching language preserves unsaved edits. Edited proposals or later content
+changes fall back to the original until refined again. Missing or incomplete bilingual output also
+falls back to the original. Existing Tasks and previews are not backfilled: generate and apply a new
+refinement to obtain both languages.
 
 ## Knowledge and failure safety
 

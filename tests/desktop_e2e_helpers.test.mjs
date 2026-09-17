@@ -13,7 +13,7 @@ test("desktop E2E cases are isolated selectors with per-case timeouts", () => {
 test("desktop E2E defaults to independent Task-centred scenario groups", () => {
   assert.deepEqual(parseDesktopE2eCases({ env: {} }).map((item) => item.name), [
     "task-capture", "task-worklog", "task-refinement", "task-relationships",
-    "task-review", "task-publication", "task-problem-resolution", "task-persistence", "task-localization",
+    "task-review", "task-publication", "task-problem-resolution", "task-persistence", "task-localization", "task-bilingual-refinement",
     "task-controls", "task-workbench-retry", "task-legacy-refinement", "task-legacy-chat-controls", "task-legacy-preview-retry", "task-chat-controls",
     "task-refinement-provider-recovery", "task-refinement-close-retry", "task-refinement-close-pending", "task-refinement-relaunch", "task-mcp-continuation",
     "global-shell", "global-search", "global-compass", "global-provider", "global-mcp", "global-queue-notifications", "global-notice",
@@ -28,8 +28,8 @@ test("desktop E2E runner rejects malformed selectors and unusable timeouts", () 
 });
 
 test("desktop E2E registry exposes the complete acceptance set", () => {
-  assert.equal(DESKTOP_E2E_SCENARIO_NAMES.length, 33);
-  assert.equal(new Set(DESKTOP_E2E_SCENARIO_NAMES).size, 33);
+  assert.equal(DESKTOP_E2E_SCENARIO_NAMES.length, 34);
+  assert.equal(new Set(DESKTOP_E2E_SCENARIO_NAMES).size, 34);
 });
 
 test("desktop E2E console summaries redact provider credentials", () => {

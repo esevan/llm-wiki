@@ -3,6 +3,29 @@ import { describe, expect, it, vi } from "vitest";
 import { RefinementPanel } from "./RefinementPanel";
 
 describe("Refinement panel", () => {
+  it("switches bilingual preview display but accepts the canonical Korean payload", async () => {
+    document.documentElement.lang = "ko";
+    const payload = { title: "한국어 태스크", detail: "원문 설명" };
+    const request = vi.fn().mockImplementation(({ path }: { path: string }) => Promise.resolve({
+      ok: true, status: 200, json: async () => path.endsWith("/proposals")
+        ? [{ id: "translated", type: "new_task", draftRevision: 1, payload,
+          localizedFields: { ko: payload, en: { title: "English Task", detail: "English detail" } } }]
+        : { id: "bilingual-session", draftRevision: 1, previewStatus: "completed", messages: [] }, text: async () => "", body: null,
+    }));
+    window.llmWikiApplication = { request };
+    try {
+      render(<RefinementPanel kind="capture" subjectId="bilingual" onClose={vi.fn()} />);
+      expect(await screen.findByText("한국어 태스크")).toBeInTheDocument();
+      await act(async () => { document.documentElement.lang = "en"; });
+      expect(await screen.findByText("English Task")).toBeInTheDocument();
+      expect(screen.getByText("English detail")).toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+      await waitFor(() => expect(request.mock.calls.some(([req]) => req.path.endsWith("/proposal-decisions"))).toBe(true));
+      const decision = request.mock.calls.find(([req]) => req.path.endsWith("/proposal-decisions"))![0];
+      expect(JSON.parse(decision.body).editedPayload).toEqual(payload);
+    } finally { document.documentElement.lang = "en"; }
+  });
+
   it("allows the next chat while preview runs and keeps preview failure separate", async () => {
     let messages = 0;
     let previewStatus = "running";

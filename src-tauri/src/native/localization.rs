@@ -1,8 +1,43 @@
 use rusqlite::{params, Connection};
 use serde_json::{Map, Value};
 
+pub const TASK_FIELDS: [&str; 6] = ["title", "detail", "outcome", "scope", "nonGoals", "validationCriteria"];
+
+// Bind derived text to immutable content, including across state-only revisions.
+pub fn task_content_key(connection: &Connection, task_id: &str) -> Result<String, String> {
+    let hash: String = connection.query_row(
+        "SELECT r.content_hash FROM tasks t JOIN task_revisions r ON r.task_id=t.id AND r.revision=t.current_revision WHERE t.id=?",
+        [task_id], |row| row.get(0),
+    ).map_err(|error| error.to_string())?;
+    Ok(format!("{task_id}:{hash}"))
+}
+
+pub fn task_versions(connection: &Connection, task_id: &str) -> Result<Value, String> {
+    let key = task_content_key(connection, task_id)?;
+    Ok(overlay(connection, "task_content", serde_json::json!({"id":key}), "en")?["localized_versions"].clone())
+}
+
+pub fn current_task_versions(connection: &Connection) -> Result<std::collections::HashMap<String, Value>, String> {
+    let mut statement = connection.prepare(
+        "SELECT t.id,l.locale,l.field_name,l.value FROM tasks t
+         JOIN task_revisions r ON r.task_id=t.id AND r.revision=t.current_revision
+         JOIN localized_content l ON l.entity_type='task_content' AND l.entity_id=t.id || ':' || r.content_hash",
+    ).map_err(|error| error.to_string())?;
+    let rows = statement.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, String>(3)?)))
+        .map_err(|error| error.to_string())?;
+    let mut result = std::collections::HashMap::new();
+    for row in rows {
+        let (id, locale, field, value) = row.map_err(|error| error.to_string())?;
+        let versions = result.entry(id).or_insert_with(|| serde_json::json!({}));
+        if versions.get(&locale).is_none() { versions[&locale] = serde_json::json!({}); }
+        versions[&locale][&field] = Value::String(value);
+    }
+    Ok(result)
+}
+
 fn localized_fields(entity_type: &str) -> Option<&'static [&'static str]> {
     match entity_type {
+        "task_content" => Some(&TASK_FIELDS),
         "captures" => Some(&["text"]),
         "problems" => Some(&["statement", "detail"]),
         "features" => Some(&["title", "outcome", "non_goals", "validation_criteria"]),

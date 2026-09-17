@@ -23,6 +23,8 @@ function deterministicResult(prompt) {
     try { context = JSON.parse(prompt.slice(prompt.lastIndexOf("\n\n") + 2)); } catch { /* Older fixtures omit context. */ }
     const task = context.taskSnapshot;
     const patch = { title: "Refined deterministic Task", outcome: "The recorded request is handled." };
+    const complete = (fields, baseline = {}) => Object.fromEntries(["title", "detail", "outcome", "scope", "nonGoals", "validationCriteria"].map(key => [key, fields[key] ?? baseline[key] ?? ""]));
+    const localizedFields = { en: complete(patch, task), ko: { ...complete(patch, task), title: "정제된 태스크", outcome: "기록된 요청을 처리합니다." } };
     if (task && context.messages?.some(message => message.body?.includes("Split a deterministic Subtask"))) {
       return { proposals: [{ id: "deterministic-subtask", type: "subtask", payload: {
         parentTaskId: task.id, expectedTaskRevision: task.taskRevision,
@@ -36,7 +38,9 @@ function deterministicResult(prompt) {
       proposals: [{
         id: "deterministic-task-proposal",
         type: task ? "task_patch" : "new_task",
-        payload: task ? { expectedTaskRevision: task.taskRevision, patch } : patch,
+        payload: task ? { expectedTaskRevision: task.taskRevision, patch: prompt.startsWith("Write the primary payload in ko.") ? { title: localizedFields.ko.title, outcome: localizedFields.ko.outcome } : patch }
+          : prompt.startsWith("Write the primary payload in ko.") ? localizedFields.ko : patch,
+        localizedFields,
       }],
     };
   }

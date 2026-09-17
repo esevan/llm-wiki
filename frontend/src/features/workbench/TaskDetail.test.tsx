@@ -25,6 +25,31 @@ const response = (body: unknown) => ({
 });
 
 describe("Task detail", () => {
+  it("switches stored Task translations without fetching or overwriting canonical content", async () => {
+    document.documentElement.lang = "ko";
+    const request = vi.fn().mockResolvedValue(response({ ...task, title: "한국어 태스크",
+      contentVersions: { ko: { title: "한국어 태스크" }, en: { title: "English Task" } } }));
+    window.llmWikiApplication = { request };
+    try {
+      render(<TaskDetail taskId="task-1" onClose={vi.fn()} onChanged={vi.fn()} />);
+      expect(await screen.findByRole("heading", { name: "한국어 태스크" })).toBeInTheDocument();
+      const taskReads = () => request.mock.calls.filter(([req]) => req.path === "/tasks/task-1").length;
+      const count = taskReads();
+      await act(async () => { document.documentElement.lang = "en"; });
+      expect(await screen.findByRole("heading", { name: "English Task" })).toBeInTheDocument();
+      expect(taskReads()).toBe(count);
+      fireEvent.click(screen.getByRole("tab", { name: "Details" }));
+      fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+      const titleInput = screen.getByLabelText("Title");
+      expect(titleInput).toHaveValue("한국어 태스크");
+      fireEvent.change(titleInput, { target: { value: "Unsaved title" } });
+      await act(async () => { document.documentElement.lang = "ko"; });
+      expect(titleInput).toHaveValue("Unsaved title");
+      expect(document.querySelector('[data-control="task-draft-conflict"]')).toBeNull();
+      expect(await screen.findByRole("heading", { name: "Unsaved title" })).toBeInTheDocument();
+    } finally { document.documentElement.lang = "en"; }
+  });
+
   it("renders saved and migrated image attachments while retaining file labels", async () => {
     const data = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=";
     const attachments = [

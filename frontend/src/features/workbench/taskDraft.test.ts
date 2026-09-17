@@ -3,6 +3,13 @@ import { acknowledgeSave, baseline, definitionFields, definitionOf, editDraft, k
 import type { TaskAggregate } from "../../types/taskWorkbench";
 const task: TaskAggregate = { id: "one", kind: "task", state: "in_progress", taskRevision: 2, title: "Task", detail: "Original", workLog: [] };
 describe("Task definition draft", () => {
+  it("drops translations on acknowledged definition edits even when the subsequent refresh fails", () => {
+    const current = editDraft(baseline({ ...task, contentVersions: { ko: { title: "예전 번역" } } }), "title", "Edited title");
+    const saved = acknowledgeSave(current, { ...definitionOf(task), id: task.id, taskRevision: 3, title: "Edited title" });
+    expect(saved.persisted.contentVersions).toBeUndefined();
+    expect(saved.draft.title).toBe("Edited title");
+  });
+
   it("preserves all six dirty fields while merging Work Log and normalizing absent fields", () => {
     let current = baseline(task);
     for (const field of definitionFields) current = editDraft(current, field, `Edited ${field}`);

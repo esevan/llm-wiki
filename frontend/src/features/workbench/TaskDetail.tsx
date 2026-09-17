@@ -1,3 +1,4 @@
+import { localizedTask } from "./taskContent";
 import { useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, type ReactNode, type Ref } from "react";
 import { createPortal } from "react-dom";
 import { taskClient } from "../../services/taskClient";
@@ -427,7 +428,8 @@ export function TaskDetail({
     if (knowledgeRetry === "publish") void publishKnowledge();
   };
   const knowledgeEdited = Boolean(knowledgeDraft && knowledgeDraft.bodyMarkdown !== knowledgeDraft.savedBodyMarkdown);
-  const task = detailState && { ...detailState.persisted, ...detailState.draft };
+  const canonicalTask = detailState && { ...detailState.persisted, ...detailState.draft };
+  const task = canonicalTask && (editing || detailState!.dirty.size ? canonicalTask : localizedTask(canonicalTask));
   const knowledgeDraftIsCurrent = Boolean(
     knowledgeDraft && task?.publication?.draftRevision === knowledgeDraft.draftRevision
       && task.publication.contentHash === knowledgeDraft.contentHash

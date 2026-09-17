@@ -1,3 +1,4 @@
+import { localizedTask } from "./taskContent";
 import { completedTasksNewestFirst } from "./completedTasks";
 import { InputImageAttachment } from "./InputImageAttachment";
 import { useInputImage } from "./useInputImage";
@@ -19,7 +20,7 @@ const itemTitle = (item: WorkbenchItem) =>
   item.kind === "capture" ? item.text : item.title;
 export function WorkbenchView({ active }: { active: boolean }) {
   const text = useTaskWorkbenchText(),
-    [snapshot, setSnapshot] = useState<WorkbenchSnapshot>(),
+    [storedSnapshot, setSnapshot] = useState<WorkbenchSnapshot>(),
     [input, setInput] = useState(""),
     [mode, setMode] = useState<"capture" | "task">("capture"),
     [busy, setBusy] = useState(false),
@@ -32,6 +33,9 @@ export function WorkbenchView({ active }: { active: boolean }) {
     [deleteTarget, setDeleteTarget] = useState<{ entityType: "captures" | "problems" | "tasks"; id: string; title: string }>(),
     [deleteBusy, setDeleteBusy] = useState(false),
     [deleteError, setDeleteError] = useState("");
+  const snapshot = storedSnapshot && { ...storedSnapshot, categories: storedSnapshot.categories.map(category => ({
+    ...category, items: category.items.map(item => item.kind === "task" ? localizedTask(item) : item),
+  })) };
   const captureImage = useInputImage();
   const refinementImages = useRef(new Map<string, InputImage>());
   const [focusActive, setFocusActive] = useState(false);

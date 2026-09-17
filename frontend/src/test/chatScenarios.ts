@@ -594,3 +594,51 @@ export async function runLegacyPreviewWarningRetryScenario(harness: Pick<ChatSce
   coverEffect(harness, "chat-preview-warning", () => warning.hidden && !(control<HTMLElement>("#explore-refinement-preview", "refinement preview").hidden));
   await harness.step("A genuine one-shot native refinement-context failure displayed the retry warning; the rendered warning control reloaded the migrated Problem preview.");
 }
+
+/** Real provider -> preview -> acceptance -> persisted bilingual Task display. */
+export async function runBilingualRefinementScenario(harness: ChatScenarioHarness): Promise<void> {
+  const changeLanguage = async (language: "ko" | "en") => {
+    const select = control<HTMLSelectElement>("#locale-select", "language selector");
+    select.value = language;
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+    await harness.waitFor(() => document.documentElement.lang === language, `selected ${language}`);
+  };
+  const capture = `Bilingual refinement ${Date.now()}`;
+  await harness.api("/provider/config", "PUT", { base_url: harness.providerUrl, model: "deterministic-test-model", api_key: "desktop-e2e-key" });
+  await harness.create(capture, "capture");
+  await changeLanguage("ko");
+  const captureId = await openCaptureRefinement(harness, capture);
+  await send(harness, "이 내용을 태스크로 정제해 주세요.");
+  await harness.waitFor(() => document.querySelector(".proposal h4")?.textContent === "정제된 태스크"
+    && readyControl('[data-control="refinement-proposal-accept"]'), "Korean bilingual preview ready");
+  const session = await harness.api<RefinementSnapshot>(refinementPath(captureId));
+  const proposals = await harness.api<Array<{ localizedFields?: { en?: { title?: string } } }>>(`/refinement/${session.id}/proposals`);
+  if (proposals[0]?.localizedFields?.en?.title !== "Refined deterministic Task") throw new Error("Preview did not retain its English version");
+  const requestCount = (await providerRequests(harness.providerUrl)).length;
+  await closeRefinement(harness, "Close Korean preview before switching language");
+  await harness.waitFor(() => !document.querySelector(".refinement-panel"), "Korean preview closed");
+  await changeLanguage("en");
+  await openCaptureRefinement(harness, capture);
+  await harness.waitFor(() => document.querySelector(".proposal h4")?.textContent === "Refined deterministic Task"
+    && readyControl('[data-control="refinement-proposal-accept"]'), "same preview displayed in English");
+  const accept = control<HTMLButtonElement>('[data-control="refinement-proposal-accept"]', "accept bilingual preview");
+  await harness.prepareClick(accept, "Accept bilingual preview");
+  harness.click(accept, "Accept bilingual preview");
+  await harness.waitFor(() => !document.querySelector(".proposal"), "bilingual preview applied");
+  await closeRefinement(harness, "Close accepted bilingual preview");
+  await harness.waitFor(() => !document.querySelector(".refinement-panel"), "accepted preview closed");
+  const saved = await harness.api<{ title: string; contentVersions?: { en?: { title?: string } } }>(`/tasks/${captureId}`);
+  if (saved.title !== "정제된 태스크" || saved.contentVersions?.en?.title !== "Refined deterministic Task") throw new Error("Acceptance lost original or translated Task content");
+  await harness.detail("Refined deterministic Task");
+  await harness.waitFor(() => document.querySelector(".task-detail h2")?.textContent === "Refined deterministic Task", "applied Task English detail");
+  const close = control<HTMLButtonElement>('[data-control="task-detail-close"]', "close Task detail");
+  await harness.prepareClick(close, "Close Task before language switch");
+  harness.click(close, "Close Task before language switch");
+  await harness.waitFor(() => !document.querySelector(".task-detail"), "Task detail closed");
+  await changeLanguage("ko");
+  await harness.detail("정제된 태스크");
+  await harness.waitFor(() => document.querySelector(".task-detail h2")?.textContent === "정제된 태스크", "applied Task Korean detail");
+  const requests = await providerRequests(harness.providerUrl);
+  if (requests.length !== requestCount) throw new Error("Language switching unexpectedly generated another provider request");
+  await harness.step("Korean refinement generated both languages; switching preview and applied Task languages preserved canonical content without another provider request.");
+}
