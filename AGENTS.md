@@ -16,17 +16,24 @@
 - Do not run `npm ci` in a worktree linked to shared `node_modules`. If `package-lock.json` changes,
   replace that link with task-local dependencies before installing. If the embedding manifest
   changes, unlink the shared model assets before preparing the new model.
-- Reuse incremental checks while implementing. Decide whether E2E is necessary by assessing the
-  change's side-effect and regression risks, affected user flows, and coverage from focused tests.
-- Run E2E only when meaningful risks require end-to-end validation, such as changes spanning UI and
-  native commands, persistence or migrations, lifecycle or synchronization, or packaging and startup
-  behavior that focused tests cannot adequately verify. Documentation-only, copy-only, and isolated
-  low-risk changes do not require E2E when appropriate focused checks cover their impact.
+- E2E is exceptionally expensive. Default to skipping it and use focused unit, integration, or
+  static checks first. Assess concrete side-effect and regression risks and the coverage those
+  cheaper checks provide; uncertainty alone is not a reason to launch E2E.
+- Run E2E only when a specific, material risk remains that cheaper checks cannot adequately verify.
+  Changes involving UI/native boundaries, persistence, lifecycle, synchronization, or packaging
+  warrant assessment, not automatic E2E. Documentation-only, copy-only, and isolated low-risk
+  changes normally require no E2E.
+- When E2E is necessary, explicitly select the smallest set of scenarios covering the remaining
+  risk. Expand only when a failure or concrete coverage gap justifies additional scenarios. Do not
+  run the entire suite merely for confidence, task completion, or because selection is inconvenient.
+- Run the full E2E suite only as an exceptional last resort when a concrete, broad regression risk
+  cannot be adequately covered by a targeted subset. Before running it, explain the risk and why
+  cheaper checks and selected scenarios are insufficient.
 - When packaged desktop E2E is necessary, run the release Tauri build and E2E once after the final
   code and documentation changes, not after intermediate edits. Do not run a release build solely
   for E2E that the risk assessment deemed unnecessary.
-- State the E2E run or skip decision and its risk-based rationale in the final handoff, including any
-  material residual risks or checks that could not be performed.
+- State the E2E run or skip decision, selected scenarios (or justification for the full suite), and
+  risk-based rationale in the final handoff, including material residual risks or unavailable checks.
 - Do not create task worktrees under `/private/tmp` or another directory outside this repository.
 - Use `<repository>/.tmp/` for non-worktree temporary files. Do not generate task files outside this workspace.
 
@@ -35,8 +42,10 @@
 - Run verification as separate commands so persistent approval rules can match each command.
 - Use `npm test` for React, adapter, and native UI runtime tests.
 - Use `cargo test --manifest-path src-tauri/Cargo.toml` for native unit and command tests.
-- When the risk assessment requires packaged application E2E, use `npm run test:desktop` after a
-  release build.
+- When packaged application E2E is necessary, use
+  `npm run test:desktop -- --scenario <scenario-name>` after a release build; select only the
+  scenarios required by the risk assessment. Do not use the unfiltered command by default.
+- Use `npm run test:desktop -- --full` only when the exceptional full-suite criteria above are met.
 - Use `git diff --check` for whitespace validation.
 - Do not vary the inline JavaScript or its success message with task-specific wording.
 
