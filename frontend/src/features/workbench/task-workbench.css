@@ -1048,9 +1048,9 @@ main:has(.task-workbench.active :is(.task-detail, .refinement-panel)) {
   overflow-wrap: anywhere;
 }
 
-.workbench-current { display: grid; grid-template-columns: minmax(0, 1fr) 280px; gap: var(--space-5); align-items: start; }
+.workbench-current { display: grid; grid-template-columns: minmax(0, 1fr) 280px; gap: var(--space-5); align-items: stretch; }
 .workbench-current > .workbench-active { min-width: 0; }
-.workbench-recent { display: flex; flex-direction: column; box-sizing: border-box; height: 320px; min-width: 0; padding: var(--space-4); border: var(--border-default); border-radius: var(--radius-panel); background: var(--color-bg-surface); }
+.workbench-recent { display: flex; flex-direction: column; box-sizing: border-box; contain: size; min-height: 0; min-width: 0; padding: var(--space-4); border: var(--border-default); border-radius: var(--radius-panel); background: var(--color-bg-surface); }
 .workbench-recent h2 { flex-shrink: 0; margin: 0 0 var(--space-3); font-size: var(--font-size-md); }
 .workbench-recent > .completed-task-list { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior-y: contain; scrollbar-gutter: stable; padding: var(--space-1); }
 .completed-task-list { list-style: none; padding: 0; margin: 0; }
@@ -1062,7 +1062,10 @@ main:has(.task-workbench.active :is(.task-detail, .refinement-panel)) {
 .completed-task-list small { display: block; color: var(--color-text-secondary); margin-top: var(--space-1); }
 .compass-tabs { display: flex; gap: var(--space-2); margin-bottom: var(--space-5); }
 .compass-tabs [aria-pressed="true"] { background: var(--color-bg-accent-subtle); border-color: var(--color-accent-strong); }
-@container (max-width: 760px) { .workbench-current { grid-template-columns: minmax(0, 1fr); } }
+@container (max-width: 760px) {
+  .workbench-current { grid-template-columns: minmax(0, 1fr); }
+  .workbench-recent { height: 320px; }
+}
 .compass-tabs button { min-height: 44px; padding: var(--space-2) var(--space-4); border: var(--border-default); border-radius: var(--radius-control); background: var(--color-bg-surface); color: var(--color-text-primary); font: inherit; font-weight: 700; cursor: pointer; }
 .compass-tabs button:hover { background: var(--color-bg-accent-subtle); }
 .compass-tabs button:active { background: var(--color-bg-muted); }
