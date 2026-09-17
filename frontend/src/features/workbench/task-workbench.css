@@ -928,9 +928,18 @@ main:has(.task-workbench.active :is(.task-detail, .refinement-panel)) {
 }
 .workbench-active-cards {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr));
+  grid-template-columns: repeat(auto-fill, 320px);
+  grid-auto-rows: 220px;
+  justify-content: start;
+  overflow-x: auto;
   gap: var(--space-3);
   margin-top: var(--space-4);
+}
+.workbench-active-cards > .canonical-card {
+  box-sizing: border-box;
+  width: 320px;
+  height: 220px;
+  overflow: auto;
 }
 .workbench-active .active-task-title {
   padding: 0;

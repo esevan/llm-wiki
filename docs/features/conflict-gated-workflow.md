@@ -26,6 +26,7 @@ Workbench shows all in-progress Tasks at the top, followed by a compact entry fo
 **Inbox** for Captures that have not become Tasks and have no ongoing refinement, **Refining** for saved refinements and migrated
 Problem-only items, and **Refined Tasks** for registered Tasks without an ongoing refinement.
 Each item appears once; in-progress Tasks stay at the top even when they have a refinement session.
+In-progress cards keep a fixed 320 × 220 px size regardless of panel width or card count. Cards wrap to additional rows; narrow panels scroll horizontally, and long card content scrolls inside the card.
 Completed Tasks are available in a collapsed section in the right lane. Category names remain on cards.
 All saved refinements are included, without a shortcut count limit. On narrow windows, the lanes stack
 in the same order. Opening, refining, and deleting items remain available on their cards.
