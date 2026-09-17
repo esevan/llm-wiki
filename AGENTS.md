@@ -16,8 +16,17 @@
 - Do not run `npm ci` in a worktree linked to shared `node_modules`. If `package-lock.json` changes,
   replace that link with task-local dependencies before installing. If the embedding manifest
   changes, unlink the shared model assets before preparing the new model.
-- Reuse incremental checks while implementing. Run the release Tauri build and packaged desktop
-  E2E once after the final code and documentation changes, not after intermediate edits.
+- Reuse incremental checks while implementing. Decide whether E2E is necessary by assessing the
+  change's side-effect and regression risks, affected user flows, and coverage from focused tests.
+- Run E2E only when meaningful risks require end-to-end validation, such as changes spanning UI and
+  native commands, persistence or migrations, lifecycle or synchronization, or packaging and startup
+  behavior that focused tests cannot adequately verify. Documentation-only, copy-only, and isolated
+  low-risk changes do not require E2E when appropriate focused checks cover their impact.
+- When packaged desktop E2E is necessary, run the release Tauri build and E2E once after the final
+  code and documentation changes, not after intermediate edits. Do not run a release build solely
+  for E2E that the risk assessment deemed unnecessary.
+- State the E2E run or skip decision and its risk-based rationale in the final handoff, including any
+  material residual risks or checks that could not be performed.
 - Do not create task worktrees under `/private/tmp` or another directory outside this repository.
 - Use `<repository>/.tmp/` for non-worktree temporary files. Do not generate task files outside this workspace.
 
@@ -26,7 +35,8 @@
 - Run verification as separate commands so persistent approval rules can match each command.
 - Use `npm test` for React, adapter, and native UI runtime tests.
 - Use `cargo test --manifest-path src-tauri/Cargo.toml` for native unit and command tests.
-- Use `npm run test:desktop` for the packaged application E2E suite after a release build.
+- When the risk assessment requires packaged application E2E, use `npm run test:desktop` after a
+  release build.
 - Use `git diff --check` for whitespace validation.
 - Do not vary the inline JavaScript or its success message with task-specific wording.
 
