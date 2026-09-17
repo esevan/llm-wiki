@@ -610,6 +610,24 @@ it("rebases a disjoint refresh before save and lets the user discard overlapping
     expect(screen.getByLabelText("Knowledge draft body")).toHaveValue("# Saved Knowledge\n\nReview this private draft.");
   });
 
+  it("keeps the published Markdown visible alongside a newer editable draft", async () => {
+    window.llmWikiApplication = { request: vi.fn().mockResolvedValue(response({
+      ...task, state: "completed",
+      publishedKnowledge: { draftRevision: 1, bodyMarkdown: "---\ninternal_id: secret-id\n---\n# Published article\n\n**Verified** result\n\n[Reference](https://example.com)" },
+      publication: { state: "draft", draftRevision: 2, contentHash: "draft", sourceHash: "source", bodyMarkdown: "# New draft" },
+    })) };
+    render(<TaskDetail taskId={task.id} onClose={vi.fn()} onChanged={vi.fn()} />);
+    const published = await screen.findByLabelText("Current published version");
+    expect(published.querySelector("h1")).toHaveTextContent("Published article");
+    expect(published.querySelector("strong")).toHaveTextContent("Verified");
+    expect(published).not.toHaveTextContent("secret-id");
+    expect(published.querySelector("a")).toHaveAttribute("href", "https://example.com");
+    fireEvent.change(screen.getByLabelText("Knowledge draft body"), { target: { value: "# My correction" } });
+    expect(published).toHaveTextContent("Published article");
+    expect(published).not.toHaveTextContent("My correction");
+    expect(screen.getByLabelText("Draft preview (Markdown)").querySelector("h1")).toHaveTextContent("My correction");
+  });
+
   it("requires saving an edited Knowledge draft before publishing it", async () => {
     const savedDraft = {
       draftRevision: 3,

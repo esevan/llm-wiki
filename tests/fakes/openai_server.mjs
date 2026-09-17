@@ -53,9 +53,8 @@ function deterministicResult(prompt) {
       findings: [{ id: "deterministic-finding", path, summary: "The cited local evidence needs a user decision." }],
     };
   }
-  if (prompt.includes("Improve readability using only this evidence-bound Task document")) {
-    const taskId = prompt.match(/exact Task id `([^`]+)`/)?.[1] ?? "unknown-task";
-    return { markdown: `# Evidence-backed Task result\n\nTask \`${taskId}\` preserves its completion evidence and lineage.` };
+  if (prompt.includes("Write a standalone reusable knowledge article")) {
+    return { markdown: prompt.split("\n\n").slice(1).join("\n\n") };
   }
   if (prompt.includes("executive_summary_markdown")) {
     return {
