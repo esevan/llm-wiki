@@ -4,7 +4,7 @@ use rusqlite::{
 use serde_json::{json, Map, Value};
 use std::collections::BTreeMap;
 
-pub const CURRENT_SCHEMA_VERSION: i64 = 11;
+pub const CURRENT_SCHEMA_VERSION: i64 = 12;
 
 type MigrationFunction = for<'connection> fn(&Transaction<'connection>) -> Result<(), String>;
 type LegacyLocalizationRow = (String, String, String, String, String, String, String);
@@ -71,7 +71,23 @@ const MIGRATIONS: &[Migration] = &[
         name: "add Capture and refinement images",
         run: add_input_images,
     },
+    Migration { version: 12, name: "allow multiple input images", run: allow_multiple_input_images },
 ];
+
+fn allow_multiple_input_images(tx: &Transaction<'_>) -> Result<(), String> {
+    tx.execute_batch("CREATE TABLE input_images_multiple (
+        capture_id TEXT REFERENCES captures(id),
+        message_id TEXT REFERENCES refinement_messages(id),
+        name TEXT NOT NULL, media_type TEXT NOT NULL, data TEXT NOT NULL,
+        CHECK ((capture_id IS NOT NULL) != (message_id IS NOT NULL))
+    );
+    INSERT INTO input_images_multiple SELECT * FROM input_images ORDER BY rowid;
+    DROP TABLE input_images;
+    ALTER TABLE input_images_multiple RENAME TO input_images;
+    CREATE INDEX input_images_capture ON input_images(capture_id);
+    CREATE INDEX input_images_message ON input_images(message_id);")
+        .map_err(|error| error.to_string())
+}
 
 fn add_input_images(tx: &Transaction<'_>) -> Result<(), String> {
     tx.execute_batch("CREATE TABLE input_images (
@@ -1181,6 +1197,29 @@ mod tests {
     }
 
     #[test]
+    fn multiple_images_upgrade_preserves_old_images_and_allows_ordered_additions() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        apply_plan(&mut connection, &MIGRATIONS[..11], 11).unwrap();
+        connection.execute_batch("INSERT INTO captures(id,text) VALUES('multi','Original');
+            INSERT INTO refinement_sessions(id,capture_id) VALUES('multi-session','multi');
+            INSERT INTO refinement_messages(id,session_id,role,content,created_at) VALUES('multi-message','multi-session','user','Existing','2026-01-01');
+            INSERT INTO input_images(capture_id,name,media_type,data) VALUES('multi','old.png','image/png','bytes');
+            INSERT INTO input_images(message_id,name,media_type,data) VALUES('multi-message','old.png','image/png','bytes');").unwrap();
+        apply(&mut connection).unwrap();
+        connection.execute_batch("INSERT INTO input_images(capture_id,name,media_type,data) VALUES('multi','new.png','image/png','new');
+            INSERT INTO input_images(message_id,name,media_type,data) VALUES('multi-message','new.png','image/png','new');").unwrap();
+        apply(&mut connection).unwrap();
+        for (capture, id) in [(true, "multi"), (false, "multi-message")] {
+            let images = crate::adapters::sqlite::input_images::get_all(&connection, capture, id).unwrap();
+            assert_eq!(images.len(), 2);
+            assert_eq!(images[0]["name"], "old.png");
+            assert_eq!(images[0]["data"], "bytes");
+            assert_eq!(images[1]["name"], "new.png");
+        }
+        assert!(connection.execute("INSERT INTO input_images(name,media_type,data) VALUES('orphan','image/png','bytes')", []).is_err());
+    }
+
+    #[test]
     fn fresh_database_reaches_current_version() {
         let mut connection = Connection::open_in_memory().unwrap();
 
@@ -1413,6 +1452,9 @@ mod tests {
     #[test]
     fn legacy_ai_job_schema_gains_safe_defaults_without_losing_history() {
         let mut connection = Connection::open_in_memory().unwrap();
+        // Model a complete version-2 database before replacing its legacy job table.
+        apply_plan(&mut connection, &MIGRATIONS[..2], 2).unwrap();
+        connection.execute_batch("DROP TABLE ai_jobs_v2;").unwrap();
         connection
             .execute_batch(
                 "CREATE TABLE ai_jobs_v2 (

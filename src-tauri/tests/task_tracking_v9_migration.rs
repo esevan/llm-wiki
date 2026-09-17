@@ -3,7 +3,7 @@ use rusqlite::{params, Connection};
 use sha2::{Digest, Sha256};
 use tempfile::tempdir;
 
-const MIGRATED_SCHEMA_VERSION: i64 = 11;
+const MIGRATED_SCHEMA_VERSION: i64 = 12;
 
 fn make_v8_session_fixture(db: &std::path::Path, vault: &std::path::Path) {
     let app = NativeApplication::isolated(vault, db).unwrap();

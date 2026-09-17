@@ -8,10 +8,10 @@ can become a Task directly; refinement and Problem approval are not mandatory ga
 
 ## Images in Capture and refinement
 
-Capture and refinement messages accept one image per entry, using **Attach image** or pasting
-from the clipboard into the text field. PNG, JPEG, GIF and WebP files up to 10 MB are supported.
-A thumbnail and filename appear before sending; **Remove image** clears the attachment. Text is
-optional when an image is attached. Selecting another image replaces the current attachment.
+Capture and refinement messages accept multiple images per entry, using **Attach image** or pasting
+from the clipboard into the text field. PNG, JPEG, GIF and WebP files up to 10 MB each are supported.
+A thumbnail and filename appear before sending; **Remove image** removes only that image. Text is
+optional when an image is attached. Selecting or pasting more images appends them to the existing attachments.
 
 Saved images remain in the local database and appear when reopening refinement. The original
 Capture image and conversation images are sent to the configured AI provider for both chat and
@@ -28,7 +28,7 @@ Open **Refine** from a Capture or Task, or resume the saved refinement shortcut 
 Refinement opens in a focused dialog: the proposed result stays in a scrollable left pane while the
 full conversation history and composer stay together in a right-hand chat pane. The rest of Workbench
 is unavailable until the dialog closes. Closing restores keyboard focus after the dialog has been removed. The docked conversation’s Context control expands or collapses context independently of its preview selection. The docked conversation permits the next message as soon as the response is received, without waiting for its text animation. Keep working notes with the proposed result; the saved notes,
-scroll position, and conversation history support returning later.
+scroll position, and conversation history support returning later. New messages scroll the conversation to the bottom. The view follows answer animation and image loading until you scroll up to read earlier messages.
 
 **Send**, `Ctrl+Enter`, and `Cmd+Enter` submit a message. Plain Enter writes another line. Send is
 unavailable while the current submission or response is being processed. Every provider turn includes

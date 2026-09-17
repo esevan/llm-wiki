@@ -3,6 +3,60 @@ import { describe, expect, it, vi } from "vitest";
 import { RefinementPanel } from "./RefinementPanel";
 
 describe("Refinement panel", () => {
+  it("scrolls long new messages to the bottom and follows resizing until the user scrolls up", async () => {
+    let resize: (() => void) | undefined;
+    const observer = { observe: vi.fn(), disconnect: vi.fn() };
+    vi.stubGlobal("ResizeObserver", class { constructor(callback: () => void) { resize = callback; } observe = observer.observe; disconnect = observer.disconnect; });
+    let sent = false;
+    const request = vi.fn().mockImplementation(({ path }: { path: string }) => {
+      if (path.endsWith("/messages")) sent = true;
+      const value = path.endsWith("/proposals") ? [] : { id: "scroll", responseStatus: sent ? "completed" : undefined,
+        messages: sent ? [{ id: "new", role: "assistant", body: "A long new answer" }] : [] };
+      return Promise.resolve({ ok: true, status: 200, json: async () => value, text: async () => "", body: null });
+    });
+    window.llmWikiApplication = { request };
+    const view = render(<RefinementPanel kind="capture" subjectId="scroll" onClose={vi.fn()} />);
+    try {
+      await waitFor(() => expect(document.querySelector(".refinement-panel")).toHaveAttribute("data-refinement-session", "scroll"));
+      const container = document.querySelector<HTMLElement>(".refinement-messages")!;
+      let height = 1000;
+      Object.defineProperties(container, { scrollHeight: { get: () => height }, clientHeight: { value: 200 } });
+      fireEvent.change(screen.getByLabelText("Refinement message"), { target: { value: "Please respond" } });
+      fireEvent.click(screen.getByRole("button", { name: "Send" }));
+      await waitFor(() => expect(container.scrollTop).toBe(1000));
+      height = 1500;
+      act(() => resize?.());
+      expect(container.scrollTop).toBe(1500);
+      container.scrollTop = 100;
+      fireEvent.scroll(container);
+      height = 2000;
+      act(() => resize?.());
+      expect(container.scrollTop).toBe(100);
+    } finally { view.unmount(); vi.unstubAllGlobals(); }
+  });
+
+  it("keeps multiple attachments after a rejected send and renders saved images", async () => {
+    const images = ["one.png", "two.png"].map(name => ({ name, mediaType: "image/png", data: "iVBORw0KGgo=" }));
+    const imageDrafts = new Map([["capture:multi", images]]);
+    const request = vi.fn().mockImplementation(({ path }: { path: string }) => Promise.resolve({
+      ok: !path.endsWith("/messages"), status: path.endsWith("/messages") ? 503 : 200,
+      json: async () => path.endsWith("/proposals") ? [] : { id: "multi", messages: [{ id: "old", role: "user", body: "", images }] },
+      text: async () => "Send failed", body: null,
+    }));
+    window.llmWikiApplication = { request };
+    render(<RefinementPanel kind="capture" subjectId="multi" imageDrafts={imageDrafts} onClose={vi.fn()} />);
+    await waitFor(() => expect(screen.getAllByAltText("one.png")).toHaveLength(2));
+    expect(screen.getByLabelText("Attach image")).toHaveAttribute("multiple");
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await screen.findByRole("alert");
+    const sent = request.mock.calls.find(([input]) => input.path.endsWith("/messages"))![0];
+    expect(JSON.parse(sent.body).images).toEqual(images);
+    expect(imageDrafts.get("capture:multi")).toEqual(images);
+    fireEvent.click(screen.getByRole("button", { name: "Remove image: one.png" }));
+    expect(imageDrafts.get("capture:multi")).toEqual([images[1]]);
+  });
+
+
   it("allows the next chat while preview runs and keeps preview failure separate", async () => {
     let messages = 0;
     let previewStatus = "running";

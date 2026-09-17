@@ -9,6 +9,8 @@ command or legacy settings import can read the database.
 
 Version 11 adds image attachments for Captures and refinement messages without rewriting existing text or conversation history. Images are stored with their owning record in the same transaction.
 
+Version 12 removes the one-image-per-entry limit while preserving existing attachment bytes and ownership. Images retain insertion order; indexed owner columns support loading all attachments for a Capture or message.
+
 ## Guarantees
 
 - Version `0` represents an unversioned database created by the former Python application or an

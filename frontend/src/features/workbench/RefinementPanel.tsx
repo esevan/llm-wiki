@@ -77,7 +77,7 @@ export function RefinementPanel({
   onApplied?: () => void;
   subjectTitle?: string;
   messageDrafts?: Map<string, string>;
-  imageDrafts?: Map<string, InputImage>;
+  imageDrafts?: Map<string, InputImage[]>;
   ref?: Ref<RefinementPanelHandle>;
 }) {
   const text = useTaskWorkbenchText();
@@ -92,9 +92,9 @@ export function RefinementPanel({
   const messageKey = `${kind}:${subjectId}`;
   const attachment = useInputImage(imageDrafts?.get(messageKey));
   useEffect(() => {
-    if (attachment.image) imageDrafts?.set(messageKey, attachment.image);
+    if (attachment.images.length) imageDrafts?.set(messageKey, attachment.images);
     else imageDrafts?.delete(messageKey);
-  }, [attachment.image, imageDrafts, messageKey]);
+  }, [attachment.images, imageDrafts, messageKey]);
   const [message, setMessage] = useState(messageDrafts?.get(messageKey) ?? "");
   useEffect(() => { messageDrafts?.set(messageKey, message); }, [messageDrafts, messageKey, message]);
   const [editing, setEditing] = useState<string>();
@@ -125,9 +125,9 @@ export function RefinementPanel({
   const [revealingMessageIds, setRevealingMessageIds] = useState<Set<string>>(new Set());
   const draftTouched = useRef(false);
   const lastSubmittedMessage = useRef("");
-  const lastSubmittedImage = useRef<InputImage | undefined>(undefined);
-  const currentImage = useRef(attachment.image);
-  currentImage.current = attachment.image;
+  const lastSubmittedImage = useRef<InputImage[]>([]);
+  const currentImage = useRef(attachment.images);
+  currentImage.current = attachment.images;
   const restoreImage = attachment.restore;
   const workspaceQueue = useRef<Promise<unknown>>(Promise.resolve());
   const skipCleanupFlush = useRef(false);
@@ -139,6 +139,7 @@ export function RefinementPanel({
     scrollAnchor: "top",
   });
   const scrollRef = useRef<HTMLDivElement>(null);
+  const followBottom = useRef(true);
   const headingRef = useRef<HTMLHeadingElement>(null);
   const panelRef = useRef<HTMLElement>(null);
   const closing = useRef(false);
@@ -191,19 +192,22 @@ export function RefinementPanel({
         if (baseline?.id === next.taskId) setTaskBaseline(baseline);
       }
       requestAnimationFrame(() => {
-        if (scrollRef.current)
-          scrollRef.current.scrollTop = Number(next.scrollAnchor ?? 0);
+        if (sequence === loadSequence.current && scrollRef.current) {
+          const saved = Number(next.scrollAnchor);
+          scrollRef.current.scrollTop = Number.isFinite(saved) ? saved : scrollRef.current.scrollHeight;
+          followBottom.current = scrollRef.current.scrollHeight - scrollRef.current.scrollTop - scrollRef.current.clientHeight < 120;
+        }
       });
       const nextProposals = await taskClient.proposals(next.id);
       if (sequence === loadSequence.current) {
         setProposals(nextProposals);
         setResponding(activeStatus(next.responseStatus));
         setPolling(activeStatus(next.responseStatus) || activeStatus(next.previewStatus));
-        if (next.responseStatus === "failed" && !latest.current.message && !currentImage.current && (lastSubmittedMessage.current || lastSubmittedImage.current)) {
+        if (next.responseStatus === "failed" && !latest.current.message && !currentImage.current.length && (lastSubmittedMessage.current || lastSubmittedImage.current.length)) {
           setError(text.assistantFailure);
           setMessage(lastSubmittedMessage.current);
           latest.current.message = lastSubmittedMessage.current;
-          if (!currentImage.current) restoreImage(lastSubmittedImage.current);
+          if (!currentImage.current.length) restoreImage(lastSubmittedImage.current);
         }
       }
     } catch (e) {
@@ -289,10 +293,10 @@ export function RefinementPanel({
               if (next.responseStatus === "failed")
                 {
                   setError(text.assistantFailure);
-                  if (!latest.current.message && !currentImage.current && (lastSubmittedMessage.current || lastSubmittedImage.current)) {
+                  if (!latest.current.message && !currentImage.current.length && (lastSubmittedMessage.current || lastSubmittedImage.current.length)) {
                     setMessage(lastSubmittedMessage.current);
                     latest.current.message = lastSubmittedMessage.current;
-                    if (!currentImage.current) restoreImage(lastSubmittedImage.current);
+                    if (!currentImage.current.length) restoreImage(lastSubmittedImage.current);
                   }
                 }
             }
@@ -312,16 +316,22 @@ export function RefinementPanel({
     };
   }, [polling, session?.id, kind, subjectId, text.assistantFailure, restoreImage]);
   useEffect(() => {
-    if (!revealingMessageIds.size || typeof ResizeObserver === "undefined") return;
+    if (typeof ResizeObserver === "undefined") return;
     const element = scrollRef.current;
     if (!element) return;
     const observer = new ResizeObserver(() => {
-      if (element.scrollHeight - element.scrollTop - element.clientHeight < 120)
+      if (followBottom.current)
         element.scrollTop = element.scrollHeight;
     });
     element.querySelectorAll<HTMLElement>(".message").forEach(message => observer.observe(message));
     return () => observer.disconnect();
-  }, [revealingMessageIds]);
+  }, [session?.messages?.length, session?.id]);
+  const lastMessageId = session?.messages?.at(-1)?.id;
+  useEffect(() => {
+    if (!lastMessageId || !scrollRef.current) return;
+    followBottom.current = true;
+    scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+  }, [lastMessageId]);
   const canonicalPayload = (proposal: RefinementProposal) => {
     const patch = proposal.payload.patch;
     if (patch && typeof patch === "object" && !Array.isArray(patch)) {
@@ -498,8 +508,8 @@ export function RefinementPanel({
       latest.current.scrollAnchor = String(scrollRef.current?.scrollTop ?? 0);
       await persistCurrent();
       const submittedMessage = message.trim();
-      await taskClient.message(session.id, submittedMessage, attachment.image);
-      lastSubmittedImage.current = attachment.image;
+      await taskClient.message(session.id, submittedMessage, attachment.images);
+      lastSubmittedImage.current = attachment.images;
       attachment.clear();
       turnGeneration.current += 1;
       lastSubmittedMessage.current = submittedMessage;
@@ -640,13 +650,14 @@ export function RefinementPanel({
       </section>
       <section className="refinement-conversation" aria-label={text.conversation}>
         <div className="refinement-messages" ref={scrollRef} onScroll={event => {
+          followBottom.current = event.currentTarget.scrollHeight - event.currentTarget.scrollTop - event.currentTarget.clientHeight < 120;
           latest.current.scrollAnchor = String(event.currentTarget.scrollTop); scheduleSave();
         }}>
-          {session?.captureImage && <article className="message message-user"><strong>{text.capture}</strong><InputImagePreview image={session.captureImage} /></article>}
+          {(session?.captureImages ?? (session?.captureImage ? [session.captureImage] : [])).map((image, index) => <article key={index} className="message message-user"><strong>{text.capture}</strong><InputImagePreview image={image} /></article>)}
           {session?.messages?.map(item => <article key={item.id} className={`message message-${item.role}`}>
             <strong>{item.role === "user" ? text.you : text.assistant}</strong>
             <RefinementMessage body={item.body} reveal={revealingMessageIds.has(item.id)} />
-            {item.image && <InputImagePreview image={item.image} />}
+            {(item.images ?? (item.image ? [item.image] : [])).map((image, index) => <InputImagePreview key={index} image={image} />)}
           </article>)}
           {!session && <p className="region-empty">{text.loading}</p>}
         </div>

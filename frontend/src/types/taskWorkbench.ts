@@ -137,7 +137,8 @@ export interface RefinementSession {
   scrollAnchor?: string;
   draftRevision?: number;
   captureImage?: InputImage;
-  messages?: Array<{ id: string; role: string; body: string; image?: InputImage }>;
+  captureImages?: InputImage[];
+  messages?: Array<{ id: string; role: string; body: string; image?: InputImage; images?: InputImage[] }>;
   previewJobId?: string;
   previewStatus?: "queued" | "running" | "retryable" | "completed" | "failed" | "cancelled" | "stale";
   responseStatus?: "queued" | "running" | "completed" | "failed" | "cancelled";

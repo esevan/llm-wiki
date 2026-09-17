@@ -405,12 +405,14 @@ fn session_value(connection: &rusqlite::Connection, session_id: &str) -> Result<
         .map_err(|error| error.to_string())?;
     let mut messages = messages;
     for message in &mut messages {
-        if let Some(image) = input_images::get(connection, false, message["id"].as_str().unwrap())? {
-            message["image"] = image;
-        }
+        let images = input_images::get_all(connection, false, message["id"].as_str().unwrap())?;
+        if images.len() == 1 { message["image"] = images[0].clone(); }
+        else if !images.is_empty() { message["images"] = json!(images); }
     }
     if let Some(capture) = value["captureId"].as_str() {
-        if let Some(image) = input_images::get(connection, true, capture)? { value["captureImage"] = image; }
+        let images = input_images::get_all(connection, true, capture)?;
+        if images.len() == 1 { value["captureImage"] = images[0].clone(); }
+        else if !images.is_empty() { value["captureImages"] = json!(images); }
     }
     value["messages"] = json!(messages);
     value["responseStatus"] = connection
@@ -542,7 +544,7 @@ async fn prepare_image_capture(
         "SELECT EXISTS(SELECT 1 FROM refinement_sessions s JOIN captures c ON c.id=s.capture_id WHERE s.id=? AND s.task_id IS NULL AND trim(c.text)='' AND NOT EXISTS(SELECT 1 FROM refinement_messages m WHERE m.session_id=s.id))",
         [session_id], |row| row.get(0),
     ).map_err(|error| error.to_string())?;
-    if !eligible || session.get("captureImage").is_none() { return Ok(()); }
+    if !eligible || (session.get("captureImage").is_none() && session.get("captureImages").is_none()) { return Ok(()); }
     drop(connection);
     let message = if input["locale"].as_str() == Some("ko") {
         "첨부한 이미지의 텍스트, 표, 핵심 내용을 분석해 1차 정제해 주세요. 확인되는 사실과 요청 사항을 정리하고 검토 가능한 작업 초안을 제안해 주세요. 읽을 수 없거나 불확실한 내용은 명시하고 추측하지 마세요."
@@ -565,14 +567,14 @@ async fn refinement_message(
     input: &Value,
 ) -> Result<Value, String> {
     let session_id = required(input, "sessionId")?;
-    let image = input_images::validate(input)?;
+    let images = input_images::validate_all(input)?;
     let message = input
         .get("message")
         .or_else(|| input.get("body"))
         .and_then(Value::as_str)
         .map(str::trim)
         .unwrap_or("");
-    if message.is_empty() && image.is_none() { return Err("invalid_input: message or image is required".into()); }
+    if message.is_empty() && images.is_empty() { return Err("invalid_input: message or image is required".into()); }
     let mut connection = database::open(db_path)?;
     let tx = database::immediate_transaction(&mut connection)?;
     if let Some(result) = operation_replay(&tx, input)? {
@@ -608,7 +610,7 @@ async fn refinement_message(
         params![message_id, session_id, message, timestamp],
     )
     .map_err(|error| error.to_string())?;
-    if let Some(image) = image { input_images::save(&tx, false, &message_id, &image)?; }
+    for image in &images { input_images::save(&tx, false, &message_id, image)?; }
     tx.execute(
         "INSERT INTO task_assistance_jobs(id,kind,subject_id,status,input_json,created_at) VALUES(?,'refinement_response',?,'queued',?,?)",
         params![job_id, session_id, input.to_string(), timestamp],
@@ -2833,6 +2835,36 @@ mod tests {
         let context = refinement_context(&connection, session).unwrap();
         let (text, images) = image_context(&context);
         assert_eq!(images.iter().filter(|part| part["type"] == "image_url").count(), 2);
+        assert!(!text.to_string().contains("iVBORw0KGgo="));
+        let prompt = refinement_prompt(&connection, session).unwrap();
+        assert!(!prompt.contains("iVBORw0KGgo="));
+        let content = provider_content(prompt, &images);
+        assert_eq!(content[2]["image_url"]["url"], "data:image/png;base64,iVBORw0KGgo=");
+        assert_eq!(provider_content("text only".into(), &[]), json!("text only"));
+    }
+
+    #[tokio::test]
+    async fn multiple_images_persist_and_both_prompts_include_every_image() {
+        let (_root, db, vault, settings) = fixture();
+        let capture_id = capture(&db);
+        let image = json!({"name":"shot.png","mediaType":"image/png","data":"iVBORw0KGgo="});
+        input_images::save(&database::open(&db).unwrap(), true, &capture_id, &image).unwrap();
+        input_images::save(&database::open(&db).unwrap(), true, &capture_id, &image).unwrap();
+        let opened = refinement_open(&db, &json!({"operationId":"image-open","captureId":capture_id})).unwrap();
+        assert_eq!(opened["captureImages"], json!([image, image]));
+        let session = opened["id"].as_str().unwrap();
+        let input = json!({"operationId":"image-message","sessionId":session,"message":"","images":[image, image]});
+        let result = execute(&db, &settings, &vault, SemanticEngine::new(None), "task-refinement.message", &input).await.unwrap();
+        let replay = execute(&db, &settings, &vault, SemanticEngine::new(None), "task-refinement.message", &input).await.unwrap();
+        assert_eq!(result, replay);
+        let connection = database::open(&db).unwrap();
+        let saved = session_value(&connection, session).unwrap();
+        assert_eq!(saved["messages"][0]["images"], json!([image, image]));
+        assert_eq!(saved["messages"][0]["body"], "");
+        assert_eq!(saved["messages"].as_array().unwrap().len(), 1);
+        let context = refinement_context(&connection, session).unwrap();
+        let (text, images) = image_context(&context);
+        assert_eq!(images.iter().filter(|part| part["type"] == "image_url").count(), 4);
         assert!(!text.to_string().contains("iVBORw0KGgo="));
         let prompt = refinement_prompt(&connection, session).unwrap();
         assert!(!prompt.contains("iVBORw0KGgo="));
