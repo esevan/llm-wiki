@@ -163,6 +163,13 @@ fn completion_problem_resolution_and_knowledge_are_explicit_separate_decisions()
     ));
     ok(&h.call("workflow","task.completion.create",json!({"operationId":"complete","taskId":x,"expectedTaskRevision":1,"evidence":"Tests passed"})));
     assert_eq!(get(&h, &x).body["state"], "completed");
+    let board = h.call("workflow", "workbench.get", json!({}));
+    ok(&board);
+    let completed = board.body["categories"].as_array().unwrap().iter()
+        .flat_map(|category| category["items"].as_array().unwrap())
+        .find(|item| item["id"] == x).unwrap();
+    assert!(completed["completedAt"].as_str().is_some_and(|at| !at.is_empty()));
+
     ok(&h.call("workflow","problem.resolution.create",json!({"operationId":"resolve","problemId":p.body["id"],"expectedProblemRevision":1,"rationale":"explicit"})));
 }
 #[test]

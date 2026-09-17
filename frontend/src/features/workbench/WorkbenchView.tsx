@@ -1,3 +1,4 @@
+import { completedTasksNewestFirst } from "./completedTasks";
 import { InputImageAttachment } from "./InputImageAttachment";
 import { useInputImage } from "./useInputImage";
 import type { InputImage } from "../../types/taskWorkbench";
@@ -201,7 +202,7 @@ export function WorkbenchView({ active }: { active: boolean }) {
     category.items.map((item) => [`${item.kind}:${item.id}`, category.label] as const)));
   const refiningIds = new Set(snapshot?.refiningShortcuts.map((item) => `${item.kind}:${item.id}`));
   const activeTasks = items.filter((item) => item.kind === "task" && item.state === "in_progress");
-  const completedTasks = items.filter((item) => item.kind === "task" && item.state === "completed" && (!item.parentTaskId || !items.some(parent => parent.kind === "task" && parent.id === item.parentTaskId)));
+  const completedTasks = completedTasksNewestFirst(items).slice(0, 5);
   const allTasks = items.filter((item): item is TaskCard => item.kind === "task");
   const pendingItems = items.filter((item) => (item.kind !== "task" || item.state === "task") && (item.kind !== "task" || !item.parentTaskId || !allTasks.some(parent => parent.id === item.parentTaskId)));
   const lanes = [
@@ -212,10 +213,10 @@ export function WorkbenchView({ active }: { active: boolean }) {
     { id: "tasks", title: text.refinedTasks, hint: text.refinedTasksHint, empty: text.noReadyTasks,
       items: pendingItems.filter((item) => item.kind === "task" && !refiningIds.has(`task:${item.id}`)) },
   ];
-  const categories = [...(snapshot?.categories ?? [])];
+  const visibleIds = new Set(lanes.flatMap(lane => lane.items.map(item => `${item.kind}:${item.id}`)));
+  const categories = (snapshot?.categories ?? []).filter(category => category.items.some(item => visibleIds.has(`${item.kind}:${item.id}`)));
   const generalIndex = categories.findIndex(category => category.id.toLowerCase() === "general" || category.label === "General");
   if (generalIndex >= 0) categories.unshift(...categories.splice(generalIndex, 1));
-  else categories.unshift({ id: "general", label: "General", items: [] });
   const renderCard = (item: WorkbenchItem): React.ReactNode => (
     <article
       className={`canonical-card${(item.kind === "task" && detail === item.id) || (refining?.kind === item.kind && refining.id === item.id) ? " selected" : ""}`}
@@ -388,6 +389,7 @@ export function WorkbenchView({ active }: { active: boolean }) {
         )}
       </section>
       {snapshot && (
+        <div className="workbench-current">
         <section className="workbench-active shortcut-region" aria-labelledby="workbench-active-title">
           <header className="workbench-active-header">
             <div><small>{text.resume}</small><h2 id="workbench-active-title">{text.active}</h2></div>
@@ -396,6 +398,13 @@ export function WorkbenchView({ active }: { active: boolean }) {
           </header>
           {activeTasks.length ? <div className="workbench-active-cards">{activeTasks.map(renderCard)}</div> : <p className="region-empty">{text.noActive}</p>}
         </section>
+        <aside className="workbench-recent" aria-labelledby="recent-completed-title">
+          <h2 id="recent-completed-title">{text.recentCompleted}</h2>
+          {completedTasks.length ? <ol className="completed-task-list">{completedTasks.map(task => (
+            <li key={task.id}><button type="button" data-control="workbench-completed-open" onClick={event => selectDetail(task.id, event.currentTarget)}>{task.title}</button></li>
+          ))}</ol> : <p className="region-empty">{text.noCompleted}</p>}
+        </aside>
+        </div>
       )}
       {snapshot && (
         <section className="workbench-board" aria-label={text.categories}>
@@ -403,7 +412,6 @@ export function WorkbenchView({ active }: { active: boolean }) {
           {categories.map((category, categoryIndex) => {
             const categoryItems = new Set(category.items.map(item => `${item.kind}:${item.id}`));
             const belongs = (item: WorkbenchItem) => categoryItems.has(`${item.kind}:${item.id}`);
-            const categoryCompleted = completedTasks.filter(belongs);
             return (
             <section className="workbench-category" data-category={category.id} aria-labelledby={`category-${categoryIndex}`} key={category.id}>
               <header className="workbench-category-header">
@@ -421,12 +429,7 @@ export function WorkbenchView({ active }: { active: boolean }) {
                 <div className="workbench-lane-cards">
                   {lane.items.length ? lane.items.map(renderCard) : <p className="region-empty">{lane.empty}</p>}
                 </div>
-                {lane.id === "tasks" && categoryCompleted.length > 0 && (
-                  <details className="workbench-completed" data-control="workbench-completed-details">
-                    <summary>{text.completed} <span className="workbench-count">{categoryCompleted.length}</span></summary>
-                    <div className="workbench-lane-cards">{categoryCompleted.map(renderCard)}</div>
-                  </details>
-                )}
+
               </section>
             ))}
               </div>

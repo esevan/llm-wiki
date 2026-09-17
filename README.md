@@ -9,6 +9,8 @@ keeps enough context to resume, and publishes only completed outcomes as portabl
 
 ![The current Workbench shows lightweight Capture and Task entry with saved work](docs/features/images/workbench-tasks.en.png)
 
+Compass includes a Completed tasks tab for the full completion history. Workbench keeps only the latest five completions beside active Tasks and hides empty categories.
+
 
 Refinement preserves the existing Task identity and shows **Refined - Revision N**. Focus active work at the top of Workbench. Explicit Subtasks form an expandable tree; completing each child updates and publishes the parent Knowledge revision, and finishing all children closes the parent.
 

@@ -93,6 +93,14 @@ export async function runCompassGoalScenario(harness: GlobalScenarioHarness, tit
   await harness.waitFor(() => document.getElementById('dashboard')?.textContent?.includes(title) ?? false, 'rendered created goal');
   const dashboard = await harness.request<{ goals: Array<{ title: string }> }>('/dashboard');
   harness.coverage.assertEffect('compass-goal-save', () => dashboard.goals.some(goal => goal.title === title) && input.value === '');
+  const completedTab = required<HTMLButtonElement>('[data-control="compass-completed-tab"]', 'Completed tasks tab');
+  harness.coverage.interact('compass-completed-tab', () => harness.click(completedTab, 'Completed tasks'));
+  await harness.waitFor(() => completedTab.getAttribute('aria-pressed') === 'true', 'completed tab selected');
+  harness.coverage.assertEffect('compass-completed-tab', () => completedTab.getAttribute('aria-pressed') === 'true');
+  const directionTab = required<HTMLButtonElement>('[data-control="compass-direction-tab"]', 'Direction tab');
+  harness.coverage.interact('compass-direction-tab', () => harness.click(directionTab, 'Direction'));
+  await harness.waitFor(() => directionTab.getAttribute('aria-pressed') === 'true', 'direction tab selected');
+  harness.coverage.assertEffect('compass-direction-tab', () => directionTab.getAttribute('aria-pressed') === 'true' && !form.closest('[hidden]'));
   // Current shipping Compass has no edit/delete/step controls. This is a deliberate
   // reachability result, not an exclusion: adding any such enabled control makes
   // observe() fail until it has its own manifest id and semantic scenario.

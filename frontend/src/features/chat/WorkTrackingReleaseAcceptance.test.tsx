@@ -47,7 +47,7 @@ acceptance("release acceptance: real user surfaces", () => {
     await waitFor(() =>
       expect(window.llmWikiApplication.request).toHaveBeenCalled(),
     );
-    expect(screen.getByText("Tracked from Chat")).toBeVisible();
+    expect(await screen.findByText("Tracked from Chat")).toBeVisible();
   });
 
   it("US3 requires an explicit draft review before publication", () => {

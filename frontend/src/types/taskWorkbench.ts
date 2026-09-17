@@ -12,6 +12,7 @@ export interface CaptureCard {
   lastUserActivityAt?: string;
 }
 export interface TaskCard {
+  completedAt?: string | null;
   originCaptureText?: string | null;
   kind: "task";
   id: string;

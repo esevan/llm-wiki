@@ -68,7 +68,7 @@ describe("Task Workbench", () => {
     await screen.findByText("Review permissions");
     const main = document.querySelector(".workbench-main")!;
     expect(main.children[0]).toHaveClass("task-capture");
-    expect(main.children[1]).toHaveClass("workbench-active");
+    expect(main.children[1]).toHaveClass("workbench-current");
     const categories = [...document.querySelectorAll(".workbench-category")];
     expect(categories.map(category => category.getAttribute("data-category"))).toEqual(["general", "security"]);
     expect(categories[0]).toHaveTextContent("Plan release");
@@ -155,8 +155,8 @@ describe("Task Workbench", () => {
     expect(lanes[1]).toHaveTextContent("Shape this task");
     expect(lanes[2]).toHaveTextContent("Plan release");
     expect(lanes[2]).not.toHaveTextContent("Shape this task");
-    expect(lanes[2].querySelector("details")).not.toHaveAttribute("open");
-    expect(lanes[2].querySelector("details")).toHaveTextContent("Finished work");
+    expect(lanes[2]).not.toHaveTextContent("Finished work");
+    expect(document.querySelector(".workbench-recent")).toHaveTextContent("Finished work");
     expect(document.querySelector(".workbench-main")?.firstElementChild).toHaveClass("task-capture");
   });
 
@@ -217,7 +217,8 @@ describe("Task Workbench", () => {
     render(<WorkbenchView active />);
     await screen.findByText("진행 중인 Task가 없습니다.");
     expect(screen.queryByText("No active Tasks yet.")).not.toBeInTheDocument();
-    expect(screen.getByText("다듬기를 기다리는 항목이 없습니다.")).toBeInTheDocument();
+    expect(document.querySelector(".workbench-category")).toBeNull();
+    expect(screen.getByText("아직 완료한 작업이 없습니다.")).toBeInTheDocument();
     document.documentElement.lang = "en";
   });
 
@@ -420,4 +421,16 @@ describe("guarded Task selection", () => {
     expect(document.querySelector(".task-detail")).not.toBeInTheDocument();
     await waitFor(() => expect(trigger).toHaveFocus());
   });
+});
+
+it("hides empty and completed-only categories and shows five latest completions", async () => {
+  const done = Array.from({ length: 7 }, (_, index) => ({ kind: "task", id: `done-${index}`, title: `Done ${index}`, state: "completed", taskRevision: 1, completedAt: `2026-09-${10 + index}T00:00:00Z`, lastUserActivityAt: `2026-10-${17 - index}T00:00:00Z` }));
+  window.llmWikiApplication = { request: vi.fn().mockResolvedValue(response({ ...snapshot, categories: [
+    ...snapshot.categories, { id: "empty", label: "Empty category", items: [] }, { id: "done", label: "Done category", items: done },
+  ] })) };
+  render(<WorkbenchView active />);
+  await screen.findByText("Done 6");
+  expect(document.querySelector('[data-category="empty"]')).toBeNull();
+  expect(document.querySelector('[data-category="done"]')).toBeNull();
+  expect([...document.querySelectorAll('.workbench-recent li')].map(row => row.textContent)).toEqual(['Done 6', 'Done 5', 'Done 4', 'Done 3', 'Done 2']);
 });

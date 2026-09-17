@@ -9,6 +9,8 @@ LLM Wiki는 대화를 구조화된 일로 바꾸고, 언제든 이어갈 수 있
 
 ![가벼운 Capture·Task 입력과 저장된 작업을 보여 주는 최신 Workbench](docs/features/images/workbench-tasks.png)
 
+Compass의 완료 목록 탭에서 전체 완료 작업을 확인합니다. Workbench는 진행 중인 Task 옆에 최근 완료 5개만 표시하고 빈 카테고리는 숨깁니다.
+
 
 정제는 기존 Task ID를 유지하고 **Refined - Revision N**을 표시합니다. Workbench 최상단에서 진행 중인 작업에 Focus할 수 있습니다. 명시적인 Subtask는 펼칠 수 있는 계층으로 연결되며, 자식 완료마다 부모 Knowledge를 갱신·발행하고 모든 자식이 끝나면 부모도 완료합니다.
 

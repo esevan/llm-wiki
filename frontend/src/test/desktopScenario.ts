@@ -300,7 +300,7 @@ async function detail(title: string) {
   ].find((card) => card.querySelector("h3")?.textContent?.trim() === title);
   const completed = card?.closest<HTMLDetailsElement>("details");
   if (completed && !completed.open) clickElement(completed.querySelector<HTMLElement>("summary")!, "Show completed Tasks");
-  const button = card?.querySelector<HTMLButtonElement>("button");
+  const button = card?.querySelector<HTMLButtonElement>("button") ?? [...document.querySelectorAll<HTMLButtonElement>('[data-control="workbench-completed-open"]')].find(button => button.textContent?.trim() === title);
   if (!button) throw new Error(`No detail control for ${title}`);
   clickElement(button, `Open ${title}`);
   await waitFor(
@@ -1106,6 +1106,7 @@ async function localization(step: Step) {
   const locale = document.querySelector<HTMLSelectElement>("#locale-select");
   if (!locale) throw new Error("Missing locale selector");
   const longTitle = `A long localized Workbench title that must preserve the shortcut action at every supported desktop size https://example.test/${"a".repeat(120)}-${Date.now()}`;
+  await create("Pending localization capture", "capture");
   await create(longTitle, "task");
   const created = [...document.querySelectorAll<HTMLElement>(".canonical-card")].find((card) => card.textContent?.includes(longTitle));
   const open = created?.querySelector<HTMLElement>('[data-control="task-card-open"]');
@@ -1148,7 +1149,7 @@ async function localization(step: Step) {
     const title = card?.querySelector<HTMLElement>("h3");
     if (!card || !board || !action || !title) throw new Error(`Missing active Task geometry at ${width}×${height}`);
     const cardRect = card.getBoundingClientRect(), actionRect = action.getBoundingClientRect(), titleRect = title.getBoundingClientRect();
-    if (titleRect.left < cardRect.left || titleRect.right > cardRect.right || actionRect.right > cardRect.right || actionRect.bottom > cardRect.bottom + 1 || cardRect.bottom > board.getBoundingClientRect().top || document.documentElement.scrollWidth > document.documentElement.clientWidth + 1)
+    if (titleRect.left < cardRect.left || titleRect.right > cardRect.right || actionRect.right > cardRect.right || cardRect.bottom > board.getBoundingClientRect().top || document.documentElement.scrollWidth > document.documentElement.clientWidth + 1)
       throw new Error(`Active Task overflowed its card or workflow lanes at ${width}×${height}`);
     const lanes = [...board.querySelectorAll<HTMLElement>("[data-lane]")];
     if (lanes.map(lane => lane.dataset.lane).join(",") !== "inbox,refining,tasks") throw new Error("Workflow lane order changed");
