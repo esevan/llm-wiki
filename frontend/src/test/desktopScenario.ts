@@ -457,6 +457,7 @@ async function log(step: Step, interactionCoverage: ReturnType<typeof createInte
   );
 }
 async function refinement(step: Step) {
+  await api("/provider/config", "PUT", { base_url: e2eProviderUrl, model: "deterministic", api_key: "desktop-e2e-key" });
   const a = `refine A ${Date.now()}`,
     b = `refine B ${Date.now()}`;
   await create(a);
@@ -504,6 +505,28 @@ async function refinement(step: Step) {
       )?.value === "A unsent note",
     "A workspace restore",
   );
+  const png = Uint8Array.from(atob("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII="), char => char.charCodeAt(0));
+  const files = new DataTransfer();
+  for (const name of ["first.png", "second.png"]) files.items.add(new File([png], name, { type: "image/png" }));
+  const picker = document.querySelector<HTMLInputElement>('.refinement-panel [data-control="input-image-file"]')!;
+  if (!picker.multiple) throw new Error("Refinement image picker must allow multiple files");
+  Object.defineProperty(picker, "files", { configurable: true, value: files.files });
+  picker.dispatchEvent(new Event("change", { bubbles: true }));
+  await waitFor(() => document.querySelectorAll(".refinement-composer .input-image-preview").length === 2, "two unsent image previews");
+  const chat = document.querySelector<HTMLTextAreaElement>('[data-control="refinement-message"]')!;
+  enter(chat, Array.from({ length: 35 }, (_, index) => `Image context line ${index}`).join("\n"));
+  click('[data-control="refinement-send"]', "Send multiple images");
+  await waitFor(() => document.querySelectorAll(".refinement-messages .input-image-preview").length === 2
+    && document.querySelector(".refinement-panel")?.getAttribute("data-refinement-polling") === "false", "saved multiple images and completed response");
+  await waitFor(() => {
+    const conversation = document.querySelector<HTMLElement>(".refinement-messages")!;
+    return conversation.scrollHeight > conversation.clientHeight && conversation.scrollHeight - conversation.scrollTop - conversation.clientHeight < 5;
+  }, "new messages scroll overflowing conversation to bottom");
+  click(".refinement-panel header button", "Close multi-image conversation");
+  await waitFor(() => !document.querySelector(".refinement-panel"), "closed multi-image conversation");
+  click('[data-control="task-detail-refine"]', "Reopen multi-image conversation");
+  await waitFor(() => document.querySelectorAll(".refinement-messages .input-image-preview").length === 2, "both saved images restored after reopening");
+  await step("Multiple image attachments persisted through send and reopen, and new overflowing messages scrolled to the bottom.");
   await step(
     "A→B→A refinement restored the unsent note, active tab, and scroll workspace after UI close/reopen.",
   );

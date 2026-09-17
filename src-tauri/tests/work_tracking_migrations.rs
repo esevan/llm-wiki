@@ -36,7 +36,7 @@ fn work_tracking_schema_is_complete_and_idempotent() {
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        11
+        12
     );
 }
 

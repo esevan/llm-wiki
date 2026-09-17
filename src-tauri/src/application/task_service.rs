@@ -605,15 +605,15 @@ impl TaskApplicationService {
         Ok(())
     }
     fn capture(&self, input: &Value) -> Result<Value, String> {
-        let image = crate::adapters::sqlite::input_images::validate(input)?;
+        let images = crate::adapters::sqlite::input_images::validate_all(input)?;
         let text = input["text"].as_str().unwrap_or("").trim();
-        if text.is_empty() && image.is_none() { return Err("invalid_input: text or image is required".into()); }
+        if text.is_empty() && images.is_empty() { return Err("invalid_input: text or image is required".into()); }
         self.repo.transaction(|tx| {
             if let Some(result) = self.op(tx, input, "capture.create")? { return Ok(result); }
             let id = task_repository::new_id();
             let at = task_repository::now();
             tx.execute("INSERT INTO captures(id,text,created_at,source_mode,last_user_activity_at) VALUES(?,?,?,'capture',?)", params![id,text,at,at]).map_err(|e|e.to_string())?;
-            if let Some(image) = &image { crate::adapters::sqlite::input_images::save(tx, true, &id, image)?; }
+            for image in &images { crate::adapters::sqlite::input_images::save(tx, true, &id, image)?; }
             let result = json!({"id":id,"text":text,"createdAt":at});
             self.finish(tx, input, "capture.create", &result)?;
             Ok(result)
@@ -851,6 +851,32 @@ mod tests {
         assert!(service.execute("capture.create", &invalid).is_err());
         assert_eq!(connection.query_row("SELECT count(*) FROM captures", [], |r| r.get::<_,i64>(0)).unwrap(), 1);
         assert!(service.execute("capture.create", &json!({"operationId":"empty","text":""})).is_err());
+    }
+
+    #[test]
+    fn multiple_capture_images_validate_atomically_and_replay_without_duplicates() {
+        let root = tempdir().unwrap();
+        let db = root.path().join("images.db");
+        crate::native::database::initialize(&db).unwrap();
+        let service = TaskApplicationService::new(&db);
+        let images = json!([
+            {"name":"one.png","mediaType":"image/png","data":"iVBORw0KGgo="},
+            {"name":"two.png","mediaType":"image/png","data":"iVBORw0KGgo="}
+        ]);
+        let input = json!({"operationId":"multi-capture","text":"","images":images});
+        let saved = service.execute("capture.create", &input).unwrap();
+        assert_eq!(service.execute("capture.create", &input).unwrap(), saved);
+        let connection = crate::native::database::open(&db).unwrap();
+        assert_eq!(json!(crate::adapters::sqlite::input_images::get_all(&connection, true, saved["id"].as_str().unwrap()).unwrap()), images);
+        let mut invalid = input.clone();
+        invalid["operationId"] = json!("invalid-batch");
+        invalid["images"][1]["data"] = json!("not base64");
+        assert!(service.execute("capture.create", &invalid).is_err());
+        assert_eq!(connection.query_row("SELECT count(*) FROM captures", [], |r| r.get::<_,i64>(0)).unwrap(), 1);
+        assert_eq!(connection.query_row("SELECT count(*) FROM input_images", [], |r| r.get::<_,i64>(0)).unwrap(), 2);
+        for images in [json!([]), json!([null]), json!({})] {
+            assert!(service.execute("capture.create", &json!({"operationId":"bad","text":"","images":images})).is_err());
+        }
     }
 
     fn link_owned_session(

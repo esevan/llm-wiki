@@ -45,7 +45,7 @@ const request = async <T>(
 
 export const taskClient = {
   workbench: () => request<WorkbenchSnapshot>("/workbench"),
-  createCapture: (text: string, image?: InputImage) => request("/captures", "POST", { text, image }),
+  createCapture: (text: string, images?: InputImage[]) => request("/captures", "POST", { text, images }),
   createTask: (inputText: string) =>
     request<TaskAggregate>("/tasks", "POST", { inputText, title: inputText }),
   deleteItem: (entityType: "captures" | "problems" | "features" | "tasks", id: string) =>
@@ -214,11 +214,11 @@ export const taskClient = {
     request<RefinementProposal[]>(
       `/refinement/${encodeURIComponent(id)}/proposals`,
     ),
-  message: (id: string, message: string, image?: InputImage) =>
+  message: (id: string, message: string, images?: InputImage[]) =>
     request<RefinementSession>(
       `/refinement/${encodeURIComponent(id)}/messages`,
       "POST",
-      { message, image },
+      { message, images },
     ),
   proposalDecision: (
     id: string,

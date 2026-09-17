@@ -15,12 +15,12 @@ export function InputImageAttachment({ attachment, disabled }: { attachment: Ret
   const text = useTaskWorkbenchText();
   const input = useRef<HTMLInputElement>(null);
   return <div className="input-image-attachment" aria-busy={attachment.reading}>
-    <input data-control="input-image-file" ref={input} type="file" hidden accept="image/png,image/jpeg,image/gif,image/webp" disabled={disabled || attachment.reading}
-      aria-label={text.attachImage} onChange={event => { attachment.select(event.target.files?.[0]); event.target.value = ""; }} />
+    <input data-control="input-image-file" ref={input} type="file" multiple hidden accept="image/png,image/jpeg,image/gif,image/webp" disabled={disabled || attachment.reading}
+      aria-label={text.attachImage} onChange={event => { void attachment.select(Array.from(event.target.files ?? [])); event.target.value = ""; }} />
     <button data-control="input-image-choose" type="button" disabled={disabled || attachment.reading} onClick={() => input.current?.click()}>{attachment.reading ? "…" : text.attachImage}</button>
     <small>{text.imageHint}</small>
-    {attachment.image && <><InputImagePreview image={attachment.image} />
-      <button data-control="input-image-remove" type="button" disabled={disabled || attachment.reading} onClick={attachment.clear}>{text.removeImage}</button></>}
+    {attachment.images.map((image, index) => <div key={index}><InputImagePreview image={image} />
+      <button data-control="input-image-remove" type="button" disabled={disabled || attachment.reading} aria-label={`${text.removeImage}: ${image.name}`} onClick={() => attachment.remove(index)}>{text.removeImage}</button></div>)}
     {attachment.error && <p role="alert">{attachment.error}</p>}
   </div>;
 }

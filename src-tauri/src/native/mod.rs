@@ -417,7 +417,7 @@ impl NativeApplication {
             else { response.body["imageSummaryQueueError"] = queued.body["detail"].clone(); }
         }
 
-        if name == "capture.create" && input["text"].as_str().unwrap_or("").trim().is_empty() && input["image"].is_object() {
+        if name == "capture.create" && input["text"].as_str().unwrap_or("").trim().is_empty() && (input["image"].is_object() || input["images"].as_array().is_some_and(|images| !images.is_empty())) {
             let capture_id = response.body["id"].as_str().unwrap_or("");
             let prepared = task_assistance::execute_with_registry(
                 &self.db_path, &self.settings_path, &self.vault, self.semantic.clone(), self.jobs.clone(),

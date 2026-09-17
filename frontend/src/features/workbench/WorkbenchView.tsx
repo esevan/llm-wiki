@@ -37,7 +37,7 @@ export function WorkbenchView({ active }: { active: boolean }) {
     ...category, items: category.items.map(item => item.kind === "task" ? localizedTask(item) : item),
   })) };
   const captureImage = useInputImage();
-  const refinementImages = useRef(new Map<string, InputImage>());
+  const refinementImages = useRef(new Map<string, InputImage[]>());
   const [focusActive, setFocusActive] = useState(false);
   const detailRef = useRef<TaskDetailHandle>(null);
   const refinementRef = useRef<RefinementPanelHandle>(null);
@@ -146,7 +146,7 @@ export function WorkbenchView({ active }: { active: boolean }) {
     setError("");
     try {
       await (mode === "capture"
-        ? taskClient.createCapture(input.trim(), captureImage.image)
+        ? taskClient.createCapture(input.trim(), captureImage.images)
         : taskClient.createTask(input.trim()));
       setInput("");
       if (mode === "capture") captureImage.clear();
