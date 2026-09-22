@@ -328,6 +328,7 @@ impl NativeApplication {
                 operation.name.starts_with("locale.")
                     || operation.name.starts_with("provider.")
                     || operation.name.starts_with("i18n.")
+                    || operation.name == "settings.vault.get"
             }
             "workflow" => matches!(
                 operation.name.split('.').next().unwrap_or_default(),
