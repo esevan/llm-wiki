@@ -3,6 +3,8 @@ import { McpConnections } from './McpConnections';
 import { useSyncExternalStore } from 'react';
 import { useEffect, useState } from 'react';
 import { chooseVault } from '../../services/vaultSetupClient';
+import english from '../../../public/i18n/en.json';
+import korean from '../../../public/i18n/ko.json';
 
 const advancedTasks = [
   ['capture_assistance', 'Capture discussion and refinement'],
@@ -22,21 +24,33 @@ const advancedTasks = [
 
 export function SettingsView({ active }: { active: boolean }) {
   const [vaultPath, setVaultPath] = useState('');
+  const [vaultState, setVaultState] = useState<'loading' | 'ready' | 'error'>('loading');
   const [vaultAction, setVaultAction] = useState('');
   const [indexing, setIndexing] = useState(false);
-  useEffect(() => {
-    if (!window.llmWikiApplication) return;
+  const ko = useSyncExternalStore(
+    (changed) => { const observer = new MutationObserver(changed); observer.observe(document.documentElement, { attributes: true, attributeFilter: ['lang'] }); return () => observer.disconnect(); },
+    () => document.documentElement.lang.startsWith('ko'), () => false,
+  );
+  const resources = (ko ? korean : english) as Record<string, string>;
+  const t = (key: string) => resources[`ai_setup.${key}`] ?? key;
+  const loadVault = () => {
+    setVaultState('loading');
+    if (!window.llmWikiApplication) { setVaultState('error'); return; }
     void window.llmWikiApplication.request({ path: '/settings/vault' }).then(async response => {
-      if (response.ok) setVaultPath((await response.json<{ path: string }>()).path);
+      if (!response.ok) throw new Error('vault_settings_failed');
+      setVaultPath((await response.json<{ path: string }>()).path); setVaultState('ready');
+    }).catch(() => {
+      setVaultPath(''); setVaultState('error');
     });
-  }, []);
+  };
+  useEffect(loadVault, []);
   const regenerateEmbeddings = async () => {
     if (indexing || !window.llmWikiApplication) return;
-    setIndexing(true); setVaultAction('Rebuilding embeddings…');
+    setIndexing(true); setVaultAction(t('vault.regenerating'));
     try {
       const response = await window.llmWikiApplication.request({ path: '/index/embeddings', method: 'POST' });
-      setVaultAction(response.ok ? 'Embeddings regenerated for the current Vault.' : 'Embedding regeneration failed.');
-    } catch { setVaultAction('Embedding regeneration failed.'); } finally { setIndexing(false); }
+      setVaultAction(response.ok ? t('vault.regenerated') : t('vault.regenerate_failed'));
+    } catch { setVaultAction(t('vault.regenerate_failed')); } finally { setIndexing(false); }
   };
   const securityNote = useSyncExternalStore(
     (changed) => {
@@ -56,13 +70,20 @@ export function SettingsView({ active }: { active: boolean }) {
       </header>
       <section className="result">
         <p>{securityNote}</p>
-        <section className="settings-group vault-settings" aria-labelledby="vault-settings-title">
-          <h2 id="vault-settings-title">Vault</h2>
-          <p className="meta">This folder is the source for Vault search and embeddings.</p>
-          <code className="vault-path" data-control="vault-path">{vaultPath || 'Loading current Vault…'}</code>
-          <footer>
-            <button type="button" data-control="vault-change" onClick={() => void chooseVault()}>Change Vault location</button>
-            <button type="button" data-control="vault-regenerate-embeddings" disabled={indexing} onClick={() => void regenerateEmbeddings()}>{indexing ? 'Regenerating…' : 'Regenerate embeddings'}</button>
+        <section className="settings-group vault-settings" aria-labelledby="vault-settings-title" aria-busy={vaultState === 'loading'}>
+          <header className="vault-settings-heading">
+            <h2 id="vault-settings-title">{t('vault.title')}</h2>
+            {vaultState === 'ready' && <span className="vault-state">{t('vault.active')}</span>}
+          </header>
+          <div className="vault-location">
+            <span className="vault-location-label">{t('vault.location')}</span>
+            <code className={`vault-path ${vaultState === 'error' ? 'is-error' : ''}`} data-control="vault-path">{vaultPath || (vaultState === 'loading' ? t('vault.loading') : t('vault.unavailable'))}</code>
+          </div>
+          <p className="meta">{t('vault.description')}</p>
+          <footer className="vault-actions">
+            <button className="tiny" type="button" data-control="vault-change" onClick={() => void chooseVault()}>{t('vault.change')}</button>
+            {vaultState === 'error' && <button className="tiny" type="button" data-control="vault-retry" onClick={loadVault}>{t('vault.retry')}</button>}
+            <button className="tiny vault-secondary-action" type="button" data-control="vault-regenerate-embeddings" disabled={indexing || vaultState !== 'ready'} onClick={() => void regenerateEmbeddings()}>{indexing ? t('vault.regenerating') : t('vault.regenerate')}</button>
           </footer>
           {vaultAction && <p className="meta" role="status" aria-live="polite">{vaultAction}</p>}
         </section>
