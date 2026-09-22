@@ -6,7 +6,7 @@ Task detail keeps its Capture provenance, optional exact Problem revision, Work 
 
 ![Task detail keeps work evidence and provenance together](images/task-detail.en.png)
 
-Create a draft deliberately, review or correct it, then publish the reviewed Markdown separately. Draft revision and content hash identify the publication source. If the published Vault file changes externally, hash checks prevent a silent overwrite. Regenerating refreshes the draft from the recorded Task; it does not erase the Task's private record.
+Create a draft deliberately, review or correct it, then publish the reviewed Markdown separately. Publication writes the English canonical Markdown to the Vault and automatically queues its Korean translation under `Translations/ko/`. Draft revision and content hash identify the publication source. If the published Vault file changes externally, hash checks prevent a silent overwrite. Regenerating refreshes the draft from the recorded Task; it does not erase the Task's private record.
 
 Earlier Solution lineage tabs, inferred-claim correction views, and automatic completed-work reports are retained legacy behavior/specification history. They are not current Task interface promises.
 
