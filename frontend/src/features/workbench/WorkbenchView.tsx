@@ -404,7 +404,7 @@ export function WorkbenchView({ active }: { active: boolean }) {
         </section>
         <aside className="workbench-recent" aria-labelledby="recent-completed-title">
           <h2 id="recent-completed-title">{text.recentCompleted}</h2>
-          {completedTasks.length ? <ol className="completed-task-list">{completedTasks.map(task => (
+          {completedTasks.length ? <ol className="completed-task-list" aria-label={text.recentCompleted}>{completedTasks.map(task => (
             <li key={task.id}><button type="button" data-control="workbench-completed-open" onClick={event => selectDetail(task.id, event.currentTarget)}>{task.title}</button></li>
           ))}</ol> : <p className="region-empty">{text.noCompleted}</p>}
         </aside>

@@ -1048,14 +1048,15 @@ main:has(.task-workbench.active :is(.task-detail, .refinement-panel)) {
   overflow-wrap: anywhere;
 }
 
-.workbench-current { display: grid; grid-template-columns: minmax(0, 1fr) 280px; gap: var(--space-5); align-items: stretch; }
-.workbench-current > .workbench-active { min-width: 0; }
-.workbench-recent { display: flex; flex-direction: column; box-sizing: border-box; contain: size; min-height: 0; min-width: 0; padding: var(--space-4); border: var(--border-default); border-radius: var(--radius-panel); background: var(--color-bg-surface); }
+.workbench-current { display: grid; grid-template-columns: minmax(0, 1fr) 280px; gap: var(--space-5); align-items: stretch; height: 320px; }
+.workbench-current > .workbench-active { min-width: 0; min-height: 0; height: 100%; box-sizing: border-box; display: flex; flex-direction: column; }
+.workbench-active-cards { min-height: 0; flex: 1; align-content: start; }
+.workbench-recent { display: flex; flex-direction: column; box-sizing: border-box; contain: size; min-height: 0; min-width: 0; height: 100%; padding: var(--space-4); border: var(--border-default); border-radius: var(--radius-panel); background: var(--color-bg-surface); }
 .workbench-recent h2 { flex-shrink: 0; margin: 0 0 var(--space-3); font-size: var(--font-size-md); }
-.workbench-recent > .completed-task-list { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior-y: contain; scrollbar-gutter: stable; padding: var(--space-1); }
+.workbench-recent > .completed-task-list { display: flex; flex: 1; min-height: 0; min-width: 0; gap: var(--space-2); overflow-x: auto; overflow-y: hidden; overscroll-behavior-inline: contain; scrollbar-gutter: stable; padding: var(--space-1) var(--space-3) var(--space-1) var(--space-1); scroll-padding-inline: var(--space-1); }
 .completed-task-list { list-style: none; padding: 0; margin: 0; }
-.completed-task-list li + li { border-top: var(--border-default); }
-.completed-task-list button { display: block; width: 100%; min-height: 44px; padding: var(--space-3) var(--space-2); border: 0; border-radius: var(--radius-control); background: transparent; text-align: left; overflow-wrap: anywhere; }
+.completed-task-list li { flex: 0 0 190px; min-width: 0; }
+.completed-task-list button { display: block; width: 100%; min-height: 44px; padding: var(--space-3) var(--space-2); border: 0; border-radius: var(--radius-control); background: transparent; color: var(--color-accent-strong); text-align: left; text-decoration: underline; text-underline-offset: 3px; font-size: var(--font-size-sm); overflow-wrap: anywhere; }
 .completed-task-list button:hover { background: var(--color-bg-accent-subtle); }
 .completed-task-list button:active { background: var(--color-bg-muted); }
 .completed-task-list button:focus-visible { outline: 2px solid var(--color-accent-strong); outline-offset: 2px; }
@@ -1063,7 +1064,8 @@ main:has(.task-workbench.active :is(.task-detail, .refinement-panel)) {
 .compass-tabs { display: flex; gap: var(--space-2); margin-bottom: var(--space-5); }
 .compass-tabs [aria-pressed="true"] { background: var(--color-bg-accent-subtle); border-color: var(--color-accent-strong); }
 @container (max-width: 760px) {
-  .workbench-current { grid-template-columns: minmax(0, 1fr); }
+  .workbench-current { grid-template-columns: minmax(0, 1fr); height: auto; }
+  .workbench-active { height: 320px; }
   .workbench-recent { height: 320px; }
 }
 .compass-tabs button { min-height: 44px; padding: var(--space-2) var(--space-4); border: var(--border-default); border-radius: var(--radius-control); background: var(--color-bg-surface); color: var(--color-text-primary); font: inherit; font-weight: 700; cursor: pointer; }
