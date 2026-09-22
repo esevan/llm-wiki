@@ -389,7 +389,7 @@ impl NativeApplication {
             || name.starts_with("task-knowledge.")
             || name == "task.lineage"
         {
-            return match task_assistance::execute_with_registry(
+            let mut result = match task_assistance::execute_with_registry(
                 &self.db_path,
                 &self.settings_path,
                 &self.vault,
@@ -406,6 +406,26 @@ impl NativeApplication {
                     body: json!({"detail":error}),
                 },
             };
+            if name == "task-knowledge.publish" && result.status < 300 {
+                let path = result.body.get("path").and_then(Value::as_str).unwrap_or("");
+                let source_hash = result.body.get("publishedHash").and_then(Value::as_str).unwrap_or("");
+                if !path.is_empty() && !source_hash.is_empty() {
+                    let queued = self.enqueue_job(json!({
+                        "taskKind":"knowledge_translation",
+                        "entityType":"knowledge",
+                        "entityId":path,
+                        "path":path,
+                        "expectedSourceHash":source_hash,
+                        "automatic":true
+                    })).await;
+                    if queued.status < 300 {
+                        result.body["translationJob"] = queued.body;
+                    } else {
+                        result.body["translationQueueError"] = queued.body["detail"].clone();
+                    }
+                }
+            }
+            return result;
         }
         let mut response = self.execute_domain("workflow", operation);
         if !(200..300).contains(&response.status) {
