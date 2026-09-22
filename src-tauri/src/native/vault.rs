@@ -111,6 +111,7 @@ pub fn index(
     vault: &Path,
     semantic: &SemanticEngine,
     semantic_enabled: bool,
+    force_embeddings: bool,
 ) -> Result<Value, String> {
     let started = Instant::now();
     let connection = database::open(db_path)?;
@@ -166,7 +167,7 @@ pub fn index(
         };
         if semantic_enabled
             && semantic.available()
-            && embedded_hash.as_deref() != Some(&source_hash)
+            && (force_embeddings || embedded_hash.as_deref() != Some(&source_hash))
         {
             pending_embeddings.push((
                 path.clone(),

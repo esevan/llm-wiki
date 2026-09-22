@@ -15,6 +15,11 @@ background worker count, and API key. The API key is never returned through the 
 is never written to the Vault or application database. A blank API-key field preserves the stored
 key while other provider settings are updated.
 
+AI setup also shows the active Vault path. Change Vault location opens the native folder picker and
+restarts the app with the selected folder. Regenerate embeddings scans the current Vault and rebuilds
+semantic embeddings for its Markdown documents using the bundled model; it does not delete Vault files
+or application records.
+
 The current settings document is version 2. `introCompleted` is written as `false` only for a
 genuine new installation and becomes `true` when the introduction is skipped or completed. A
 missing field means an installation predates the introduction, so upgrades do not unexpectedly

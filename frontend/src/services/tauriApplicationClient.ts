@@ -60,6 +60,8 @@ const operationFor = (request: ApplicationRequest): NativeOperation => {
 
   if (method === 'GET' && path === '/health') return { name: 'health.get', input: {} };
   if (method === 'POST' && path === '/index') return { name: 'vault.index', input: {} };
+  if (method === 'POST' && path === '/index/embeddings') return { name: 'vault.index', input: { semantic: true, forceEmbeddings: true } };
+  if (method === 'GET' && path === '/settings/vault') return { name: 'settings.vault.get', input: {} };
   if (method === 'GET' && path === '/search') return { name: 'vault.search', input: { query: url.searchParams.get('q') ?? '', limit: Number(url.searchParams.get('limit') ?? 20), offset: Number(url.searchParams.get('offset') ?? 0), semantic: url.searchParams.get('semantic') === 'true' } };
   if (method === 'GET' && path === '/settings/locale') return { name: 'locale.get', input: { browserLocale: url.searchParams.get('browser_locale') ?? 'en' } };
   if (method === 'PUT' && path === '/settings/locale') return { name: 'locale.save', input: body };
@@ -228,7 +230,7 @@ const commandFor = (operation: NativeOperation): NativeCommand => {
   if (operation.name === 'provider.test' || operation.name === 'problem.enrich') return 'provider_request';
   if (root === 'health') return 'system_command';
   if (root === 'vault' || root === 'knowledge') return 'vault_command';
-  if (root === 'locale' || root === 'provider' || root === 'i18n') return 'settings_command';
+  if (root === 'locale' || root === 'provider' || root === 'i18n' || root === 'settings') return 'settings_command';
   if (root === 'jobs' || root === 'notifications') return 'jobs_command';
   if (root === 'work_tracking') return 'work_tracking_command';
   return 'workflow_command';
