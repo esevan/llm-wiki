@@ -15,10 +15,16 @@ Apply these rules to every Git commit:
 - Keep the subject at 50 characters or fewer, including the gitmoji.
 - Start the subject with an appropriate gitmoji.
 - Phrase the subject as an imperative and emphasize what changed.
-- Use the body to explain why the change was needed and how it works.
+- Use the body to explain why the change was needed, how it works, and what
+  verification was performed. Report checks actually run and any material
+  verification limitations; do not invent successful checks.
 - Wrap body lines at 72 characters. Do not wrap URLs or indivisible
   tokens.
-- Omit the body only when the why and how are genuinely self-evident.
+- Omit the body only for a trivial typo or wording correction whose reason and
+  effect are fully clear from the subject. Bug fixes, behavior changes, build or
+  configuration changes, and refactors always require a body.
+- A concise subject and the single-commit PR rule do not justify omitting the
+  body. The latter limits commit count, not message length.
 
 When the commit introduces a breaking change, finish the body with a
 `BREAKING CHANGE:` section. Explain the incompatibility and its impact.
@@ -34,6 +40,6 @@ branch single-commit requires a history-rewriting push, verify the exact
 branch and obtain any authorization required for that destructive
 operation.
 
-Before committing or pushing, inspect the final subject, body wrapping,
+Before committing or pushing, inspect the final subject, required body content, body wrapping,
 breaking-change footer, and commit count. Preserve repository-specific
 Git and worktree instructions that impose additional constraints.

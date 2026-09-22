@@ -1,5 +1,16 @@
 # Repository agent instructions
 
+## Commit messages
+
+- Before composing, amending, squashing, or pushing a commit, read and follow
+  [.agents/skills/commit-convention/SKILL.md](.agents/skills/commit-convention/SKILL.md).
+- Include a body explaining why the change was needed, how it works, and what
+  verification was performed. A short subject is not a substitute for a body.
+- Omit the body only for a trivial typo or wording correction whose reason and
+  effect are fully clear from the subject. Bug fixes, behavior changes, build or
+  configuration changes, and refactors require a body.
+- The single-commit PR rule limits the number of commits, not message length.
+
 ## Mandatory worktree workflow
 
 - Before starting any implementation that changes application code or tests, create or switch to a dedicated Git worktree on a task-specific branch.

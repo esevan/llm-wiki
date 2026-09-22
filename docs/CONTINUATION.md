@@ -6,6 +6,19 @@ Capture remains a lightweight input; Work Log, refinement, exact Problem revisio
 relationships, advisory review, completion, and Knowledge publication are independent decisions.
 The Python/FastAPI browser delivery remains retired in Git history at `caef236`.
 
+## Current handoff
+
+- The Task-centered redesign is complete in single commit `de01ff47398871902a765d43b5a4060161316f92`; `main` and `origin/main` match, and the existing seven unpublished commits were pushed with it.
+- The signed application was installed at `/Applications/LLM Wiki.app` and launched successfully (PID `28832` at handoff). The verified release identity was CDHash `3be85b685e04f76596c914fafa4bf9639081958d`, signature `LLM Wiki Local Signing`, timestamp `2026-09-12 08:58:37`, with the designated requirement matching strict verification. Previous app backup: `/Applications/LLM Wiki.app.previous-1789222006550-28769`.
+- Packaged macOS E2E completed 32/32 scenarios with 169 rendered/exercised/asserted controls and no evidence gaps. Artifacts are retained in `.worktrees/task-centered-workbench/.tmp/desktop-e2e-artifacts-FcAbm6`; the documented EN/KO runbook supports `--list`, `--scenario`, `--full`, `--artifact-dir`, and `--keep-state`.
+- Scoped npm (149), Cargo (106), lint, typecheck, format, and clippy checks passed. Full-repository lint still reports 21 pre-existing findings. Real-provider quality/latency, real Vault data, and installed Windows/Linux or OS reduced-motion coverage were not tested.
+- Installer data, keychain, and TCC state were not reset; normal launch-time migration remains available. No new code, test, build, commit, push, or launch work remains.
+- Deferred follow-up is recorded in [Task-centered architecture backlog](backlog/task-centered-architecture.md). The LLM Wiki MCP tracking attempt returned `elicitation_required`; no new remote record was saved.
+- Preserve current user-owned changes: `AGENTS.md`, `.agents/skills/commit-convention/SKILL.md`, `docs/plans/task-centered-workbench.md`, and the untracked `docs/plans/ui-ux-improvements.md` / `docs/plans/ui-ux-improvements.ko.md`. The original task-centered plan was restored with SHA-256 `820d61b0fab5b1ce293aed6c7b81e0062a1765a8222da973887daa2207999d12`; its backup is `.tmp/pre-merge-user-plan-p1c5jb0a/task-centered-workbench.md`.
+- There is no remaining implementation objective. Resume only an explicitly requested backlog or evidence gap; do not automatically restart the redesign or full E2E run.
+
+- The lessons are maintained in [CONTRIBUTING.md](../CONTRIBUTING.md) and [CONTRIBUTING.ko.md](../CONTRIBUTING.ko.md), linked from both README contribution sections.
+
 ## Main verification and installation fixes (2026-09-16)
 
 - Refinement restores its opener after the panel unmounts and releases its focus trap,
