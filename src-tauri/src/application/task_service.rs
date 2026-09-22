@@ -697,7 +697,7 @@ impl TaskApplicationService {
         let mut x=c.query_row("SELECT t.current_revision,t.state,r.title,r.detail,r.outcome,r.scope,r.non_goals,r.validation_criteria,t.category,t.created_at,t.last_user_activity_at FROM tasks t JOIN task_revisions r ON r.task_id=t.id AND r.revision=t.current_revision WHERE t.id=?",[id],|r|Ok(json!({"id":id,"taskRevision":r.get::<_,i64>(0)?,"state":r.get::<_,String>(1)?,"title":r.get::<_,String>(2)?,"detail":r.get::<_,String>(3)?,"outcome":r.get::<_,String>(4)?,"scope":r.get::<_,String>(5)?,"nonGoals":r.get::<_,String>(6)?,"validationCriteria":r.get::<_,String>(7)?,"category":r.get::<_,String>(8)?,"createdAt":r.get::<_,String>(9)?,"lastUserActivityAt":r.get::<_,String>(10)?}))).optional().map_err(|x|x.to_string())?.ok_or("Task not found")?;
         x["contentVersions"] = crate::native::localization::task_versions(&c, id)?;
         x["originCapture"] = c.query_row(
-            "SELECT c.id,c.text,c.created_at FROM captures c JOIN tasks t ON t.origin_capture_id=c.id WHERE t.id=? AND c.source_mode='capture'",
+            "SELECT c.id,c.text,c.created_at FROM captures c JOIN tasks t ON t.origin_capture_id=c.id WHERE t.id=?",
             [id], |r| Ok(json!({"id":r.get::<_,String>(0)?,"text":r.get::<_,String>(1)?,"createdAt":r.get::<_,String>(2)?})),
         ).optional().map_err(|e| e.to_string())?.unwrap_or(Value::Null);
         for (key,value) in crate::native::task_hierarchy::metadata(&c,id)?.as_object().ok_or("invalid metadata")? { x[key] = value.clone(); }
@@ -770,7 +770,7 @@ impl TaskApplicationService {
 
     fn workbench(&self) -> Result<Value, String> {
         let c = crate::native::database::open(self.repo.path())?;
-        let mut s=c.prepare("SELECT t.id,t.current_revision,t.state,r.title,t.category,t.last_user_activity_at,f.revision,h.parent_task_id,(SELECT c.text FROM captures c WHERE c.id=t.origin_capture_id AND c.source_mode='capture'),t.completed_at FROM tasks t JOIN task_revisions r ON r.task_id=t.id AND r.revision=t.current_revision LEFT JOIN task_refinements f ON f.task_id=t.id LEFT JOIN task_subtasks h ON h.child_task_id=t.id WHERE t.archived_at IS NULL AND NOT EXISTS(SELECT 1 FROM deleted_entities d WHERE d.entity_type='tasks' AND d.entity_id=t.id) ORDER BY t.last_user_activity_at DESC").map_err(|x|x.to_string())?;
+        let mut s=c.prepare("SELECT t.id,t.current_revision,t.state,r.title,t.category,t.last_user_activity_at,f.revision,h.parent_task_id,(SELECT c.text FROM captures c WHERE c.id=t.origin_capture_id),t.completed_at FROM tasks t JOIN task_revisions r ON r.task_id=t.id AND r.revision=t.current_revision LEFT JOIN task_refinements f ON f.task_id=t.id LEFT JOIN task_subtasks h ON h.child_task_id=t.id WHERE t.archived_at IS NULL AND NOT EXISTS(SELECT 1 FROM deleted_entities d WHERE d.entity_type='tasks' AND d.entity_id=t.id) ORDER BY t.last_user_activity_at DESC").map_err(|x|x.to_string())?;
         let mut rows=s.query_map([],|r|Ok(json!({"kind":"task","id":r.get::<_,String>(0)?,"taskRevision":r.get::<_,i64>(1)?,"state":r.get::<_,String>(2)?,"title":r.get::<_,String>(3)?,"category":r.get::<_,String>(4)?,"lastUserActivityAt":r.get::<_,String>(5)?,"refinedRevision":r.get::<_,Option<i64>>(6)?,"parentTaskId":r.get::<_,Option<String>>(7)?,"originCaptureText":r.get::<_,Option<String>>(8)?,"completedAt":r.get::<_,Option<String>>(9)?}))).map_err(|x|x.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|x|x.to_string())?;
         let mut translations = crate::native::localization::current_task_versions(&c)?;
         for item in &mut rows {
@@ -828,6 +828,26 @@ mod tests {
     use super::*;
     use rusqlite::params;
     use tempfile::tempdir;
+
+    #[test]
+    fn direct_task_keeps_its_initial_text_in_detail_and_workbench() {
+        let root = tempdir().unwrap();
+        let db = root.path().join("task.db");
+        crate::native::database::initialize(&db).unwrap();
+        let service = TaskApplicationService::new(&db);
+        let initial = "Keep this exact first thought";
+        let created = service
+            .execute("task.create", &json!({"operationId":"direct-task","inputText":initial,"title":"A Task"}))
+            .unwrap();
+        let id = created["id"].as_str().unwrap();
+
+        assert_eq!(service.get(id).unwrap()["originCapture"]["text"], initial);
+        let snapshot = service.workbench().unwrap();
+        let has_initial = snapshot["categories"].as_array().unwrap().iter()
+            .flat_map(|category| category["items"].as_array().unwrap())
+            .any(|item| item["id"] == id && item["originCaptureText"] == initial);
+        assert!(has_initial);
+    }
 
     #[test]
     fn capture_image_is_atomic_persistent_and_replayable() {

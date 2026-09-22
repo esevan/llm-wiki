@@ -2178,8 +2178,9 @@ pub(crate) fn task_lineage_tx(
         edges.push(json!({"from":task_node,"to":node,"kind":"published_as"}));
     }
     let source_hash = digest(&json!({"nodes":nodes,"edges":edges}).to_string());
+    let journey = crate::native::task_journey::build_tx(connection, task_id)?;
     Ok(
-        json!({"taskId":task_id,"taskRevision":revision,"sourceHash":source_hash,"nodes":nodes,"edges":edges}),
+        json!({"taskId":task_id,"taskRevision":revision,"sourceHash":source_hash,"nodes":nodes,"edges":edges,"journey":journey}),
     )
 }
 

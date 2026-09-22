@@ -181,4 +181,5 @@ export interface ConflictReviewHistory {
 export interface LineageSnapshot {
   nodes?: Array<{ id: string; kind: string; title?: string }>;
   edges?: Array<{ from: string; to: string; kind: string }>;
+  journey?: import("../features/workbench/TaskJourneyGraph").TaskJourney;
 }

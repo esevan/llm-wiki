@@ -389,27 +389,12 @@ export async function runTaskControlMatrixScenario(h: WorkbenchScenarioHarness) 
   h.coverage.interact("task-connection-details", () => h.click(connectionSummary, "Open connection details"));
   await h.waitFor(() => connections.open, "open Task connection details");
   effect(h, ["task-connection-details"], () => connections.open);
-  observe(h, "connection editors");
-  await enterControl(h, "task-problem-create-text", "Matrix linked Problem");
-  await clickControl(h, "task-problem-create", "Create and link Problem");
-  await h.waitForAsync(async () => Boolean((await h.task(revisedTitle)).problemLinks?.length), "Problem link readback");
-  const problemOne = (await h.task(revisedTitle)).problemLinks?.[0];
-  if (!problemOne) throw new Error("Created Problem link missing");
-  effect(h, ["task-problem-create"], () => Boolean(problemOne));
-  observe(h, "linked Problem row");
-  await enterControl(h, "task-problem-revision-text", "Matrix linked Problem revision two");
-  await clickControl(h, "task-problem-revise", "Revise linked Problem");
-  await h.waitFor(() => control<HTMLInputElement>("task-problem-link-revision").value === "2", "Problem revision editor update");
-  effect(h, ["task-problem-revise"], () => control<HTMLInputElement>("task-problem-link-revision").value === "2");
-  await enterControl(h, "task-problem-link-id", problemOne.problemId);
-  await enterControl(h, "task-problem-link-revision", "2");
-  await clickControl(h, "task-problem-link", "Link exact Problem revision two");
-  await h.waitForAsync(async () => Boolean((await h.task(revisedTitle)).problemLinks?.some(link => link.problemRevision === 2)), "Problem r2 link readback");
-  await h.waitFor(() => document.body.textContent?.includes("revision 2") === true, "rendered Problem r2 link");
-  effect(h, ["task-problem-link"], () => document.body.textContent?.includes("revision 2") === true);
-
   const target = await h.task(targetTitle);
-  await enterControl(h, "task-relationship-target", target.id);
+  observe(h, "Task search and connection controls");
+  await enterControl(h, "task-relationship-search", targetTitle);
+  await h.waitFor(() => Boolean(document.querySelector(`[data-control="task-relationship-select"][data-record-id="${CSS.escape(target.id)}"]`)), "Task search result");
+  await h.click(control("task-relationship-select", target.id), "Select related Task from Workbench");
+  effect(h, ["task-relationship-select"], () => control<HTMLButtonElement>("task-relationship-select", target.id).getAttribute("aria-pressed") === "true");
   const kind = control<HTMLSelectElement>("task-relationship-kind");
   for (const relationship of ["related", "prerequisite", "split_from"]) {
     if (relationship === "related") {
@@ -438,24 +423,6 @@ export async function runTaskControlMatrixScenario(h: WorkbenchScenarioHarness) 
   await h.waitForAsync(async () => !(await h.task(revisedTitle)).relationships?.some(link => link.id === relation.id), "relationship unlink readback");
   await h.waitFor(() => !document.querySelector(`[data-record-id="${CSS.escape(relation.id)}"]`), "removed Task relationship row");
   effect(h, ["task-relationship-unlink"], () => !document.querySelector(`[data-record-id="${CSS.escape(relation.id)}"]`));
-
-  const resolvableLink = (await h.task(revisedTitle)).problemLinks?.find(link => link.problemId === problemOne.problemId && link.problemRevision === 2);
-  if (!resolvableLink) throw new Error("Current Problem revision link missing before resolution");
-  await clickControl(h, "task-problem-resolve", "Resolve exact linked Problem", resolvableLink.id);
-  let resolvedProblem = false;
-  await h.waitForAsync(async () => {
-    const record = await h.api<{ state?: string }>(`/problems/${encodeURIComponent(problemOne.problemId)}/record`);
-    resolvedProblem = record.state === "resolved";
-    return resolvedProblem;
-  }, "Problem resolution readback");
-  effect(h, ["task-problem-resolve"], () => resolvedProblem);
-  const secondLink = (await h.task(revisedTitle)).problemLinks?.find(link => link.problemRevision === 2);
-  if (secondLink) {
-    await clickControl(h, "task-problem-unlink", "Unlink Problem revision two", secondLink.id);
-    await h.waitForAsync(async () => !(await h.task(revisedTitle)).problemLinks?.some(link => link.id === secondLink.id), "Problem unlink readback");
-    await h.waitFor(() => !document.querySelector(`[data-record-id="${CSS.escape(secondLink.id)}"]`), "removed Problem link row");
-    effect(h, ["task-problem-unlink"], () => !document.querySelector(`[data-record-id="${CSS.escape(secondLink.id)}"]`));
-  }
 
   await selectTaskTab(h, "Review", "Return to Task Review transitions");
   await clickControl(h, "task-transition-start", "Start Task");

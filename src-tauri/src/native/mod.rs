@@ -13,6 +13,7 @@ pub(crate) mod semantic;
 pub mod settings;
 pub(crate) mod task_assistance;
 pub(crate) mod task_hierarchy;
+pub(crate) mod task_journey;
 pub(crate) mod vault;
 pub(crate) mod work_tracking;
 pub(crate) mod work_tracking_projector;

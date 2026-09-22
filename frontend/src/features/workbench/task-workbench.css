@@ -473,6 +473,22 @@ main:has(.task-workbench.active :is(.task-detail, .refinement-panel)) {
 .connection-details .inline-form + .inline-form {
   margin-top: 0.55rem;
 }
+.connection-hint { margin: 0 0 var(--space-3); color: var(--color-text-secondary); font-size: var(--font-size-sm); line-height: 1.5; }
+.task-connection-search { display: grid; gap: var(--space-1); font-size: var(--font-size-sm); font-weight: 700; }
+.task-connection-search input { margin: 0; }
+.task-connection-results { display: grid; gap: var(--space-1); max-height: 17rem; margin-top: var(--space-3); padding: var(--space-2); overflow-y: auto; border: var(--border-default); border-radius: var(--radius-control); background: var(--color-bg-muted); }
+.connection-picker-heading, .connection-picker-status, .connection-picker-error { margin: var(--space-1); font-size: var(--font-size-sm); }
+.connection-picker-heading { color: var(--color-text-secondary); font-weight: 700; }
+.connection-picker-error { color: var(--color-status-error); }
+.task-connection-results [data-control="task-relationship-select"] { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); width: 100%; min-height: var(--control-height); padding: var(--space-2) var(--space-3); border: 1px solid transparent; border-radius: var(--radius-control); background: var(--color-bg-surface); color: var(--color-text-primary); text-align: left; }
+.task-connection-results [data-control="task-relationship-select"] strong { min-width: 0; overflow-wrap: anywhere; }
+.task-connection-results [data-control="task-relationship-select"] small { flex: none; color: var(--color-text-secondary); }
+.task-connection-results [data-control="task-relationship-select"]:hover { border-color: var(--color-border-accent); background: var(--color-bg-accent-subtle); }
+.task-connection-results [data-control="task-relationship-select"][aria-pressed="true"] { border-color: var(--color-accent-strong); background: var(--color-bg-accent-subtle); }
+.task-connection-results [data-control="task-relationship-select"]:focus-visible, .task-connection-open:focus-visible { outline: 2px solid var(--color-accent-strong); outline-offset: 2px; }
+.task-connection-actions { align-items: center; margin-top: var(--space-3); }
+.connection-selected { margin: var(--space-2) 0 0; font-size: var(--font-size-sm); }
+.task-connection-open { margin: 0; padding: 0; border: 0; background: transparent; color: var(--color-accent-strong); font: inherit; font-weight: 700; text-align: left; text-decoration: underline; text-underline-offset: 3px; }
 .inline-form input {
   min-width: 0;
   margin: 0;

@@ -15,10 +15,12 @@ more context or a reviewable proposal is useful; preserve solutions already reco
 Press **Enter** in the Workbench entry to save it; use **Shift+Enter** for a line break. Enter during
 IME composition is left to the composition, so the text can be completed safely.
 
-A Capture can lead to multiple Problems and Tasks. Problems have immutable revisions, and Tasks
-link to the exact revisions they address. A Task can also refer to another Task as a prerequisite
-or related work. These links preserve the flow of work without imposing a one-to-one relationship.
-Related work is visible and can be unlinked from either Task; prerequisites retain their direction.
+A Capture can lead to multiple Problems and Tasks. The Connection panel is for Task-to-Task work.
+Search the Workbench by a Task title or its original Capture, choose a recent or completed Task,
+and then choose prerequisite, related, or split-from. Internal Task IDs are never required. These
+links preserve the flow of work without
+imposing a one-to-one relationship. Related work is visible and can be unlinked from either Task;
+prerequisites retain their direction.
 
 ## Resume from the board
 
@@ -53,6 +55,11 @@ items initially; expand the list to see all items, including completed ones.
 
 Task detail keeps six editable definition fields—title, detail, outcome, scope, non-goals, and
 validation criteria—beside Work Log entries, attachments, comments, checklists, and decisions.
+**Original capture** preserves the text used to start a Task, including one created directly from
+the Workbench, so later refinement does not hide its starting point. The Details tab also shows a
+Task journey: an evidence-backed trace of the original idea, refinements, recorded work, decisions,
+and completion. Its connectors show recorded order only; they do not claim that one event caused
+another.
 Press **Enter** in a Work Log entry to add it; use **Shift+Enter** for a line break.
 Checklist items and Work Log comments also submit with **Enter**. Empty input and Enter during IME composition do not submit.
 Paste a screenshot into the Work Log entry to attach it directly; an image-only entry is allowed,
@@ -73,10 +80,9 @@ so normal navigation does not discard that draft. This is explicit-save protecti
 definition fields, not Task autosave: it does not promise durability on app quit/crash or cover
 every auxiliary form.
 
-Use **Add completion evidence** to begin completion. Completing a Task does not automatically resolve its linked Problems or complete related Tasks.
-Resolve a Problem separately against its current revision and evidence. An older linked revision
-cannot be resolved as though it were the current one. Creating a private Knowledge draft and
-publishing it are also separate explicit decisions; see [Completion and Knowledge](completion-writeback-archive.md).
+Use **Add completion evidence** to begin completion. Completing a Task does not automatically
+complete related Tasks. Creating a private Knowledge draft and publishing it are also separate
+explicit decisions; see [Completion and Knowledge](completion-writeback-archive.md).
 
 ## Review conflicts without blocking work
 

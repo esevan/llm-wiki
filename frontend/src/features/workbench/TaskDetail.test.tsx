@@ -25,6 +25,32 @@ const response = (body: unknown) => ({
 });
 
 describe("Task detail", () => {
+  it("finds recent and completed Tasks by title instead of asking for an internal ID", async () => {
+    const request = vi.fn().mockImplementation(({ path, method, body }: { path: string; method?: string; body?: string }) => {
+      if (path === "/workbench") return Promise.resolve(response({ categories: [{ id: "General", label: "General", items: [
+        { ...task, id: "recent-task", title: "Recent work", state: "in_progress" },
+        { ...task, id: "completed-task", title: "Completed design notes", state: "completed" },
+      ] }] }));
+      if (path === "/tasks/task-1/relationships" && method === "POST") {
+        expect(JSON.parse(body ?? "{}")).toMatchObject({ targetTaskId: "completed-task", kind: "related" });
+      }
+      return Promise.resolve(response(task));
+    });
+    window.llmWikiApplication = { request };
+    render(<TaskDetail taskId="task-1" onClose={vi.fn()} onChanged={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("tab", { name: "Details" }));
+    fireEvent.click(screen.getByText("Connection details"));
+    expect(await screen.findByRole("button", { name: /Recent work/ })).toBeVisible();
+    expect(screen.getByRole("button", { name: /Completed design notes/ })).toBeVisible();
+    expect(screen.queryByLabelText("Related Task ID")).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Search Tasks"), { target: { value: "completed" } });
+    expect(screen.queryByRole("button", { name: /Recent work/ })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Completed design notes/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Link Task" }));
+    await waitFor(() => expect(request).toHaveBeenCalledWith(expect.objectContaining({ path: "/tasks/task-1/relationships", method: "POST", body: expect.stringContaining("completed-task") })));
+  });
+
   it("switches stored Task translations without fetching or overwriting canonical content", async () => {
     document.documentElement.lang = "ko";
     const request = vi.fn().mockResolvedValue(response({ ...task, title: "한국어 태스크",
@@ -663,7 +689,7 @@ it("rebases a disjoint refresh before save and lets the user discard overlapping
   ])("shows an immutable Queue result read-only when the saved draft changed: %o", async (publication) => {
     const latest = { ...publication, bodyMarkdown: "# Latest", sourceHash: "source-4" };
     const sessions = new Map<string, DetailSession>([[task.id, {
-      entry: "", check: "", decision: "", comments: {}, completionEvidence: "", problemId: "", newProblem: "", problemStatement: "", problemRevision: "1", relatedTaskId: "", relationshipKind: "related", readinessReasons: {}, tab: "review", editing: false, scrollTop: 0,
+      entry: "", check: "", decision: "", comments: {}, completionEvidence: "", relatedTaskId: "", relatedTaskSearch: "", relationshipKind: "related", readinessReasons: {}, tab: "review", editing: false, scrollTop: 0,
       knowledgeDraft: { draftRevision: 2, bodyMarkdown: "# Exact older result", contentHash: "body-2", sourceHash: "source-2", state: "draft" },
     }]]);
     window.llmWikiApplication = { request: vi.fn().mockResolvedValue(response({ ...task, state: "completed", publication: latest })) };

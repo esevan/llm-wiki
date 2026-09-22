@@ -4,9 +4,10 @@ import { useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, u
 import { createPortal } from "react-dom";
 import { taskClient } from "../../services/taskClient";
 import { formatSystemTime } from "../../services/systemTime";
-import type { LineageSnapshot, TaskAggregate } from "../../types/taskWorkbench";
+import type { LineageSnapshot, TaskAggregate, TaskCard } from "../../types/taskWorkbench";
 import { ConflictReviewPanel } from "./ConflictReviewPanel";
 import { RefinementPanel } from "./RefinementPanel";
+import { TaskJourneyGraph } from "./TaskJourneyGraph";
 import { useTaskWorkbenchText } from "./taskWorkbenchText";
 import { useModalInteraction } from "./useModalInteraction";
 
@@ -60,11 +61,8 @@ export type DetailSession = {
   attachment?: File;
   comments: Record<string, string>;
   completionEvidence: string;
-  problemId: string;
-  newProblem: string;
-  problemStatement: string;
-  problemRevision: string;
   relatedTaskId: string;
+  relatedTaskSearch: string;
   relationshipKind: "prerequisite" | "split_from" | "related";
   readinessReasons: Record<string, string>;
   knowledgeDraft?: KnowledgeDraft;
@@ -118,11 +116,10 @@ export function TaskDetail({
   const [comments, setComments] = useState<Record<string, string>>(session?.comments ?? {});
   const [refining, setRefining] = useState(false);
   const [completionEvidence, setCompletionEvidence] = useState(session?.completionEvidence ?? "");
-  const [problemId, setProblemId] = useState(session?.problemId ?? "");
-  const [newProblem, setNewProblem] = useState(session?.newProblem ?? "");
-  const [problemStatement, setProblemStatement] = useState(session?.problemStatement ?? "");
-  const [problemRevision, setProblemRevision] = useState(session?.problemRevision ?? "1");
   const [relatedTaskId, setRelatedTaskId] = useState(session?.relatedTaskId ?? "");
+  const [relatedTaskSearch, setRelatedTaskSearch] = useState(session?.relatedTaskSearch ?? "");
+  const [relatedTasks, setRelatedTasks] = useState<TaskCard[]>();
+  const [relatedTasksError, setRelatedTasksError] = useState("");
   const [relationshipKind, setRelationshipKind] = useState<
     "prerequisite" | "split_from" | "related"
   >(session?.relationshipKind ?? "related");
@@ -165,8 +162,8 @@ export function TaskDetail({
   const mutationQueue = useRef<Promise<void>>(Promise.resolve());
   const mutationBusyRef = useRef(false);
   useEffect(() => {
-    detailSessions.set(taskId, { detailState, entry, check, decision, attachment, comments, completionEvidence, problemId, newProblem, problemStatement, problemRevision, relatedTaskId, relationshipKind, readinessReasons, knowledgeDraft, tab, editing, scrollTop: restoredScroll.current ? panelRef.current?.scrollTop ?? 0 : initialScrollTop.current });
-  }, [attachment, check, comments, completionEvidence, decision, detailSessions, detailState, editing, entry, knowledgeDraft, newProblem, problemId, problemRevision, problemStatement, readinessReasons, relatedTaskId, relationshipKind, session?.scrollTop, tab, taskId]);
+    detailSessions.set(taskId, { detailState, entry, check, decision, attachment, comments, completionEvidence, relatedTaskId, relatedTaskSearch, relationshipKind, readinessReasons, knowledgeDraft, tab, editing, scrollTop: restoredScroll.current ? panelRef.current?.scrollTop ?? 0 : initialScrollTop.current });
+  }, [attachment, check, comments, completionEvidence, decision, detailSessions, detailState, editing, entry, knowledgeDraft, readinessReasons, relatedTaskId, relatedTaskSearch, relationshipKind, session?.scrollTop, tab, taskId]);
   useEffect(() => {
     const panel = panelRef.current;
     if (loaded && panel && !restoredScroll.current) {
@@ -212,6 +209,23 @@ export function TaskDetail({
     void load();
     return () => { ++sequences.current; };
   }, [load, refreshKey]);
+  useEffect(() => {
+    let cancelled = false;
+    setRelatedTasksError("");
+    setRelatedTasks(undefined);
+    void taskClient
+      .workbench()
+      .then((snapshot) => snapshot.categories
+        .flatMap((category) => category.items)
+        .filter((item): item is TaskCard => item.kind === "task" && item.id !== taskId)
+        .map(localizedTask)
+        .sort((left, right) => (right.lastUserActivityAt ?? "").localeCompare(left.lastUserActivityAt ?? "")))
+      .then((tasks) => { if (!cancelled) setRelatedTasks(tasks); })
+      .catch((cause) => {
+        if (!cancelled) setRelatedTasksError(String(cause instanceof Error ? cause.message : cause));
+      });
+    return () => { cancelled = true; };
+  }, [taskId]);
   const workLogJobsPending = detailState?.persisted.workLog?.some(log =>
     [log.imageSummaryJob, log.translationJob].some(job =>
       ["queued", "running", "retryable"].includes(job?.status ?? "")));
@@ -508,13 +522,14 @@ export function TaskDetail({
     { field: "nonGoals", label: text.nonGoals, control: "task-revision-non-goals", value: task.nonGoals ?? "" },
     { field: "validationCriteria", label: text.criteria, control: "task-revision-criteria", value: task.validationCriteria ?? "" },
   ];
-  const latestProblemRevisions = new Map<string, number>();
-  for (const link of task.problemLinks ?? []) {
-    latestProblemRevisions.set(
-      link.problemId,
-      Math.max(latestProblemRevisions.get(link.problemId) ?? 0, link.problemRevision),
-    );
-  }
+  const taskById = new Map((relatedTasks ?? []).map((candidate) => [candidate.id, candidate]));
+  const taskSearch = relatedTaskSearch.trim().toLocaleLowerCase();
+  const linkedTaskIds = new Set((task.relationships ?? []).map((link) => link.targetTaskId));
+  const matchingRelatedTasks = (relatedTasks ?? []).filter((candidate) =>
+    !linkedTaskIds.has(candidate.id) && (!taskSearch || [candidate.title, candidate.originCaptureText ?? ""]
+      .some((value) => value.toLocaleLowerCase().includes(taskSearch))),
+  );
+  const selectedRelatedTask = taskById.get(relatedTaskId);
   return modal(
     <aside
       ref={panelRef}
@@ -940,43 +955,12 @@ export function TaskDetail({
       <div className="task-tab-panel" data-task-tab="details" hidden={tab !== "details"}>
       <section className="task-panel task-relationships-panel">
         <h3>{text.relationships}</h3>
-        {task.problemLinks?.map((link) => (
-          <p key={link.id}>
-            {text.problem} · {text.problemRevision} {link.problemRevision}
-            <button
-              type="button"
-              data-control="task-problem-unlink"
-              data-record-id={link.id}
-              onClick={() =>
-                void update(() =>
-                  taskClient.unlinkProblem(task.id, link.id, revision),
-                )
-              }
-            >
-              {text.unlink}
-            </button>
-            <button
-              type="button"
-              data-control="task-problem-resolve"
-              data-record-id={link.id}
-              disabled={link.problemRevision < (latestProblemRevisions.get(link.problemId) ?? link.problemRevision)}
-              onClick={() =>
-                void taskClient
-                  .resolveProblem(
-                    link.problemId,
-                    link.problemRevision,
-                    "Resolved after this Task",
-                  )
-                  .catch((error) => setError(String(error)))
-              }
-            >
-              {text.resolveProblem}
-            </button>
-          </p>
-        ))}
         {task.relationships?.map((link) => (
           <p key={link.id}>
-            {link.kind.replace("_", " ")}
+            <button type="button" className="task-connection-open" data-control="task-relationship-open" data-record-id={link.targetTaskId} onClick={() => onOpenTask?.(link.targetTaskId)}>
+              {taskById.get(link.targetTaskId)?.title ?? text.connectedTaskUnavailable}
+            </button>
+            <span> · {{ related: text.related, prerequisite: text.prerequisite, split_from: text.splitFrom }[link.kind]}</span>
             <button
               type="button"
               data-control="task-relationship-unlink"
@@ -993,115 +977,37 @@ export function TaskDetail({
         ))}
         <details className="connection-details" data-control="task-connection-details">
           <summary>{text.connectionDetails}</summary>
-          <div className="inline-form">
+          <p className="connection-hint">{text.connectionPickerHint}</p>
+          <label className="task-connection-search">
+            <span>{text.searchTasks}</span>
             <input
-              data-control="task-problem-create-text"
-              aria-label={text.newProblemStatement}
-              placeholder={text.newProblemPlaceholder}
-              value={newProblem}
-              onChange={(event) => setNewProblem(event.target.value)}
+              data-control="task-relationship-search"
+              aria-label={text.searchTasks}
+              placeholder={text.searchTasksPlaceholder}
+              value={relatedTaskSearch}
+              onChange={(event) => setRelatedTaskSearch(event.target.value)}
             />
-            <button
-              type="button"
-              data-control="task-problem-create"
-              disabled={!newProblem.trim()}
-              onClick={() =>
-                void taskClient
-                  .createProblem(newProblem)
-                  .then((problem) =>
-                    taskClient
-                      .problemLink(
-                        task.id,
-                        revision,
-                        problem.id,
-                        problem.problemRevision,
-                      )
-                      .then((next) => ({ next, problem })),
-                  )
-                  .then(({ problem }) => {
-                    setNewProblem("");
-                    setProblemId(problem.id);
-                    setProblemRevision(String(problem.problemRevision));
-                    void load();
-                    onChanged();
-                  })
-                  .catch((e) =>
-                    setError(String(e instanceof Error ? e.message : e)),
-                  )
-              }
-            >
-              {text.createAndLinkProblem}
-            </button>
-          </div>
-          <div className="inline-form">
-            <input
-              data-control="task-problem-revision-text"
-              aria-label={text.problemRevisionStatement}
-              placeholder={text.problemRevisionPlaceholder}
-              value={problemStatement}
-              onChange={(event) => setProblemStatement(event.target.value)}
-            />
-            <button
-              type="button"
-              data-control="task-problem-revise"
-              disabled={!problemId.trim() || !problemStatement.trim()}
-              onClick={() =>
-                void taskClient
-                  .reviseProblem(problemId, problemStatement)
-                  .then((problem) => {
-                    setProblemRevision(String(problem.problemRevision));
-                    setProblemStatement("");
-                  })
-                  .catch((e) =>
-                    setError(String(e instanceof Error ? e.message : e)),
-                  )
-              }
-            >
-              {text.reviseProblem}
-            </button>
-          </div>
-          <div className="inline-form">
-            <input
-              data-control="task-problem-link-id"
-              aria-label={text.problemId}
-              placeholder={text.problemId}
-              value={problemId}
-              onChange={(event) => setProblemId(event.target.value)}
-            />
-            <input
-              data-control="task-problem-link-revision"
-              aria-label={text.problemRevision}
-              type="number"
-              min="1"
-              value={problemRevision}
-              onChange={(event) => setProblemRevision(event.target.value)}
-            />
-            <button
-              type="button"
-              data-control="task-problem-link"
-              disabled={!problemId.trim()}
-              onClick={() =>
-                void update(() =>
-                  taskClient.problemLink(
-                    task.id,
-                    revision,
-                    problemId,
-                    Number(problemRevision),
-                  ),
-                )
-              }
-            >
-              {text.linkProblem}
-            </button>
-          </div>
-          <div className="inline-form">
-            <input
-              data-control="task-relationship-target"
-              aria-label={text.relatedTaskId}
-              placeholder={text.taskId}
-              value={relatedTaskId}
-              onChange={(event) => setRelatedTaskId(event.target.value)}
-            />
+          </label>
+          {relatedTasksError && <p className="connection-picker-error" role="alert">{text.taskSearchFailed}: {relatedTasksError}</p>}
+          {!relatedTasks && !relatedTasksError && <p className="connection-picker-status">{text.loadingTasks}</p>}
+          {relatedTasks && <div className="task-connection-results" role="group" aria-label={text.recentTasks}>
+            <p className="connection-picker-heading">{taskSearch ? text.searchResults : text.recentTasks}</p>
+            {matchingRelatedTasks.map((candidate) => (
+              <button
+                key={candidate.id}
+                type="button"
+                aria-pressed={candidate.id === relatedTaskId}
+                data-control="task-relationship-select"
+                data-record-id={candidate.id}
+                onClick={() => setRelatedTaskId(candidate.id)}
+              >
+                <strong>{candidate.title}</strong>
+                <small>{candidate.state === "completed" ? text.completed : candidate.state === "in_progress" ? text.inProgress : text.ready}</small>
+              </button>
+            ))}
+            {!matchingRelatedTasks.length && <p className="connection-picker-status">{text.noMatchingTasks}</p>}
+          </div>}
+          <div className="inline-form task-connection-actions">
             <select
               data-control="task-relationship-kind"
               aria-label={text.relationshipKind}
@@ -1132,6 +1038,7 @@ export function TaskDetail({
               {text.linkTask}
             </button>
           </div>
+          {selectedRelatedTask && <p className="connection-selected">{text.selectedTask}: <strong>{selectedRelatedTask.title}</strong></p>}
         </details>
       </section>
       </div>
@@ -1333,7 +1240,7 @@ export function TaskDetail({
             {text.flow}
           </button>
         </header>
-        {lineage && (
+        {lineage?.journey ? <TaskJourneyGraph journey={lineage.journey} /> : lineage && (
           <ol className="lineage-flow">
             {lineage.nodes?.map((node) => (
               <li key={node.id}>
