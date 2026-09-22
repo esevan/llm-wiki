@@ -170,3 +170,20 @@ it('opens the Task owning a completed image summary from the Queue', async () =>
     delete window.llmWikiOpenTaskImageSummary;
   }
 });
+
+it('opens Task Details for a completed Task journey Queue result', async () => {
+  renderShell();
+  const open = vi.fn();
+  window.llmWikiOpenTaskJourney = open;
+  try {
+    startRuntime(async (path) => {
+      if (path === '/jobs') return { jobs: [{ id: 'journey-job', task_kind: 'lineage_inference', entity_type: 'tasks', entity_id: 'task-1', status: 'completed', result_interface: 'task_journey' }] };
+      if (path.endsWith('/result')) return { result: { taskId: 'task-1' } };
+      return { notifications: [], unread_count: 0 };
+    });
+    await tick();
+    document.querySelector<HTMLButtonElement>('[data-job-action="result"]')!.click();
+    await tick();
+    expect(open).toHaveBeenCalledWith('task-1');
+  } finally { delete window.llmWikiOpenTaskJourney; }
+});

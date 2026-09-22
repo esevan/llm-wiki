@@ -4,7 +4,7 @@ use rusqlite::{
 use serde_json::{json, Map, Value};
 use std::collections::BTreeMap;
 
-pub const CURRENT_SCHEMA_VERSION: i64 = 12;
+pub const CURRENT_SCHEMA_VERSION: i64 = 13;
 
 type MigrationFunction = for<'connection> fn(&Transaction<'connection>) -> Result<(), String>;
 type LegacyLocalizationRow = (String, String, String, String, String, String, String);
@@ -72,7 +72,20 @@ const MIGRATIONS: &[Migration] = &[
         run: add_input_images,
     },
     Migration { version: 12, name: "allow multiple input images", run: allow_multiple_input_images },
+    Migration { version: 13, name: "cache Task journey graphs", run: add_task_journey_graphs },
 ];
+
+fn add_task_journey_graphs(tx: &Transaction<'_>) -> Result<(), String> {
+    tx.execute_batch("CREATE TABLE IF NOT EXISTS task_journey_graphs (
+        task_id TEXT NOT NULL REFERENCES tasks(id), locale TEXT NOT NULL,
+        source_hash TEXT NOT NULL, graph_json TEXT NOT NULL,
+        model_status TEXT NOT NULL DEFAULT 'fallback', model_error TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY(task_id,locale)
+    );
+    CREATE INDEX IF NOT EXISTS task_journey_graph_source ON task_journey_graphs(task_id,source_hash);")
+        .map_err(|error| error.to_string())
+}
 
 fn allow_multiple_input_images(tx: &Transaction<'_>) -> Result<(), String> {
     tx.execute_batch("CREATE TABLE input_images_multiple (

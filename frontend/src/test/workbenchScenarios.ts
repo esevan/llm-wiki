@@ -478,10 +478,10 @@ export async function runTaskControlMatrixScenario(h: WorkbenchScenarioHarness) 
   await h.waitFor(() => document.querySelector(".task-detail")?.getAttribute("data-task-state") === "completed", "reopened completed detail");
   await h.step("Task controls: completed Task rendered");
   observe(h, "completed Task");
-  await clickControl(h, "task-lineage-load", "Load Task lineage");
-  await h.waitFor(() => Boolean(document.querySelector(".lineage-flow li")), "lineage nodes");
-  effect(h, ["task-lineage-load"], () => Boolean(document.querySelector(".lineage-flow li")));
-  await h.step("Task controls: lineage loaded");
+  await clickControl(h, "task-lineage-open", "Open Task lineage");
+  await h.waitFor(() => Boolean(document.querySelector(".task-journey, .task-journey-empty")), "lineage queue state");
+  effect(h, ["task-lineage-open"], () => Boolean(document.querySelector(".task-journey, .task-journey-empty")));
+  await h.step("Task controls: lineage opened");
   await invoke("desktop_e2e_arm_one_shot_failure", { operation: "jobs.enqueue" });
   await clickControl(h, "task-knowledge-draft", "Create Knowledge draft");
   await h.waitFor(() => Boolean(document.querySelector('[data-control="task-knowledge-draft-retry"]')), "Knowledge enqueue failure");

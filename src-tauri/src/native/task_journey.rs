@@ -159,14 +159,8 @@ fn revision_changes(previous: &[String], current: &[String]) -> Vec<Value> {
     ["title", "detail", "outcome", "scope", "nonGoals", "validationCriteria"]
         .into_iter()
         .enumerate()
-        .filter_map(|(index, name)| (previous.get(index) != current.get(index)).then(|| json!({"field":name,"before":excerpt(previous.get(index).map(String::as_str).unwrap_or("")),"after":excerpt(current.get(index).map(String::as_str).unwrap_or(""))})))
+        .filter_map(|(index, name)| (previous.get(index) != current.get(index)).then(|| json!({"field":name,"before":previous.get(index).cloned().unwrap_or_default(),"after":current.get(index).cloned().unwrap_or_default()})))
         .collect()
-}
-
-fn excerpt(value: &str) -> String {
-    let mut result = value.chars().take(140).collect::<String>();
-    if value.chars().count() > 140 { result.push('…'); }
-    result
 }
 
 fn append_rows<F>(

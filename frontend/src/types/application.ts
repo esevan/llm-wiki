@@ -68,6 +68,7 @@ declare global {
       context?: { problemRevision?: number; sourceTitle?: string; workspaceDock?: boolean },
     ) => void;
     llmWikiOpenTaskImageSummary?: (taskId: string, entryId: string) => void;
+    llmWikiOpenTaskJourney?: (taskId: string) => void;
     llmWikiOpenKnowledgeDraft?: (draft: { taskId: string; draftRevision: number; bodyMarkdown: string; contentHash: string; sourceHash?: string; state: string }) => void;
     __TAURI_INTERNALS__?: object;
   }

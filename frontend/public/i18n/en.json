@@ -620,6 +620,7 @@
   "queue.destination.conflict_review": "Conflict Review page",
   "queue.destination.workbench": "Workbench",
   "queue.destination.solution_lineage": "Completed Solution Lineage",
+  "queue.destination.task_journey": "Task Activity",
   "queue.destination.completed_knowledge": "Completed Knowledge document",
   "queue.destination.knowledge_document": "Translated Knowledge document",
   "queue.destination.embedding_coverage": "Embedding summary",

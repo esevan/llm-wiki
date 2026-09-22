@@ -59,7 +59,10 @@ validation criteria—beside Work Log entries, attachments, comments, checklists
 the Workbench, so later refinement does not hide its starting point. The Details tab also shows a
 Task journey: an evidence-backed trace of the original idea, refinements, recorded work, decisions,
 and completion. Its connectors show recorded order only; they do not claim that one event caused
-another.
+another. Opening it reads a saved graph or queues one durable refresh. AI only supplies compact
+node labels; recorded events and links remain deterministic. Select a node to read the complete
+recorded Activity, including its time and source content. A current saved graph is reused, and a
+missing or failed AI title falls back to a short local label.
 Press **Enter** in a Work Log entry to add it; use **Shift+Enter** for a line break.
 Checklist items and Work Log comments also submit with **Enter**. Empty input and Enter during IME composition do not submit.
 Paste a screenshot into the Work Log entry to attach it directly; an image-only entry is allowed,

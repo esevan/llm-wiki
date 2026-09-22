@@ -43,6 +43,7 @@ export function WorkbenchView({ active }: { active: boolean }) {
   const refinementRef = useRef<RefinementPanelHandle>(null);
   const [detailRefresh, setDetailRefresh] = useState(0);
   const [queueImageSummary, setQueueImageSummary] = useState<{ taskId: string; entryId: string }>();
+  const [queueJourneyTaskId, setQueueJourneyTaskId] = useState<string>();
   const [queueKnowledgeDraft, setQueueKnowledgeDraft] = useState<({ taskId: string } & NonNullable<DetailSession["knowledgeDraft"]>)>();
   const detailSessions = useRef(new Map<string, DetailSession>());
   const refinementMessages = useRef(new Map<string, string>());
@@ -138,6 +139,16 @@ export function WorkbenchView({ active }: { active: boolean }) {
       setQueueImageSummary({ taskId, entryId });
     };
     return () => { delete window.llmWikiOpenTaskImageSummary; };
+  }, []);
+  useEffect(() => {
+    window.llmWikiOpenTaskJourney = (taskId) => {
+      closeLegacyDock();
+      setRefining(undefined);
+      setDetail(taskId);
+      setQueueJourneyTaskId(taskId);
+      setDetailRefresh((value) => value + 1);
+    };
+    return () => { delete window.llmWikiOpenTaskJourney; };
   }, []);
   const save = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -457,6 +468,7 @@ export function WorkbenchView({ active }: { active: boolean }) {
           onRefine={() => openRefinement({ kind: "task", id: detail })}
           refreshKey={detailRefresh}
           queueImageSummary={queueImageSummary?.taskId === detail ? queueImageSummary : undefined}
+          openJourney={queueJourneyTaskId === detail}
           queueKnowledgeDraft={queueKnowledgeDraft?.taskId === detail ? queueKnowledgeDraft : undefined}
           suppressInitialFocus={Boolean(refining)}
           onChanged={() => void load()}

@@ -25,6 +25,51 @@ const response = (body: unknown) => ({
 });
 
 describe("Task detail", () => {
+  it("opens queued lineage automatically and polls again while its status is unchanged", async () => {
+    const lineage = vi.fn()
+      .mockResolvedValueOnce(response({ journeyStatus: { status: "running", jobId: "journey" } }))
+      .mockResolvedValueOnce(response({ journeyStatus: { status: "running", jobId: "journey" } }))
+      .mockResolvedValue(response({ journey: { events: [{ id: "work", type: "work_recorded", detail: { summary: "Saved source" } }], titles: [{ id: "work", title: "Work log" }] } }));
+    window.llmWikiApplication = { request: vi.fn(({ path }: { path: string }) => path === "/tasks/task-1/lineage" ? lineage() : Promise.resolve(response(task))) };
+    render(<TaskDetail taskId="task-1" onClose={vi.fn()} onChanged={vi.fn()} openJourney />);
+    await screen.findByText("Loading…");
+    await waitFor(() => expect(screen.getByRole("tab", { name: "Details" })).toHaveAttribute("aria-selected", "true"));
+    expect(document.querySelector('[data-control="task-lineage-details"]')).toHaveAttribute("open");
+    await waitFor(() => expect(lineage).toHaveBeenCalledTimes(3), { timeout: 3000 });
+    expect(await screen.findByRole("button", { name: "Work log" })).toBeVisible();
+  });
+  it("shows fallback provenance and lets a terminal journey job retry from the Queue", async () => {
+    const request = vi.fn(({ path, method }: { path: string; method?: string }) => {
+      if (path === "/tasks/task-1/lineage") return Promise.resolve(response({ journeyStatus: { status: "failed", jobId: "journey", error: "Provider unavailable" } }));
+      if (path === "/jobs/journey/retry" && method === "POST") return Promise.resolve(response({ status: "queued" }));
+      return Promise.resolve(response(task));
+    });
+    window.llmWikiApplication = { request: request as never };
+    render(<TaskDetail taskId="task-1" onClose={vi.fn()} onChanged={vi.fn()} openJourney />);
+    expect(await screen.findByText("Provider unavailable")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    await waitFor(() => expect(request).toHaveBeenCalledWith(expect.objectContaining({ path: "/jobs/journey/retry", method: "POST" })));
+  });
+  it("reloads an expanded journey after a locale change and ignores an older response", async () => {
+    let resolveEnglish!: (value: ReturnType<typeof response>) => void;
+    const english = new Promise<ReturnType<typeof response>>((resolve) => { resolveEnglish = resolve; });
+    const current = { journey: { events: [{ id: "work", type: "work_recorded" }], titles: [{ id: "work", title: "현재 제목" }] } };
+    const request = vi.fn(({ path, headers }: { path: string; headers?: Record<string, string> }) => path === "/tasks/task-1/lineage"
+      ? headers?.["X-LLM-Wiki-Locale"] === "ko" ? Promise.resolve(response(current)) : english
+      : Promise.resolve(response(task)));
+    window.llmWikiApplication = { request: request as never };
+    const originalLocale = document.documentElement.lang;
+    document.documentElement.lang = "en";
+    render(<TaskDetail taskId="task-1" onClose={vi.fn()} onChanged={vi.fn()} openJourney />);
+    try {
+      await waitFor(() => expect(request).toHaveBeenCalledWith(expect.objectContaining({path:"/tasks/task-1/lineage"})));
+      await act(async () => { document.documentElement.lang = "ko"; });
+      expect(await screen.findByRole("button", {name:"현재 제목"})).toBeVisible();
+      await act(async () => { resolveEnglish(response({ journey: { events: [{ id: "work", type: "work_recorded" }], titles: [{ id: "work", title: "Old title" }] } })); });
+      expect(screen.getByRole("button", {name:"현재 제목"})).toBeVisible();
+      expect(screen.queryByRole("button", {name:"Old title"})).not.toBeInTheDocument();
+    } finally { await act(async () => { document.documentElement.lang = originalLocale; }); }
+  });
   it("finds recent and completed Tasks by title instead of asking for an internal ID", async () => {
     const request = vi.fn().mockImplementation(({ path, method, body }: { path: string; method?: string; body?: string }) => {
       if (path === "/workbench") return Promise.resolve(response({ categories: [{ id: "General", label: "General", items: [

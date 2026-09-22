@@ -304,4 +304,5 @@ export const taskClient = {
     request<import("../types/taskWorkbench").LineageSnapshot>(
       `/tasks/${encodeURIComponent(id)}/lineage`,
     ),
+  retryJob: (id: string) => request(`/jobs/${encodeURIComponent(id)}/retry`, "POST"),
 };

@@ -83,6 +83,7 @@ export function TaskDetail({
   sessions,
   queueKnowledgeDraft,
   queueImageSummary,
+  openJourney,
   ref,
 }: {
   taskId: string;
@@ -96,9 +97,11 @@ export function TaskDetail({
   sessions?: Map<string, DetailSession>;
   queueKnowledgeDraft?: KnowledgeDraft;
   queueImageSummary?: { entryId: string };
+  openJourney?: boolean;
   ref?: Ref<TaskDetailHandle>;
 }) {
   const text = useTaskWorkbenchText();
+  const displayLocale = document.documentElement.lang;
   const fallbackSessions = useRef(new Map<string, DetailSession>());
   const detailSessions = sessions ?? fallbackSessions.current;
   const session = detailSessions.get(taskId);
@@ -143,6 +146,9 @@ export function TaskDetail({
   const [knowledgeQueued, setKnowledgeQueued] = useState(false);
   const [mutationBusy, setMutationBusy] = useState(false);
   const [lineage, setLineage] = useState<LineageSnapshot>();
+  const [lineageExpanded, setLineageExpanded] = useState(Boolean(openJourney));
+  const [lineageRetrying, setLineageRetrying] = useState(false);
+  const lineageLoadSequence = useRef(0);
   const [closePrompt, setClosePrompt] = useState(false);
   const pendingLeave = useRef<(() => void) | undefined>(undefined);
   const panelRef = useRef<HTMLElement>(null);
@@ -195,7 +201,7 @@ export function TaskDetail({
           setKnowledgeDraft((current) => current ?? persistedDraft);
         }
         if (!hadSession.current) {
-          setTab(next.state === "completed" ? "review" : next.state === "task" ? "details" : "work");
+          setTab(openJourney ? "details" : next.state === "completed" ? "review" : next.state === "task" ? "details" : "work");
           hadSession.current = true;
         }
       }
@@ -203,12 +209,30 @@ export function TaskDetail({
       if (sequence === loadSequence.current)
         setError(String(e instanceof Error ? e.message : e));
     }
-  }, [taskId]);
+  }, [openJourney, taskId]);
   useEffect(() => {
     const sequences = loadSequence;
     void load();
     return () => { ++sequences.current; };
   }, [load, refreshKey]);
+  const loadLineage = useCallback(async () => {
+    const sequence = ++lineageLoadSequence.current;
+    try { const next = await taskClient.lineage(taskId); if (sequence === lineageLoadSequence.current) setLineage(next); }
+    catch (e) { setError(String(e instanceof Error ? e.message : e)); }
+  }, [taskId]);
+  useEffect(() => {
+    if (!lineageExpanded || !detailState?.persisted) return;
+    void loadLineage();
+  }, [detailState?.persisted, displayLocale, lineageExpanded, loadLineage, refreshKey]);
+  useEffect(() => {
+    if (openJourney && loaded) { setTab("details"); setLineageExpanded(true); }
+  }, [loaded, openJourney]);
+  useEffect(() => {
+    const status = lineage?.journeyStatus?.status;
+    if (!lineageExpanded || !["queued", "running", "retryable"].includes(status ?? "")) return;
+    const timer = window.setTimeout(() => void loadLineage(), 700);
+    return () => window.clearTimeout(timer);
+  }, [lineage, lineageExpanded, loadLineage]);
   useEffect(() => {
     let cancelled = false;
     setRelatedTasksError("");
@@ -1225,31 +1249,8 @@ export function TaskDetail({
         <p style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{task.originCapture.text}</p>
         <small>{formatSystemTime(task.originCapture.createdAt, document.documentElement.lang || navigator.language)}</small>
       </details>}
-      <details className="task-panel" data-control="task-lineage-details"><summary>{text.flow}</summary>
-        <header>
-          <button
-            type="button"
-            data-control="task-lineage-load"
-            onClick={() =>
-              void taskClient
-                .lineage(task.id)
-                .then(setLineage)
-                .catch((e) => setError(String(e.message ?? e)))
-            }
-          >
-            {text.flow}
-          </button>
-        </header>
-        {lineage?.journey ? <TaskJourneyGraph journey={lineage.journey} /> : lineage && (
-          <ol className="lineage-flow">
-            {lineage.nodes?.map((node) => (
-              <li key={node.id}>
-                <strong>{node.kind.replaceAll("_", " ")}</strong>
-                <span>{node.title ?? text.recordedWork}</span>
-              </li>
-            ))}
-          </ol>
-        )}
+      <details className="task-panel" data-control="task-lineage-details" open={lineageExpanded} onToggle={(event) => setLineageExpanded(event.currentTarget.open)}><summary data-control="task-lineage-open">{text.flow}</summary>
+        {lineage?.journey ? <><TaskJourneyGraph journey={lineage.journey} />{lineage.modelStatus === "fallback" && <p className="task-journey-empty" role="status">{text.journeyFallback}{lineage.modelError ? ` ${lineage.modelError}` : ""}</p>}</> : lineage?.journeyStatus && ["queued", "running", "retryable"].includes(lineage.journeyStatus.status ?? "") ? <p className="task-journey-empty" role="status">{text.loading}</p> : lineage?.journeyStatus ? <div className="task-journey-empty" role="alert"><p>{lineage.journeyStatus.error || text.journeyFailed}</p>{lineage.journeyStatus.jobId && <button type="button" data-control="task-lineage-retry" disabled={lineageRetrying} onClick={() => { setLineageRetrying(true); void taskClient.retryJob(lineage.journeyStatus!.jobId!).then(loadLineage).catch((error) => setError(String(error instanceof Error ? error.message : error))).finally(() => setLineageRetrying(false)); }}>{text.retry}</button>}</div> : <p className="task-journey-empty" role="status">{text.loading}</p>}
       </details>
       </div>
     </aside>,

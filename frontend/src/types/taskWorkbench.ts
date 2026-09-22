@@ -179,7 +179,13 @@ export interface ConflictReviewHistory {
   currentResult?: ConflictReview | null;
 }
 export interface LineageSnapshot {
+  sourceHash?: string;
+  journeySourceHash?: string;
   nodes?: Array<{ id: string; kind: string; title?: string }>;
   edges?: Array<{ from: string; to: string; kind: string }>;
   journey?: import("../features/workbench/TaskJourneyGraph").TaskJourney;
+  recordedJourney?: import("../features/workbench/TaskJourneyGraph").TaskJourney;
+  journeyStatus?: { jobId?: string; status?: string; error?: string } | null;
+  modelStatus?: string;
+  modelError?: string;
 }

@@ -239,7 +239,7 @@ pub(crate) async fn execute_with_registry(
         "task-knowledge.correction" => knowledge_correction(db_path, input),
         "task-knowledge.regenerate" => knowledge_regenerate(db_path, settings_path, input).await,
         "task-knowledge.withdraw" => knowledge_withdraw(db_path, vault_root, input),
-        "task.lineage" => task_lineage(db_path, required(input, "taskId")?),
+        "task.lineage" => task_lineage_for_locale(db_path, required(input, "taskId")?, input.get("locale").and_then(Value::as_str).unwrap_or("en")),
         _ => Err(format!(
             "Native task assistance operation is not implemented: {name}"
         )),
@@ -2092,12 +2092,24 @@ pub(crate) fn decide_current_chat_advisory_tx(
 }
 
 fn task_lineage(db_path: &Path, task_id: &str) -> Result<Value, String> {
-    SqliteTaskRepository::new(db_path).transaction(|tx| task_lineage_tx(tx, task_id))
+    task_lineage_for_locale(db_path, task_id, "en")
+}
+
+pub(crate) fn task_lineage_for_locale(db_path: &Path, task_id: &str, locale: &str) -> Result<Value, String> {
+    SqliteTaskRepository::new(db_path).transaction(|tx| task_lineage_tx_locale(tx, task_id, locale))
 }
 
 pub(crate) fn task_lineage_tx(
     connection: &Transaction<'_>,
     task_id: &str,
+) -> Result<Value, String> {
+    task_lineage_tx_locale(connection, task_id, "en")
+}
+
+pub(crate) fn task_lineage_tx_locale(
+    connection: &Transaction<'_>,
+    task_id: &str,
+    locale: &str,
 ) -> Result<Value, String> {
     let (revision, state, origin): (i64, String, Option<String>) = connection
         .query_row(
@@ -2177,10 +2189,28 @@ pub(crate) fn task_lineage_tx(
         nodes.push(json!({"id":node,"kind":"knowledge_revision","recordId":task_id,"revision":draft_revision,"state":state,"path":path,"contentHash":hash}));
         edges.push(json!({"from":task_node,"to":node,"kind":"published_as"}));
     }
-    let source_hash = digest(&json!({"nodes":nodes,"edges":edges}).to_string());
     let journey = crate::native::task_journey::build_tx(connection, task_id)?;
+    let source_hash = digest(&json!({"nodes":nodes,"edges":edges}).to_string());
+    // This hash deliberately includes the complete recorded event payload. A changed
+    // work log, refinement message, decision, or completion invalidates cached titles.
+    let journey_source_hash = digest(&journey.to_string());
+    let saved = connection.query_row(
+        "SELECT graph_json,model_status,model_error FROM task_journey_graphs WHERE task_id=? AND locale=? AND source_hash=?",
+        params![task_id,locale,journey_source_hash],
+        |row| Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?,row.get::<_,String>(2)?)),
+    ).optional().map_err(|error| error.to_string())?;
+    let queued = connection.query_row(
+        "SELECT id,status,COALESCE(error_message,'') FROM ai_jobs_v2 WHERE task_kind='lineage_inference' AND entity_type='tasks' AND entity_id=? AND json_extract(input_json,'$.sourceHash')=? AND json_extract(input_json,'$.locale')=? ORDER BY rowid DESC LIMIT 1",
+        params![task_id,journey_source_hash,locale],
+        |row| Ok(json!({"jobId":row.get::<_,String>(0)?,"status":row.get::<_,String>(1)?,"error":row.get::<_,String>(2)?})),
+    ).optional().map_err(|error| error.to_string())?;
+    let (saved_journey, model_status, model_error) = saved.map(|(graph,status,error)| {
+        (serde_json::from_str::<Value>(&graph).unwrap_or(Value::Null), status, error)
+    }).unwrap_or((Value::Null, String::new(), String::new()));
     Ok(
-        json!({"taskId":task_id,"taskRevision":revision,"sourceHash":source_hash,"nodes":nodes,"edges":edges,"journey":journey}),
+        json!({"taskId":task_id,"taskRevision":revision,"sourceHash":source_hash,"journeySourceHash":journey_source_hash,"nodes":nodes,"edges":edges,
+          "journey":if saved_journey.is_null(){Value::Null}else{saved_journey},
+          "recordedJourney":journey,"journeyStatus":queued,"modelStatus":model_status,"modelError":model_error}),
     )
 }
 

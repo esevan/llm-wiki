@@ -55,3 +55,11 @@ CREATE TABLE IF NOT EXISTS task_knowledge_drafts (
 );
 CREATE INDEX IF NOT EXISTS task_assistance_job_subject ON task_assistance_jobs(kind,subject_id,created_at);
 CREATE INDEX IF NOT EXISTS task_knowledge_latest ON task_knowledge_drafts(task_id,revision DESC);
+CREATE TABLE IF NOT EXISTS task_journey_graphs (
+ task_id TEXT NOT NULL REFERENCES tasks(id), locale TEXT NOT NULL,
+ source_hash TEXT NOT NULL, graph_json TEXT NOT NULL,
+ model_status TEXT NOT NULL DEFAULT 'fallback', model_error TEXT NOT NULL DEFAULT '',
+ created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ PRIMARY KEY(task_id,locale)
+);
+CREATE INDEX IF NOT EXISTS task_journey_graph_source ON task_journey_graphs(task_id,source_hash);

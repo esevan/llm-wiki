@@ -620,6 +620,7 @@
   "queue.destination.conflict_review": "충돌 검토 페이지",
   "queue.destination.workbench": "Workbench",
   "queue.destination.solution_lineage": "완료된 Solution Lineage",
+  "queue.destination.task_journey": "Task 활동",
   "queue.destination.completed_knowledge": "완료 작업 Knowledge 문서",
   "queue.destination.knowledge_document": "번역된 Knowledge 문서",
   "queue.destination.embedding_coverage": "임베딩 결과 요약",

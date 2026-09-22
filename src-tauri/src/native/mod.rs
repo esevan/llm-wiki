@@ -384,10 +384,31 @@ impl NativeApplication {
         }
         let name = operation.name.clone();
         let input = operation.input.clone();
+        if name == "task.lineage" {
+            let task_id = match input.get("taskId").and_then(Value::as_str) {
+                Some(value) if !value.is_empty() => value,
+                _ => return NativeResponse { status: 400, body: json!({"detail":"taskId is required"}) },
+            };
+            let locale = input.get("locale").and_then(Value::as_str).unwrap_or("en");
+            let snapshot = match task_assistance::task_lineage_for_locale(&self.db_path, task_id, locale) {
+                Ok(value) => value,
+                Err(error) => return NativeResponse { status: error_status(&error), body: json!({"detail":error}) },
+            };
+            if snapshot["journey"].is_null() && snapshot["journeyStatus"].is_null() {
+                let queued = self.enqueue_job(json!({
+                    "taskKind":"lineage_inference", "entityType":"tasks", "entityId":task_id,
+                    "sourceHash":snapshot["journeySourceHash"], "locale":locale
+                })).await;
+                if !(200..300).contains(&queued.status) { return queued; }
+            }
+            return match task_assistance::task_lineage_for_locale(&self.db_path, task_id, locale) {
+                Ok(body) => NativeResponse { status: 200, body },
+                Err(error) => NativeResponse { status: error_status(&error), body: json!({"detail":error}) },
+            };
+        }
         if name.starts_with("task-refinement.")
             || name.starts_with("task-review.")
             || name.starts_with("task-knowledge.")
-            || name == "task.lineage"
         {
             let mut result = match task_assistance::execute_with_registry(
                 &self.db_path,
@@ -812,4 +833,35 @@ mod recovery_tests {
         assert_eq!(ready.status, 200);
         assert_eq!(ready.body["state"], "task");
     }
+    #[tokio::test]
+    async fn task_journey_expand_reuses_one_queued_and_persisted_fallback_graph() {
+        let root = tempdir().unwrap();
+        let db = root.path().join("state.sqlite3");
+        let app = NativeApplication::isolated(&root.path().join("vault"), &db).unwrap();
+        let created = app.execute(NativeOperation { name:"task.create".into(), input:json!({"operationId":"journey-task","inputText":"Keep the complete initial idea","title":"Journey"}) });
+        assert_eq!(created.status,200);
+        let task_id = created.body["id"].as_str().unwrap();
+        let read = || NativeOperation {name:"task.lineage".into(), input:json!({"taskId":task_id,"locale":"ko"})};
+        let first = app.execute_workflow(read()).await;
+        assert_eq!(first.status,200,"{}",first.body);
+        let job_id = first.body["journeyStatus"]["jobId"].as_str().unwrap().to_owned();
+        let mut latest = first.body;
+        for _ in 0..100 {
+            let next = app.execute_workflow(read()).await;
+            assert_eq!(next.status,200,"{}",next.body);
+            assert_eq!(next.body["journeyStatus"]["jobId"],job_id);
+            latest = next.body;
+            if !latest["journey"].is_null() { break; }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        assert_eq!(latest["modelStatus"],"fallback");
+        assert!(!latest["journey"]["events"].as_array().unwrap().is_empty());
+        let reopened = app.execute_workflow(read()).await;
+        assert_eq!(reopened.body["journey"],latest["journey"]);
+        let connection = database::open(&db).unwrap();
+        let count:i64 = connection.query_row("SELECT count(*) FROM ai_jobs_v2 WHERE task_kind='lineage_inference' AND entity_id=?",[task_id],|row|row.get(0)).unwrap();
+        assert_eq!(count,1);
+        assert_eq!(jobs::result(&db,&job_id).unwrap()["result_interface"],"task_journey");
+    }
+
 }
