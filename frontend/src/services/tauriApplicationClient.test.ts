@@ -21,11 +21,15 @@ describe('Tauri domain command adapter', () => {
     const client = new TauriApplicationClient();
     await client.request({ path: '/search?q=native' });
     await client.request({ path: '/provider/config' });
+    await client.request({ path: '/settings/vault' });
     expect(invoke).toHaveBeenNthCalledWith(1, 'vault_command', {
       operation: { name: 'vault.search', input: { query: 'native', limit: 20, offset: 0, semantic: false } },
     });
     expect(invoke).toHaveBeenNthCalledWith(2, 'settings_command', {
       operation: { name: 'provider.get', input: {} },
+    });
+    expect(invoke).toHaveBeenNthCalledWith(3, 'settings_command', {
+      operation: { name: 'settings.vault.get', input: {} },
     });
   });
 
