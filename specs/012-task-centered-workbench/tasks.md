@@ -262,5 +262,29 @@ migration or retain legacy write gates as an interim compatibility path.
 
 ## Format Validation
 
-All 92 tasks use checkbox, sequential ID, appropriate `[P]` and `[US#]` markers, and concrete file
-paths. Story tasks are independently testable and required tests precede implementation.
+Tasks T001–T092 use checkbox, sequential ID, appropriate `[P]` and `[US#]` markers, and concrete
+file paths. Story tasks are independently testable and required tests precede implementation.
+
+## Follow-up: Task journey visual language and exact Knowledge snapshot
+
+- [x] T093 [US7] Add focused component tests for gap text, relationship details, Korean labels,
+  invalid dates, and unique marker IDs; add native tests for bounded labels and grounded
+  later-to-earlier semantic links. Record wide/narrow routing and key-node hierarchy through manual
+  browser review rather than claiming component geometry assertions in
+  `frontend/src/features/workbench/TaskJourneyGraph.test.tsx` and `src-tauri/src/native/jobs.rs`.
+- [x] T094 [US7] Implement the journey graph visual hierarchy and inspectable relationship evidence
+  in `frontend/src/features/workbench/TaskJourneyGraph.tsx` and `task-journey-graph.css`.
+- [x] T095 [US7] Persist and reuse locale-bound journey projections with fallback plus deleted-Task,
+  stale-source, and concurrent cache finalization guards in `src-tauri/src/native/jobs.rs`.
+- [x] T096 [US7] Ensure app-generated Knowledge preparation embeds the exact current journey under
+  `lineage.journey`, rechecks source/completion/journey currentness, keeps supplied-body drafts
+  provider-free, and renders draft Review separately from current Details in `task_assistance.rs`
+  and `TaskDetail.tsx`.
+- [x] T097 [P] [US7] Align the dedicated bilingual lineage guide, spec 010 historical scope, and
+  current 012 spec/design/validation records with the implemented behavior and limitations in
+  `docs/features/lineage-knowledge-layer.md`, `docs/features/lineage-knowledge-layer.ko.md`, and
+  `specs/010-lineage-knowledge-layer/spec.md`.
+- [ ] T098 [US7] Validate real-provider locale-specific English and Korean titles and relationship
+  rationale in the UI and record it in
+  `specs/012-task-centered-workbench/acceptance-verification.md`; existing captures cover localized
+  chrome/dates and mixed long fixture titles.

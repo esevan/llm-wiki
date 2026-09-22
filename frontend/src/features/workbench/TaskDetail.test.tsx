@@ -70,6 +70,32 @@ describe("Task detail", () => {
       expect(screen.queryByRole("button", {name:"Old title"})).not.toBeInTheDocument();
     } finally { await act(async () => { document.documentElement.lang = originalLocale; }); }
   });
+  it("shows lineage in Review and keeps the exact snapshot used by a Knowledge draft", async () => {
+    const current = { journey: { events: [{ id: "current", type: "work_recorded" }], titles: [{ id: "current", title: "Newer current lineage" }] } };
+    window.llmWikiApplication = { request: vi.fn(({ path }: { path: string }) => path === "/tasks/task-1/lineage"
+      ? Promise.resolve(response(current))
+      : Promise.resolve(response({ ...task, state: "completed", completion: { id: "done", evidence: "Verified" } }))) as never };
+    render(<TaskDetail taskId="task-1" onClose={vi.fn()} onChanged={vi.fn()} queueKnowledgeDraft={{
+      draftRevision: 1,
+      bodyMarkdown: "# Draft",
+      contentHash: "body-hash",
+      sourceHash: "source-hash",
+      state: "draft",
+      lineage: { journey: { sourceHash: "journey-hash", modelStatus: "ai", journey: {
+        events: [{ id: "exact", type: "decision_recorded" }],
+        titles: [{ id: "exact", title: "Exact draft decision" }],
+      } } },
+    }} />);
+
+    expect(await screen.findByText("This is the exact lineage snapshot used to create the current Knowledge draft.")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Exact draft decision" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Newer current lineage" })).not.toBeInTheDocument();
+    expect(document.querySelectorAll(".task-journey")).toHaveLength(1);
+    fireEvent.click(screen.getByRole("tab", { name: "Details" }));
+    fireEvent.click(screen.getByText("Lineage"));
+    expect(await screen.findByRole("button", { name: "Newer current lineage" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Exact draft decision" })).not.toBeInTheDocument();
+  });
   it("finds recent and completed Tasks by title instead of asking for an internal ID", async () => {
     const request = vi.fn().mockImplementation(({ path, method, body }: { path: string; method?: string; body?: string }) => {
       if (path === "/workbench") return Promise.resolve(response({ categories: [{ id: "General", label: "General", items: [

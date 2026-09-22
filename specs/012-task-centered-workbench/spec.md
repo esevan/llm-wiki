@@ -163,6 +163,21 @@ publish an exact revision, and verify graph lineage and external-change protecti
 1. **Given** a Task linked to a Problem, **When** the Task completes, **Then** the Problem remains unchanged until a separate resolution decision.
 2. **Given** a completed Task, **When** a Knowledge draft is generated, **Then** nothing is published until the user approves the exact draft revision and hash.
 3. **Given** a published document, **When** lineage is opened, **Then** Capture, exact Task and Problem revisions, Work Log, decisions, completion, and Knowledge revision are inspectable.
+4. **Given** recorded Task activity, **When** the journey is shown at wide or narrow widths, **Then**
+   chronology remains an immutable ordered trace and the layout changes from a three-column snake to
+   one column without implying causality.
+5. **Given** AI-proposed journey labels and semantic relationships, **When** they are accepted into
+   the graph, **Then** labels are locale-bound and at most 48 characters, every relationship points
+   from a later event to an earlier event, and quoted evidence is validated against both endpoints.
+6. **Given** an app-generated Knowledge draft, **When** preparation starts, **Then** the current
+   locale's journey is created or reused first and its exact source hash, graph, model status, and
+   model error are embedded in the draft lineage.
+7. **Given** a draft is under review after the current Task journey changes, **When** Details and
+   Review are compared, **Then** Details shows the current journey and Review preserves the journey
+   snapshot used to create that draft.
+8. **Given** Task evidence, completion state, or journey input changes during asynchronous work,
+   **When** the older result finishes, **Then** it is rejected as stale and cannot overwrite current
+   evidence or create a mismatched draft.
 
 ---
 
@@ -193,6 +208,10 @@ other, exercise stale approval and scope denial, and verify projection recovery 
 - A legacy attachment has empty metadata, large base64 content, or byte content that cannot be decoded.
 - Migration is rerun after rollback or after backup creation but before schema commit.
 - Knowledge changed outside the app after draft generation.
+- The interface locale changes after a Knowledge draft captured its journey; chrome and dates may
+  localize, but the immutable draft labels are not silently retranslated.
+- A provider is unavailable or returns invalid, forward-pointing, self-referential, unknown-kind,
+  or single-endpoint-supported journey relationships.
 - Narrow windows, long Korean and English text, reduced motion, keyboard-only use, empty/error/loading states.
 
 ## Requirements *(mandatory)*
@@ -239,6 +258,24 @@ other, exercise stale approval and scope denial, and verify projection recovery 
 - **FR-038**: Automated tests MUST cover every major acceptance journey, migration fault, exact-revision conflict, background recency rule, narrow/wide keyboard UI, and final packaged desktop behavior.
 - **FR-039**: Final validation MUST reuse one release artifact for packaged E2E and real-provider app review, and MUST report provider unavailability instead of fabricating AI quality results.
 - **FR-040**: Real-provider review MUST use a fixed rubric and exact sample counts for document quality plus conflict latency and evidence accuracy.
+- **FR-041**: Task journey MUST render recorded events as immutable chronology, use a wide
+  three-column snake and narrow single-column layout, keep visual spacing fixed regardless of elapsed
+  time, distinguish key decision/change/completion/junction nodes, and mark timestamp gaps of at
+  least 24 hours without implying causality.
+- **FR-042**: Optional journey interpretation MUST limit locale-bound labels to 48 characters and
+  accept only `supersedes`, `derived_from`, or `depends_on` links from a later event to an earlier
+  event with validated quotes from both endpoints; fallback MUST preserve recorded events and edges.
+- **FR-043**: App-generated Knowledge draft preparation MUST create or reuse the current journey for
+  the requested locale before generation and store the exact
+  `{ sourceHash, journey, modelStatus, modelError }` snapshot under `lineage.journey`.
+- **FR-044**: Draft Review MUST render its stored journey snapshot while Details renders the current
+  Task journey, or fall back to the current journey when no draft snapshot exists; changing the
+  interface language MUST NOT rewrite an immutable draft snapshot.
+- **FR-045**: Asynchronous journey caching MUST reject deleted Tasks. Journey and Knowledge
+  finalization MUST reject stale source hashes, and Knowledge finalization MUST also reject changed
+  completion state or journey evidence before persistence.
+- **FR-046**: The interface MUST identify semantic journey links as AI interpretation and expose
+  their rationale and endpoint quotes. User correction of these links is not required in this release.
 
 ### Key Entities
 
@@ -251,7 +288,10 @@ other, exercise stale approval and scope denial, and verify projection recovery 
 - **Readiness Field Decision**: Revision-bound field status, reason, evidence, and provenance.
 - **Conflict Review Run / Finding / Resolution**: Exact-input asynchronous attempt, cited result, and separate user disposition.
 - **User Activity Event**: Allowlisted action used for recency independent of background processing.
-- **Lineage Snapshot / Knowledge Revision**: Immutable provenance graph and separately approved portable publication.
+- **Recorded Journey / Journey Interpretation**: Immutable ordered Task events and edges, plus an
+  optional locale-bound label and grounded semantic-link overlay.
+- **Knowledge Journey Snapshot / Knowledge Revision**: Exact journey source hash, graph and model
+  outcome embedded in an immutable draft lineage, followed by separately approved publication.
 - **Migration Backup Manifest**: Verified source database, hashes, versions, and restore metadata.
 
 ## Success Criteria *(mandatory)*
@@ -267,6 +307,11 @@ other, exercise stale approval and scope denial, and verify projection recovery 
 - **SC-007**: All keyboard-only journeys complete without focus loss, and every state remains understandable without color in wide and narrow layouts in both supported languages.
 - **SC-008**: In the fixed real-provider corpus, every reported conflict claim has an inspectable citation; median and p95 end-to-end latency plus rubric accuracy are recorded without substituting deterministic fallback output.
 - **SC-009**: Every published Knowledge document is traceable to the exact Task revision, completion, Problem revisions, evidence snapshot, approved draft revision, and hash.
+- **SC-010**: Every accepted semantic journey relationship is later-to-earlier, uses an allowlisted
+  kind, and contains validated quoted evidence from both endpoints; invalid relationships change
+  zero recorded events or chronology edges.
+- **SC-011**: Every app-generated Knowledge draft preserves the exact journey snapshot used during
+  generation, and every stale asynchronous result is prevented from becoming current.
 
 ## Assumptions
 

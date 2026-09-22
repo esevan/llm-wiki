@@ -31,5 +31,15 @@
 
 ## Notes
 
-- Validation passed on the first review iteration. The linked source plan carries implementation
-  choices; the specification states observable behavior and measurable outcomes.
+- [x] The 2026-09-22 journey follow-up defines observable wide/narrow chronology, fixed spacing,
+  24-hour gap markers, key-node emphasis, and non-causal chronological edges (FR-041).
+- [x] AI labels and semantic links have bounded locale, direction, kind, and two-endpoint evidence
+  constraints, with deterministic fallback preserving recorded events (FR-042, SC-010).
+- [x] App-generated Knowledge preparation, immutable draft Review, and stale finalization boundaries
+  are explicit; supplied-body drafts do not promise provider journey inference (FR-043–FR-045).
+- [x] The absence of a semantic-link correction UI is stated rather than claimed complete (FR-046).
+- [ ] Real-provider English and Korean journey labels and rationale have been rendered and reviewed
+  in the UI. Existing captures cover localized chrome/dates and mixed long fixture titles only.
+
+- Historical baseline validation passed on its first review iteration. The 2026-09-22 journey
+  follow-up is tracked by the scoped checks above, including the remaining provider-locale item.

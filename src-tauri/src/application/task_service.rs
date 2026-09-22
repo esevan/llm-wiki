@@ -728,7 +728,7 @@ impl TaskApplicationService {
         let completion = c.query_row("SELECT id,evidence,report,created_at FROM task_completions WHERE task_id=? ORDER BY created_at DESC LIMIT 1",[id],|r|Ok(json!({"id":r.get::<_,String>(0)?,"evidence":r.get::<_,String>(1)?,"report":r.get::<_,String>(2)?,"createdAt":r.get::<_,String>(3)?}))).optional().map_err(|e|e.to_string())?;
         let publication = c.query_row("SELECT revision,state,content_hash,lineage_json,body_markdown FROM task_knowledge_drafts WHERE task_id=? ORDER BY revision DESC LIMIT 1",[id],|r| {
             let lineage: Value = serde_json::from_str(&r.get::<_,String>(3)?).unwrap_or(Value::Null);
-            Ok(json!({"draftRevision":r.get::<_,i64>(0)?,"state":r.get::<_,String>(1)?,"contentHash":r.get::<_,String>(2)?,"sourceHash":lineage["sourceHash"],"bodyMarkdown":r.get::<_,String>(4)?}))
+            Ok(json!({"draftRevision":r.get::<_,i64>(0)?,"state":r.get::<_,String>(1)?,"contentHash":r.get::<_,String>(2)?,"sourceHash":lineage["sourceHash"],"lineage":lineage,"bodyMarkdown":r.get::<_,String>(4)?}))
         }).optional().map_err(|e|e.to_string())?;
         // A newer private draft must not hide the last published document. A
         // withdrawal suppresses earlier revisions of the same published file.
@@ -981,21 +981,37 @@ mod tests {
         let db = root.path().join("state.db");
         crate::native::database::initialize(&db).unwrap();
         let service = TaskApplicationService::new(&db);
-        let task = service.execute("task.create", &json!({"operationId":"create","inputText":"input","title":"Review saved draft"})).unwrap();
+        let task = service
+            .execute(
+                "task.create",
+                &json!({"operationId":"create","inputText":"input","title":"Review saved draft"}),
+            )
+            .unwrap();
         let task_id = task["id"].as_str().unwrap();
         service.execute("task.transition", &json!({"operationId":"start","taskId":task_id,"expectedTaskRevision":1,"to":"in_progress"})).unwrap();
         service.execute("task.completion.create", &json!({"operationId":"complete","taskId":task_id,"expectedTaskRevision":1,"evidence":"done"})).unwrap();
         let repo = SqliteTaskRepository::new(&db);
-        repo.transaction(|tx| crate::native::task_assistance::save_supplied_knowledge_draft_tx(
-            tx,
-            &json!({"operationId":"saved-draft","taskId":task_id,"expectedTaskRevision":1}),
-            "# Saved Knowledge\n\nReview this private draft.",
-            "supplied",
-        )).unwrap();
+        let saved = repo
+            .transaction(|tx| {
+                crate::native::task_assistance::save_supplied_knowledge_draft_tx(
+                    tx,
+                    &json!({"operationId":"saved-draft","taskId":task_id,"expectedTaskRevision":1}),
+                    "# Saved Knowledge\n\nReview this private draft.",
+                    "supplied",
+                )
+            })
+            .unwrap();
 
-        let loaded = service.execute("task.get", &json!({"taskId":task_id})).unwrap();
+        let loaded = service
+            .execute("task.get", &json!({"taskId":task_id}))
+            .unwrap();
         assert_eq!(loaded["publication"]["state"], "draft");
-        assert_eq!(loaded["publication"]["bodyMarkdown"], "# Saved Knowledge\n\nReview this private draft.");
+        assert_eq!(
+            loaded["publication"]["bodyMarkdown"],
+            "# Saved Knowledge\n\nReview this private draft."
+        );
+        assert!(loaded["publication"]["lineage"].is_object());
+        assert_eq!(loaded["publication"]["lineage"], saved["lineage"]);
     }
 
     #[test]

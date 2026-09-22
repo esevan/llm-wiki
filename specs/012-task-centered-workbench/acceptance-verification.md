@@ -1,5 +1,39 @@
 # Task-centered Workbench acceptance verification
 
+## Lineage flowchart and Knowledge follow-up (2026-09-21)
+
+This follow-up applies to the uncommitted `fix/lineage-visual-polish` worktree. It does not update
+any signed release artifact or historical packaged-test result below.
+
+- `npm test` passed 38 Vitest files / 269 tests plus the Node/runtime/boundary checks. After final
+  routing edits, focused journey and interactive-source checks passed (8 tests). TaskDetail
+  coverage verifies that Review uses a saved draft journey while Details uses current lineage.
+- Focused Rust checks cover relationship validation, locale-bound/versioned caches, recorded
+  fallback, deleted/stale source protection, journey preparation before Knowledge, exact snapshot
+  persistence, and cancelled/stale draft saves. The application-service roundtrip test verifies
+  that reopening a Task returns the stored draft lineage. These are focused checks, not a claim
+  that the complete native suite was rerun for this follow-up.
+- Typecheck, scoped graph lint, and `git diff --check` passed. The documentation synchronization
+  that follows changes no application code and requires document/link checks only.
+- Actual browser review exercised the graph fixture at 1100px and 420px container settings,
+  English/Korean interface labels and date formatting, mixed-language long titles, keyboard
+  selection/focus, chronological row transitions, gap markers, and all three semantic link styles.
+  The fixture's node titles and relation explanations were fixed mixed-language sample data.
+  **This does not verify Korean-translated node titles, localized provider output, or a fully
+  localized Korean graph.** The earlier conversational claim of complete bilingual visual
+  verification was too broad.
+- The reviewed fixture uses the actual React graph component, not the packaged native application.
+  Native Review-tab rendering, real-provider relation quality, and end-to-end provider-to-Knowledge
+  locale behavior remain unverified by that capture. Unit/component coverage establishes the
+  checked preparation, persistence, and tab-selection contracts.
+- Packaged desktop E2E and a release build were skipped. Focused Rust/component checks cover the
+  changed data/state contracts and browser inspection covers graph geometry; no packaging change
+  required a new packaged scenario. The native/provider limitations above remain explicit.
+
+See the current [lineage contract](contracts/application-api.md#recorded-journey-and-inferred-relationships)
+and [feature guide](../../docs/features/lineage-knowledge-layer.md). Historical acceptance figures
+below remain attached to their original artifacts.
+
 **Verified:** 2026-09-12
 
 > **Historical Task-centered acceptance record:** The artifact identities, nine-case records, and

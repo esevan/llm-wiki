@@ -125,3 +125,11 @@ Solution.
 ## Documentation Migration
 
 - This feature moved from duplicate prefix `006` to `010`; AI task model routing retains `006`.
+
+## Current Task-centered scope (2026-09-22)
+
+This specification remains the historical Solution-era record. It must not be read as a promise of
+the current four-stage Solution UI, claim-correction UI, or automatic completion report. Current
+Task journey behavior, exact Knowledge snapshots, and their acceptance requirements are defined by
+[spec 012](../012-task-centered-workbench/spec.md); the user-facing boundary is summarized in the
+[lineage and Knowledge guide](../../docs/features/lineage-knowledge-layer.md).

@@ -58,11 +58,35 @@ validation criteria—beside Work Log entries, attachments, comments, checklists
 **Original capture** preserves the text used to start a Task, including one created directly from
 the Workbench, so later refinement does not hide its starting point. The Details tab also shows a
 Task journey: an evidence-backed trace of the original idea, refinements, recorded work, decisions,
-and completion. Its connectors show recorded order only; they do not claim that one event caused
-another. Opening it reads a saved graph or queues one durable refresh. AI only supplies compact
-node labels; recorded events and links remain deterministic. Select a node to read the complete
-recorded Activity, including its time and source content. A current saved graph is reused, and a
-missing or failed AI title falls back to a short local label.
+and completion. Its pale chronological connectors show recorded order only; they do not claim that one event caused
+another. Opening it reads a saved graph or queues one durable refresh. AI may supply descriptive
+labels of up to 48 characters and optional evidence-backed relationship suggestions;
+the recorded events, their order, and chronological links remain immutable. Select a node to read
+the complete recorded Activity, including its time and source content. A current saved graph is
+reused, and a missing or failed AI interpretation falls back to short local labels and the recorded
+chronology.
+The journey is laid out as a spacious three-column flowchart so long labels remain readable. Start,
+decision, and completed events use distinct shapes and restrained status colors; these are visual cues
+for their recorded event types, not additional workflow states. Decisions, definition changes,
+completion, and junction nodes receive additional visual prominence. Recorded timestamps appear on nodes,
+and a gap of at least one day receives a localized break marker on its connector without changing
+the diagram's fixed spacing. On a narrow window the same sequence stacks into one readable column.
+Separate crosslinks show only AI interpretations supported by recorded evidence: **Supersedes** means
+a later event replaces an earlier choice, **Derived from** means later work explicitly stems from
+earlier material, and **Requires** means the earlier event is a prerequisite. Line patterns and end
+shapes distinguish these meanings without relying on color. Selecting a connected node emphasizes
+its incident crosslinks and reveals their rationale and quoted evidence; chronology alone never
+creates one of these relationships.
+
+Before generating a Knowledge draft, draft preparation ensures that current lineage exists by reusing a
+current saved graph or generating and persisting a fallback or AI interpretation. The draft can use
+recorded evidence together with decision evolution, replaced choices, derived outcomes, and true
+prerequisites. Inferred links remain reviewable suggestions rather than proven causes. Before drafting,
+Review shows the current lineage; after a draft exists, it shows the exact lineage snapshot stored with
+that draft. Loading, fallback, and failure states remain explicit, and a failed lineage refresh can be
+retried. The user still reviews the draft and decides separately whether to publish it.
+See [Task lineage and Knowledge](lineage-knowledge-layer.md) for the dedicated journey and
+generation contract.
 Press **Enter** in a Work Log entry to add it; use **Shift+Enter** for a line break.
 Checklist items and Work Log comments also submit with **Enter**. Empty input and Enter during IME composition do not submit.
 Paste a screenshot into the Work Log entry to attach it directly; an image-only entry is allowed,

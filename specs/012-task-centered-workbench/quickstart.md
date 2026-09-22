@@ -21,10 +21,19 @@
 4. Link many Tasks/Problems, relationships and readiness decisions; reject cycles/duplicates.
 5. Review a Capture draft before Task exists and a Task revision; inject late/failure/insufficient
    results and prove they never become current/clear or block work.
-6. Complete Task while Problem remains open, then resolve separately and publish an exact Knowledge
-   draft; inspect graph lineage and external-change protection.
-7. Repeat cross-surface revision and stale-approval journeys through MCP.
-8. Repeat primary flows by pointer and keyboard in wide/narrow English/Korean UI.
+6. Complete Task while Problem remains open, then resolve separately and generate an exact Knowledge
+   draft. Confirm the wide three-column journey becomes one column when narrow, chronology remains
+   distinct from interpreted links, and gaps of at least 24 hours are marked.
+7. Inspect accepted semantic links: each is `supersedes`, `derived_from`, or `depends_on`, points
+   from a later event to an earlier event, and exposes quotes from both endpoint events.
+8. Change Task evidence after draft generation. Confirm Details shows the current journey while
+   Review keeps the draft's embedded `{ sourceHash, journey, modelStatus, modelError }` snapshot;
+   verify stale asynchronous results and external-file changes are rejected.
+9. Switch English/Korean chrome and dates. Record locale-specific provider-label validation as
+   blocked unless a real provider generated and rendered both locale graphs; mixed-language fixture
+   titles do not satisfy this check.
+10. Repeat cross-surface revision and stale-approval journeys through MCP.
+11. Repeat primary flows by pointer and keyboard in wide/narrow English/Korean UI.
 
 ## Stable Verification
 

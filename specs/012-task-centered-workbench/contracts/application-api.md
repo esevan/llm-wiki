@@ -105,6 +105,66 @@ changes do not.
   review operation; external hash mismatch returns `source_changed`.
 - regenerate and withdraw are explicit revisioned operations and preserve earlier records.
 
+### Recorded journey and inferred relationships
+
+The lineage response retains the top-level provenance `nodes`, `edges`, and `sourceHash`, and
+adds the Task event journey separately:
+
+- `recordedJourney`: deterministic `events` (`id`, `type`, `occurredAt`, `detail`) and recorded
+  `edges` of kind `followed_by` or `refinement_context`. Chronology does not establish causality.
+- `journeySourceHash`: hash of the full recorded journey and inference schema version, distinct
+  from the top-level provenance hash. Changing source text invalidates this cache even if the
+  current Task revision is unchanged.
+- `journey`: the current locale/source-matched cached journey, or `null` while unavailable.
+  It preserves recorded events/edges and adds `titles: [{id,title}]` (at most 48 characters) and
+  a separate `relationships` array. Cache identity includes Task, locale, and journey source hash.
+- `journeyStatus`: latest matching job's `{jobId,status,error}`, or `null`; `modelStatus` and
+  `modelError` describe the saved interpretation. A provider fallback retains recorded events
+  and local labels and contains no inferred relationships.
+
+Each inferred relationship has this shape:
+
+```json
+{
+  "from": "later-event-id",
+  "to": "earlier-event-id",
+  "kind": "supersedes",
+  "provenance": "inferred",
+  "rationale": "Why these recorded events may be related",
+  "evidence": [
+    {"eventId": "later-event-id", "quote": "Verbatim text from the later event"},
+    {"eventId": "earlier-event-id", "quote": "Verbatim text from the earlier event"}
+  ]
+}
+```
+
+Allowed kinds are `supersedes` (replacement/reversal), `derived_from` (derivation), and
+`depends_on` (prerequisite). Direction is the later referring event to the earlier referenced
+event. Endpoints must exist, differ, and follow that order; evidence must quote both endpoint
+narratives. Invalid/ungrounded candidates are discarded and valid duplicates are collapsed.
+These interpretations neither mutate recorded decisions nor create Task-to-Task relationships.
+No accept/reject/edit operation for these inferred journey links is introduced here.
+
+### Journey preparation and exact Knowledge snapshots
+
+Generated Knowledge drafts and regeneration first reuse or prepare a current journey before
+generating the article. A usable recorded fallback permits drafting when AI interpretation is
+unavailable. Preparation rejects deleted/stale sources and reuses a concurrently completed current
+cache instead of overwriting it.
+
+The draft's `lineage.journey` contains the exact preparation result
+`{sourceHash,journey,modelStatus,modelError}`. Both direct and queued generated-draft saves recheck
+the Knowledge source/completion and journey source hash; changed evidence cannot be committed as
+a current generated draft. The saved interpretation is not replaced by a later cache entry.
+`GET /tasks/{taskId}` includes the stored `publication.lineage` so reopening a draft retains its
+generation evidence. Review shows this draft snapshot when present, otherwise current lineage;
+Details shows current lineage. Supplied-body/MCP draft operations retain their existing contract;
+the new prerequisite describes application-generated drafts.
+
+Knowledge synthesis can use recorded decision evolution and the inferred relationship explanations
+and endpoint quotations. It must distinguish historical/replaced choices from current conclusions
+and keep inferred relationships qualified. Publication remains a separate user decision.
+
 ## Removed Contract
 
 `/board`, `/captures/{id}/promote`, Problem approval, `/problems/{id}/features`, feature approval/stage,

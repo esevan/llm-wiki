@@ -129,6 +129,7 @@ export interface TaskAggregate extends TaskCard {
     contentHash?: string;
     sourceHash?: string;
     bodyMarkdown?: string;
+    lineage?: { journey?: { sourceHash?: string; journey?: import("../features/workbench/TaskJourneyGraph").TaskJourney; modelStatus?: string; modelError?: string } };
   };
 }
 export interface RefinementSession {
