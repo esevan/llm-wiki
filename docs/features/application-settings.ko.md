@@ -26,5 +26,10 @@ SQLite에 설정을 저장하던 버전에서 업그레이드하면 `settings.js
 provider 값을 최초 시작 과정에서 가져옵니다. Rollback 안전성을 위해 기존 DB row는 남겨 두지만 이전
 후에는 읽거나 갱신하지 않습니다. 새 DB에는 예전 설정 table을 생성하지 않습니다.
 
+AI setup에는 현재 사용 중인 Vault 경로도 표시됩니다. `Vault 위치 변경`은 네이티브 폴더 선택기를
+열고 선택한 폴더를 새 Vault로 사용하도록 앱을 다시 시작합니다. `Embedding 재생성`은 현재 Vault의
+Markdown 문서를 다시 읽어 번들 모델로 semantic embedding을 재생성하며, Vault 파일이나 앱 기록을
+삭제하지 않습니다.
+
 격리된 개발과 자동화 test에서는 `LLM_WORKBENCH_HOME`으로 설정 디렉터리를 바꿀 수 있습니다.
 명시적인 process-level override가 없다면 production package는 항상 현재 사용자의 home을 사용합니다.

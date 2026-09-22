@@ -103,6 +103,11 @@ h1 { max-width: 720px; font-size: clamp(31px, 3.2vw, 44px); line-height: 1.05; l
 #provider-form input:not([type="checkbox"]) { min-height: 42px; }
 #provider-form #advanced-task-options label { margin: 0; min-height: 40px; padding: 8px 10px; }
 #provider-form footer { gap: 10px; margin-top: 22px; }
+.vault-settings { display: grid; gap: 10px; margin-bottom: 14px; padding: 15px; border: var(--border-default); border-radius: var(--radius-card); background: var(--color-bg-elevated); }
+.vault-settings h2 { margin: 0; font-size: 16px; }
+.vault-settings p { margin: 0; }
+.vault-path { display: block; overflow-wrap: anywhere; padding: 10px; border-radius: 8px; background: var(--color-bg-primary); color: var(--color-text-secondary); }
+.vault-settings footer { display: flex; flex-wrap: wrap; gap: 10px; }
 .advanced-options { margin-top: 18px; padding: 13px; border: var(--border-default); border-radius: var(--radius-card); background: var(--color-bg-muted); }
 .advanced-options summary { color: var(--color-text-primary); }
 

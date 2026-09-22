@@ -1531,7 +1531,7 @@ async fn run_review(
     if !review_is_current(db_path, vault_root, run_id, &identity.material_hash)? {
         return mark_review_stale(db_path, run_id);
     }
-    vault::index(db_path, vault_root, &semantic, semantic.available())?;
+    vault::index(db_path, vault_root, &semantic, semantic.available(), false)?;
     let query = review_query(&identity.material);
     let evidence = review_evidence(db_path, &semantic, &query)?;
     if evidence.is_empty() {

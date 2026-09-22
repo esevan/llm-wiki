@@ -195,6 +195,10 @@ impl NativeApplication {
         self.settings_path.clone()
     }
 
+    fn vault_settings(&self) -> Result<Value, String> {
+        Ok(json!({"path": self.vault.to_string_lossy()}))
+    }
+
     pub fn vault_setup_status(&self) -> Result<Value, String> {
         Ok(json!({
             "required": self.vault_setup_required,
@@ -543,6 +547,10 @@ impl NativeApplication {
                     .get("semantic")
                     .and_then(Value::as_bool)
                     .unwrap_or(true),
+                input
+                    .get("forceEmbeddings")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
             )?,
             "vault.search" => vault::search(
                 &self.db_path,
@@ -571,6 +579,8 @@ impl NativeApplication {
             "i18n.get" => settings::resources(id("locale")?)?,
             "provider.get" => settings::provider(&self.settings_path)?,
             "provider.save" => settings::save_provider(&self.settings_path, input)?,
+            "settings.vault.get" => self.vault_settings()?,
+            "vault.settings.get" => self.vault_settings()?,
             "board.get" => workflow::board_for_locale(
                 &self.db_path,
                 input.get("locale").and_then(Value::as_str).unwrap_or("en"),

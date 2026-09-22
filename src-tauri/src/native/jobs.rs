@@ -559,7 +559,7 @@ async fn run_inner(
             let indexing_vault = vault.to_owned();
             let indexing_semantic = semantic.clone();
             let result = tokio::task::spawn_blocking(move || {
-                crate::native::vault::index(&indexing_db, &indexing_vault, &indexing_semantic, true)
+                crate::native::vault::index(&indexing_db, &indexing_vault, &indexing_semantic, true, true)
             })
             .await
             .map_err(|error| format!("Embedding refresh task failed: {error}"))??;

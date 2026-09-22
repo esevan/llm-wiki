@@ -1,6 +1,8 @@
 import { IconButton } from '../../components/IconButton';
 import { McpConnections } from './McpConnections';
 import { useSyncExternalStore } from 'react';
+import { useEffect, useState } from 'react';
+import { chooseVault } from '../../services/vaultSetupClient';
 
 const advancedTasks = [
   ['capture_assistance', 'Capture discussion and refinement'],
@@ -19,6 +21,23 @@ const advancedTasks = [
 ] as const;
 
 export function SettingsView({ active }: { active: boolean }) {
+  const [vaultPath, setVaultPath] = useState('');
+  const [vaultAction, setVaultAction] = useState('');
+  const [indexing, setIndexing] = useState(false);
+  useEffect(() => {
+    if (!window.llmWikiApplication) return;
+    void window.llmWikiApplication.request({ path: '/settings/vault' }).then(async response => {
+      if (response.ok) setVaultPath((await response.json<{ path: string }>()).path);
+    });
+  }, []);
+  const regenerateEmbeddings = async () => {
+    if (indexing || !window.llmWikiApplication) return;
+    setIndexing(true); setVaultAction('Rebuilding embeddings…');
+    try {
+      const response = await window.llmWikiApplication.request({ path: '/index/embeddings', method: 'POST' });
+      setVaultAction(response.ok ? 'Embeddings regenerated for the current Vault.' : 'Embedding regeneration failed.');
+    } catch { setVaultAction('Embedding regeneration failed.'); } finally { setIndexing(false); }
+  };
   const securityNote = useSyncExternalStore(
     (changed) => {
       const observer = new MutationObserver(changed);
@@ -37,6 +56,16 @@ export function SettingsView({ active }: { active: boolean }) {
       </header>
       <section className="result">
         <p>{securityNote}</p>
+        <section className="settings-group vault-settings" aria-labelledby="vault-settings-title">
+          <h2 id="vault-settings-title">Vault</h2>
+          <p className="meta">This folder is the source for Vault search and embeddings.</p>
+          <code className="vault-path" data-control="vault-path">{vaultPath || 'Loading current Vault…'}</code>
+          <footer>
+            <button type="button" data-control="vault-change" onClick={() => void chooseVault()}>Change Vault location</button>
+            <button type="button" data-control="vault-regenerate-embeddings" disabled={indexing} onClick={() => void regenerateEmbeddings()}>{indexing ? 'Regenerating…' : 'Regenerate embeddings'}</button>
+          </footer>
+          {vaultAction && <p className="meta" role="status" aria-live="polite">{vaultAction}</p>}
+        </section>
         <form className="modal" id="provider-form" data-control="provider-form">
           <fieldset className="settings-group">
             <legend data-i18n="ai_setup.connection_group">Connection</legend>
