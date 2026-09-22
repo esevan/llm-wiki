@@ -106,6 +106,28 @@ h1 { max-width: 720px; font-size: clamp(31px, 3.2vw, 44px); line-height: 1.05; l
 .advanced-options { margin-top: 18px; padding: 13px; border: var(--border-default); border-radius: var(--radius-card); background: var(--color-bg-muted); }
 .advanced-options summary { color: var(--color-text-primary); }
 
+.mcp-connections { max-width: 980px; }
+.mcp-connection-form { display: grid; gap: 18px; margin-top: 22px; padding: 20px; border: var(--border-default); border-radius: var(--radius-panel); background: var(--color-bg-elevated); box-shadow: var(--shadow-card); }
+.mcp-form-field { display: grid; gap: 7px; min-width: 0; margin: 0; color: var(--color-text-primary); font-weight: 700; }
+.mcp-form-field input, .mcp-form-field select { width: 100%; min-width: 0; min-height: 42px; box-sizing: border-box; }
+.mcp-scope-fieldset { min-width: 0; margin: 0; padding: 16px; border: var(--border-default); border-radius: var(--radius-card); background: var(--color-bg-surface); }
+.mcp-scope-fieldset legend { padding: 0 6px; color: var(--color-accent-strong); font: 700 11px var(--font-family-mono); letter-spacing: .04em; }
+.mcp-scope-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 12px; }
+.mcp-scope-option { display: flex; align-items: flex-start; gap: 9px; min-width: 0; margin: 0; padding: 9px 10px; border: 1px solid transparent; border-radius: var(--radius-control); color: var(--color-text-primary); line-height: 1.35; cursor: pointer; }
+.mcp-scope-option:hover { background: var(--color-bg-accent-subtle); border-color: var(--color-border-accent-muted); }
+.mcp-scope-option input { flex: 0 0 17px; width: 17px; height: 17px; margin: 2px 0 0; accent-color: var(--color-accent-primary); }
+.mcp-scope-option span { min-width: 0; overflow-wrap: anywhere; }
+.mcp-connection-actions { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 14px; align-items: end; }
+.mcp-connection-actions button, .mcp-topic-form button { min-height: 42px; white-space: nowrap; }
+.mcp-topic-details { margin-top: 26px; }
+.mcp-topic-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin-top: 16px; padding: 16px; border: var(--border-default); border-radius: var(--radius-card); background: var(--color-bg-elevated); }
+.mcp-topic-form button { align-self: end; justify-self: start; }
+@media (max-width: 680px) {
+  .mcp-connection-form { padding: 16px; }
+  .mcp-scope-grid, .mcp-topic-form, .mcp-connection-actions { grid-template-columns: 1fr; }
+  .mcp-connection-actions button, .mcp-topic-form button { width: 100%; }
+}
+
 dialog { border: var(--border-default); background: var(--color-bg-surface); }
 dialog::backdrop { background: rgb(39 36 42 / 44%); backdrop-filter: blur(4px); }
 .modal { color: var(--color-text-primary); }
