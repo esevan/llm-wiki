@@ -103,11 +103,18 @@ h1 { max-width: 720px; font-size: clamp(31px, 3.2vw, 44px); line-height: 1.05; l
 #provider-form input:not([type="checkbox"]) { min-height: 42px; }
 #provider-form #advanced-task-options label { margin: 0; min-height: 40px; padding: 8px 10px; }
 #provider-form footer { gap: 10px; margin-top: 22px; }
-.vault-settings { display: grid; gap: 10px; margin-bottom: 14px; padding: 15px; border: var(--border-default); border-radius: var(--radius-card); background: var(--color-bg-elevated); }
-.vault-settings h2 { margin: 0; font-size: 16px; }
+.vault-settings { display: grid; gap: 14px; margin-bottom: 14px; padding: 17px 0 16px; border-top: var(--border-default); border-bottom: var(--border-default); }
+.vault-settings-heading { display: flex; align-items: start; justify-content: space-between; gap: 16px; }
+.vault-settings h2 { margin: 0; font-size: 19px; }
 .vault-settings p { margin: 0; }
-.vault-path { display: block; overflow-wrap: anywhere; padding: 10px; border-radius: 8px; background: var(--color-bg-primary); color: var(--color-text-secondary); }
-.vault-settings footer { display: flex; flex-wrap: wrap; gap: 10px; }
+.vault-state { flex: none; padding: 5px 9px; border-radius: var(--radius-pill); color: var(--color-status-success); background: var(--color-positive-surface); font: 700 10px var(--font-family-mono); letter-spacing: .04em; text-transform: uppercase; }
+.vault-location { display: grid; gap: 6px; }
+.vault-location-label { color: var(--color-text-muted); font: 700 10px var(--font-family-mono); letter-spacing: .06em; text-transform: uppercase; }
+.vault-path { display: block; overflow-wrap: anywhere; padding: 9px 11px; border: var(--border-default); border-radius: var(--radius-control); background: var(--color-bg-surface); color: var(--color-text-primary); font-size: 12px; }
+.vault-path.is-error { color: var(--color-status-error); border-color: #efb5b3; background: var(--color-bg-danger-subtle); }
+.vault-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.vault-secondary-action { color: var(--color-accent-strong); border-color: var(--color-border-accent-muted); background: var(--color-bg-accent-subtle); }
+.vault-secondary-action:hover:not(:disabled) { background: var(--color-bg-surface); border-color: var(--color-border-accent); }
 .advanced-options { margin-top: 18px; padding: 13px; border: var(--border-default); border-radius: var(--radius-card); background: var(--color-bg-muted); }
 .advanced-options summary { color: var(--color-text-primary); }
 
