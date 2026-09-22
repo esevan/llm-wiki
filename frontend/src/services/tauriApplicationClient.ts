@@ -26,6 +26,7 @@ export interface DesktopE2eResult {
 export interface DesktopE2eState {
   providerUrl: string;
   scenario: string;
+  executionCwd?: string;
   restoreCapture: string | null;
   restoreSteps: string[];
 }

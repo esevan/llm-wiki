@@ -33,6 +33,7 @@ export type WorkbenchScenarioHarness = {
   prepareClick: (element: HTMLElement, label: string) => Promise<void>;
   enter: (element: HTMLInputElement | HTMLTextAreaElement, value: string) => void;
   step: (message: string) => Promise<void>;
+  executionCwd?: string;
 };
 
 function observe(h: WorkbenchScenarioHarness, state: string) {

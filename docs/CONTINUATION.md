@@ -1,12 +1,27 @@
 # LLM Wiki — Continuation handoff
 
-**Updated:** 2026-09-16
+**Updated:** 2026-09-22
 **Current status:** The React/Tauri/Rust desktop now uses the Task as the canonical unit of work.
 Capture remains a lightweight input; Work Log, refinement, exact Problem revisions, Task
 relationships, advisory review, completion, and Knowledge publication are independent decisions.
 The Python/FastAPI browser delivery remains retired in Git history at `caef236`.
 
+## Task Codex execution follow-up (2026-09-22)
+
+- Implementation is complete on `feature/task-session-execution`, including the inherited session MVP work. The feature commit is prepared for integration; verify the current local and remote Git state directly when resuming integration or release work. The user's installed application was not replaced.
+- Spec Kit [feature 014](../specs/014-task-codex-execution/spec.md) extends existing Task sessions with persistent Codex threads, explicit preparation/execution, durable turns and canonical Work Log projections, provider-derived approval/question buttons, and recovery without automatic resend or Task completion. Existing Task/session/attachment storage and Work Log paths are reused.
+- Astra High completed the **UI/UX design review**, as the user clarified. Actual rendered verification is separate. E2E ran with Luna; concrete E2E failures were diagnosed with Astra.
+- Final checks: frontend 294 passed; native 186 passed, zero failed, one opt-in live test ignored in the normal suite; typecheck and whitespace checks passed. The unchanged 100 ms projection gate passed at p95 11.259417 ms. The separately run actual authenticated Codex test passed two same-thread turns with a first-turn-only nonce recalled in the second and two durable Work Log projections.
+- After rebasing onto main's released v13 Task journey cache, the combined tree passed 303 frontend tests and 196 native tests with the same one opt-in live test ignored. The merged migration chain retains v13 for journey graphs, adds sessions at v14 and execution at v15; populated main-v13 journey/manual data, populated v14 session data, rollback, retry, and foreign-key checks passed. Typecheck and whitespace validation also passed.
+- The final signed release and selected `task-codex-execution` packaged E2E passed. Evidence: `.tmp/task-codex-execution-artifacts-5/` inside the execution worktree. No full suite was run. Three initial harness failures and the actual restart-stale-request defect were diagnosed and corrected before the final pass; [quickstart](../specs/014-task-codex-execution/quickstart.md) distinguishes each evidence type.
+- Actual CUA inspection covered EN/KO session UI, keyboard note save/reopen, 900 px native width, completed Run/answer restoration, report/evidence attribution, compact Work Log display, exact reverse-link heading focus, and restart recovery with stale questions read-only. All temporary review processes were stopped; the user's installed app was preserved.
+- Residual limits: 640 px is unavailable under the existing native minimum; Windows and real-provider approval/interruption/auth-failure cases were not exercised; not every transient state was visually inspected. The Work-panel native accessibility tree was intermittently absent after a deep link but present on direct tab access; full assistive-technology validation is not claimed. Attachments are saved as notes and are not sent to Codex in this increment.
+- No further feature implementation is queued. Resume only explicitly requested integration/install work or a recorded validation gap; do not restart broad inventory or the full E2E suite. Earlier handoff entries below are historical.
+
 ## Current handoff
+
+- The Task work-session MVP is implemented in `.worktrees/task-session-mvp`. Sessions are explicitly created and Task-bound, persist chat-style records/settings/attachments across restart, preserve failed input for retry, and do not mutate Task state or run AI. The selected packaged `task-work-session-restart` scenario passed after the final release build; npm passed 268 tests and the full Cargo suite passed.
+- An isolated normal macOS review bundle showed the Sessions UI in English and Korean, restored saved settings and an image, saved a long mixed Korean/English note using keyboard navigation, and restored it after a real restart. Native file selection reached a real 400×160 PNG, but UI automation lost AppKit access before picker completion could be observed; process samples showed the app and WebContent remained healthy. Narrow, explicit error-state, and Windows rendering remain unverified and should be treated as validation follow-up rather than a confirmed code defect.
 
 - The Task-centered redesign is complete in single commit `de01ff47398871902a765d43b5a4060161316f92`; `main` and `origin/main` match, and the existing seven unpublished commits were pushed with it.
 - The signed application was installed at `/Applications/LLM Wiki.app` and launched successfully (PID `28832` at handoff). The verified release identity was CDHash `3be85b685e04f76596c914fafa4bf9639081958d`, signature `LLM Wiki Local Signing`, timestamp `2026-09-12 08:58:37`, with the designated requirement matching strict verification. Previous app backup: `/Applications/LLM Wiki.app.previous-1789222006550-28769`.

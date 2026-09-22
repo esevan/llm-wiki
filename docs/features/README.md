@@ -16,6 +16,7 @@ Start with [Product Spirit](../product-spirit.md), or use the
   local external Chat on the same Workbench workflow without requiring the Workbench screen.
 - [Task-centered Workbench](conflict-gated-workflow.md) keeps Capture, optional Refinement, Problems,
   and independently tracked Tasks in one observable workflow.
+- [Task work sessions](task-work-sessions.md) preserve private notes and explicit, resumable Codex Runs inside each Task without changing Task state.
 - [Refinement Preview](refinement-preview-status.md) preserves context while AI prepares a proposal
   for review.
 - [Compass](direction-dashboard.md) records direction without scoring people.

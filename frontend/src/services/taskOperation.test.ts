@@ -27,6 +27,22 @@ describe('Task contract routing', () => {
     expect(taskOperation('POST', '/work-log/entry%201/image-summary', { entityId: 'forged', entityType: 'features', taskKind: 'other' }, 'ko'))
       .toEqual({ name: 'jobs.enqueue', input: { taskKind: 'image_summary', entityType: 'task_work_log_entries', entityId: 'entry 1', locale: 'ko' } });
   });
+  it('binds work-session reads and writes to both URL identities', () => {
+    expect(taskOperation('GET','/tasks/task%20a/work-sessions/session%201',{ taskId:'forged',sessionId:'wrong' },'en'))
+      .toEqual({name:'task.work-session.get',input:{taskId:'task a',sessionId:'session 1',locale:'en'}});
+    expect(taskOperation('POST','/tasks/task%20a/work-sessions/session%201/entries',{operationId:'entry',taskId:'forged',sessionId:'wrong',body:'note'},'ko'))
+      .toEqual({name:'task.work-session.entry.create',input:{operationId:'entry',taskId:'task a',sessionId:'session 1',body:'note',locale:'ko'}});
+  });
+  it('routes execution reads and controls to the exact Task, session, Run, and request', () => {
+    expect(taskOperation('GET', '/tasks/task%20a/work-sessions/session%201/runs', { taskId: 'forged' }, 'en'))
+      .toEqual({ name: 'task.execution.list', input: { taskId: 'task a', sessionId: 'session 1', locale: 'en' } });
+    expect(taskOperation('POST', '/tasks/task%20a/work-sessions/session%201/runs', { sessionId: 'wrong', instruction: 'run' }, 'en'))
+      .toEqual({ name: 'task.execution.start', input: { taskId: 'task a', sessionId: 'session 1', instruction: 'run', locale: 'en' } });
+    expect(taskOperation('POST', '/tasks/task%20a/work-sessions/session%201/runs/run%201/interrupt', { runId: 'wrong' }, 'ko'))
+      .toEqual({ name: 'task.execution.interrupt', input: { taskId: 'task a', sessionId: 'session 1', runId: 'run 1', locale: 'ko' } });
+    expect(taskOperation('POST', '/tasks/task%20a/work-sessions/session%201/runs/run%201/formal-requests/request%201/response', { requestId: 'wrong', response: { decision: 'approve' } }, 'en'))
+      .toEqual({ name: 'task.execution.formal-response', input: { taskId: 'task a', sessionId: 'session 1', runId: 'run 1', requestId: 'request 1', response: { decision: 'approve' }, locale: 'en' } });
+  });
   it('does not swallow unrelated routes or unsupported verbs', () => {
     expect(taskOperation('GET', '/provider/config', {}, 'en')).toBeUndefined();
     expect(taskOperation('DELETE', '/tasks/t1/completions', {}, 'en')).toBeUndefined();

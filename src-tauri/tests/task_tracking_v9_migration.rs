@@ -3,7 +3,7 @@ use rusqlite::{params, Connection};
 use sha2::{Digest, Sha256};
 use tempfile::tempdir;
 
-const MIGRATED_SCHEMA_VERSION: i64 = 12;
+const MIGRATED_SCHEMA_VERSION: i64 = 15;
 
 fn make_v8_session_fixture(db: &std::path::Path, vault: &std::path::Path) {
     let app = NativeApplication::isolated(vault, db).unwrap();
@@ -49,8 +49,25 @@ fn make_v8_session_fixture(db: &std::path::Path, vault: &std::path::Path) {
         .unwrap();
     let db_conn = Connection::open(db).unwrap();
     // Remove post-v8 additions before replaying migrations from the historical fixture.
-    db_conn.execute_batch("DROP TABLE input_images; DROP TABLE task_auto_publications;
-        DROP TABLE task_refinements; DROP TABLE task_subtasks; PRAGMA user_version=8;").unwrap();
+    db_conn
+        .execute_batch(
+            "DROP TRIGGER task_execution_request_update_revision;
+        DROP TRIGGER task_execution_request_insert_revision;
+        DROP TRIGGER task_execution_item_insert_revision;
+        DROP TRIGGER task_execution_run_update_revision;
+        DROP TRIGGER task_execution_run_insert_revision;
+        DROP TABLE task_work_session_run_logs;
+        DROP TABLE task_work_session_formal_requests;
+        DROP TABLE task_work_session_run_items;
+        DROP TABLE task_work_session_runs;
+        DROP TABLE task_execution_runtime;
+        DROP TABLE task_work_session_entries;
+        DROP TABLE task_work_sessions;
+        DROP TABLE task_journey_graphs;
+        DROP TABLE input_images; DROP TABLE task_auto_publications;
+        DROP TABLE task_refinements; DROP TABLE task_subtasks; PRAGMA user_version=8;",
+        )
+        .unwrap();
     let parent = session["sessionId"].as_str().unwrap();
     let child = "v9-child";
     db_conn

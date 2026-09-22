@@ -75,7 +75,8 @@ const manifest: readonly ControlSpec[] = [
   ...['decisions', 'lineage'].map(name => task(`task-${name}-details`, 'F9', 'frontend/src/features/workbench/TaskDetail.tsx', 'secondary Task detail section discloses')),
   task('task-lineage-open', 'F30', 'frontend/src/features/workbench/TaskDetail.tsx', 'opening Task lineage reads its saved graph or queues one refresh'),
   task('task-lineage-retry', 'F30', 'frontend/src/features/workbench/TaskDetail.tsx', 'terminal Task lineage generation retries through the durable Queue'),
-  ...['work', 'details', 'review'].map(name => task(`task-detail-tab-${name}`, 'F9', 'frontend/src/features/workbench/TaskDetail.tsx', 'Task detail section changes without losing drafts')),
+  ...['work', 'sessions', 'details', 'review'].map(name => task(`task-detail-tab-${name}`, 'F9', 'frontend/src/features/workbench/TaskDetail.tsx', 'Task detail section changes without losing drafts')),
+  ...['create','select','message','attachment','attachment-remove','send','prepare','run','run-open','stop','run-retry','settings-edit','title','provider','model','workspace','approval','settings-save','attachment-download','approval-choice','question-text','question-option','question-other','request-submit','worklog-open','worklog-sync'].map(name => task(`task-session-${name}`, 'F69', 'frontend/src/features/workbench/TaskWorkSessions.tsx', 'Task-owned session state, explicit Codex Run, or formal response changes visibly', 'A session operation is pending or required input is absent.')),
   ...['edit', 'cancel'].map(name => task(`task-definition-${name}`, 'F12', 'frontend/src/features/workbench/TaskDetail.tsx', 'definition editing is explicitly entered or cancelled')),
   ...['keep-mine', 'use-latest', 'guard-save', 'guard-discard', 'guard-keep-editing'].map(name => task(`task-draft-${name}`, 'F9', 'frontend/src/features/workbench/TaskDetail.tsx', 'dirty Task draft conflict or leave choice has an explicit effect')),
   task('task-detail-refine', 'F10', 'frontend/src/features/workbench/TaskDetail.tsx', 'task refinement opens'),
@@ -90,6 +91,7 @@ const manifest: readonly ControlSpec[] = [
   task('task-revision-save', 'F12', 'frontend/src/features/workbench/TaskDetail.tsx', 'immutable task revision reflects the edit', 'No definition changes, overlapping revision conflicts awaiting a choice, or a save is in progress.'),
   task('task-image-summary', 'F13', 'frontend/src/features/workbench/TaskDetail.tsx', 'bilingual image summary job completes and renders', 'Task mutation is in progress'),
   ...['text','file','add'].map(name => task(`task-worklog-${name}`, 'F13', 'frontend/src/features/workbench/TaskDetail.tsx', 'work-log entry persists')),
+  task('task-worklog-execution-open', 'F69', 'frontend/src/features/workbench/TaskDetail.tsx', 'linked execution opens its exact Task session and Run'),
   ...['text','add'].map(name => task(`task-comment-${name}`, 'F14', 'frontend/src/features/workbench/TaskDetail.tsx', 'comment persists')),
   ...['text','add','toggle'].map(name => task(`task-checklist-${name}`, 'F15', 'frontend/src/features/workbench/TaskDetail.tsx', 'checklist state persists')),
   task('task-checklist-completed-toggle', 'F15', 'frontend/src/features/workbench/TaskDetail.tsx', 'completed checklist items are disclosed or collapsed'),
@@ -167,4 +169,4 @@ export const taskInteractiveManifest: readonly ControlSpec[] = manifest.map(cont
   disabledReason: disabledPreconditions.get(control.id) ?? control.disabledReason,
 }));
 
-export const inventoryFamilyCount = 68;
+export const inventoryFamilyCount = 69;

@@ -4,7 +4,7 @@ use rusqlite::{
 use serde_json::{json, Map, Value};
 use std::collections::BTreeMap;
 
-pub const CURRENT_SCHEMA_VERSION: i64 = 13;
+pub const CURRENT_SCHEMA_VERSION: i64 = 15;
 
 type MigrationFunction = for<'connection> fn(&Transaction<'connection>) -> Result<(), String>;
 type LegacyLocalizationRow = (String, String, String, String, String, String, String);
@@ -71,8 +71,26 @@ const MIGRATIONS: &[Migration] = &[
         name: "add Capture and refinement images",
         run: add_input_images,
     },
-    Migration { version: 12, name: "allow multiple input images", run: allow_multiple_input_images },
-    Migration { version: 13, name: "cache Task journey graphs", run: add_task_journey_graphs },
+    Migration {
+        version: 12,
+        name: "allow multiple input images",
+        run: allow_multiple_input_images,
+    },
+    Migration {
+        version: 13,
+        name: "cache Task journey graphs",
+        run: add_task_journey_graphs,
+    },
+    Migration {
+        version: 14,
+        name: "add Task work sessions",
+        run: add_task_work_sessions,
+    },
+    Migration {
+        version: 15,
+        name: "add Task Codex execution",
+        run: add_task_codex_execution,
+    },
 ];
 
 fn add_task_journey_graphs(tx: &Transaction<'_>) -> Result<(), String> {
@@ -87,8 +105,19 @@ fn add_task_journey_graphs(tx: &Transaction<'_>) -> Result<(), String> {
         .map_err(|error| error.to_string())
 }
 
+fn add_task_codex_execution(tx: &Transaction<'_>) -> Result<(), String> {
+    tx.execute_batch(include_str!("task_execution_schema.sql"))
+        .map_err(|error| error.to_string())
+}
+
+fn add_task_work_sessions(tx: &Transaction<'_>) -> Result<(), String> {
+    tx.execute_batch(include_str!("task_work_session_schema.sql"))
+        .map_err(|error| error.to_string())
+}
+
 fn allow_multiple_input_images(tx: &Transaction<'_>) -> Result<(), String> {
-    tx.execute_batch("CREATE TABLE input_images_multiple (
+    tx.execute_batch(
+        "CREATE TABLE input_images_multiple (
         capture_id TEXT REFERENCES captures(id),
         message_id TEXT REFERENCES refinement_messages(id),
         name TEXT NOT NULL, media_type TEXT NOT NULL, data TEXT NOT NULL,
@@ -98,17 +127,21 @@ fn allow_multiple_input_images(tx: &Transaction<'_>) -> Result<(), String> {
     DROP TABLE input_images;
     ALTER TABLE input_images_multiple RENAME TO input_images;
     CREATE INDEX input_images_capture ON input_images(capture_id);
-    CREATE INDEX input_images_message ON input_images(message_id);")
-        .map_err(|error| error.to_string())
+    CREATE INDEX input_images_message ON input_images(message_id);",
+    )
+    .map_err(|error| error.to_string())
 }
 
 fn add_input_images(tx: &Transaction<'_>) -> Result<(), String> {
-    tx.execute_batch("CREATE TABLE input_images (
+    tx.execute_batch(
+        "CREATE TABLE input_images (
         capture_id TEXT UNIQUE REFERENCES captures(id),
         message_id TEXT UNIQUE REFERENCES refinement_messages(id),
         name TEXT NOT NULL, media_type TEXT NOT NULL, data TEXT NOT NULL,
         CHECK ((capture_id IS NOT NULL) != (message_id IS NOT NULL))
-    );").map_err(|error| error.to_string())
+    );",
+    )
+    .map_err(|error| error.to_string())
 }
 
 /// Version 9 has exactly one durable purpose: an explicitly reviewed continuation of an
@@ -1194,6 +1227,141 @@ mod tests {
     use super::*;
 
     #[test]
+    fn populated_main_v13_to_v15_preserves_journey_and_manual_data() {
+        let root = tempfile::tempdir().unwrap();
+        let db = root.path().join("main-v13.sqlite3");
+        let mut connection = Connection::open(&db).unwrap();
+        apply_plan(&mut connection, &MIGRATIONS[..13], 13).unwrap();
+        drop(connection);
+
+        let service = crate::application::task_service::TaskApplicationService::new(&db);
+        let task = service
+            .execute(
+                "task.create",
+                &json!({"operationId":"main-v13-task","inputText":"Original","title":"Main V13 Task"}),
+            )
+            .unwrap();
+        let task_id = task["id"].as_str().unwrap();
+        let log = service
+            .execute(
+                "task.work-log.create",
+                &json!({"operationId":"main-v13-log","taskId":task_id,"expectedTaskRevision":1,"body":"Manual v13 log"}),
+            )
+            .unwrap();
+        let log_id = log["id"].as_str().unwrap();
+        service
+            .execute(
+                "work-log.comment.create",
+                &json!({"operationId":"main-v13-comment","entryId":log_id,"body":"Manual v13 comment"}),
+            )
+            .unwrap();
+        let graph = json!({"events":[{"id":"v13","title":"Preserved journey"}]});
+        Connection::open(&db)
+            .unwrap()
+            .execute(
+                "INSERT INTO task_journey_graphs(task_id,locale,source_hash,graph_json,model_status,model_error) VALUES(?,'en','main-v13-source',?,'generated','')",
+                params![task_id, graph.to_string()],
+            )
+            .unwrap();
+
+        let mut connection = Connection::open(&db).unwrap();
+        apply(&mut connection).unwrap();
+
+        assert_eq!(schema_version(&connection).unwrap(), 15);
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT source_hash,graph_json FROM task_journey_graphs WHERE task_id=? AND locale='en'",
+                    [task_id],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+                )
+                .unwrap(),
+            ("main-v13-source".into(), graph.to_string())
+        );
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT body FROM task_work_log_entries WHERE id=?",
+                    [log_id],
+                    |row| row.get::<_, String>(0),
+                )
+                .unwrap(),
+            "Manual v13 log"
+        );
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT body FROM task_work_log_comments WHERE entry_id=?",
+                    [log_id],
+                    |row| row.get::<_, String>(0),
+                )
+                .unwrap(),
+            "Manual v13 comment"
+        );
+        assert!(table_exists(&connection, "task_work_sessions").unwrap());
+        assert!(table_exists(&connection, "task_execution_runtime").unwrap());
+        assert_eq!(
+            connection
+                .query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |row| {
+                    row.get::<_, i64>(0)
+                })
+                .unwrap(),
+            0
+        );
+    }
+
+    #[test]
+    fn populated_v14_to_v15_preserves_sessions_attachments_manual_logs_comments_and_ids() {
+        let root = tempfile::tempdir().unwrap();
+        let db = root.path().join("v14.sqlite3");
+        let mut connection = Connection::open(&db).unwrap();
+        apply_plan(&mut connection, &MIGRATIONS[..14], 14).unwrap();
+        drop(connection);
+        let service = crate::application::task_service::TaskApplicationService::new(&db);
+        let task = service.execute("task.create", &json!({"operationId":"task-v14","inputText":"Original","title":"V14 Task"})).unwrap();
+        let task_id = task["id"].as_str().unwrap();
+        let session = service.execute("task.work-session.create", &json!({"operationId":"session-v14","taskId":task_id,"title":"Stable session"})).unwrap();
+        let session_id = session["id"].as_str().unwrap();
+        let entry = service.execute("task.work-session.entry.create", &json!({"operationId":"entry-v14","taskId":task_id,"sessionId":session_id,"author":"user","kind":"note","body":"Stable note","attachment":{"name":"proof.txt","mediaType":"text/plain","data":"cHJvb2Y="}})).unwrap();
+        let log = service.execute("task.work-log.create", &json!({"operationId":"log-v14","taskId":task_id,"expectedTaskRevision":1,"body":"Manual log body"})).unwrap();
+        let log_id = log["id"].as_str().unwrap();
+        service.execute("work-log.comment.create", &json!({"operationId":"comment-v14","entryId":log_id,"body":"Manual comment"})).unwrap();
+        let mut connection = Connection::open(&db).unwrap();
+        apply(&mut connection).unwrap();
+        assert_eq!(schema_version(&connection).unwrap(), 15);
+        assert_eq!(connection.query_row("SELECT id,title FROM task_work_sessions WHERE id=?",[session_id],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?))).unwrap(),(session_id.to_owned(),"Stable session".into()));
+        assert_eq!(connection.query_row("SELECT id,body,json_extract(attachment_json,'$.name') FROM task_work_session_entries WHERE id=?",[entry["id"].as_str().unwrap()],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?))).unwrap(),(entry["id"].as_str().unwrap().to_owned(),"Stable note".into(),"proof.txt".into()));
+        assert_eq!(connection.query_row("SELECT body FROM task_work_log_entries WHERE id=?",[log_id],|r|r.get::<_,String>(0)).unwrap(),"Manual log body");
+        assert_eq!(connection.query_row("SELECT body FROM task_work_log_comments WHERE entry_id=?",[log_id],|r|r.get::<_,String>(0)).unwrap(),"Manual comment");
+        assert_eq!(connection.query_row("SELECT count(*) FROM pragma_foreign_key_check",[],|r|r.get::<_,i64>(0)).unwrap(),0);
+    }
+
+    #[test]
+    fn v15_failure_rolls_back_and_retries_without_losing_v14_rows() {
+        let root = tempfile::tempdir().unwrap();
+        let db = root.path().join("v14-retry.sqlite3");
+        let mut connection = Connection::open(&db).unwrap();
+        apply_plan(&mut connection, &MIGRATIONS[..14], 14).unwrap();
+        drop(connection);
+        let service = crate::application::task_service::TaskApplicationService::new(&db);
+        let task = service.execute("task.create", &json!({"operationId":"retry-task","inputText":"Original","title":"Retry"})).unwrap();
+        let task_id = task["id"].as_str().unwrap();
+        let session = service.execute("task.work-session.create", &json!({"operationId":"retry-session","taskId":task_id,"title":"Preserved"})).unwrap();
+        let session_id = session["id"].as_str().unwrap();
+        let mut connection = Connection::open(&db).unwrap();
+        connection.execute_batch("CREATE TABLE task_execution_runtime(singleton INTEGER PRIMARY KEY,connection_generation INTEGER NOT NULL);").unwrap();
+        assert!(apply(&mut connection).unwrap_err().contains("migration 15"));
+        assert_eq!(schema_version(&connection).unwrap(), 14);
+        assert!(!columns(&connection,"task_work_sessions").unwrap().contains(&"codex_thread_id".to_owned()));
+        assert_eq!(connection.query_row("SELECT title FROM task_work_sessions WHERE id=?",[session_id],|r|r.get::<_,String>(0)).unwrap(),"Preserved");
+        connection.execute_batch("DROP TABLE task_execution_runtime;").unwrap();
+        apply(&mut connection).unwrap();
+        assert_eq!(schema_version(&connection).unwrap(), 15);
+        assert_eq!(connection.query_row("SELECT title FROM task_work_sessions WHERE id=?",[session_id],|r|r.get::<_,String>(0)).unwrap(),"Preserved");
+        assert_eq!(connection.query_row("SELECT count(*) FROM pragma_foreign_key_check",[],|r|r.get::<_,i64>(0)).unwrap(),0);
+    }
+
+    #[test]
     fn input_images_upgrade_preserves_existing_captures_and_messages() {
         let mut connection = Connection::open_in_memory().unwrap();
         apply_plan(&mut connection, &MIGRATIONS[..10], 10).unwrap();
@@ -1203,9 +1371,33 @@ mod tests {
         apply(&mut connection).unwrap();
         connection.execute("INSERT INTO input_images(capture_id,name,media_type,data) VALUES('capture-image-upgrade','shot.png','image/png','bytes')", []).unwrap();
         apply(&mut connection).unwrap();
-        assert_eq!(connection.query_row("SELECT content FROM refinement_messages WHERE id='message-image-upgrade'", [], |r| r.get::<_,String>(0)).unwrap(), "Existing message");
-        assert_eq!(connection.query_row("SELECT text FROM captures WHERE id='capture-image-upgrade'", [], |r| r.get::<_,String>(0)).unwrap(), "Original");
-        assert_eq!(connection.query_row("SELECT count(*) FROM input_images", [], |r| r.get::<_,i64>(0)).unwrap(), 1);
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT content FROM refinement_messages WHERE id='message-image-upgrade'",
+                    [],
+                    |r| r.get::<_, String>(0)
+                )
+                .unwrap(),
+            "Existing message"
+        );
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT text FROM captures WHERE id='capture-image-upgrade'",
+                    [],
+                    |r| r.get::<_, String>(0)
+                )
+                .unwrap(),
+            "Original"
+        );
+        assert_eq!(
+            connection
+                .query_row("SELECT count(*) FROM input_images", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
         assert!(connection.execute("INSERT INTO input_images(name,media_type,data) VALUES('orphan','image/png','bytes')", []).is_err());
     }
 
@@ -1223,7 +1415,8 @@ mod tests {
             INSERT INTO input_images(message_id,name,media_type,data) VALUES('multi-message','new.png','image/png','new');").unwrap();
         apply(&mut connection).unwrap();
         for (capture, id) in [(true, "multi"), (false, "multi-message")] {
-            let images = crate::adapters::sqlite::input_images::get_all(&connection, capture, id).unwrap();
+            let images =
+                crate::adapters::sqlite::input_images::get_all(&connection, capture, id).unwrap();
             assert_eq!(images.len(), 2);
             assert_eq!(images[0]["name"], "old.png");
             assert_eq!(images[0]["data"], "bytes");
@@ -1570,6 +1763,9 @@ mod tests {
 }
 
 fn add_task_hierarchy(tx: &Transaction<'_>) -> Result<(), String> {
-    if !table_exists(tx, "tasks")? { return Ok(()); }
-    tx.execute_batch(include_str!("task_hierarchy_schema.sql")).map_err(|e| e.to_string())
+    if !table_exists(tx, "tasks")? {
+        return Ok(());
+    }
+    tx.execute_batch(include_str!("task_hierarchy_schema.sql"))
+        .map_err(|e| e.to_string())
 }

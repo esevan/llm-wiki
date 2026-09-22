@@ -6,6 +6,9 @@ import type {
   RefinementProposal,
   RefinementSession,
   TaskAggregate,
+  TaskWorkSession,
+  TaskWorkSessionAttachment,
+  TaskWorkSessionRecord,
   WorkbenchSnapshot,
 } from "../types/taskWorkbench";
 
@@ -65,6 +68,11 @@ export const taskClient = {
     ),
   task: (id: string) =>
     request<TaskAggregate>(`/tasks/${encodeURIComponent(id)}`),
+  workSessions: (taskId: string) => request<{ sessions: TaskWorkSession[] }>(`/tasks/${encodeURIComponent(taskId)}/work-sessions`),
+  createWorkSession: (taskId: string, title: string) => request<TaskWorkSession>(`/tasks/${encodeURIComponent(taskId)}/work-sessions`, "POST", { title }),
+  workSession: (taskId: string, sessionId: string) => request<TaskWorkSessionRecord>(`/tasks/${encodeURIComponent(taskId)}/work-sessions/${encodeURIComponent(sessionId)}`),
+  saveWorkSession: (taskId: string, session: TaskWorkSession) => request<TaskWorkSession>(`/tasks/${encodeURIComponent(taskId)}/work-sessions/${encodeURIComponent(session.id)}`, "PUT", { title: session.title, provider: session.provider, model: session.model, approvalMode: session.approvalMode, approvalsReviewer: session.approvalsReviewer, workspacePath: session.workspacePath }),
+  appendWorkSessionEntry: (taskId: string, sessionId: string, body: string, attachment: TaskWorkSessionAttachment | undefined, entryOperationId: string) => request(`/${"tasks"}/${encodeURIComponent(taskId)}/work-sessions/${encodeURIComponent(sessionId)}/entries`, "POST", { operationId: entryOperationId, author: "user", kind: "note", body, attachment }),
   revise: (
     id: string,
     expectedTaskRevision: number,

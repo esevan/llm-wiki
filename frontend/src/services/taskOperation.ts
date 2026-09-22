@@ -68,11 +68,17 @@ export function taskOperation(
         "POST decisions": "decision.create",
         "POST completions": "completion.create",
         "GET lineage": "lineage",
+        "GET work-sessions": "work-session.list",
+        "POST work-sessions": "work-session.create",
       };
       const name = names[`${method} ${p[2]}`];
       if (name) return op(`task.${name}`, ids);
     }
     if (p.length === 4) {
+      if (p[2] === "work-sessions" && method === "GET")
+        return op("task.work-session.get", { ...ids, sessionId: p[3] });
+      if (p[2] === "work-sessions" && method === "PUT")
+        return op("task.work-session.update", { ...ids, sessionId: p[3] });
       if (p[2] === "problem-links" && method === "DELETE")
         return op("task.problem-link.delete", { ...ids, linkId: p[3] });
       if (p[2] === "relationships" && method === "DELETE")
@@ -85,6 +91,26 @@ export function taskOperation(
           input: { ...body, ...ids, taskKind: "knowledge_draft", entityType: "tasks", entityId: p[1], locale },
         };
     }
+    if (p.length === 5 && p[2] === "work-sessions" && p[4] === "entries" && method === "POST")
+      return op("task.work-session.entry.create", { ...ids, sessionId: p[3] });
+    if (p.length === 5 && p[2] === "work-sessions" && p[4] === "runs") {
+      if (method === "GET")
+        return op("task.execution.list", { ...ids, sessionId: p[3] });
+      if (method === "POST")
+        return op("task.execution.start", { ...ids, sessionId: p[3] });
+    }
+    if (p.length === 6 && p[2] === "work-sessions" && p[4] === "runs") {
+      if (method === "GET")
+        return op("task.execution.get", { ...ids, sessionId: p[3], runId: p[5] });
+    }
+    if (p.length === 7 && p[2] === "work-sessions" && p[4] === "runs" && method === "POST") {
+      if (p[6] === "interrupt")
+        return op("task.execution.interrupt", { ...ids, sessionId: p[3], runId: p[5] });
+      if (p[6] === "work-log-sync")
+        return op("task.execution.work-log-sync", { ...ids, sessionId: p[3], runId: p[5] });
+    }
+    if (p.length === 9 && p[2] === "work-sessions" && p[4] === "runs" && p[6] === "formal-requests" && p[8] === "response" && method === "POST")
+      return op("task.execution.formal-response", { ...ids, sessionId: p[3], runId: p[5], requestId: p[7] });
     if (
       p.length === 6 &&
       p[2] === "knowledge" &&

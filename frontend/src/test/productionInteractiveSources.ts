@@ -15,6 +15,7 @@ import refinement from '../features/workbench/RefinementPanel.tsx?raw';
 import deleteDialog from '../features/workbench/DeleteItemDialog.tsx?raw';
 import taskDetail from '../features/workbench/TaskDetail.tsx?raw';
 import taskJourney from '../features/workbench/TaskJourneyGraph.tsx?raw';
+import taskWorkSessions from '../features/workbench/TaskWorkSessions.tsx?raw';
 import workbench from '../features/workbench/WorkbenchView.tsx?raw';
 import modalInteraction from '../features/workbench/useModalInteraction.ts?raw';
 import archiveRuntime from '../../public/runtime/archive.js?raw';
@@ -51,6 +52,7 @@ export const productionInteractiveSources = new Map<string, string>([
   ['frontend/src/features/workbench/RefinementPanel.tsx', refinement],
   ['frontend/src/features/workbench/TaskDetail.tsx', taskDetail],
   ['frontend/src/features/workbench/TaskJourneyGraph.tsx', taskJourney],
+  ['frontend/src/features/workbench/TaskWorkSessions.tsx', taskWorkSessions],
   ['frontend/src/features/workbench/DeleteItemDialog.tsx', deleteDialog],
   ['frontend/src/features/workbench/WorkbenchView.tsx', workbench],
   ['frontend/src/features/workbench/useModalInteraction.ts', modalInteraction],

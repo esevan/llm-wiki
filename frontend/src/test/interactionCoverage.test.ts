@@ -23,9 +23,9 @@ describe('interactive control coverage', () => {
     expect(unrelated.report().notRendered).toContain('file');
   });
 
-  it('keeps individual Task controls distinct from the 68-family inventory', () => {
-    expect(inventoryFamilyCount).toBe(68);
-    expect(taskInteractiveManifest.length).toBeGreaterThan(68);
+  it('keeps individual Task controls distinct from the 69-family inventory', () => {
+    expect(inventoryFamilyCount).toBe(69);
+    expect(taskInteractiveManifest.length).toBeGreaterThan(69);
     expect(new Set(taskInteractiveManifest.map(control => control.id)).size).toBe(taskInteractiveManifest.length);
     expect(taskInteractiveManifest.every(control => control.selector.length > 0 && control.effect.length > 0)).toBe(true);
     expect(taskInteractiveManifest.find(control => control.id === 'chat-preview-detail')?.disabledReason).toMatch(/Detail tab/);

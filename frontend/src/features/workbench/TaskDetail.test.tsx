@@ -2,6 +2,11 @@ import { act, createEvent, fireEvent, render, screen, waitFor } from "@testing-l
 import { describe, expect, it, vi } from "vitest";
 import { TaskDetail, type DetailSession } from "./TaskDetail";
 
+const execution = vi.hoisted(() => ({
+  subscribe: vi.fn().mockResolvedValue({ runs: [], activeRunId: null, selectedRun: null }),
+}));
+vi.mock("../../services/taskExecutionClient", () => ({ taskExecutionClient: execution }));
+
 const task = {
   id: "task-1",
   kind: "task" as const,
@@ -224,6 +229,53 @@ describe("Task detail", () => {
     expect(await screen.findByText("A saved summary")).toBeVisible();
     expect(screen.getByRole("tab", { name: "Work" })).toHaveAttribute("aria-selected", "true");
     expect(document.querySelector('[data-work-log-entry="image-entry"]')).toHaveFocus();
+  });
+
+  it("opens the exact saved session and Run from its Work Log execution link", async () => {
+    const workSession = { id: "session-a", taskId: "task-1", title: "Investigation", provider: "codex" as const, model: "gpt-5.6-sol", approvalMode: "ask" as const, workspacePath: "/project", createdAt: "2026-09-22T00:00:00Z", updatedAt: "2026-09-22T00:00:00Z" };
+    const run = { id: "run-a", taskId: "task-1", sessionId: "session-a", instruction: "Inspect evidence", status: "succeeded" as const, stopRequested: false, provider: "codex" as const, model: "gpt-5.6-sol", workspacePath: "/project", evidence: [], formalRequests: [], workLogEntryId: "linked-log", workLogSyncState: "synced" as const, revision: 1, finalReport: "Evidence checked" };
+    execution.subscribe.mockResolvedValue({ runs: [run], activeRunId: null, selectedRun: run });
+    window.llmWikiApplication = { request: vi.fn().mockImplementation(({ path }: { path: string }) => {
+      if (path === "/tasks/task-1/work-sessions") return Promise.resolve(response({ sessions: [workSession] }));
+      if (path === "/tasks/task-1/work-sessions/session-a") return Promise.resolve(response({ session: workSession, entries: [] }));
+      return Promise.resolve(response({ ...task, workLog: [{ id: "linked-log", body: "Codex evidence", execution: { runId: "run-a", sessionId: "session-a", status: "succeeded", provider: "codex", model: "gpt-5.6-sol", evidence: [], artifacts: [], limitations: [], syncState: "synced" } }] }));
+    }) };
+    render(<TaskDetail taskId="task-1" onClose={vi.fn()} onChanged={vi.fn()} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Open execution" }));
+    expect(await screen.findByRole("tab", { name: "Sessions" })).toHaveAttribute("aria-selected", "true");
+    await waitFor(() => expect(execution.subscribe).toHaveBeenCalledWith({ taskId: "task-1", sessionId: "session-a", runId: "run-a" }, expect.any(Function)));
+    const executionHeading = await screen.findByRole("heading", { name: "Run status: Finished" });
+    await waitFor(() => expect(executionHeading).toHaveFocus());
+    fireEvent.click(screen.getByRole("button", { name: "Open Work Log entry" }));
+    expect(screen.getByRole("tab", { name: "Work" })).toHaveAttribute("aria-selected", "true");
+    expect(document.querySelector('[data-work-log-entry="linked-log"]')).toHaveFocus();
+  });
+
+  it("attributes model reports separately from observed execution evidence and retains terminal recovery context", async () => {
+    const execution = { runId: "run-unverified", sessionId: "session-unverified", status: "needs_attention" as const, provider: "codex" as const, model: "gpt-5.6-sol", evidence: [{ id: "event-1", kind: "command", status: "completed", label: "Focused check", summary: "Exited with code 0" }], artifacts: ["reports/result.txt"], limitations: ["Final provider state was not recovered"], syncState: "synced" as const };
+    window.llmWikiApplication = { request: vi.fn().mockResolvedValue(response({ ...task, workLog: [{ id: "execution-log", body: "Run requested", execution }] })) };
+    render(<TaskDetail taskId="task-1" onClose={vi.fn()} onChanged={vi.fn()} />);
+    expect(await screen.findByText(/Needs attention/)).toBeVisible();
+    expect(screen.getByText("Codex final report is unavailable for this terminal Run.")).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Observed provider evidence" })).toBeVisible();
+    expect(screen.getByText("Focused check: Exited with code 0")).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Artifacts" })).toBeVisible();
+    expect(screen.getByText("reports/result.txt")).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Unresolved limitations" })).toBeVisible();
+    expect(screen.getByText("Final provider state was not recovered")).toBeVisible();
+  });
+
+  it("labels the Work Log execution status and report attribution in Korean", async () => {
+    document.documentElement.lang = "ko";
+    window.llmWikiApplication = { request: vi.fn().mockResolvedValue(response({ ...task, workLog: [{ id: "reported-log", body: "작업 요청", execution: { runId: "run-reported", sessionId: "session-reported", status: "succeeded", provider: "codex", model: "gpt-5.6-sol", reportExcerpt: "모델 보고", evidence: [], artifacts: [], limitations: [], syncState: "synced" } }] })) };
+    try {
+      render(<TaskDetail taskId="task-1" onClose={vi.fn()} onChanged={vi.fn()} />);
+      expect(await screen.findByText(/완료됨/)).toBeVisible();
+      expect(screen.getByRole("heading", { name: "모델이 작성한 최종 보고서" })).toBeVisible();
+      expect(screen.getByText("모델 보고")).toBeVisible();
+    } finally {
+      document.documentElement.lang = "en";
+    }
   });
 
   it("shows Work Log entries newest first with an explicit local date and time", async () => {
@@ -957,6 +1009,8 @@ describe("Task detail tabs and workbench sessions", () => {
 
     const work = await screen.findByRole("tab", { name: "Work" });
     fireEvent.keyDown(work, { key: "ArrowRight" });
+    await waitFor(() => expect(screen.getByRole("tab", { name: "Sessions" })).toHaveAttribute("aria-selected", "true"));
+    fireEvent.keyDown(screen.getByRole("tab", { name: "Sessions" }), { key: "ArrowRight" });
     await waitFor(() => expect(screen.getByRole("tab", { name: "Details" })).toHaveAttribute("aria-selected", "true"));
     fireEvent.keyDown(screen.getByRole("tab", { name: "Details" }), { key: "End" });
     await waitFor(() => expect(screen.getByRole("tab", { name: "Review" })).toHaveAttribute("aria-selected", "true"));

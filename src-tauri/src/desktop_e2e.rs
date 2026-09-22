@@ -75,8 +75,12 @@ pub(crate) fn desktop_e2e_arm_one_shot_failure(
     }
     if !matches!(
         operation.as_str(),
-        "refinement.context" | "knowledge.read" | "workbench.get"
-            | "task-refinement.workspace" | "task-refinement.open" | "task.get"
+        "refinement.context"
+            | "knowledge.read"
+            | "workbench.get"
+            | "task-refinement.workspace"
+            | "task-refinement.open"
+            | "task.get"
             | "jobs.enqueue"
     ) {
         return Err("Unsupported desktop E2E failure operation".into());
@@ -626,6 +630,7 @@ pub(crate) struct DesktopE2eResult {
 pub(crate) struct DesktopE2eState {
     provider_url: String,
     scenario: String,
+    execution_cwd: Option<String>,
     restore_capture: Option<String>,
     restore_steps: Vec<String>,
 }
@@ -637,6 +642,7 @@ pub(crate) fn desktop_e2e_mode() -> Option<DesktopE2eState> {
         let provider_url = std::env::var("LLM_WIKI_E2E_PROVIDER_URL").ok()?;
         let scenario =
             std::env::var("LLM_WIKI_E2E_SCENARIO").unwrap_or_else(|_| "task-capture".into());
+        let execution_cwd = std::env::var("LLM_WIKI_E2E_EXECUTION_CWD").ok();
         let restore_capture = std::env::var("LLM_WIKI_E2E_RESTORE_CAPTURE").ok();
         let restore_steps = std::env::var("LLM_WIKI_E2E_RESTORE_STEPS")
             .ok()
@@ -645,6 +651,7 @@ pub(crate) fn desktop_e2e_mode() -> Option<DesktopE2eState> {
         Some(DesktopE2eState {
             provider_url,
             scenario,
+            execution_cwd,
             restore_capture,
             restore_steps,
         })

@@ -70,6 +70,7 @@ export interface WorkLogEntry {
     url?: string;
   };
   comments?: Array<{ id: string; body: string; createdAt?: string }>;
+  execution?: TaskExecutionWorkLogLink;
 }
 export interface ChecklistItem {
   id: string;
@@ -190,3 +191,42 @@ export interface LineageSnapshot {
   modelStatus?: string;
   modelError?: string;
 }
+export type TaskWorkSessionAttachment = { name: string; mediaType: string; data: string };
+export type TaskWorkSessionEntry = {
+  id: string; author: "user" | "assistant" | "system";
+  kind: "note" | "ai_output" | "execution_result"; body: string;
+  attachment?: TaskWorkSessionAttachment; createdAt: string;
+};
+export type TaskExecutionStatus = "queued" | "running" | "awaiting_response" | "succeeded" | "failed" | "cancelled" | "interrupted" | "needs_attention";
+export type FormalRequestStatus = "pending" | "submitting" | "answered" | "stale" | "error";
+export type TaskExecutionEvidence = { id: string; kind: string; status: string; label: string; summary: string; command?: string; paths?: string[]; exitCode?: number; createdAt?: string };
+export type TaskExecutionFormalRequest = {
+  id: string; kind: "command_approval" | "file_change_approval" | "permissions_approval" | "user_input";
+  status: FormalRequestStatus; isBlocking: boolean; title: string; prompt: string;
+  choices: Array<{ value: string; label: string; description?: string }>;
+  questions: Array<{ id: string; header: string; prompt: string; options: Array<{ value: string; label: string; description?: string }>; allowOther: boolean; isSecret: boolean }>;
+  proposedResponse?: { decision?: string; answers?: Record<string, { answers: string[] }> };
+  response?: { decision?: string; answers?: Record<string, { answers: string[] }> };
+  error?: string;
+};
+export type TaskExecutionEffectiveConfig = {
+  model: string; cwd: string; approvalPolicy: string; approvalsReviewer: "user" | "auto_review"; sandbox: string;
+  provenance: "preflight" | "bound_thread"; settingsRevision: string; ready: boolean;
+  capabilities: { structuredUserInput: boolean }; readinessError?: { code: string; message: string };
+};
+export type TaskExecutionRun = {
+  id: string; taskId: string; sessionId: string; instruction: string; status: TaskExecutionStatus; stopRequested: boolean;
+  provider: "codex"; model: string; workspacePath: string; threadId?: string; turnId?: string; startedAt?: string; finishedAt?: string;
+  userEntryId?: string;
+  finalReport?: string; error?: { code: string; message: string }; evidence: TaskExecutionEvidence[];
+  liveStatus?: { kind: string; status: "running" | "completed" };
+  formalRequests: TaskExecutionFormalRequest[]; workLogEntryId?: string; workLogSyncState: "pending" | "synced" | "failed";
+  workLogSyncError?: string; retryOfRunId?: string; revision: number;
+};
+export type TaskExecutionSnapshot = { revision?: number; runs: TaskExecutionRun[]; activeRunId: string | null; selectedRun: TaskExecutionRun | null; effectiveConfig?: TaskExecutionEffectiveConfig };
+export type TaskExecutionWorkLogLink = { runId: string; sessionId: string; status: TaskExecutionStatus; provider: "codex"; model: string; reportExcerpt?: string; evidence: TaskExecutionEvidence[]; artifacts: string[]; limitations: string[]; syncState: "pending" | "synced" | "failed" };
+export type TaskWorkSession = {
+  id: string; taskId: string; title: string; provider: "codex"; model: string;
+  approvalMode: "ask" | "auto"; approvalsReviewer?: "user" | "auto_review"; workspacePath: string; createdAt: string; updatedAt: string;
+};
+export type TaskWorkSessionRecord = { session: TaskWorkSession; entries: TaskWorkSessionEntry[] };
