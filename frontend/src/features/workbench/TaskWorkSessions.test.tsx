@@ -361,6 +361,46 @@ describe("Task work sessions", () => {
     expect(screen.getByLabelText("Instruction or note")).toHaveValue("retry this");
     expect(execution.execute).not.toHaveBeenCalled();
   });
+  it("retries a failed Run directly without changing the current draft or attachment", async () => {
+    execution.execute.mockReset();
+    const saved = { ...session("one", "Investigation"), workspacePath: "/project" };
+    const failed = { id: "run-failed", taskId: task.id, sessionId: "one", instruction: "retry this exactly", status: "failed" as const, stopRequested: false, provider: "codex" as const, model: "gpt-5.6-sol", workspacePath: "/project", evidence: [], formalRequests: [], workLogSyncState: "synced" as const, revision: 1, error: { code: "provider_error", message: "Provider stopped" } };
+    const effectiveConfig = { model: "gpt-5.6-sol", cwd: "/project", approvalPolicy: "ask", approvalsReviewer: "user" as const, sandbox: "workspace-write", provenance: "preflight" as const, settingsRevision: "settings-1", ready: true, capabilities: { structuredUserInput: true } };
+    const failedSnapshot = { runs: [failed], activeRunId: null, selectedRun: failed, effectiveConfig };
+    const retried = { ...failed, id: "run-retried", status: "succeeded" as const, retryOfRunId: failed.id, finalReport: "Retry finished", error: undefined, revision: 2 };
+    const retriedSnapshot = { runs: [retried, failed], activeRunId: null, selectedRun: retried, effectiveConfig };
+    let rejectFirst!: (reason: Error) => void;
+    execution.subscribe.mockResolvedValue(failedSnapshot);
+    execution.execute
+      .mockReturnValueOnce(new Promise((_resolve, reject) => { rejectFirst = reject; }))
+      .mockResolvedValueOnce(retriedSnapshot);
+    window.llmWikiApplication = { request: vi.fn().mockImplementation(({ path }: { path: string }) => path.endsWith("work-sessions") ? Promise.resolve(response({ sessions: [saved] })) : Promise.resolve(response({ session: saved, entries: [] }))) };
+    const attachment = { name: "unrelated.png", mediaType: "image/png", data: "cG5n" };
+    const draftStore = new Map<string, WorkSessionDraft>([["one", { body: "keep my draft", attachment, operationId: "draft-operation" }]]);
+    const firstView = render(<TaskWorkSessions task={task} draftStore={draftStore} />);
+    const retry = await screen.findByRole("button", { name: "Retry Run: retry this exactly" });
+
+    fireEvent.click(retry);
+    fireEvent.click(retry);
+    expect(execution.execute).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("button", { name: "Run with Codex" })).toBeDisabled();
+    const firstInput = execution.execute.mock.calls[0][0];
+    expect(firstInput).toMatchObject({ taskId: task.id, sessionId: "one", instruction: failed.instruction, settingsRevision: "settings-1", retryOfRunId: failed.id });
+    expect(firstInput).not.toHaveProperty("attachment");
+    await act(async () => rejectFirst(new Error("response lost")));
+    expect(await screen.findByText(/response lost/)).toBeVisible();
+    expect(screen.getByLabelText("Instruction or note")).toHaveValue("keep my draft");
+    expect(screen.getByAltText("unrelated.png")).toBeVisible();
+
+    firstView.unmount();
+    render(<TaskWorkSessions task={task} draftStore={draftStore} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Retry Run: retry this exactly" }));
+    await waitFor(() => expect(execution.execute).toHaveBeenCalledTimes(2));
+    expect(execution.execute.mock.calls[1][0].operationId).toBe(firstInput.operationId);
+    expect(await screen.findByText("Retry finished")).toBeVisible();
+    expect(screen.getByLabelText("Instruction or note")).toHaveValue("keep my draft");
+    expect(screen.getByAltText("unrelated.png")).toBeVisible();
+  });
   it("keeps a newer composer draft when an earlier Run submission resolves", async () => {
     execution.execute.mockClear();
     const saved = { ...session("one", "Investigation"), workspacePath: "/project" };
@@ -515,8 +555,12 @@ describe("Task work sessions", () => {
     window.llmWikiApplication = { request: vi.fn().mockImplementation(({ path }: { path: string }) => path.endsWith("work-sessions") ? Promise.resolve(response({ sessions: [saved] })) : Promise.resolve(response({ session: saved, entries: [] }))) };
     render(<TaskWorkSessions task={task} />);
     fireEvent.change(await screen.findByLabelText("Session"), { target: { value: "one" } });
+    expect(await screen.findAllByRole("button", { name: /Retry Run:/ })).toHaveLength(2);
+    screen.getAllByRole("button", { name: /Retry Run:/ }).forEach((button) => expect(button).toBeDisabled());
+    expect(screen.getAllByText("Prepare the conversation before retrying.")).toHaveLength(2);
     for (const [index, status] of ["interrupted", "needs_attention"].entries()) {
-      fireEvent.click(await screen.findByRole("button", { name: new RegExp(status) }));
+      const historyName = status === "interrupted" ? "Interrupted · interrupted work" : "Needs attention · needs_attention work";
+      fireEvent.click(await screen.findByRole("button", { name: historyName }));
       expect(screen.getByRole("status", { name: "" })).toHaveTextContent("Outcome unknown — work may already have happened");
       expect(screen.getAllByText("Codex did not provide a final report.")).toHaveLength(2);
       expect(screen.getByRole("button", { name: "Use instruction again" })).toBeEnabled();
