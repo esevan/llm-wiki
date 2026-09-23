@@ -452,6 +452,17 @@ impl NativeApplication {
                         result.body["translationQueueError"] = queued.body["detail"].clone();
                     }
                 }
+                let queued = self.enqueue_job(json!({
+                    "taskKind":"embedding_refresh",
+                    "entityType":"vault",
+                    "entityId":"current",
+                    "automatic":true
+                })).await;
+                if queued.status < 300 {
+                    result.body["embeddingJob"] = queued.body;
+                } else {
+                    result.body["embeddingQueueError"] = queued.body["detail"].clone();
+                }
             }
             return result;
         }
