@@ -330,6 +330,7 @@ impl NativeApplication {
                     || operation.name.starts_with("provider.")
                     || operation.name.starts_with("i18n.")
                     || operation.name == "settings.vault.get"
+                    || operation.name.starts_with("settings.codex_home.")
             }
             "workflow" => matches!(
                 operation.name.split('.').next().unwrap_or_default(),
@@ -609,6 +610,8 @@ impl NativeApplication {
             "provider.save" => settings::save_provider(&self.settings_path, input)?,
             "settings.vault.get" => self.vault_settings()?,
             "vault.settings.get" => self.vault_settings()?,
+            "settings.codex_home.get" => settings::codex_home(&self.settings_path)?,
+            "settings.codex_home.save" => settings::save_codex_home(&self.settings_path, input)?,
             "board.get" => workflow::board_for_locale(
                 &self.db_path,
                 input.get("locale").and_then(Value::as_str).unwrap_or("en"),

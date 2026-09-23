@@ -52,6 +52,7 @@ pub(crate) struct CodexAppServer {
 
 struct Inner {
     executable: Option<PathBuf>,
+    codex_home: Option<PathBuf>,
     startup: Mutex<()>,
     connection: Mutex<Option<Connection>>,
     pending: Arc<Mutex<PendingRequests>>,
@@ -68,15 +69,16 @@ struct Connection {
 }
 
 impl CodexAppServer {
-    pub(crate) fn new() -> Self {
-        Self::from_optional_executable(None)
+    fn from_optional_executable(executable: Option<PathBuf>) -> Self {
+        Self::from_optional_executable_and_home(executable, None)
     }
 
-    fn from_optional_executable(executable: Option<PathBuf>) -> Self {
+    fn from_optional_executable_and_home(executable: Option<PathBuf>, codex_home: Option<PathBuf>) -> Self {
         let (events, _) = broadcast::channel(EVENT_CAPACITY);
         Self {
             inner: Arc::new(Inner {
                 executable,
+                codex_home,
                 startup: Mutex::new(()),
                 connection: Mutex::new(None),
                 pending: Arc::new(Mutex::new(HashMap::new())),
@@ -90,6 +92,10 @@ impl CodexAppServer {
     #[cfg(test)]
     pub(crate) fn from_test_executable(executable: PathBuf) -> Self {
         Self::from_optional_executable(Some(executable))
+    }
+
+    pub(crate) fn with_codex_home(codex_home: Option<PathBuf>) -> Self {
+        Self::from_optional_executable_and_home(None, codex_home)
     }
 
     pub(crate) fn subscribe(&self) -> broadcast::Receiver<AppServerEvent> {
@@ -110,13 +116,19 @@ impl CodexAppServer {
             .clone()
             .map(Ok)
             .unwrap_or_else(resolve_codex_executable)?;
-        let mut child = Command::new(&executable)
+        let mut command = Command::new(&executable);
+        command
             .arg("app-server")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
-            .kill_on_drop(true)
-            .spawn()
+            .kill_on_drop(true);
+        // Do not set CODEX_HOME for the normal path. Codex itself then uses the
+        // same standard local home as its CLI and IDE integration.
+        if let Some(home) = &self.inner.codex_home {
+            command.env("CODEX_HOME", home);
+        }
+        let mut child = command.spawn()
             .map_err(|error| classify_spawn_error(&executable, error))?;
         let stdin = child
             .stdin
@@ -617,6 +629,24 @@ mod tests {
         assert!(!error.contains("do-not-expose"));
         assert!(server.current_generation().await.is_none());
         assert!(!server.structured_input_supported());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn explicit_codex_home_is_passed_to_the_app_server_process() {
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("alternate-codex-home");
+        std::fs::create_dir(&home).unwrap();
+        let fixture = executable_fixture(&format!(
+            "test \"$CODEX_HOME\" = \"{}\" || exit 1\nread _initialize\necho '{{\"id\":1,\"result\":{{\"capabilities\":{{}}}}}}'\nread _initialized\nsleep 1",
+            home.display()
+        ));
+        let server = CodexAppServer::from_optional_executable_and_home(
+            Some(fixture.path().join("codex-fixture")),
+            Some(home),
+        );
+        server.start(9).await.unwrap();
+        assert_eq!(server.current_generation().await, Some(9));
     }
 
     #[cfg(unix)]

@@ -115,6 +115,11 @@ h1 { max-width: 720px; font-size: clamp(31px, 3.2vw, 44px); line-height: 1.05; l
 .vault-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .vault-secondary-action { color: var(--color-accent-strong); border-color: var(--color-border-accent-muted); background: var(--color-bg-accent-subtle); }
 .vault-secondary-action:hover:not(:disabled) { background: var(--color-bg-surface); border-color: var(--color-border-accent); }
+.codex-home-settings { border-top: 0; }
+.codex-home-toggle, .codex-home-field { display: grid; gap: 7px; color: var(--color-text-primary); font-weight: 700; }
+.codex-home-toggle { grid-template-columns: auto minmax(0, 1fr); align-items: start; cursor: pointer; }
+.codex-home-toggle input { width: 17px; height: 17px; margin: 2px 0 0; accent-color: var(--color-accent-primary); }
+.codex-home-field input { min-height: 42px; box-sizing: border-box; padding: 9px 11px; border: var(--border-default); border-radius: var(--radius-control); background: var(--color-bg-surface); color: var(--color-text-primary); font: inherit; }
 .advanced-options { margin-top: 18px; padding: 13px; border: var(--border-default); border-radius: var(--radius-card); background: var(--color-bg-muted); }
 .advanced-options summary { color: var(--color-text-primary); }
 

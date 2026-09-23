@@ -48,8 +48,8 @@ struct ExecutionSignal {
 }
 
 impl TaskExecutionRuntime {
-    pub(crate) fn new(service: TaskExecutionApplicationService) -> Self {
-        Self::with_app_server(service, CodexAppServer::new())
+    pub(crate) fn new(service: TaskExecutionApplicationService, codex_home: Option<std::path::PathBuf>) -> Self {
+        Self::with_app_server(service, CodexAppServer::with_codex_home(codex_home))
     }
 
     fn with_app_server(
@@ -1393,7 +1393,7 @@ mod tests {
         let run = snapshot["selectedRun"]["id"].as_str().unwrap().to_owned();
         service.mark_dispatch_recorded(&run).unwrap();
         service.accept_turn(&run, "live-thread", "live-turn").unwrap();
-        let runtime = TaskExecutionRuntime::new(service);
+        let runtime = TaskExecutionRuntime::new(service, None);
 
         runtime.update_live_delta("item/agentMessage/delta",&json!({"threadId":"live-thread","turnId":"live-turn","itemId":"agent","delta":"Working"}));
         runtime.update_live_delta("item/agentMessage/delta",&json!({"threadId":"live-thread","turnId":"live-turn","itemId":"agent","delta":" now"}));
@@ -1439,7 +1439,7 @@ mod tests {
             .unwrap();
 
         let service = TaskExecutionApplicationService::new(&db);
-        let runtime = TaskExecutionRuntime::new(service);
+        let runtime = TaskExecutionRuntime::new(service, None);
         let prepared = runtime
             .prepare(&json!({"taskId":task_id,"sessionId":session_id}))
             .await

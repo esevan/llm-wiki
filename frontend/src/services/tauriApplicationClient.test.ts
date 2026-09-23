@@ -22,6 +22,7 @@ describe('Tauri domain command adapter', () => {
     await client.request({ path: '/search?q=native' });
     await client.request({ path: '/provider/config' });
     await client.request({ path: '/settings/vault' });
+    await client.request({ path: '/settings/codex-home' });
     expect(invoke).toHaveBeenNthCalledWith(1, 'vault_command', {
       operation: { name: 'vault.search', input: { query: 'native', limit: 20, offset: 0, semantic: false } },
     });
@@ -30,6 +31,9 @@ describe('Tauri domain command adapter', () => {
     });
     expect(invoke).toHaveBeenNthCalledWith(3, 'settings_command', {
       operation: { name: 'settings.vault.get', input: {} },
+    });
+    expect(invoke).toHaveBeenNthCalledWith(4, 'settings_command', {
+      operation: { name: 'settings.codex_home.get', input: {} },
     });
   });
 

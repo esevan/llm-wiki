@@ -38,6 +38,7 @@ const manifest: readonly ControlSpec[] = [
   task('vault-change', 'F39', 'frontend/src/features/settings/SettingsView.tsx', 'native Vault picker starts and the app restarts with the selected location'),
   task('vault-retry', 'F39', 'frontend/src/features/settings/SettingsView.tsx', 'Vault settings reload after a failed status request'),
   task('vault-regenerate-embeddings', 'F39', 'frontend/src/features/settings/SettingsView.tsx', 'current Vault embeddings are rebuilt and status is reported'),
+  ...['home-alternate-toggle', 'home-alternate', 'home-save', 'home-retry'].map(name => task(`codex-${name}`, 'F39', 'frontend/src/features/settings/SettingsView.tsx', 'Codex home mode, path, or reload changes visibly')),
   ...['name', 'topics', 'create'].map(name => task(`mcp-connection-${name}`, 'F41', 'frontend/src/features/settings/McpConnections.tsx', 'connection input and exact grants persist')),
   ...['session:read', 'session:write', 'topic:read', 'workbench:current:read', 'workbench:overview:read', 'vault:search:lexical', 'vault:search:semantic', 'vault:evidence:read', 'knowledge:draft:write', 'knowledge:publish'].map(name => existing(`mcp-scope-${name}`, 'F41', `[data-control="mcp-scope-${name}"]`, 'frontend/src/features/settings/McpConnections.tsx', name, 'individual MCP grant persists')),
   ...['access', 'revoke'].map(name => task(`mcp-connection-${name}`, 'F42', 'frontend/src/features/settings/McpConnections.tsx', name === 'access' ? 'connection command and grants disclose' : 'connection revokes')),

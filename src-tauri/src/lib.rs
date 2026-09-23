@@ -509,8 +509,9 @@ pub fn run() {
             if !recovery_pending {
                 execution_service.recover_nonterminal()?;
             }
+            let codex_home = native::settings::configured_codex_home(&application.settings_path())?;
             let execution_runtime =
-                native::task_execution_runtime::TaskExecutionRuntime::new(execution_service);
+                native::task_execution_runtime::TaskExecutionRuntime::new(execution_service, codex_home);
             let background_projector = application.work_tracking_service();
             let mcp_service = application.work_tracking_service();
             let mcp_listener_shutdown = mcp_ipc::McpListenerShutdown::default();
