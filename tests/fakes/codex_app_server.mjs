@@ -65,7 +65,24 @@ function startTurn(threadId, input) {
     // Exercise the legitimate pre-response path as well as the post-response burst.
     write({ method: "turn/started", params: { threadId, turnId, turn: { id: turnId, status: "inProgress" } } });
   }
+  if (process.env.LLM_WIKI_FAKE_CODEX_CHILD_BURST === "1") {
+    write({ id: "fixture-stale-approval", method: "item/commandExecution/requestApproval", params: {
+      threadId, turnId: "fixture-stale-turn", itemId: "fixture-stale-command", command: "fixture-stale-check", cwd: process.cwd(), reason: "Stale request before the response.", availableDecisions: ["accept", "decline"], isBlocking: true,
+    }});
+  }
   response(input.id, { turn: { id: turnId, threadId, status: "inProgress" } });
+  if (process.env.LLM_WIKI_FAKE_CODEX_CHILD_BURST === "1") {
+    const childThreadId = `fixture-child-thread-${turnId}`;
+    const childTurnId = `fixture-child-turn-${turnId}`;
+    for (let index = 0; index < 160; index += 1) {
+      write({ method: "item/agentMessage/delta", params: { threadId: childThreadId, turnId: childTurnId, itemId: "fixture-child-agent", delta: `child-${index} ` } });
+    }
+    write({ id: "fixture-child-approval", method: "item/commandExecution/requestApproval", params: {
+      threadId: childThreadId, turnId: childTurnId, itemId: "fixture-child-command", command: "fixture-child-check", cwd: process.cwd(), reason: "Unowned child request.", availableDecisions: ["accept", "decline"], isBlocking: true,
+    }});
+    completeTurn(threadId, turnId, state.turns);
+    return;
+  }
   if (process.env.LLM_WIKI_FAKE_CODEX_BURST === "1") {
     for (let index = 0; index < 160; index += 1) {
       write({ method: "item/agentMessage/delta", params: { threadId, turnId, itemId: "fixture-burst-agent", delta: `chunk-${index} ` } });
@@ -86,6 +103,7 @@ rl.on("line", (line) => {
   let input;
   try { input = JSON.parse(line); } catch { return; }
   if (process.env.LLM_WIKI_FAKE_CODEX_LOG && input.method) appendFileSync(process.env.LLM_WIKI_FAKE_CODEX_LOG, `${input.method}\n`);
+  if (process.env.LLM_WIKI_FAKE_CODEX_LOG && ["fixture-child-approval", "fixture-stale-approval"].includes(input.id) && input.error) appendFileSync(process.env.LLM_WIKI_FAKE_CODEX_LOG, `rejected:${input.id}\n`);
   if (input.method === "initialize") {
     response(input.id, { capabilities: { experimentalApi: true } });
   } else if (input.method === "initialized") {

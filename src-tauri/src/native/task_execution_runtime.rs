@@ -678,8 +678,14 @@ impl TaskExecutionRuntime {
                     self.run_for_params(params).is_some()
                 };
                 if !recognized {
-                    self.buffer_early(event).await;
-                } else if method == "turn/completed" {
+                    match self.event_may_precede_acceptance(params) {
+                        Ok(true) => self.buffer_early(event).await,
+                        Ok(false) => {}
+                        Err(_) => self.fail_event_routing().await,
+                    }
+                    return;
+                }
+                if method == "turn/completed" {
                     self.clear_live_status(params);
                 } else if method.ends_with("/delta") || method.ends_with("/outputDelta") {
                     self.update_live_delta(method, params);
@@ -711,7 +717,16 @@ impl TaskExecutionRuntime {
                         run_id,
                     });
                 }
-                Ok(None) => self.buffer_early(event).await,
+                Ok(None) => match self.event_may_precede_acceptance(params) {
+                    Ok(true) => self.buffer_early(event).await,
+                    Ok(false) => {
+                        self.inner
+                            .server
+                            .reject_unowned_request(*generation, id.clone())
+                            .await;
+                    }
+                    Err(_) => self.fail_event_routing().await,
+                },
                 Err(_) => {
                     let _ = self
                         .inner
@@ -793,18 +808,23 @@ impl TaskExecutionRuntime {
     }
 
     async fn drain_early(&self, thread: &str, turn: &str) {
-        let mut retained = VecDeque::new();
         let mut matched = Vec::new();
+        let mut rejected = Vec::new();
         {
             let mut early = self.inner.early_events.lock().await;
             while let Some(event) = early.pop_front() {
                 if event_matches(&event, thread, turn) {
                     matched.push(event);
-                } else {
-                    retained.push_back(event);
+                } else if let AppServerEvent::Request { generation, id, .. } = event {
+                    rejected.push((generation, id));
                 }
             }
-            *early = retained;
+        }
+        for (generation, id) in rejected {
+            self.inner
+                .server
+                .reject_unowned_request(generation, id)
+                .await;
         }
         for event in matched {
             Box::pin(self.handle_event_in_order(event)).await;
@@ -827,6 +847,24 @@ impl TaskExecutionRuntime {
             .service
             .run_identity_for_event(thread, turn)
             .ok()?
+    }
+
+    fn event_may_precede_acceptance(&self, params: &Value) -> Result<bool, String> {
+        let Some(thread) = params
+            .get("threadId")
+            .and_then(Value::as_str)
+        else {
+            return Ok(false);
+        };
+        self.inner.service.turn_acceptance_pending(thread)
+    }
+
+    async fn fail_event_routing(&self) {
+        let _ = self
+            .inner
+            .service
+            .mark_connection_lost("Codex event ownership could not be checked safely");
+        self.inner.server.shutdown().await;
     }
 
     fn update_live_status(&self, params: &Value, status: &str) {
@@ -1517,6 +1555,107 @@ mod tests {
             )
             .unwrap();
         assert_eq!(formal_turn, turn);
+        assert!(runtime.inner.early_events.lock().await.is_empty());
+        assert!(runtime.inner.server.generation().await.is_ok());
+        runtime.shutdown().await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn child_thread_burst_does_not_poison_parent_turn_routing() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = tempdir().unwrap();
+        let db = root.path().join("state.sqlite3");
+        let workspace = root.path().join("workspace");
+        std::fs::create_dir(&workspace).unwrap();
+        crate::native::database::initialize(&db).unwrap();
+        let tasks = TaskApplicationService::new(&db);
+        let task = tasks
+            .execute(
+                "task.create",
+                &json!({"operationId":"child-burst-task","inputText":"Route child output","title":"Child output"}),
+            )
+            .unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let session = tasks
+            .execute(
+                "task.work-session.create",
+                &json!({"operationId":"child-burst-session","taskId":task,"title":"Child burst"}),
+            )
+            .unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        tasks.execute("task.work-session.update", &json!({"operationId":"child-burst-settings","taskId":task,"sessionId":session,"title":"Child burst","provider":"codex","model":"gpt-5.6-sol","approvalMode":"ask","approvalsReviewer":"user","workspacePath":workspace})).unwrap();
+
+        let fake = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../tests/fakes/codex_app_server.mjs")
+            .canonicalize()
+            .unwrap();
+        let log = root.path().join("requests.log");
+        let wrapper = root.path().join("fake-codex-child-burst");
+        std::fs::write(
+            &wrapper,
+            format!(
+                "#!/bin/sh\nexport LLM_WIKI_FAKE_CODEX_CHILD_BURST=1\nexport LLM_WIKI_FAKE_CODEX_LOG='{}'\nexec '{}'\n",
+                log.display(),
+                fake.display()
+            ),
+        )
+        .unwrap();
+        let mut permissions = std::fs::metadata(&wrapper).unwrap().permissions();
+        permissions.set_mode(0o700);
+        std::fs::set_permissions(&wrapper, permissions).unwrap();
+
+        let runtime = TaskExecutionRuntime::with_test_server(
+            TaskExecutionApplicationService::new(&db),
+            wrapper,
+        );
+        let prepared = runtime
+            .prepare(&json!({"taskId":task,"sessionId":session}))
+            .await
+            .unwrap();
+        let settings_revision = prepared["effectiveConfig"]["settingsRevision"]
+            .as_str()
+            .unwrap();
+        let started = runtime.execute(&json!({"taskId":task,"sessionId":session,"operationId":"child-burst-run","instruction":"Emit child output","settingsRevision":settings_revision})).await.unwrap();
+        let run = started["selectedRun"]["id"].as_str().unwrap().to_owned();
+
+        let completed = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                let snapshot = runtime
+                    .snapshot(&json!({"taskId":task,"sessionId":session,"runId":run}))
+                    .unwrap();
+                let request_rejected = std::fs::read_to_string(&log)
+                    .unwrap_or_default()
+                    .contains("rejected:fixture-child-approval");
+                let stale_request_rejected = std::fs::read_to_string(&log)
+                    .unwrap_or_default()
+                    .contains("rejected:fixture-stale-approval");
+                if snapshot["selectedRun"]["status"] == "succeeded"
+                    && snapshot["selectedRun"]["finalReport"].is_string()
+                    && request_rejected
+                    && stale_request_rejected
+                {
+                    break snapshot;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(completed["selectedRun"]["error"].is_null());
+        assert!(completed["selectedRun"]["finalReport"]
+            .as_str()
+            .unwrap()
+            .contains("Controlled Codex fixture completed"));
+        assert!(completed["selectedRun"]["formalRequests"]
+            .as_array()
+            .unwrap()
+            .is_empty());
         assert!(runtime.inner.early_events.lock().await.is_empty());
         assert!(runtime.inner.server.generation().await.is_ok());
         runtime.shutdown().await;

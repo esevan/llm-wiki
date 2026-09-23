@@ -529,6 +529,18 @@ impl TaskExecutionApplicationService {
     ) -> Result<Option<(String, String, String)>, String> {
         database::open(&self.db_path)?.query_row("SELECT id,task_id,session_id FROM task_work_session_runs WHERE provider_thread_id=? AND provider_turn_id=?",params![thread,turn],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional().map_err(|e|e.to_string())
     }
+    pub(crate) fn turn_acceptance_pending(&self, thread: &str) -> Result<bool, String> {
+        database::open(&self.db_path)
+            .and_then(|connection| {
+                connection
+                    .query_row(
+                        "SELECT EXISTS(SELECT 1 FROM task_work_session_runs WHERE provider_thread_id=? AND provider_turn_id IS NULL AND dispatch_state='dispatch_recorded' AND status='running')",
+                        [thread],
+                        |row| row.get(0),
+                    )
+                    .map_err(|error| error.to_string())
+            })
+    }
     pub(crate) fn run_identity(
         &self,
         task: &str,

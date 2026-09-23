@@ -333,6 +333,21 @@ impl CodexAppServer {
             .await
     }
 
+    pub(crate) async fn reject_unowned_request(&self, generation: i64, id: Value) {
+        let _ = self
+            .send_for_generation(
+                generation,
+                json!({
+                    "id": id,
+                    "error": {
+                        "code": -32600,
+                        "message": "This client cannot route the request to an active turn"
+                    }
+                }),
+            )
+            .await;
+    }
+
     pub(crate) async fn generation(&self) -> Result<i64, String> {
         let connection = self.inner.connection.lock().await;
         let connection = connection
