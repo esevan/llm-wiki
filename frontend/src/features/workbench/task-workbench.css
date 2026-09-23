@@ -1051,7 +1051,7 @@ main:has(.task-workbench.active :is(.task-detail, .refinement-panel)) {
 /* Work flows left to right; active Tasks remain above the preparation lanes. */
 .workbench-main { container-type: inline-size; }
 .workbench-active {
-  padding: var(--space-5);
+  padding: var(--space-3);
   border: 1px solid var(--color-border-positive);
   border-radius: var(--radius-panel);
   background: var(--color-bg-positive-subtle);
@@ -1074,18 +1074,31 @@ main:has(.task-workbench.active :is(.task-detail, .refinement-panel)) {
 }
 .workbench-active-cards {
   display: grid;
-  grid-template-columns: repeat(auto-fill, 320px);
-  grid-auto-rows: 220px;
-  justify-content: start;
-  overflow-x: auto;
-  gap: var(--space-3);
-  margin-top: var(--space-4);
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr));
+  grid-auto-rows: max-content;
+  align-items: start;
+  overflow: auto;
+  overscroll-behavior-y: contain;
+  scrollbar-gutter: stable;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+  padding: var(--space-1);
 }
 .workbench-active-cards > .canonical-card {
   box-sizing: border-box;
-  width: 320px;
-  height: 220px;
-  overflow: auto;
+  width: 100%;
+  height: auto;
+  padding: var(--space-3);
+  overflow-wrap: anywhere;
+}
+.workbench-active > .workbench-active-header { flex-shrink: 0; flex-wrap: wrap; }
+.workbench-active .canonical-card h3 { margin: var(--space-1) 0; }
+.workbench-active .canonical-card footer { padding-top: var(--space-2); }
+.workbench-active .canonical-card footer button {
+  min-height: var(--control-height);
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 .workbench-active .active-task-title {
   padding: 0;
@@ -1132,8 +1145,7 @@ main:has(.task-workbench.active :is(.task-detail, .refinement-panel)) {
 .workbench-card-category { font-size: var(--font-size-sm); color: var(--color-text-secondary); overflow-wrap: anywhere; }
 .workbench-board .canonical-card footer,
 .workbench-active .canonical-card footer { flex-wrap: wrap; gap: var(--space-2); }
-.workbench-board .canonical-card footer button,
-.workbench-active .canonical-card footer button { min-height: 40px; }
+.workbench-board .canonical-card footer button { min-height: 40px; }
 .workbench-board .canonical-card footer button:last-child,
 .workbench-active .canonical-card footer button:last-child { margin-left: auto; color: var(--color-text-secondary); }
 .workbench-board button:active:not(:disabled),
@@ -1211,7 +1223,7 @@ main:has(.task-workbench.active :is(.task-detail, .refinement-panel)) {
 .compass-tabs [aria-pressed="true"] { background: var(--color-bg-accent-subtle); border-color: var(--color-accent-strong); }
 @container (max-width: 760px) {
   .workbench-current { grid-template-columns: minmax(0, 1fr); height: auto; }
-  .workbench-active { height: 320px; }
+  .workbench-current > .workbench-active { height: 320px; }
   .workbench-recent { height: 320px; }
 }
 .compass-tabs button { min-height: 44px; padding: var(--space-2) var(--space-4); border: var(--border-default); border-radius: var(--radius-control); background: var(--color-bg-surface); color: var(--color-text-primary); font: inherit; font-weight: 700; cursor: pointer; }
