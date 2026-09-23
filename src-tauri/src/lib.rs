@@ -449,7 +449,7 @@ async fn choose_vault(
 }
 
 #[tauri::command]
-fn choose_project_folder(app: tauri::AppHandle) -> Result<Option<String>, String> {
+async fn choose_project_folder(app: tauri::AppHandle) -> Result<Option<String>, String> {
     Ok(first_run::pick_folder(&app, "Choose a project folder")?
         .map(|path| path.to_string_lossy().into_owned()))
 }
@@ -604,7 +604,21 @@ mod tests {
     use super::*;
     use crate::native::settings::VaultStartup;
     use serde_json::json;
+    use std::future::Future;
     use tempfile::tempdir;
+
+    fn assert_async_project_folder_command<F, Fut>(command: F)
+    where
+        F: Fn(tauri::AppHandle) -> Fut,
+        Fut: Future<Output = Result<Option<String>, String>>,
+    {
+        let _ = command;
+    }
+
+    #[test]
+    fn project_folder_picker_dispatches_off_the_main_thread() {
+        assert_async_project_folder_command(choose_project_folder);
+    }
 
     #[test]
     fn mcp_listener_shutdown_covers_all_tauri_exit_events() {
