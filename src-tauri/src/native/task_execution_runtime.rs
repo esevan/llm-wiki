@@ -14,6 +14,7 @@ use tauri::ipc::Channel;
 use tokio::sync::{broadcast, Mutex};
 
 const EARLY_EVENT_LIMIT: usize = 128;
+const FILESYSTEM_SCOPE_INSTRUCTIONS: &str = "Filesystem scope: Prefer the selected workspace and the explicitly configured Vault. Do not recursively discover files from the filesystem root, the home directory, or any parent of the workspace, including broad find, rg, or glob scans. If an external path is necessary, first narrow the request to one specific path and obtain user approval before reading it.";
 
 #[derive(Clone)]
 pub(crate) struct TaskExecutionRuntime {
@@ -353,12 +354,16 @@ impl TaskExecutionRuntime {
                 return Ok((snapshot, prepared));
             }
         }
+        let developer_instructions = format!(
+            "{}\n\n{}",
+            prepared.bootstrap, FILESYSTEM_SCOPE_INSTRUCTIONS
+        );
         let response = if let Some(thread_id) = prepared.thread_id.as_deref() {
             self.inner
                 .server
                 .request(
                     "thread/resume",
-                    json!({"threadId":thread_id,"model":prepared.model,"cwd":prepared.cwd,"approvalsReviewer":prepared.approvals_reviewer,"excludeTurns":true}),
+                    json!({"threadId":thread_id,"model":prepared.model,"cwd":prepared.cwd,"approvalsReviewer":prepared.approvals_reviewer,"developerInstructions":developer_instructions,"excludeTurns":true}),
                 )
                 .await?
                 .1
@@ -367,7 +372,7 @@ impl TaskExecutionRuntime {
                 .server
                 .request(
                     "thread/start",
-                    json!({"model":prepared.model,"cwd":prepared.cwd,"approvalsReviewer":prepared.approvals_reviewer,"developerInstructions":prepared.bootstrap}),
+                    json!({"model":prepared.model,"cwd":prepared.cwd,"approvalsReviewer":prepared.approvals_reviewer,"developerInstructions":developer_instructions}),
                 )
                 .await?
                 .1
@@ -432,7 +437,7 @@ impl TaskExecutionRuntime {
         self.inner.service.mark_dispatch_recorded(&run_id)?;
         let instruction = required(input, "instruction")?;
         let mut turn_input = format!(
-            "{instruction}\n\nWhen this turn finishes, include a concise final report covering work performed, files or artifacts changed, checks actually run, and unresolved issues. Do not mark the owning LLM Wiki Task complete."
+            "{instruction}\n\n{FILESYSTEM_SCOPE_INSTRUCTIONS}\n\nWhen this turn finishes, include a concise final report covering work performed, files or artifacts changed, checks actually run, and unresolved issues. Do not mark the owning LLM Wiki Task complete."
         );
         let sent_context_delta = prepared.thread_id.is_some() && prepared.context_changed;
         if sent_context_delta {

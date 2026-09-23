@@ -252,15 +252,16 @@ function SessionMarkdown({ children }: { children: string }) {
 function EvidenceRow({ evidence, runCommand }: { evidence: TaskExecutionEvidence; runCommand: string }) {
   const isCommand = evidence.kind === "commandExecution" || Boolean(evidence.command);
   const detail = [evidence.command, evidence.summary].filter(Boolean).join("\n\n");
+  const paths = Array.isArray(evidence.paths) ? evidence.paths.filter((path): path is string => typeof path === "string") : [];
   return (
     <details className="task-execution-event" data-kind={evidence.kind}>
       <summary>
         <span className="task-execution-event-icon" aria-hidden="true">{isCommand ? ">_" : "·"}</span>
         <strong>{isCommand ? runCommand : evidence.label}</strong>
-        <span className="task-execution-event-status">{evidence.exitCode === undefined ? evidence.status : `exit ${evidence.exitCode}`}</span>
+        <span className="task-execution-event-status">{typeof evidence.exitCode === "number" ? `exit ${evidence.exitCode}` : evidence.status}</span>
       </summary>
       {detail && <pre>{detail}</pre>}
-      {evidence.paths?.length ? <ul>{evidence.paths.map((path) => <li key={path}>{path}</li>)}</ul> : null}
+      {paths.length ? <ul>{paths.map((path) => <li key={path}>{path}</li>)}</ul> : null}
     </details>
   );
 }
@@ -437,15 +438,15 @@ export function TaskWorkSessions({
     setLoadingMoreCodex(false);
     setLoadingEarlierTurns(false);
     void loadList(expected).then((next) => {
-      if (generation.current === expected && !activeRef.current && next?.[0]) void open(next[0].id);
+      if (generation.current === expected && !activeRef.current && !focusExecution?.sessionId && next?.[0]) void open(next[0].id);
     });
     return () => {
       generation.current += 1;
     };
   }, [task.id]);
   useEffect(() => {
-    if (focusExecution?.sessionId && focusExecution.sessionId !== activeRef.current) void open(focusExecution.sessionId);
-  }, [focusExecution?.runId, focusExecution?.sessionId]);
+    if (sessions !== undefined && focusExecution?.sessionId && focusExecution.sessionId !== activeRef.current) void open(focusExecution.sessionId);
+  }, [focusExecution?.runId, focusExecution?.sessionId, sessions]);
   const open = async (id: string) => {
     if (busy) return;
     if (activeRef.current) {
@@ -906,7 +907,7 @@ export function TaskWorkSessions({
                           </article>
                         ) : (
                           <details className="task-execution-event" key={item.id} data-kind={item.kind}>
-                            <summary><span className="task-execution-event-icon" aria-hidden="true">{item.command ? ">_" : "·"}</span><strong>{item.command ? t.runCommand : item.label}</strong><span className="task-execution-event-status">{item.exitCode === undefined ? item.status : `exit ${item.exitCode}`}</span></summary>
+                            <summary><span className="task-execution-event-icon" aria-hidden="true">{item.command ? ">_" : "·"}</span><strong>{item.command ? t.runCommand : item.label}</strong><span className="task-execution-event-status">{typeof item.exitCode === "number" ? `exit ${item.exitCode}` : item.status}</span></summary>
                             {(item.command || item.output) && <pre>{[item.command, item.output].filter(Boolean).join("\n\n")}</pre>}
                           </details>
                         ))}

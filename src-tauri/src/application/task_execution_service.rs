@@ -816,7 +816,7 @@ impl TaskExecutionApplicationService {
     }
     fn items(&self, c: &rusqlite::Connection, run: &str) -> Result<Vec<Value>, String> {
         let mut s=c.prepare("SELECT provider_item_id,kind,status,content_json,created_at FROM task_work_session_run_items WHERE run_id=? ORDER BY provider_order,provider_item_id").map_err(|e|e.to_string())?;
-        let rows=s.query_map([run],|r|{let id:String=r.get(0)?;let kind:String=r.get(1)?;let status:String=r.get(2)?;let raw:String=r.get(3)?;let v=parse_json(raw,json!({}));Ok(json!({"id":id,"kind":kind,"status":status,"label":v.get("type").and_then(Value::as_str).unwrap_or(&kind),"summary":item_summary(&v),"command":v.get("command"),"paths":v.get("changes"),"exitCode":v.get("exitCode"),"createdAt":r.get::<_,String>(4)?}))}).map_err(|e|e.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|e|e.to_string())?;
+        let rows=s.query_map([run],|r|{let id:String=r.get(0)?;let kind:String=r.get(1)?;let status:String=r.get(2)?;let raw:String=r.get(3)?;let v=parse_json(raw,json!({}));Ok(json!({"id":id,"kind":kind,"status":status,"label":v.get("type").and_then(Value::as_str).unwrap_or(&kind),"summary":item_summary(&v),"command":v.get("command"),"paths":item_paths(&v),"exitCode":v.get("exitCode"),"createdAt":r.get::<_,String>(4)?}))}).map_err(|e|e.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|e|e.to_string())?;
         Ok(rows)
     }
     fn formal_requests(&self, c: &rusqlite::Connection, run: &str) -> Result<Vec<Value>, String> {
@@ -994,6 +994,19 @@ fn item_summary(v: &Value) -> String {
         }
     }
     safe_text(&json!(v.to_string()), 2000)
+}
+fn item_paths(v: &Value) -> Vec<String> {
+    v.get("changes")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|change| {
+            change
+                .as_str()
+                .or_else(|| change.get("path").and_then(Value::as_str))
+        })
+        .map(|path| safe_text(&json!(path), 2_000))
+        .collect()
 }
 fn formal_projection(
     id: String,
@@ -1265,6 +1278,39 @@ mod tests {
             .unwrap();
         assert_eq!(execution["runId"], run);
         assert_eq!(execution["status"], "succeeded");
+    }
+
+    #[test]
+    fn file_change_evidence_projects_provider_objects_as_string_paths() {
+        let f = fixture();
+        let (snapshot, _) = f
+            .service
+            .create_run(&run_input(&f, "file-change-run", "Change one file"))
+            .unwrap();
+        let run = snapshot["selectedRun"]["id"].as_str().unwrap();
+        f.service.mark_dispatch_recorded(run).unwrap();
+        f.service.accept_turn(run, "thread-a", "turn-a").unwrap();
+        f.service
+            .complete_item(
+                run,
+                &json!({
+                    "id":"file-change",
+                    "type":"fileChange",
+                    "status":"completed",
+                    "changes":[{
+                        "kind":{"type":"update"},
+                        "path":"/project/src/main.rs"
+                    }]
+                }),
+                1,
+            )
+            .unwrap();
+
+        let snapshot = f.service.snapshot(&f.task, &f.session, Some(run)).unwrap();
+        assert_eq!(
+            snapshot["selectedRun"]["evidence"][0]["paths"],
+            json!(["/project/src/main.rs"])
+        );
     }
 
     #[test]

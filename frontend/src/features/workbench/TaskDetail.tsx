@@ -695,7 +695,7 @@ export function TaskDetail({
         </button>}
       </section>
       <div id="task-tab-sessions" aria-labelledby="task-detail-tab-sessions" className="task-tab-panel" role="tabpanel" data-task-tab="sessions" hidden={tab !== "sessions"}>
-        <TaskWorkSessions task={task} draftStore={workSessionDrafts} focusExecution={executionFocus} onOpenWorkLog={(entryId) => focusInTab("work", `#work-log-${entryId}`)} />
+        {tab === "sessions" && <TaskWorkSessions task={task} draftStore={workSessionDrafts} focusExecution={executionFocus} onOpenWorkLog={(entryId) => focusInTab("work", `#work-log-${entryId}`)} />}
       </div>
       {refining && (
         <RefinementPanel

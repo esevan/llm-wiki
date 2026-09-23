@@ -84,6 +84,32 @@ describe("Task work sessions", () => {
     expect(screen.getByText("Local answer")).toBeVisible();
   });
 
+  it("keeps the session visible when legacy file-change paths contain provider objects", async () => {
+    const saved = { ...session("one", "Legacy file change"), workspacePath: "/project" };
+    const run = {
+      id: "run-file-change", taskId: task.id, sessionId: "one", instruction: "Update the file",
+      status: "succeeded" as const, stopRequested: false, provider: "codex" as const,
+      model: "gpt-5.6-sol", workspacePath: "/project", formalRequests: [],
+      workLogSyncState: "synced" as const, revision: 1,
+      evidence: [{
+        id: "change", kind: "fileChange", label: "fileChange", status: "completed",
+        summary: "Updated one file",
+        paths: [{ kind: { type: "update" }, path: "/project/src/main.ts" }] as unknown as string[],
+        exitCode: null as unknown as number,
+      }],
+    };
+    execution.subscribe.mockResolvedValue({ runs: [run], activeRunId: null, selectedRun: run });
+    window.llmWikiApplication = { request: vi.fn().mockImplementation(({ path }: { path: string }) => path.endsWith("work-sessions") ? Promise.resolve(response({ sessions: [saved] })) : Promise.resolve(response({ session: saved, entries: [] }))) };
+
+    render(<TaskWorkSessions task={task} />);
+
+    expect(await screen.findByRole("heading", { name: "Legacy file change" })).toBeVisible();
+    expect(await screen.findByText("Updated one file")).toBeInTheDocument();
+    expect(screen.getByText("completed")).toBeInTheDocument();
+    expect(screen.queryByText("exit null")).not.toBeInTheDocument();
+    expect(screen.queryByText("/project/src/main.ts")).not.toBeInTheDocument();
+  });
+
   it("follows new output only while the conversation is near the bottom", async () => {
     const saved = { ...session("one", "Follow output"), workspacePath: "/project" };
     let deliver: (snapshot: TaskExecutionSnapshot) => void = () => {};

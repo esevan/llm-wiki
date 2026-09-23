@@ -30,6 +30,22 @@ const response = (body: unknown) => ({
 });
 
 describe("Task detail", () => {
+  it("does not load saved sessions until the Sessions tab is opened", async () => {
+    const request = vi.fn(({ path }: { path: string }) => path === "/tasks/task-1/work-sessions"
+      ? Promise.resolve(response({ sessions: [] }))
+      : Promise.resolve(response(task)));
+    window.llmWikiApplication = { request: request as never };
+
+    render(<TaskDetail taskId="task-1" onClose={vi.fn()} onChanged={vi.fn()} />);
+
+    expect(await screen.findByRole("heading", { name: "Independent work" })).toBeVisible();
+    expect(request).not.toHaveBeenCalledWith(expect.objectContaining({ path: "/tasks/task-1/work-sessions" }));
+
+    fireEvent.click(screen.getByRole("tab", { name: "Sessions" }));
+
+    await waitFor(() => expect(request).toHaveBeenCalledWith(expect.objectContaining({ path: "/tasks/task-1/work-sessions" })));
+  });
+
   it("opens queued lineage automatically and polls again while its status is unchanged", async () => {
     const lineage = vi.fn()
       .mockResolvedValueOnce(response({ journeyStatus: { status: "running", jobId: "journey" } }))
