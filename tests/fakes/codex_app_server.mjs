@@ -61,7 +61,22 @@ function startTurn(threadId, input) {
   const state = threads.get(threadId);
   const turnId = `fixture-turn-${nextTurn++}`;
   state.turns += 1;
+  if (process.env.LLM_WIKI_FAKE_CODEX_BURST === "1") {
+    // Exercise the legitimate pre-response path as well as the post-response burst.
+    write({ method: "turn/started", params: { threadId, turnId, turn: { id: turnId, status: "inProgress" } } });
+  }
   response(input.id, { turn: { id: turnId, threadId, status: "inProgress" } });
+  if (process.env.LLM_WIKI_FAKE_CODEX_BURST === "1") {
+    for (let index = 0; index < 160; index += 1) {
+      write({ method: "item/agentMessage/delta", params: { threadId, turnId, itemId: "fixture-burst-agent", delta: `chunk-${index} ` } });
+    }
+    write({ id: `fixture-question-${nextRequest++}`, method: "item/tool/requestUserInput", params: {
+      threadId, turnId, itemId: `fixture-question-item-${turnId}`, reason: "Nonblocking burst question.", isBlocking: false,
+      questions: [{ id: "fixture-choice", header: "Mode", question: "Choose later.", options: [{ label: "Proceed", description: "Continue." }], isOther: false, isSecret: false }],
+    }});
+    completeTurn(threadId, turnId, state.turns);
+    return;
+  }
   if (state.turns === 1) askApproval(threadId, turnId);
   else completeTurn(threadId, turnId, state.turns);
 }

@@ -11,15 +11,46 @@ use std::{
 use tokio::{
     io::{AsyncBufRead, AsyncBufReadExt, AsyncWriteExt, BufReader},
     process::{Child, Command},
-    sync::{broadcast, mpsc, oneshot, Mutex},
+    sync::{mpsc, oneshot, Mutex},
 };
 
 const EVENT_CAPACITY: usize = 256;
-// History is paginated, but one persisted turn can still contain sizeable command output.
-// Keep a hard bound while allowing a single normal history page to clear the transport.
+// Bound in-memory protocol events. The reader waits at this limit so the single durable
+// consumer catches up without losing provider order or terminal state.
 const MAX_PROTOCOL_LINE_BYTES: usize = 8 * 1024 * 1024;
 const RPC_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
-type PendingRequests = HashMap<(i64, u64), oneshot::Sender<Result<Value, String>>>;
+type PendingRequests = HashMap<(i64, u64), PendingRequest>;
+
+struct PendingRequest {
+    response: oneshot::Sender<RoutedResponse>,
+    hold_following_events: bool,
+}
+
+struct RoutedResponse {
+    result: Result<Value, String>,
+    release: Option<oneshot::Sender<()>>,
+}
+
+pub(crate) struct EventBarrierResponse {
+    pub(crate) result: Result<Value, String>,
+    release: Option<oneshot::Sender<()>>,
+}
+
+impl EventBarrierResponse {
+    pub(crate) fn release(mut self) {
+        if let Some(release) = self.release.take() {
+            let _ = release.send(());
+        }
+    }
+}
+
+impl Drop for EventBarrierResponse {
+    fn drop(&mut self) {
+        if let Some(release) = self.release.take() {
+            let _ = release.send(());
+        }
+    }
+}
 
 struct Outbound {
     value: Value,
@@ -57,7 +88,8 @@ struct Inner {
     pending: Arc<Mutex<PendingRequests>>,
     next_id: AtomicU64,
     experimental_initialized: AtomicBool,
-    events: broadcast::Sender<AppServerEvent>,
+    events: mpsc::Sender<AppServerEvent>,
+    event_receiver: std::sync::Mutex<Option<mpsc::Receiver<AppServerEvent>>>,
 }
 
 struct Connection {
@@ -73,7 +105,7 @@ impl CodexAppServer {
     }
 
     fn from_optional_executable(executable: Option<PathBuf>) -> Self {
-        let (events, _) = broadcast::channel(EVENT_CAPACITY);
+        let (events, event_receiver) = mpsc::channel(EVENT_CAPACITY);
         Self {
             inner: Arc::new(Inner {
                 executable,
@@ -83,6 +115,7 @@ impl CodexAppServer {
                 next_id: AtomicU64::new(1),
                 experimental_initialized: AtomicBool::new(false),
                 events,
+                event_receiver: std::sync::Mutex::new(Some(event_receiver)),
             }),
         }
     }
@@ -92,8 +125,13 @@ impl CodexAppServer {
         Self::from_optional_executable(Some(executable))
     }
 
-    pub(crate) fn subscribe(&self) -> broadcast::Receiver<AppServerEvent> {
-        self.inner.events.subscribe()
+    pub(crate) fn subscribe(&self) -> Result<mpsc::Receiver<AppServerEvent>, String> {
+        self.inner
+            .event_receiver
+            .lock()
+            .map_err(|_| "Codex event receiver lock is unavailable".to_string())?
+            .take()
+            .ok_or("Codex event receiver is already attached".to_string())
     }
 
     pub(crate) async fn start(&self, generation: i64) -> Result<(), String> {
@@ -155,10 +193,12 @@ impl CodexAppServer {
                 let _ = message.written.send(write_result);
                 if failed {
                     writer_alive.store(false, Ordering::SeqCst);
-                    let _ = writer_events.send(AppServerEvent::Exited {
-                        generation,
-                        detail: "Codex app-server input closed".into(),
-                    });
+                    let _ = writer_events
+                        .send(AppServerEvent::Exited {
+                            generation,
+                            detail: "Codex app-server input closed".into(),
+                        })
+                        .await;
                     break;
                 }
             }
@@ -182,10 +222,12 @@ impl CodexAppServer {
                     },
                     Ok(None) => break,
                     Err(error) => {
-                        let _ = reader_events.send(AppServerEvent::Exited {
-                            generation,
-                            detail: error,
-                        });
+                        let _ = reader_events
+                            .send(AppServerEvent::Exited {
+                                generation,
+                                detail: error,
+                            })
+                            .await;
                         break;
                     }
                 }
@@ -197,10 +239,12 @@ impl CodexAppServer {
                 "Codex app-server connection closed",
             )
             .await;
-            let _ = reader_events.send(AppServerEvent::Exited {
-                generation,
-                detail: "Codex app-server connection closed".into(),
-            });
+            let _ = reader_events
+                .send(AppServerEvent::Exited {
+                    generation,
+                    detail: "Codex app-server connection closed".into(),
+                })
+                .await;
         });
 
         *self.inner.connection.lock().await = Some(Connection {
@@ -217,9 +261,10 @@ impl CodexAppServer {
                 "clientInfo": {"name": "llm-wiki", "title": "LLM Wiki", "version": env!("CARGO_PKG_VERSION")},
                 "capabilities": {"experimentalApi": true}
             }),
+            false,
         )
         .await;
-        if let Err(error) = initialized {
+        if let Err(error) = initialized.and_then(|response| response.result) {
             self.shutdown().await;
             return Err(format!("Codex app-server initialization failed: {error}"));
         }
@@ -243,9 +288,27 @@ impl CodexAppServer {
     ) -> Result<(i64, Value), String> {
         let generation = self.generation().await?;
         let result = self
-            .request_for_generation(generation, method, params)
+            .request_for_generation(generation, method, params, false)
             .await?;
-        Ok((generation, result))
+        Ok((generation, result.result?))
+    }
+
+    pub(crate) async fn request_with_event_barrier(
+        &self,
+        method: &str,
+        params: Value,
+    ) -> Result<(i64, EventBarrierResponse), String> {
+        let generation = self.generation().await?;
+        let response = self
+            .request_for_generation(generation, method, params, true)
+            .await?;
+        Ok((
+            generation,
+            EventBarrierResponse {
+                result: response.result,
+                release: response.release,
+            },
+        ))
     }
 
     pub(crate) async fn respond(
@@ -285,14 +348,21 @@ impl CodexAppServer {
         generation: i64,
         method: &str,
         params: Value,
-    ) -> Result<Value, String> {
+        hold_following_events: bool,
+    ) -> Result<RoutedResponse, String> {
         let id = self.inner.next_id.fetch_add(1, Ordering::Relaxed);
         let (sender, receiver) = oneshot::channel();
         self.inner
             .pending
             .lock()
             .await
-            .insert((generation, id), sender);
+            .insert(
+                (generation, id),
+                PendingRequest {
+                    response: sender,
+                    hold_following_events,
+                },
+            );
         if let Err(error) = self
             .send_for_generation(
                 generation,
@@ -304,7 +374,7 @@ impl CodexAppServer {
             return Err(error);
         }
         match tokio::time::timeout(RPC_TIMEOUT, receiver).await {
-            Ok(Ok(result)) => result,
+            Ok(Ok(result)) => Ok(result),
             Ok(Err(_)) => Err("Codex app-server response channel closed".into()),
             Err(_) => {
                 self.inner.pending.lock().await.remove(&(generation, id));
@@ -364,17 +434,31 @@ async fn route_message(
     generation: i64,
     message: Value,
     pending: &Mutex<PendingRequests>,
-    events: &broadcast::Sender<AppServerEvent>,
+    events: &mpsc::Sender<AppServerEvent>,
 ) {
     if let Some(id) = message.get("id").and_then(Value::as_u64) {
         if message.get("method").is_none() {
-            if let Some(sender) = pending.lock().await.remove(&(generation, id)) {
-                let response = if let Some(error) = message.get("error") {
+            let request = {
+                let mut pending = pending.lock().await;
+                pending.remove(&(generation, id))
+            };
+            if let Some(request) = request {
+                let result = if let Some(error) = message.get("error") {
                     Err(safe_rpc_error(error))
                 } else {
                     Ok(message.get("result").cloned().unwrap_or(Value::Null))
                 };
-                let _ = sender.send(response);
+                let (release, released) = oneshot::channel();
+                let response = RoutedResponse {
+                    result,
+                    release: request.hold_following_events.then_some(release),
+                };
+                if request.response.send(response).is_ok() && request.hold_following_events {
+                    // The caller releases this only after it has persisted any identity needed
+                    // to route the protocol messages that follow this response. Dropping the
+                    // caller future also drops or signals the release, so stdout cannot stall.
+                    let _ = released.await;
+                }
             }
             return;
         }
@@ -397,7 +481,7 @@ async fn route_message(
             params,
         }
     };
-    let _ = events.send(event);
+    let _ = events.send(event).await;
 }
 
 async fn fail_pending_generation(pending: &Mutex<PendingRequests>, generation: i64, reason: &str) {
@@ -408,16 +492,22 @@ async fn fail_pending_generation(pending: &Mutex<PendingRequests>, generation: i
         .copied()
         .collect::<Vec<_>>();
     for id in ids {
-        let Some(sender) = pending.remove(&id) else {
+        let Some(request) = pending.remove(&id) else {
             continue;
         };
-        let _ = sender.send(Err(reason.to_owned()));
+        let _ = request.response.send(RoutedResponse {
+            result: Err(reason.to_owned()),
+            release: None,
+        });
     }
 }
 
 async fn fail_all_pending(pending: &Mutex<PendingRequests>, reason: &str) {
-    for (_, sender) in std::mem::take(&mut *pending.lock().await) {
-        let _ = sender.send(Err(reason.to_owned()));
+    for (_, request) in std::mem::take(&mut *pending.lock().await) {
+        let _ = request.response.send(RoutedResponse {
+            result: Err(reason.to_owned()),
+            release: None,
+        });
     }
 }
 
@@ -544,8 +634,14 @@ mod tests {
     async fn routes_responses_requests_and_notifications_without_mixing_them() {
         let pending = Mutex::new(HashMap::new());
         let (sender, receiver) = oneshot::channel();
-        pending.lock().await.insert((3, 7), sender);
-        let (events, mut subscribed) = broadcast::channel(8);
+        pending.lock().await.insert(
+            (3, 7),
+            PendingRequest {
+                response: sender,
+                hold_following_events: false,
+            },
+        );
+        let (events, mut subscribed) = mpsc::channel(8);
 
         route_message(
             3,
@@ -554,7 +650,10 @@ mod tests {
             &events,
         )
         .await;
-        assert_eq!(receiver.await.unwrap().unwrap()["thread"]["id"], "t");
+        assert_eq!(
+            receiver.await.unwrap().result.unwrap()["thread"]["id"],
+            "t"
+        );
 
         route_message(
             3,
@@ -582,6 +681,134 @@ mod tests {
                     if method == "item/agentMessage/delta" && params["delta"] == "same"
             ));
         }
+    }
+
+    #[tokio::test]
+    async fn turn_response_barrier_orders_a_burst_before_request_continuation_without_loss() {
+        let pending = Arc::new(Mutex::new(HashMap::new()));
+        let (sender, receiver) = oneshot::channel();
+        pending.lock().await.insert(
+            (9, 41),
+            PendingRequest {
+                response: sender,
+                hold_following_events: true,
+            },
+        );
+        // A deliberately small channel proves delivery uses backpressure rather than a
+        // capacity increase. The producer cannot finish until the consumer drains it.
+        let (events, mut received) = mpsc::channel(4);
+        let producer_pending = pending.clone();
+        let producer_events = events.clone();
+        let producer = tokio::spawn(async move {
+            route_message(
+                9,
+                json!({"id":41,"result":{"turn":{"id":"turn-burst","threadId":"thread-burst"}}}),
+                &producer_pending,
+                &producer_events,
+            )
+            .await;
+            for index in 0..160 {
+                route_message(
+                    9,
+                    json!({"method":"item/agentMessage/delta","params":{"threadId":"thread-burst","turnId":"turn-burst","itemId":"agent","delta":format!("{index} ")}}),
+                    &producer_pending,
+                    &producer_events,
+                )
+                .await;
+            }
+            route_message(
+                9,
+                json!({"id":"question-burst","method":"item/tool/requestUserInput","params":{"threadId":"thread-burst","turnId":"turn-burst","isBlocking":false}}),
+                &producer_pending,
+                &producer_events,
+            )
+            .await;
+            route_message(
+                9,
+                json!({"method":"turn/completed","params":{"threadId":"thread-burst","turnId":"turn-burst","turn":{"id":"turn-burst","status":"completed"}}}),
+                &producer_pending,
+                &producer_events,
+            )
+            .await;
+        });
+
+        let routed = receiver.await.unwrap();
+        assert_eq!(routed.result.as_ref().unwrap()["turn"]["id"], "turn-burst");
+        assert!(tokio::time::timeout(
+            std::time::Duration::from_millis(20),
+            received.recv()
+        )
+        .await
+        .is_err());
+        EventBarrierResponse {
+            result: routed.result,
+            release: routed.release,
+        }
+        .release();
+
+        for index in 0..160 {
+            assert!(matches!(
+                received.recv().await.unwrap(),
+                AppServerEvent::Notification { method, params, .. }
+                    if method == "item/agentMessage/delta" && params["delta"] == format!("{index} ")
+            ));
+        }
+        assert!(matches!(
+            received.recv().await.unwrap(),
+            AppServerEvent::Request { id, method, .. }
+                if id == "question-burst" && method == "item/tool/requestUserInput"
+        ));
+        assert!(matches!(
+            received.recv().await.unwrap(),
+            AppServerEvent::Notification { method, .. } if method == "turn/completed"
+        ));
+        producer.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn dropping_a_turn_response_barrier_releases_the_reader() {
+        let pending = Arc::new(Mutex::new(HashMap::new()));
+        let (sender, receiver) = oneshot::channel();
+        pending.lock().await.insert(
+            (12, 8),
+            PendingRequest {
+                response: sender,
+                hold_following_events: true,
+            },
+        );
+        let (events, mut received) = mpsc::channel(1);
+        let producer_pending = pending.clone();
+        let producer_events = events.clone();
+        let producer = tokio::spawn(async move {
+            route_message(
+                12,
+                json!({"id":8,"result":{"turn":{"id":"cancelled-continuation"}}}),
+                &producer_pending,
+                &producer_events,
+            )
+            .await;
+            route_message(
+                12,
+                json!({"method":"turn/completed","params":{"turnId":"cancelled-continuation"}}),
+                &producer_pending,
+                &producer_events,
+            )
+            .await;
+        });
+
+        let routed = receiver.await.unwrap();
+        drop(EventBarrierResponse {
+            result: routed.result,
+            release: routed.release,
+        });
+        assert!(matches!(
+            tokio::time::timeout(std::time::Duration::from_secs(1), received.recv())
+                .await
+                .unwrap()
+                .unwrap(),
+            AppServerEvent::Notification { method, .. } if method == "turn/completed"
+        ));
+        producer.await.unwrap();
     }
 
     #[test]
@@ -647,7 +874,7 @@ mod tests {
             return;
         }
         let server = CodexAppServer::from_optional_executable(Some(fixture));
-        let mut events = server.subscribe();
+        let mut events = server.subscribe().unwrap();
         server.start(11).await.unwrap();
         let (_, started) = server
             .request(
