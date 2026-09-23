@@ -249,6 +249,14 @@ function SessionMarkdown({ children }: { children: string }) {
   );
 }
 
+function duplicatesFinalReport(summary: string, finalReport?: string) {
+  if (!finalReport) return false;
+  const evidenceText = summary.trim();
+  const finalText = finalReport.trim();
+  return evidenceText === finalText
+    || (evidenceText.endsWith("…") && finalText.startsWith(evidenceText.slice(0, -1)));
+}
+
 function EvidenceRow({ evidence, runCommand }: { evidence: TaskExecutionEvidence; runCommand: string }) {
   const isCommand = evidence.kind === "commandExecution" || Boolean(evidence.command);
   const detail = [evidence.command, evidence.summary].filter(Boolean).join("\n\n");
@@ -647,7 +655,7 @@ export function TaskWorkSessions({
     }
   };
   const run = async () => {
-    if (!record || runSubmitting || !draft.trim() || !record.session.workspacePath.trim()) {
+    if (!record || runSubmitting || execution?.activeRunId || !draft.trim() || !record.session.workspacePath.trim()) {
       if (record && !record.session.workspacePath.trim()) setError(t.runUnavailable);
       return;
     }
@@ -952,8 +960,10 @@ export function TaskWorkSessions({
                   ) : (
                     <li className="task-session-run-turn" key={item.run.id}>
                       <article data-entry-author="user"><header><strong>{t.user}</strong><span>{t.status[item.run.status]}</span></header><p>{item.run.instruction}</p></article>
-                      {item.run.evidence.map((evidence) => evidence.kind === "agentMessage" && !item.run.finalReport
-                        ? <article key={evidence.id} data-entry-author="assistant"><header><strong>Codex</strong></header><SessionMarkdown>{evidence.summary}</SessionMarkdown></article>
+                      {item.run.evidence.map((evidence) => evidence.kind === "agentMessage"
+                        ? duplicatesFinalReport(evidence.summary, item.run.finalReport)
+                          ? null
+                          : <article key={evidence.id} data-entry-author="assistant"><header><strong>Codex</strong></header><SessionMarkdown>{evidence.summary}</SessionMarkdown></article>
                         : <EvidenceRow key={evidence.id} evidence={evidence} runCommand={t.runCommand} />)}
                       {item.run.id === currentRun?.id && item.run.liveStatus?.text && <article data-entry-author="assistant"><header><strong>Codex</strong><span>{t.status.running}</span></header><SessionMarkdown>{item.run.liveStatus.text}</SessionMarkdown></article>}
                       {item.run.finalReport && <article data-entry-author="assistant"><header><strong>Codex</strong></header><SessionMarkdown>{item.run.finalReport}</SessionMarkdown></article>}
@@ -1017,6 +1027,12 @@ export function TaskWorkSessions({
                     value={draft}
                     placeholder={t.placeholder}
                     onChange={(event) => setDraft(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229) {
+                        event.preventDefault();
+                        void run();
+                      }
+                    }}
                     onPaste={(event) => {
                       const file = [...event.clipboardData.files][0];
                       if (file) {

@@ -181,6 +181,83 @@ describe("Task work sessions", () => {
     expect(window.llmWikiApplication.request).not.toHaveBeenCalledWith(expect.objectContaining({ path: expect.stringContaining("/entries") }));
   });
 
+  it("runs on Enter while preserving Shift+Enter and Korean IME composition", async () => {
+    execution.execute.mockClear();
+    const saved = { ...session("one", "Keyboard run"), workspacePath: "/project" };
+    const prepared = { runs: [], activeRunId: null, selectedRun: null, effectiveConfig: { model: "gpt-5.6-sol", cwd: "/project", approvalPolicy: "ask", approvalsReviewer: "user", sandbox: "workspace-write", provenance: "preflight", settingsRevision: "settings-1", ready: true, capabilities: { structuredUserInput: true } } };
+    execution.prepare.mockResolvedValue(prepared);
+    execution.execute.mockResolvedValue(prepared);
+    window.llmWikiApplication = { request: vi.fn().mockImplementation(({ path }: { path: string }) => path.endsWith("work-sessions") ? Promise.resolve(response({ sessions: [saved] })) : Promise.resolve(response({ session: saved, entries: [] }))) };
+    render(<TaskWorkSessions task={task} />);
+    fireEvent.change(await screen.findByLabelText("Session"), { target: { value: "one" } });
+    const composer = await screen.findByLabelText("Instruction or note");
+    fireEvent.click(screen.getByRole("button", { name: "Prepare conversation" }));
+    await waitFor(() => expect(execution.prepare).toHaveBeenCalled());
+
+    fireEvent.change(composer, { target: { value: "한국어 입력" } });
+    expect(fireEvent.keyDown(composer, { key: "Enter", isComposing: true })).toBe(true);
+    expect(fireEvent.keyDown(composer, { key: "Enter", keyCode: 229 })).toBe(true);
+    expect(fireEvent.keyDown(composer, { key: "Enter", shiftKey: true })).toBe(true);
+    expect(composer).toHaveValue("한국어 입력");
+    expect(execution.execute).not.toHaveBeenCalled();
+
+    expect(fireEvent.keyDown(composer, { key: "Enter" })).toBe(false);
+    await waitFor(() => expect(execution.execute).toHaveBeenCalledWith(expect.objectContaining({
+      taskId: "task-a",
+      sessionId: "one",
+      instruction: "한국어 입력",
+    }), expect.any(Function)));
+    expect(execution.execute).toHaveBeenCalledTimes(1);
+  });
+
+  it("renders stored Codex prose as Markdown once and keeps command logs preformatted", async () => {
+    const saved = { ...session("one", "Rendered output"), workspacePath: "/project" };
+    const finalReport = "## Final result\n\nThe task is **done**.";
+    const run = {
+      id: "run-markdown", taskId: task.id, sessionId: "one", instruction: "Render output",
+      status: "succeeded" as const, stopRequested: false, provider: "codex" as const,
+      model: "gpt-5.6-sol", workspacePath: "/project", formalRequests: [],
+      workLogSyncState: "synced" as const, revision: 1, finalReport,
+      evidence: [
+        { id: "progress", kind: "agentMessage", label: "response", status: "completed", summary: "### Progress\n\nStill **working**." },
+        { id: "duplicate-final", kind: "agentMessage", label: "response", status: "completed", summary: finalReport },
+        { id: "command", kind: "commandExecution", label: "command", status: "completed", command: "npm test", summary: "## Not Markdown\n\n**raw output**", exitCode: 0 },
+      ],
+    };
+    execution.subscribe.mockResolvedValue({ runs: [run], activeRunId: null, selectedRun: run });
+    window.llmWikiApplication = { request: vi.fn().mockImplementation(({ path }: { path: string }) => path.endsWith("work-sessions") ? Promise.resolve(response({ sessions: [saved] })) : Promise.resolve(response({ session: saved, entries: [] }))) };
+    render(<TaskWorkSessions task={task} />);
+    fireEvent.change(await screen.findByLabelText("Session"), { target: { value: "one" } });
+
+    expect(await screen.findByRole("heading", { name: "Progress" })).toBeVisible();
+    expect(screen.getByText("working").tagName).toBe("STRONG");
+    expect(screen.getAllByRole("heading", { name: "Final result" })).toHaveLength(1);
+    expect(screen.getByText("done").tagName).toBe("STRONG");
+    expect(screen.queryByRole("heading", { name: "Not Markdown" })).not.toBeInTheDocument();
+    const commandLog = screen.getByText("Run command").closest("details")?.querySelector("pre");
+    expect(commandLog).toHaveTextContent("npm test");
+    expect(commandLog).toHaveTextContent("## Not Markdown");
+    expect(commandLog).toHaveTextContent("**raw output**");
+  });
+
+  it("de-duplicates a final Codex message whose evidence summary was truncated", async () => {
+    const saved = { ...session("one", "Long output"), workspacePath: "/project" };
+    const finalReport = `## Long final\n\n${"a".repeat(2100)}`;
+    const run = {
+      id: "run-long", taskId: task.id, sessionId: "one", instruction: "Render long output",
+      status: "succeeded" as const, stopRequested: false, provider: "codex" as const,
+      model: "gpt-5.6-sol", workspacePath: "/project", formalRequests: [],
+      workLogSyncState: "synced" as const, revision: 1, finalReport,
+      evidence: [{ id: "truncated-final", kind: "agentMessage", label: "response", status: "completed", summary: `${finalReport.slice(0, 2000)}…` }],
+    };
+    execution.subscribe.mockResolvedValue({ runs: [run], activeRunId: null, selectedRun: run });
+    window.llmWikiApplication = { request: vi.fn().mockImplementation(({ path }: { path: string }) => path.endsWith("work-sessions") ? Promise.resolve(response({ sessions: [saved] })) : Promise.resolve(response({ session: saved, entries: [] }))) };
+    render(<TaskWorkSessions task={task} />);
+    fireEvent.change(await screen.findByLabelText("Session"), { target: { value: "one" } });
+
+    expect(await screen.findAllByRole("heading", { name: "Long final" })).toHaveLength(1);
+  });
+
   it("passes an attached image to the explicit Codex Run", async () => {
     const saved = { ...session("one", "Investigation"), workspacePath: "/project" };
     const prepared = { runs: [], activeRunId: null, selectedRun: null, effectiveConfig: { model: "gpt-5.6-sol", cwd: "/project", approvalPolicy: "ask", approvalsReviewer: "user", sandbox: "workspace-write", provenance: "preflight", settingsRevision: "settings-1", ready: true, capabilities: { structuredUserInput: true } } };
