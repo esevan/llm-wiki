@@ -258,21 +258,50 @@ describe("Task work sessions", () => {
     expect(await screen.findAllByRole("heading", { name: "Long final" })).toHaveLength(1);
   });
 
-  it("passes an attached image to the explicit Codex Run", async () => {
+  it("sends an attached image on Enter and clears its draft preview after success", async () => {
     const saved = { ...session("one", "Investigation"), workspacePath: "/project" };
     const prepared = { runs: [], activeRunId: null, selectedRun: null, effectiveConfig: { model: "gpt-5.6-sol", cwd: "/project", approvalPolicy: "ask", approvalsReviewer: "user", sandbox: "workspace-write", provenance: "preflight", settingsRevision: "settings-1", ready: true, capabilities: { structuredUserInput: true } } };
     execution.prepare.mockResolvedValue(prepared);
-    execution.execute.mockResolvedValue(prepared);
+    let finishExecution: (snapshot: typeof prepared) => void = () => {};
+    execution.execute.mockImplementationOnce(() => new Promise((resolve) => { finishExecution = resolve; }));
     window.llmWikiApplication = { request: vi.fn().mockImplementation(({ path }: { path: string }) => path.endsWith("work-sessions") ? Promise.resolve(response({ sessions: [saved] })) : Promise.resolve(response({ session: saved, entries: [] }))) };
-    render(<TaskWorkSessions task={task} />);
+    const draftStore = new Map<string, WorkSessionDraft>();
+    render(<TaskWorkSessions task={task} draftStore={draftStore} />);
     fireEvent.change(await screen.findByLabelText("Session"), { target: { value: "one" } });
-    fireEvent.change(await screen.findByLabelText("Instruction or note"), { target: { value: "Inspect this screenshot" } });
+    const composer = await screen.findByLabelText("Instruction or note");
+    fireEvent.change(composer, { target: { value: "Inspect this screenshot" } });
     fireEvent.change(document.querySelector<HTMLInputElement>('[data-control="task-session-attachment"]')!, { target: { files: [new File(["png"], "screen.png", { type: "image/png" })] } });
     await waitFor(() => expect(screen.getByAltText("screen.png")).toBeVisible());
     fireEvent.click(screen.getByRole("button", { name: "Prepare conversation" }));
     await waitFor(() => expect(execution.prepare).toHaveBeenCalled());
-    fireEvent.click(screen.getByRole("button", { name: "Run with Codex" }));
+    expect(fireEvent.keyDown(composer, { key: "Enter" })).toBe(false);
     await waitFor(() => expect(execution.execute).toHaveBeenCalledWith(expect.objectContaining({ attachment: { name: "screen.png", mediaType: "image/png", data: "cG5n" } }), expect.any(Function)));
+    expect(screen.getByText("Sending with this Run: screen.png")).toBeVisible();
+    finishExecution(prepared);
+    await waitFor(() => expect(screen.queryByAltText("screen.png")).not.toBeInTheDocument());
+    expect(draftStore.get("one")?.attachment).toBeUndefined();
+  });
+
+  it("retains an attached image for retry when a Run submission fails", async () => {
+    const saved = { ...session("one", "Investigation"), workspacePath: "/project" };
+    const prepared = { runs: [], activeRunId: null, selectedRun: null, effectiveConfig: { model: "gpt-5.6-sol", cwd: "/project", approvalPolicy: "ask", approvalsReviewer: "user", sandbox: "workspace-write", provenance: "preflight", settingsRevision: "settings-1", ready: true, capabilities: { structuredUserInput: true } } };
+    execution.prepare.mockResolvedValue(prepared);
+    execution.execute.mockRejectedValueOnce(new Error("offline"));
+    window.llmWikiApplication = { request: vi.fn().mockImplementation(({ path }: { path: string }) => path.endsWith("work-sessions") ? Promise.resolve(response({ sessions: [saved] })) : Promise.resolve(response({ session: saved, entries: [] }))) };
+    render(<TaskWorkSessions task={task} />);
+    fireEvent.change(await screen.findByLabelText("Session"), { target: { value: "one" } });
+    const composer = await screen.findByLabelText("Instruction or note");
+    fireEvent.change(composer, { target: { value: "Inspect this screenshot" } });
+    fireEvent.change(document.querySelector<HTMLInputElement>('[data-control="task-session-attachment"]')!, { target: { files: [new File(["png"], "screen.png", { type: "image/png" })] } });
+    await waitFor(() => expect(screen.getByAltText("screen.png")).toBeVisible());
+    fireEvent.click(screen.getByRole("button", { name: "Prepare conversation" }));
+    await waitFor(() => expect(execution.prepare).toHaveBeenCalled());
+
+    fireEvent.keyDown(composer, { key: "Enter" });
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("offline");
+    expect(screen.getByText("Attached to draft: screen.png")).toBeVisible();
+    expect(screen.getByAltText("screen.png")).toBeVisible();
   });
 
   it("submits the actual selected structured answer once and retains it after an error", async () => {

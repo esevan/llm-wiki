@@ -118,7 +118,8 @@ const copy = {
     noReferences: "No linked references",
     errorFile: "Choose a file up to 10 MB.",
     download: "Download attachment",
-    pending: "Unsaved attachment",
+    pending: "Attached to draft",
+    sendingAttachment: "Sending with this Run",
     createName: "Session",
     retry: "Save failed. Your text and attachment are still here; try again.",
     reload:
@@ -211,7 +212,8 @@ const copy = {
     noReferences: "연결된 참조 없음",
     errorFile: "10 MB 이하의 파일을 선택하세요.",
     download: "첨부 파일 다운로드",
-    pending: "저장되지 않은 첨부",
+    pending: "초안에 첨부됨",
+    sendingAttachment: "이번 실행과 함께 전송 중",
     createName: "세션",
     retry:
       "저장하지 못했습니다. 작성 내용과 첨부는 유지됩니다. 다시 시도하세요.",
@@ -666,7 +668,8 @@ export function TaskWorkSessions({
     const id = record.session.id;
     const expected = generation.current;
     const submittedInstruction = draft;
-    const payload = JSON.stringify({ instruction: submittedInstruction, settingsRevision: execution.effectiveConfig.settingsRevision, retryOfRunId, attachment });
+    const submittedAttachment = attachment;
+    const payload = JSON.stringify({ instruction: submittedInstruction, settingsRevision: execution.effectiveConfig.settingsRevision, retryOfRunId, attachment: submittedAttachment });
     const savedDraft = drafts.get(id);
     const attempt = savedDraft?.executionAttempt?.payload === payload
       ? savedDraft.executionAttempt
@@ -674,15 +677,23 @@ export function TaskWorkSessions({
     drafts.set(id, { body: draft, attachment, operationId: savedDraft?.operationId ?? operationId(), formalAnswers: answers, executionAttempt: attempt });
     setRunSubmitting(true); setError("");
     try {
-      const snapshot = await taskExecutionClient.execute({ taskId: task.id, sessionId: id, operationId: attempt.operationId, instruction: submittedInstruction, settingsRevision: execution.effectiveConfig.settingsRevision, retryOfRunId: attempt.retryOfRunId, attachment }, (next) => {
+      const snapshot = await taskExecutionClient.execute({ taskId: task.id, sessionId: id, operationId: attempt.operationId, instruction: submittedInstruction, settingsRevision: execution.effectiveConfig.settingsRevision, retryOfRunId: attempt.retryOfRunId, attachment: submittedAttachment }, (next) => {
         if (generation.current === expected && activeRef.current === id) receiveExecution(next);
       });
       if (generation.current === expected && activeRef.current === id) {
         receiveExecution(snapshot);
-        if (draftRef.current === submittedInstruction) setDraft("");
+        const submittedInstructionStillCurrent = draftRef.current === submittedInstruction;
+        const submittedAttachmentStillCurrent = attachmentRef.current === submittedAttachment;
+        if (submittedInstructionStillCurrent) setDraft("");
+        if (submittedAttachmentStillCurrent) setAttachment(undefined);
         const current = drafts.get(id);
         if (current?.executionAttempt?.operationId === attempt.operationId) {
-          drafts.set(id, { ...current, body: draftRef.current === submittedInstruction ? "" : draftRef.current, executionAttempt: undefined });
+          drafts.set(id, {
+            ...current,
+            body: submittedInstructionStillCurrent ? "" : draftRef.current,
+            attachment: submittedAttachmentStillCurrent ? undefined : attachmentRef.current,
+            executionAttempt: undefined,
+          });
         }
         setRetryOfRunId(undefined);
       }
@@ -1044,8 +1055,8 @@ export function TaskWorkSessions({
                 </label>
                 {attachment && (
                   <div className="task-session-pending">
-                    <span>
-                      {t.pending}: {attachment.name}
+                    <span aria-live="polite">
+                      {runSubmitting ? t.sendingAttachment : t.pending}: {attachment.name}
                     </span>
                     {attachment.mediaType.startsWith("image/") && (
                       <img
