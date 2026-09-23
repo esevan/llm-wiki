@@ -48,7 +48,13 @@ struct ExecutionSignal {
 
 impl TaskExecutionRuntime {
     pub(crate) fn new(service: TaskExecutionApplicationService) -> Self {
-        let server = CodexAppServer::new();
+        Self::with_app_server(service, CodexAppServer::new())
+    }
+
+    fn with_app_server(
+        service: TaskExecutionApplicationService,
+        server: CodexAppServer,
+    ) -> Self {
         let (signals, _) = broadcast::channel(128);
         Self {
             inner: Arc::new(Inner {
@@ -65,11 +71,265 @@ impl TaskExecutionRuntime {
         }
     }
 
+    #[cfg(test)]
+    fn with_test_server(
+        service: TaskExecutionApplicationService,
+        executable: std::path::PathBuf,
+    ) -> Self {
+        Self::with_app_server(service, CodexAppServer::from_test_executable(executable))
+    }
+
     pub(crate) async fn prepare(&self, input: &Value) -> Result<Value, String> {
         let _operation = self.inner.operation.lock().await;
         self.prepare_inner(input)
             .await
             .map(|(snapshot, _)| snapshot)
+    }
+
+    pub(crate) async fn external_threads(&self, input: &Value) -> Result<Value, String> {
+        let _operation = self.inner.operation.lock().await;
+        let task_id = required(input, "taskId")?;
+        let session_id = input
+            .get("sessionId")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        self.validate_external_scope(task_id, session_id)?;
+        self.ensure_started().await?;
+        let limit = input
+            .get("limit")
+            .and_then(Value::as_u64)
+            .unwrap_or(50)
+            .clamp(1, 100);
+        let mut params = json!({
+            "archived": false,
+            "limit": limit,
+            "sortKey": "updated_at",
+            "sortDirection": "desc",
+            "sourceKinds": ["cli", "vscode", "appServer"]
+        });
+        for key in ["cursor", "searchTerm", "cwd"] {
+            if let Some(value) = input.get(key).and_then(Value::as_str) {
+                let value = value.trim();
+                if !value.is_empty() {
+                    if (key == "cursor" && value.len() > 4_000)
+                        || (key == "searchTerm" && value.len() > 200)
+                        || (key == "cwd" && value.len() > 4_096)
+                    {
+                        return Err(format!("invalid_input: {key} is too long"));
+                    }
+                    params[key] = json!(value);
+                }
+            }
+        }
+        let response = self.inner.server.request("thread/list", params).await?.1;
+        let mut threads = Vec::new();
+        for thread in response["data"].as_array().into_iter().flatten() {
+            let Some(mut summary) = normalize_external_thread(thread) else {
+                continue;
+            };
+            if summary["ephemeral"].as_bool().unwrap_or(true) {
+                continue;
+            }
+            let Some(thread_id) = summary["id"].as_str() else {
+                continue;
+            };
+            if let Some((owner_task, owner_session)) =
+                self.inner.service.external_thread_owner(thread_id)?
+            {
+                if owner_task != task_id {
+                    continue;
+                }
+                summary["linkedTaskId"] = json!(owner_task);
+                summary["linkedSessionId"] = json!(owner_session);
+            }
+            threads.push(summary);
+        }
+        Ok(
+            json!({"threads":threads,"nextCursor":response.get("nextCursor").cloned().unwrap_or(Value::Null)}),
+        )
+    }
+
+    pub(crate) async fn external_thread_read(&self, input: &Value) -> Result<Value, String> {
+        let _operation = self.inner.operation.lock().await;
+        let task_id = required(input, "taskId")?;
+        let session_id = input
+            .get("sessionId")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        self.validate_external_scope(task_id, session_id)?;
+        let requested_thread = input
+            .get("threadId")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        let bound_thread = session_id
+            .map(|session_id| {
+                self.inner
+                    .service
+                    .session_external_thread(task_id, session_id)
+            })
+            .transpose()?
+            .flatten();
+        if requested_thread.is_some()
+            && bound_thread.is_some()
+            && requested_thread != bound_thread.as_deref()
+        {
+            return Err("ownership_failure: work session is linked to a different conversation".into());
+        }
+        let thread_id = requested_thread
+            .map(str::to_owned)
+            .or(bound_thread)
+            .ok_or("external_thread_unavailable: work session is not linked to a conversation")?;
+        if let Some((owner_task, _)) = self.inner.service.external_thread_owner(&thread_id)? {
+            if owner_task != task_id {
+                return Err("ownership_failure: conversation belongs to another Task".into());
+            }
+        }
+        self.ensure_started().await?;
+        let history = self.external_history_page(&thread_id, input).await?;
+        if history["thread"]["id"].as_str() != Some(thread_id.as_str()) {
+            return Err("ownership_failure: Codex returned a different conversation".into());
+        }
+        Ok(history)
+    }
+
+    pub(crate) async fn link_external_thread(&self, input: &Value) -> Result<Value, String> {
+        let _operation = self.inner.operation.lock().await;
+        let task_id = required(input, "taskId")?;
+        let session_id = input
+            .get("sessionId")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        self.validate_external_scope(task_id, session_id)?;
+        let thread_id = required(input, "threadId")?;
+        if let Some((owner_task, owner_session)) =
+            self.inner.service.external_thread_owner(thread_id)?
+        {
+            if owner_task != task_id {
+                return Err("ownership_failure: conversation belongs to another Task".into());
+            }
+            if session_id.is_some() && session_id != Some(owner_session.as_str()) {
+                return Err(format!("session_history_conflict: conversation is already linked to work session {owner_session}"));
+            }
+        }
+        self.ensure_started().await?;
+        let history = self.external_history_page(thread_id, input).await?;
+        let thread = &history["thread"];
+        if thread["id"].as_str() != Some(thread_id) {
+            return Err("ownership_failure: Codex returned a different conversation".into());
+        }
+        if thread["ephemeral"].as_bool().unwrap_or(true) {
+            return Err(
+                "external_thread_unavailable: ephemeral conversations cannot be linked".into(),
+            );
+        }
+        match thread["status"].as_str() {
+            Some("idle" | "notLoaded") => {}
+            Some("active") => {
+                return Err(
+                    "active_thread_conflict: conversation is active in another Codex surface"
+                        .into(),
+                )
+            }
+            _ => {
+                return Err(
+                    "external_thread_unavailable: conversation is not ready to be linked".into(),
+                )
+            }
+        }
+        let cwd = thread["cwd"]
+            .as_str()
+            .ok_or("external_thread_unavailable: conversation folder is unavailable")?;
+        let title = thread["title"]
+            .as_str()
+            .or_else(|| thread["preview"].as_str())
+            .unwrap_or("Imported Codex conversation");
+        let mut linked = self.inner.service.link_external_thread(
+            task_id,
+            session_id,
+            thread_id,
+            cwd,
+            title,
+            thread["model"].as_str(),
+        )?;
+        linked["thread"] = thread.clone();
+        linked["turns"] = history["turns"].clone();
+        linked["nextCursor"] = history["nextCursor"].clone();
+        Ok(linked)
+    }
+
+    async fn external_history_page(
+        &self,
+        thread_id: &str,
+        input: &Value,
+    ) -> Result<Value, String> {
+        let metadata = self
+            .inner
+            .server
+            .request(
+                "thread/read",
+                json!({"threadId":thread_id,"includeTurns":false}),
+            )
+            .await
+            .map_err(|error| format!("external_thread_unavailable: {error}"))?
+            .1;
+        let returned_id = metadata["thread"]["id"]
+            .as_str()
+            .ok_or("external_thread_unavailable: Codex did not return the conversation")?;
+        if returned_id != thread_id {
+            return Err("ownership_failure: Codex returned a different conversation".into());
+        }
+        let limit = input
+            .get("limit")
+            .and_then(Value::as_u64)
+            .unwrap_or(10)
+            .clamp(1, 25);
+        let mut params = json!({
+            "threadId":thread_id,
+            "limit":limit,
+            "sortDirection":"desc",
+            "itemsView":"full"
+        });
+        if let Some(cursor) = input
+            .get("cursor")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|cursor| !cursor.is_empty())
+        {
+            if cursor.len() > 4_000 {
+                return Err("invalid_input: cursor is too long".into());
+            }
+            params["cursor"] = json!(cursor);
+        }
+        let page = self
+            .inner
+            .server
+            .request("thread/turns/list", params)
+            .await
+            .map_err(|error| format!("external_thread_unavailable: {error}"))?
+            .1;
+        let mut turns = page["data"].as_array().cloned().unwrap_or_default();
+        turns.reverse();
+        let mut hydrated = metadata;
+        hydrated["thread"]["turns"] = Value::Array(turns);
+        let mut history = normalize_external_history(&hydrated)?;
+        history["nextCursor"] = page.get("nextCursor").cloned().unwrap_or(Value::Null);
+        Ok(history)
+    }
+
+    fn validate_external_scope(
+        &self,
+        task_id: &str,
+        session_id: Option<&str>,
+    ) -> Result<(), String> {
+        if let Some(session_id) = session_id {
+            self.inner.service.ensure_session_owner(task_id, session_id)
+        } else {
+            self.inner.service.ensure_task_owner(task_id)
+        }
     }
 
     async fn prepare_inner(&self, input: &Value) -> Result<(Value, PreparedExecution), String> {
@@ -388,7 +648,12 @@ impl TaskExecutionRuntime {
             AppServerEvent::Notification { method, params, .. }
                 if matches!(
                     method.as_str(),
-                    "item/started" | "item/completed" | "turn/started" | "turn/completed"
+                    "item/started"
+                        | "item/completed"
+                        | "turn/started"
+                        | "turn/completed"
+                        | "item/agentMessage/delta"
+                        | "item/commandExecution/outputDelta"
                 ) =>
             {
                 let recognized = if method == "item/completed" || method == "turn/completed" {
@@ -400,6 +665,8 @@ impl TaskExecutionRuntime {
                     self.buffer_early(event).await;
                 } else if method == "turn/completed" {
                     self.clear_live_status(params);
+                } else if method.ends_with("/delta") || method.ends_with("/outputDelta") {
+                    self.update_live_delta(method, params);
                 } else {
                     self.update_live_status(
                         params,
@@ -551,11 +818,59 @@ impl TaskExecutionRuntime {
             return;
         };
         let kind = safe_live_kind(params);
-        self.inner
-            .live_status
-            .lock()
-            .unwrap()
-            .insert(run_id.clone(), json!({"kind":kind,"status":status}));
+        let item = params.get("item").unwrap_or(&Value::Null);
+        self.inner.live_status.lock().unwrap().insert(
+            run_id.clone(),
+            json!({
+                "kind":kind,
+                "status":status,
+                "itemId":item.get("id").and_then(Value::as_str),
+                "command":item.get("command").and_then(Value::as_str).map(|value|safe_external_text(value,8_000)),
+                "text":item.get("text").and_then(Value::as_str).map(|value|safe_external_text(value,20_000)),
+                "output":item.get("aggregatedOutput").and_then(Value::as_str).map(|value|safe_external_text(value,20_000)),
+            }),
+        );
+        self.inner.live_revision.fetch_add(1, Ordering::SeqCst);
+        let _ = self.inner.signals.send(ExecutionSignal {
+            task_id,
+            session_id,
+            run_id,
+        });
+    }
+
+    fn update_live_delta(&self, method: &str, params: &Value) {
+        let Some((run_id, task_id, session_id)) = self.run_for_params(params) else {
+            return;
+        };
+        let item_id = params
+            .get("itemId")
+            .and_then(Value::as_str)
+            .unwrap_or("activity");
+        let delta = params
+            .get("delta")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let kind = if method == "item/agentMessage/delta" {
+            "agentMessage"
+        } else {
+            "commandExecution"
+        };
+        let field = if kind == "agentMessage" {
+            "text"
+        } else {
+            "output"
+        };
+        let mut live = self.inner.live_status.lock().unwrap();
+        let status = live
+            .entry(run_id.clone())
+            .or_insert_with(|| json!({"kind":kind,"status":"running","itemId":item_id}));
+        if status["itemId"].as_str() != Some(item_id) || status["kind"].as_str() != Some(kind) {
+            *status = json!({"kind":kind,"status":"running","itemId":item_id});
+        }
+        let mut combined = status[field].as_str().unwrap_or_default().to_owned();
+        combined.push_str(delta);
+        status[field] = json!(safe_external_text(&combined, 20_000));
+        drop(live);
         self.inner.live_revision.fetch_add(1, Ordering::SeqCst);
         let _ = self.inner.signals.send(ExecutionSignal {
             task_id,
@@ -636,6 +951,177 @@ fn required<'a>(value: &'a Value, key: &str) -> Result<&'a str, String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .ok_or_else(|| format!("invalid_input: {key} is required"))
+}
+
+fn normalize_external_thread(thread: &Value) -> Option<Value> {
+    let id = thread.get("id")?.as_str()?.trim();
+    let cwd = thread.get("cwd")?.as_str()?.trim();
+    if id.is_empty() || cwd.is_empty() {
+        return None;
+    }
+    let source = match thread.get("source") {
+        Some(Value::String(source)) => source.as_str(),
+        Some(Value::Object(source)) if source.contains_key("subAgent") => "subAgent",
+        Some(Value::Object(source)) if source.contains_key("custom") => "custom",
+        _ => "unknown",
+    };
+    let status = thread
+        .get("status")
+        .and_then(|status| status.get("type"))
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let title = thread
+        .get("name")
+        .and_then(Value::as_str)
+        .map(|text| safe_external_text(text, 500));
+    let preview = thread
+        .get("preview")
+        .and_then(Value::as_str)
+        .map(|text| safe_external_text(text, 2_000));
+    Some(json!({
+        "id":id,
+        "title":title,
+        "preview":preview,
+        "cwd":cwd,
+        "model":thread.get("model").and_then(Value::as_str),
+        "source":source,
+        "status":status,
+        "ephemeral":thread.get("ephemeral").and_then(Value::as_bool).unwrap_or(true),
+        "createdAt":external_timestamp(thread.get("createdAt")),
+        "updatedAt":external_timestamp(thread.get("updatedAt")),
+    }))
+}
+
+fn normalize_external_history(response: &Value) -> Result<Value, String> {
+    let raw_thread = response
+        .get("thread")
+        .ok_or("external_thread_unavailable: Codex did not return the conversation")?;
+    let thread = normalize_external_thread(raw_thread)
+        .ok_or("external_thread_unavailable: conversation metadata is incomplete")?;
+    let mut turns = Vec::new();
+    for raw_turn in raw_thread
+        .get("turns")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let Some(turn_id) = raw_turn.get("id").and_then(Value::as_str) else {
+            continue;
+        };
+        let mut messages = Vec::new();
+        let mut activity = Vec::new();
+        let mut items = Vec::new();
+        for (order, item) in raw_turn
+            .get("items")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .enumerate()
+        {
+            let kind = item
+                .get("type")
+                .and_then(Value::as_str)
+                .unwrap_or("activity");
+            let id = item
+                .get("id")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown-item");
+            if kind == "userMessage" {
+                let body = item
+                    .get("content")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter(|part| part.get("type").and_then(Value::as_str) == Some("text"))
+                    .filter_map(|part| part.get("text").and_then(Value::as_str))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                if !body.is_empty() {
+                    let message = json!({"type":"message","id":id,"role":"user","body":safe_external_text(&body,50_000),"order":order,"createdAt":external_timestamp(raw_turn.get("startedAt"))});
+                    messages.push(message.clone());
+                    items.push(message);
+                }
+            } else if kind == "agentMessage" {
+                if let Some(body) = item.get("text").and_then(Value::as_str) {
+                    let message = json!({"type":"message","id":id,"role":"assistant","body":safe_external_text(body,50_000),"order":order,"createdAt":external_timestamp(raw_turn.get("startedAt"))});
+                    messages.push(message.clone());
+                    items.push(message);
+                }
+            } else {
+                let label = match kind {
+                    "commandExecution" => "Run command",
+                    "fileChange" => "Changed files",
+                    "webSearch" => "Searched the web",
+                    "mcpToolCall" => "Used a tool",
+                    "reasoning" => "Reasoning",
+                    _ => "Activity",
+                };
+                let row = json!({
+                    "type":"activity",
+                    "id":id,
+                    "kind":kind,
+                    "label":label,
+                    "order":order,
+                    "status":item.get("status").and_then(Value::as_str).unwrap_or("completed"),
+                    "command":item.get("command").and_then(Value::as_str).map(|value|safe_external_text(value,8_000)),
+                    "output":item.get("aggregatedOutput").and_then(Value::as_str).map(|value|safe_external_text(value,20_000)),
+                    "exitCode":item.get("exitCode").cloned().unwrap_or(Value::Null),
+                    "createdAt":external_timestamp(item.get("createdAt").or_else(||raw_turn.get("startedAt"))),
+                });
+                activity.push(row.clone());
+                items.push(row);
+            }
+        }
+        turns.push(json!({
+            "id":turn_id,
+            "status":raw_turn.get("status").and_then(Value::as_str).unwrap_or("unknown"),
+            "createdAt":external_timestamp(raw_turn.get("startedAt")),
+            "completedAt":external_timestamp(raw_turn.get("completedAt")),
+            "messages":messages,
+            "activity":activity,
+            "items":items,
+        }));
+    }
+    Ok(json!({"thread":thread,"turns":turns}))
+}
+
+fn external_timestamp(value: Option<&Value>) -> Value {
+    value
+        .and_then(Value::as_i64)
+        .and_then(|seconds| chrono::DateTime::from_timestamp(seconds, 0))
+        .map(|value| json!(value.to_rfc3339()))
+        .unwrap_or(Value::Null)
+}
+
+fn safe_external_text(text: &str, max: usize) -> String {
+    let mut safe = text.replace('\0', "");
+    let lower = safe.to_ascii_lowercase();
+    if [
+        "bearer ",
+        "api_key=",
+        "apikey=",
+        "api-key:",
+        "authorization:",
+        "secret=",
+        "token=",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle))
+        || safe
+            .split_whitespace()
+            .any(|word| word.starts_with("sk-") && word.len() > 12)
+    {
+        return "[redacted credential-like content]".into();
+    }
+    if safe.len() > max {
+        let mut end = max;
+        while end > 0 && !safe.is_char_boundary(end) {
+            end -= 1;
+        }
+        safe.truncate(end);
+        safe.push('…');
+    }
+    safe
 }
 
 fn normalize_thread_response(response: &Value) -> Result<Value, String> {
@@ -762,6 +1248,156 @@ mod tests {
             safe_live_kind(&json!({"item":{"type":"unknown","text":"private output"}})),
             "activity"
         );
+    }
+
+    #[test]
+    fn external_history_preserves_provider_item_order_and_bounds_sensitive_text() {
+        let history = normalize_external_history(&json!({
+            "thread": {
+                "id":"thread-external",
+                "name":"Existing session",
+                "preview":"Inspect the project",
+                "cwd":"/tmp/project",
+                "model":"gpt-5.6-sol",
+                "source":"vscode",
+                "status":{"type":"idle"},
+                "ephemeral":false,
+                "createdAt":1_700_000_000_i64,
+                "updatedAt":1_700_000_100_i64,
+                "turns":[{
+                    "id":"turn-1",
+                    "status":"completed",
+                    "startedAt":1_700_000_010_i64,
+                    "completedAt":1_700_000_020_i64,
+                    "items":[
+                        {"id":"user-1","type":"userMessage","content":[{"type":"text","text":"Run checks"}]},
+                        {"id":"command-1","type":"commandExecution","status":"completed","command":"cargo test","aggregatedOutput":"ok","exitCode":0},
+                        {"id":"assistant-1","type":"agentMessage","text":"Finished"}
+                    ]
+                }]
+            }
+        }))
+        .unwrap();
+        let items = history["turns"][0]["items"].as_array().unwrap();
+        assert_eq!(items[0]["type"], "message");
+        assert_eq!(items[1]["type"], "activity");
+        assert_eq!(items[1]["kind"], "commandExecution");
+        assert_eq!(items[2]["role"], "assistant");
+        assert_eq!(items[2]["order"], 2);
+        assert_eq!(history["thread"]["source"], "vscode");
+        assert!(history["thread"]["updatedAt"]
+            .as_str()
+            .unwrap()
+            .starts_with("2023-"));
+        assert_eq!(
+            safe_external_text("Authorization: secret", 100),
+            "[redacted credential-like content]"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn fake_server_discovers_reads_and_links_without_starting_or_resuming_a_turn() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = tempdir().unwrap();
+        let db = root.path().join("state.sqlite3");
+        crate::native::database::initialize(&db).unwrap();
+        let tasks = TaskApplicationService::new(&db);
+        let task = tasks
+            .execute(
+                "task.create",
+                &json!({"operationId":"external-runtime-task","inputText":"Import existing work","title":"Import existing work"}),
+            )
+            .unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let fake = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../tests/fakes/codex_app_server.mjs")
+            .canonicalize()
+            .unwrap();
+        let log = root.path().join("requests.log");
+        let wrapper = root.path().join("fake-codex");
+        std::fs::write(
+            &wrapper,
+            format!(
+                "#!/bin/sh\nexport LLM_WIKI_FAKE_CODEX_LOG='{}'\nexec '{}'\n",
+                log.display(),
+                fake.display()
+            ),
+        )
+        .unwrap();
+        let mut permissions = std::fs::metadata(&wrapper).unwrap().permissions();
+        permissions.set_mode(0o700);
+        std::fs::set_permissions(&wrapper, permissions).unwrap();
+        let runtime = TaskExecutionRuntime::with_test_server(
+            TaskExecutionApplicationService::new(&db),
+            wrapper,
+        );
+
+        let listed = runtime
+            .external_threads(&json!({"taskId":task}))
+            .await
+            .unwrap();
+        assert_eq!(listed["threads"][0]["id"], "fixture-external-thread");
+        let read = runtime
+            .external_thread_read(
+                &json!({"taskId":task,"threadId":"fixture-external-thread"}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(read["turns"][0]["items"][1]["kind"], "commandExecution");
+        assert!(read["nextCursor"].is_null());
+        let linked = runtime
+            .link_external_thread(
+                &json!({"taskId":task,"threadId":"fixture-external-thread"}),
+            )
+            .await
+            .unwrap();
+        let session_id = linked["sessionId"].as_str().unwrap();
+        let reopened = runtime
+            .external_thread_read(&json!({"taskId":task,"sessionId":session_id}))
+            .await
+            .unwrap();
+        assert_eq!(reopened["thread"]["id"], "fixture-external-thread");
+        runtime.shutdown().await;
+
+        let requests = std::fs::read_to_string(log).unwrap();
+        assert!(requests.contains("thread/list"));
+        assert!(requests.contains("thread/read"));
+        assert!(requests.contains("thread/turns/list"));
+        assert!(!requests.contains("turn/start"));
+        assert!(!requests.contains("thread/resume"));
+        assert!(!requests.contains("thread/start"));
+    }
+
+    #[test]
+    fn live_agent_and_command_deltas_are_bounded_ephemeral_snapshot_data() {
+        let root = tempdir().unwrap();
+        let db = root.path().join("state.sqlite3");
+        crate::native::database::initialize(&db).unwrap();
+        let tasks = TaskApplicationService::new(&db);
+        let task = tasks.execute("task.create",&json!({"operationId":"live-delta-task","inputText":"Stream progress","title":"Stream progress"})).unwrap()["id"].as_str().unwrap().to_owned();
+        let session = tasks.execute("task.work-session.create",&json!({"operationId":"live-delta-session","taskId":task,"title":"Live"})).unwrap()["id"].as_str().unwrap().to_owned();
+        tasks.execute("task.work-session.update",&json!({"operationId":"live-delta-settings","taskId":task,"sessionId":session,"title":"Live","provider":"codex","model":"gpt-5.6-sol","approvalMode":"ask","approvalsReviewer":"user","workspacePath":root.path().to_string_lossy()})).unwrap();
+        let service = TaskExecutionApplicationService::new(&db);
+        let prepared = service.prepared(&task, &session).unwrap();
+        service.bind_thread(&prepared,&json!({"id":"live-thread","model":"gpt-5.6-sol","cwd":prepared.cwd,"approvalPolicy":"on-request","sandbox":"workspaceWrite"}),true).unwrap();
+        let (snapshot, _) = service.create_run(&json!({"taskId":task,"sessionId":session,"operationId":"live-delta-run","instruction":"Stream","settingsRevision":prepared.settings_revision})).unwrap();
+        let run = snapshot["selectedRun"]["id"].as_str().unwrap().to_owned();
+        service.mark_dispatch_recorded(&run).unwrap();
+        service.accept_turn(&run, "live-thread", "live-turn").unwrap();
+        let runtime = TaskExecutionRuntime::new(service);
+
+        runtime.update_live_delta("item/agentMessage/delta",&json!({"threadId":"live-thread","turnId":"live-turn","itemId":"agent","delta":"Working"}));
+        runtime.update_live_delta("item/agentMessage/delta",&json!({"threadId":"live-thread","turnId":"live-turn","itemId":"agent","delta":" now"}));
+        let agent = runtime.snapshot(&json!({"taskId":task,"sessionId":session,"runId":run})).unwrap();
+        assert_eq!(agent["selectedRun"]["liveStatus"]["text"], "Working now");
+        runtime.update_live_delta("item/commandExecution/outputDelta",&json!({"threadId":"live-thread","turnId":"live-turn","itemId":"command","delta":"ok"}));
+        let command = runtime.snapshot(&json!({"taskId":task,"sessionId":session,"runId":run})).unwrap();
+        assert_eq!(command["selectedRun"]["liveStatus"]["kind"], "commandExecution");
+        assert_eq!(command["selectedRun"]["liveStatus"]["output"], "ok");
     }
 
     #[tokio::test]

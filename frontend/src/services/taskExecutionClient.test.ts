@@ -88,4 +88,26 @@ describe("Task execution native client", () => {
     await expect(taskExecutionClient.subscribe({ taskId: "task-a", sessionId: "session-a" }, vi.fn()))
       .rejects.toThrow("This session already has an active Run.");
   });
+
+  it("lists, reads, and links persisted Codex sessions without opening an execution channel", async () => {
+    const thread = {
+      id: "thread-a", title: "Investigate sync", preview: "Check the sync path", cwd: "/project",
+      model: "gpt-5.6-sol", source: "vscode", status: "idle",
+      createdAt: "2026-09-20T10:00:00Z", updatedAt: "2026-09-22T10:00:00Z",
+    };
+    const transcript = { thread, turns: [] };
+    vi.mocked(invoke)
+      .mockResolvedValueOnce({ status: 200, body: { threads: [thread] } })
+      .mockResolvedValueOnce({ status: 200, body: transcript })
+      .mockResolvedValueOnce({ status: 200, body: { ...transcript, taskId: "task-a", sessionId: "session-new", threadId: thread.id, linked: true } });
+
+    await expect(taskExecutionClient.externalThreads({ taskId: "task-a", limit: 50 })).resolves.toEqual({ threads: [thread] });
+    await expect(taskExecutionClient.externalThread({ taskId: "task-a", threadId: thread.id })).resolves.toEqual(transcript);
+    await expect(taskExecutionClient.linkExternalThread({ taskId: "task-a", threadId: thread.id })).resolves.toEqual(expect.objectContaining({ sessionId: "session-new" }));
+
+    expect(invoke).toHaveBeenNthCalledWith(1, "task_session_external_threads_list", { input: { taskId: "task-a", limit: 50 } });
+    expect(invoke).toHaveBeenNthCalledWith(2, "task_session_external_thread_read", { input: { taskId: "task-a", threadId: "thread-a" } });
+    expect(invoke).toHaveBeenNthCalledWith(3, "task_session_external_thread_link", { input: { taskId: "task-a", threadId: "thread-a" } });
+    expect(Channel).not.toHaveBeenCalled();
+  });
 });

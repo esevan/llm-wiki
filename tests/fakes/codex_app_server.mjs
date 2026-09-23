@@ -3,8 +3,21 @@
 // Deterministic, local-only app-server used by the opt-in packaged execution
 // scenario. It speaks the JSONL protocol the native adapter supervises.
 import readline from "node:readline";
+import { appendFileSync } from "node:fs";
 
-const threads = new Map();
+const externalThread = {
+  turns: 1,
+  pending: null,
+  history: [{
+    id: "fixture-external-turn-1", status: "completed", startedAt: 1700000010, completedAt: 1700000020,
+    items: [
+      { id: "fixture-external-user", type: "userMessage", content: [{ type: "text", text: "Continue imported work" }] },
+      { id: "fixture-external-command", type: "commandExecution", status: "completed", command: "fixture-history-check", cwd: process.cwd(), aggregatedOutput: "history ok", exitCode: 0, commandActions: [] },
+      { id: "fixture-external-agent", type: "agentMessage", text: "Imported history complete" },
+    ], itemsView: "full",
+  }],
+};
+const threads = new Map([["fixture-external-thread", externalThread]]);
 let nextThread = 1;
 let nextTurn = 1;
 let nextRequest = 1;
@@ -57,6 +70,7 @@ const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity 
 rl.on("line", (line) => {
   let input;
   try { input = JSON.parse(line); } catch { return; }
+  if (process.env.LLM_WIKI_FAKE_CODEX_LOG && input.method) appendFileSync(process.env.LLM_WIKI_FAKE_CODEX_LOG, `${input.method}\n`);
   if (input.method === "initialize") {
     response(input.id, { capabilities: { experimentalApi: true } });
   } else if (input.method === "initialized") {
@@ -65,6 +79,15 @@ rl.on("line", (line) => {
     const threadId = `fixture-thread-${nextThread++}`;
     threads.set(threadId, { turns: 0, pending: null });
     response(input.id, { thread: { id: threadId }, model: input.params?.model ?? "gpt-5.6-luna", cwd: input.params?.cwd ?? process.cwd(), approvalPolicy: "on-request", approvalsReviewer: input.params?.approvalsReviewer ?? "user", sandbox: { type: "workspaceWrite" } });
+  } else if (input.method === "thread/list") {
+    response(input.id, { data: [{ id: "fixture-external-thread", name: "Fixture external conversation", preview: "Continue imported work", cwd: process.cwd(), model: "gpt-5.6-sol", modelProvider: "openai", source: "vscode", status: { type: "idle" }, ephemeral: false, createdAt: 1700000000, updatedAt: 1700000020, turns: [] }], nextCursor: null });
+  } else if (input.method === "thread/read") {
+    const threadId = input.params?.threadId;
+    if (threadId !== "fixture-external-thread") response(input.id, null);
+    else response(input.id, { thread: { id: threadId, name: "Fixture external conversation", preview: "Continue imported work", cwd: process.cwd(), model: "gpt-5.6-sol", modelProvider: "openai", source: "vscode", status: { type: "idle" }, ephemeral: false, createdAt: 1700000000, updatedAt: 1700000020, turns: input.params?.includeTurns ? externalThread.history : [] } });
+  } else if (input.method === "thread/turns/list") {
+    const history = input.params?.threadId === "fixture-external-thread" ? [...externalThread.history].reverse() : [];
+    response(input.id, { data: history, nextCursor: null });
   } else if (input.method === "thread/resume") {
     const threadId = input.params?.threadId;
     if (!threads.has(threadId)) threads.set(threadId, { turns: 0, pending: null });

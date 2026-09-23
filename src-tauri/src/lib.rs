@@ -188,7 +188,9 @@ fn execution_error(error: String) -> NativeResponse {
     } else if matches!(
         code,
         "active_run_conflict"
+            | "active_thread_conflict"
             | "operation_conflict"
+            | "session_history_conflict"
             | "settings_revision_conflict"
             | "workspace_thread_mismatch"
     ) || code.starts_with("stale_")
@@ -203,6 +205,39 @@ fn execution_error(error: String) -> NativeResponse {
         status,
         body: serde_json::json!({"error":{"code":code,"message":error}}),
     }
+}
+
+#[tauri::command]
+async fn task_session_external_threads_list(
+    runtime: tauri::State<'_, native::task_execution_runtime::TaskExecutionRuntime>,
+    input: serde_json::Value,
+) -> Result<NativeResponse, String> {
+    Ok(match runtime.external_threads(&input).await {
+        Ok(body) => NativeResponse { status: 200, body },
+        Err(error) => execution_error(error),
+    })
+}
+
+#[tauri::command]
+async fn task_session_external_thread_read(
+    runtime: tauri::State<'_, native::task_execution_runtime::TaskExecutionRuntime>,
+    input: serde_json::Value,
+) -> Result<NativeResponse, String> {
+    Ok(match runtime.external_thread_read(&input).await {
+        Ok(body) => NativeResponse { status: 200, body },
+        Err(error) => execution_error(error),
+    })
+}
+
+#[tauri::command]
+async fn task_session_external_thread_link(
+    runtime: tauri::State<'_, native::task_execution_runtime::TaskExecutionRuntime>,
+    input: serde_json::Value,
+) -> Result<NativeResponse, String> {
+    Ok(match runtime.link_external_thread(&input).await {
+        Ok(body) => NativeResponse { status: 200, body },
+        Err(error) => execution_error(error),
+    })
 }
 
 #[tauri::command]
@@ -527,6 +562,9 @@ pub fn run() {
             choose_vault,
             choose_project_folder,
             task_session_prepare,
+            task_session_external_threads_list,
+            task_session_external_thread_read,
+            task_session_external_thread_link,
             task_session_execute,
             task_session_execution_subscribe,
             task_session_interrupt,

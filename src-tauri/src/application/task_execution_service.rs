@@ -80,6 +80,192 @@ impl TaskExecutionApplicationService {
         }
     }
 
+    pub(crate) fn ensure_session_owner(
+        &self,
+        task_id: &str,
+        session_id: &str,
+    ) -> Result<(), String> {
+        let connection = database::open(&self.db_path)?;
+        let owned: bool = connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM task_work_sessions s JOIN tasks t ON t.id=s.task_id WHERE s.id=? AND s.task_id=? AND NOT EXISTS(SELECT 1 FROM deleted_entities d WHERE d.entity_type='tasks' AND d.entity_id=t.id))",
+                params![session_id, task_id],
+                |row| row.get(0),
+            )
+            .map_err(|error| error.to_string())?;
+        if owned {
+            Ok(())
+        } else {
+            Err("ownership_failure: work session not found".into())
+        }
+    }
+
+    pub(crate) fn ensure_task_owner(&self, task_id: &str) -> Result<(), String> {
+        let connection = database::open(&self.db_path)?;
+        let exists: bool = connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM tasks t WHERE t.id=? AND NOT EXISTS(SELECT 1 FROM deleted_entities d WHERE d.entity_type='tasks' AND d.entity_id=t.id))",
+                [task_id],
+                |row| row.get(0),
+            )
+            .map_err(|error| error.to_string())?;
+        if exists {
+            Ok(())
+        } else {
+            Err("ownership_failure: Task not found".into())
+        }
+    }
+
+    pub(crate) fn external_thread_owner(
+        &self,
+        thread_id: &str,
+    ) -> Result<Option<(String, String)>, String> {
+        let connection = database::open(&self.db_path)?;
+        connection
+            .query_row(
+                "SELECT task_id,id FROM task_work_sessions WHERE codex_thread_id=?",
+                [thread_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .map_err(|error| error.to_string())
+    }
+
+    pub(crate) fn session_external_thread(
+        &self,
+        task_id: &str,
+        session_id: &str,
+    ) -> Result<Option<String>, String> {
+        let connection = database::open(&self.db_path)?;
+        connection
+            .query_row(
+                "SELECT s.codex_thread_id FROM task_work_sessions s JOIN tasks t ON t.id=s.task_id WHERE s.id=? AND s.task_id=? AND NOT EXISTS(SELECT 1 FROM deleted_entities d WHERE d.entity_type='tasks' AND d.entity_id=t.id)",
+                params![session_id, task_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| "ownership_failure: work session not found".to_owned())
+    }
+
+    pub(crate) fn link_external_thread(
+        &self,
+        task_id: &str,
+        session_id: Option<&str>,
+        thread_id: &str,
+        cwd: &str,
+        title: &str,
+        model: Option<&str>,
+    ) -> Result<Value, String> {
+        let canonical = std::fs::canonicalize(cwd)
+            .map_err(|_| "invalid_folder: the imported conversation folder is unavailable")?;
+        if !canonical.is_dir() {
+            return Err("invalid_folder: the imported conversation path is not a folder".into());
+        }
+        let cwd = canonical.to_string_lossy().into_owned();
+        let mut connection = database::open(&self.db_path)?;
+        let tx = database::immediate_transaction(&mut connection)?;
+        let task_exists: bool = tx
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM tasks t WHERE t.id=? AND NOT EXISTS(SELECT 1 FROM deleted_entities d WHERE d.entity_type='tasks' AND d.entity_id=t.id))",
+                [task_id],
+                |row| row.get(0),
+            )
+            .map_err(|error| error.to_string())?;
+        if !task_exists {
+            return Err("ownership_failure: Task not found".into());
+        }
+        let existing = tx
+            .query_row(
+                "SELECT task_id,id FROM task_work_sessions WHERE codex_thread_id=?",
+                [thread_id],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )
+            .optional()
+            .map_err(|error| error.to_string())?;
+        if let Some((owner_task, owner_session)) = existing {
+            if owner_task != task_id {
+                return Err("ownership_failure: conversation belongs to another Task".into());
+            }
+            if session_id.is_none() || session_id == Some(owner_session.as_str()) {
+                tx.commit().map_err(|error| error.to_string())?;
+                return Ok(
+                    json!({"taskId":task_id,"sessionId":owner_session,"threadId":thread_id,"linked":true}),
+                );
+            }
+            return Err(format!(
+                "session_history_conflict: conversation is already linked to work session {owner_session}"
+            ));
+        }
+        let Some(session_id) = session_id else {
+            let session_id = task_repository::new_id();
+            let at = task_repository::now();
+            let safe_title = safe_text(&json!(title.trim()), 200);
+            let safe_title = if safe_title.is_empty() {
+                "Imported Codex conversation".to_owned()
+            } else {
+                safe_title
+            };
+            let model = model
+                .map(str::trim)
+                .filter(|model| !model.is_empty() && model.len() <= 200)
+                .unwrap_or("gpt-5.6-sol");
+            tx.execute(
+                "INSERT INTO task_work_sessions(id,task_id,title,provider,model,approval_mode,workspace_path,codex_thread_id,approvals_reviewer,created_at,updated_at) VALUES(?,?,?,'codex',?,'ask',?,?,'user',?,?)",
+                params![session_id, task_id, safe_title, model, cwd, thread_id, at, at],
+            )
+            .map_err(|error| error.to_string())?;
+            tx.commit().map_err(|error| error.to_string())?;
+            return Ok(
+                json!({"taskId":task_id,"sessionId":session_id,"threadId":thread_id,"linked":true,"workspacePath":cwd,"updatedAt":at}),
+            );
+        };
+        let current = tx
+            .query_row(
+                "SELECT codex_thread_id FROM task_work_sessions s JOIN tasks t ON t.id=s.task_id WHERE s.id=? AND s.task_id=? AND NOT EXISTS(SELECT 1 FROM deleted_entities d WHERE d.entity_type='tasks' AND d.entity_id=t.id)",
+                params![session_id, task_id],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()
+            .map_err(|error| error.to_string())?
+            .ok_or("ownership_failure: work session not found")?;
+        if current.as_deref() == Some(thread_id) {
+            tx.commit().map_err(|error| error.to_string())?;
+            return Ok(
+                json!({"taskId":task_id,"sessionId":session_id,"threadId":thread_id,"linked":true}),
+            );
+        }
+        if current.is_some() {
+            return Err("session_history_conflict: work session is already linked to a different conversation".into());
+        }
+        let has_history: bool = tx
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM task_work_session_entries WHERE session_id=? UNION ALL SELECT 1 FROM task_work_session_runs WHERE session_id=?)",
+                params![session_id, session_id],
+                |row| row.get(0),
+            )
+            .map_err(|error| error.to_string())?;
+        if has_history {
+            return Err("session_history_conflict: create an empty work session before linking an existing conversation".into());
+        }
+        let at = task_repository::now();
+        let changed = tx
+            .execute(
+                "UPDATE task_work_sessions SET codex_thread_id=?,workspace_path=?,effective_model=NULL,effective_cwd=NULL,effective_approval_policy=NULL,effective_sandbox=NULL,effective_structured_input=0,effective_settings_revision=NULL,context_hash=NULL,execution_revision=execution_revision+1,updated_at=? WHERE id=? AND task_id=? AND codex_thread_id IS NULL",
+                params![thread_id, cwd, at, session_id, task_id],
+            )
+            .map_err(|error| error.to_string())?;
+        if changed != 1 {
+            return Err(
+                "operation_conflict: work session changed while linking the conversation".into(),
+            );
+        }
+        tx.commit().map_err(|error| error.to_string())?;
+        Ok(
+            json!({"taskId":task_id,"sessionId":session_id,"threadId":thread_id,"linked":true,"workspacePath":cwd,"updatedAt":at}),
+        )
+    }
+
     pub(crate) fn recover_nonterminal(&self) -> Result<usize, String> {
         let mut connection = database::open(&self.db_path)?;
         let tx = database::immediate_transaction(&mut connection)?;
@@ -1694,5 +1880,157 @@ mod tests {
             .prepared(&f.task, &f.session)
             .unwrap()
             .context_changed);
+    }
+
+    #[test]
+    fn external_thread_link_is_atomic_idempotent_and_never_rebinds_history() {
+        let f = fixture();
+        let tasks = TaskApplicationService::new(&f.db);
+        let before: i64 = database::open(&f.db)
+            .unwrap()
+            .query_row("SELECT count(*) FROM task_work_sessions", [], |row| row.get(0))
+            .unwrap();
+        let imported = f
+            .service
+            .link_external_thread(
+                &f.task,
+                None,
+                "external-thread",
+                f._root.path().to_str().unwrap(),
+                "Existing VS Code conversation",
+                Some("gpt-external"),
+            )
+            .unwrap();
+        let imported_session = imported["sessionId"].as_str().unwrap();
+        let connection = database::open(&f.db).unwrap();
+        assert_eq!(
+            connection
+                .query_row("SELECT count(*) FROM task_work_sessions", [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            before + 1
+        );
+        let stored = connection
+            .query_row(
+                "SELECT model,approvals_reviewer,codex_thread_id,context_hash FROM task_work_sessions WHERE id=?",
+                [imported_session],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, Option<String>>(3)?,
+                    ))
+                },
+            )
+            .unwrap();
+        assert_eq!(stored.0, "gpt-external");
+        assert_eq!(stored.1, "user");
+        assert_eq!(stored.2, "external-thread");
+        assert!(stored.3.is_none());
+        assert_eq!(
+            f.service
+                .session_external_thread(&f.task, imported_session)
+                .unwrap()
+                .as_deref(),
+            Some("external-thread")
+        );
+        drop(connection);
+
+        let replay = f
+            .service
+            .link_external_thread(
+                &f.task,
+                None,
+                "external-thread",
+                f._root.path().to_str().unwrap(),
+                "Ignored replay title",
+                None,
+            )
+            .unwrap();
+        assert_eq!(replay["sessionId"], imported_session);
+        assert_eq!(
+            database::open(&f.db)
+                .unwrap()
+                .query_row("SELECT count(*) FROM task_work_sessions", [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            before + 1
+        );
+
+        let other_task = tasks
+            .execute(
+                "task.create",
+                &json!({"operationId":"external-other-task","inputText":"Other","title":"Other"}),
+            )
+            .unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert!(f
+            .service
+            .link_external_thread(
+                &other_task,
+                None,
+                "external-thread",
+                f._root.path().to_str().unwrap(),
+                "Must remain private",
+                None,
+            )
+            .unwrap_err()
+            .contains("ownership_failure"));
+
+        let occupied = tasks
+            .execute(
+                "task.work-session.create",
+                &json!({"operationId":"occupied-session","taskId":f.task,"title":"Occupied"}),
+            )
+            .unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        tasks
+            .execute(
+                "task.work-session.entry.create",
+                &json!({"operationId":"occupied-entry","taskId":f.task,"sessionId":occupied,"body":"local history"}),
+            )
+            .unwrap();
+        assert!(f
+            .service
+            .link_external_thread(
+                &f.task,
+                Some(&occupied),
+                "another-thread",
+                f._root.path().to_str().unwrap(),
+                "Another",
+                None,
+            )
+            .unwrap_err()
+            .contains("session_history_conflict"));
+
+        let count_before_failure: i64 = database::open(&f.db)
+            .unwrap()
+            .query_row("SELECT count(*) FROM task_work_sessions", [], |row| row.get(0))
+            .unwrap();
+        assert!(f
+            .service
+            .link_external_thread(
+                &f.task,
+                None,
+                "missing-folder-thread",
+                f._root.path().join("missing").to_str().unwrap(),
+                "Missing",
+                None,
+            )
+            .unwrap_err()
+            .contains("invalid_folder"));
+        assert_eq!(
+            database::open(&f.db)
+                .unwrap()
+                .query_row("SELECT count(*) FROM task_work_sessions", [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            count_before_failure
+        );
     }
 }

@@ -1,4 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import Markdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { taskClient } from "../../services/taskClient";
 import { taskExecutionClient } from "../../services/taskExecutionClient";
 import { formatSystemTime } from "../../services/systemTime";
@@ -10,6 +12,9 @@ import type {
   TaskWorkSessionRecord,
   TaskExecutionSnapshot,
   TaskExecutionFormalRequest,
+  TaskExecutionEvidence,
+  CodexThreadSummary,
+  CodexThreadTranscript,
 } from "../../types/taskWorkbench";
 
 export type WorkSessionDraft = {
@@ -31,8 +36,20 @@ const copy = {
   en: {
     title: "Work sessions",
     create: "New session",
+    link: "Link Codex session",
+    linkTitle: "Available Codex sessions",
+    linkHint: "Choose an existing Codex or VS Code conversation to continue it with this Task.",
+    linkAction: "Link to Task",
+    linked: "Codex session linked",
+    alreadyLinked: "Linked",
+    noCodexSessions: "No saved Codex sessions were found.",
+    codexLoading: "Loading Codex sessions…",
+    closePicker: "Close session picker",
+    loadMore: "Load more",
+    loadEarlier: "Load earlier messages",
     empty: "Create a session when you are ready to record focused work.",
     select: "Session",
+    sessionTitle: "Session title",
     provider: "Provider",
     model: "Model",
     approval: "Approval reviewer",
@@ -66,6 +83,7 @@ const copy = {
     effective: "Effective execution settings",
     runStatus: "Run status",
     runHistory: "Run history",
+    runCommand: "Run command",
     activeRun: "Active Run",
     liveKinds: { commandExecution: "Command", fileChange: "File change", agentMessage: "Codex response", reasoning: "Reasoning", webSearch: "Web search", mcpToolCall: "Tool call" },
     openRun: "Open Run",
@@ -81,6 +99,7 @@ const copy = {
     syncWorkLog: "Retry Work Log sync",
     syncPending: "Work Log sync pending.",
     syncFailed: "Work Log sync failed.",
+    syncSucceeded: "Work Log synced.",
     evidence: "Observed evidence",
     report: "Codex final report",
     noReport: "Codex did not provide a final report.",
@@ -110,8 +129,20 @@ const copy = {
   ko: {
     title: "작업 세션",
     create: "새 세션",
+    link: "Codex 세션 연결",
+    linkTitle: "사용 가능한 Codex 세션",
+    linkHint: "기존 Codex 또는 VS Code 대화를 선택해 이 Task에서 이어서 진행하세요.",
+    linkAction: "Task에 연결",
+    linked: "Codex 세션을 연결했습니다",
+    alreadyLinked: "연결됨",
+    noCodexSessions: "저장된 Codex 세션을 찾지 못했습니다.",
+    codexLoading: "Codex 세션을 불러오는 중…",
+    closePicker: "세션 선택 닫기",
+    loadMore: "더 불러오기",
+    loadEarlier: "이전 메시지 불러오기",
     empty: "집중해서 진행한 내용을 기록할 준비가 되면 세션을 만드세요.",
     select: "세션",
+    sessionTitle: "세션 제목",
     provider: "제공자",
     model: "모델",
     approval: "승인 검토자",
@@ -145,6 +176,7 @@ const copy = {
     effective: "실제 실행 설정",
     runStatus: "실행 상태",
     runHistory: "실행 기록",
+    runCommand: "명령 실행",
     activeRun: "진행 중인 실행",
     liveKinds: { commandExecution: "명령", fileChange: "파일 변경", agentMessage: "Codex 응답", reasoning: "추론", webSearch: "웹 검색", mcpToolCall: "도구 호출" },
     openRun: "실행 열기",
@@ -160,6 +192,7 @@ const copy = {
     syncWorkLog: "Work Log 동기화 다시 시도",
     syncPending: "Work Log 동기화가 보류 중입니다.",
     syncFailed: "Work Log 동기화에 실패했습니다.",
+    syncSucceeded: "Work Log를 동기화했습니다.",
     evidence: "관찰된 근거",
     report: "Codex 최종 보고",
     noReport: "Codex가 최종 보고를 제공하지 않았습니다.",
@@ -208,6 +241,30 @@ const readAttachment = (file: File): Promise<TaskWorkSessionAttachment> =>
     reader.readAsDataURL(file);
   });
 
+function SessionMarkdown({ children }: { children: string }) {
+  return (
+    <div className="task-session-markdown" data-user-content>
+      <Markdown remarkPlugins={[remarkGfm]} skipHtml>{children}</Markdown>
+    </div>
+  );
+}
+
+function EvidenceRow({ evidence, runCommand }: { evidence: TaskExecutionEvidence; runCommand: string }) {
+  const isCommand = evidence.kind === "commandExecution" || Boolean(evidence.command);
+  const detail = [evidence.command, evidence.summary].filter(Boolean).join("\n\n");
+  return (
+    <details className="task-execution-event" data-kind={evidence.kind}>
+      <summary>
+        <span className="task-execution-event-icon" aria-hidden="true">{isCommand ? ">_" : "·"}</span>
+        <strong>{isCommand ? runCommand : evidence.label}</strong>
+        <span className="task-execution-event-status">{evidence.exitCode === undefined ? evidence.status : `exit ${evidence.exitCode}`}</span>
+      </summary>
+      {detail && <pre>{detail}</pre>}
+      {evidence.paths?.length ? <ul>{evidence.paths.map((path) => <li key={path}>{path}</li>)}</ul> : null}
+    </details>
+  );
+}
+
 export function TaskWorkSessions({
   task,
   draftStore,
@@ -238,16 +295,25 @@ export function TaskWorkSessions({
   const [answers, setAnswers] = useState<Record<string, string[]>>({});
   const [requestBusy, setRequestBusy] = useState("");
   const [editingSettings, setEditingSettings] = useState(true);
+  const [settingsExpanded, setSettingsExpanded] = useState(false);
   const [selectedRunId, setSelectedRunId] = useState("");
   const [retryOfRunId, setRetryOfRunId] = useState<string>();
   const [syncBusy, setSyncBusy] = useState("");
   const [syncError, setSyncError] = useState<Record<string, string>>({});
   const [recentFolders, setRecentFolders] = useState<string[]>([]);
-  const [messageMode, setMessageMode] = useState<"note" | "queue" | "steer">("note");
+  const [showCodexSessions, setShowCodexSessions] = useState(false);
+  const [codexSessions, setCodexSessions] = useState<CodexThreadSummary[]>();
+  const [linkingThreadId, setLinkingThreadId] = useState("");
+  const [externalTranscript, setExternalTranscript] = useState<CodexThreadTranscript>();
+  const [codexNextCursor, setCodexNextCursor] = useState<string>();
+  const [loadingMoreCodex, setLoadingMoreCodex] = useState(false);
+  const [loadingEarlierTurns, setLoadingEarlierTurns] = useState(false);
   const generation = useRef(0);
   const activeRef = useRef("");
   const draftRef = useRef(draft);
   const attachmentRef = useRef(attachment);
+  const timelineRef = useRef<HTMLOListElement>(null);
+  const followLatestRef = useRef(true);
   useEffect(() => {
     draftRef.current = draft;
     attachmentRef.current = attachment;
@@ -269,8 +335,71 @@ export function TaskWorkSessions({
         setSessions(next.sessions);
         setError("");
       }
+      return next.sessions;
     } catch (cause) {
       if (generation.current === expected) setError(String(cause));
+      return undefined;
+    }
+  };
+  const loadCodexSessions = async () => {
+    setCodexSessions(undefined);
+    setError("");
+    const expected = generation.current;
+    try {
+      const result = await taskExecutionClient.externalThreads({ taskId: task.id, sessionId: activeRef.current || undefined, limit: 50 });
+      if (generation.current === expected) {
+        setCodexSessions(result.threads);
+        setCodexNextCursor(result.nextCursor ?? undefined);
+      }
+    } catch (cause) {
+      if (generation.current === expected) setError(String(cause));
+    }
+  };
+  const loadLinkedTranscript = async (sessionId: string, expected: number) => {
+    try {
+      const transcript = await taskExecutionClient.externalThread({ taskId: task.id, sessionId, limit: 10 });
+      if (generation.current === expected && activeRef.current === sessionId) setExternalTranscript(transcript);
+    } catch {
+      // The local session remains usable if Codex is unavailable.
+    }
+  };
+  const loadEarlierTurns = async () => {
+    if (!record || !externalTranscript?.nextCursor || loadingEarlierTurns) return;
+    setLoadingEarlierTurns(true);
+    const sessionId = record.session.id;
+    const expected = generation.current;
+    try {
+      const page = await taskExecutionClient.externalThread({ taskId: task.id, sessionId, cursor: externalTranscript.nextCursor, limit: 10 });
+      if (generation.current === expected && activeRef.current === sessionId) {
+        setExternalTranscript((current) => current && ({ ...current, thread: page.thread, turns: [...page.turns, ...current.turns], nextCursor: page.nextCursor }));
+      }
+    } catch (cause) {
+      if (generation.current === expected) setError(String(cause));
+    } finally {
+      setLoadingEarlierTurns(false);
+    }
+  };
+  const loadMoreCodexSessions = async () => {
+    if (!codexNextCursor || loadingMoreCodex) return;
+    setLoadingMoreCodex(true);
+    const expected = generation.current;
+    try {
+      const result = await taskExecutionClient.externalThreads({ taskId: task.id, sessionId: activeRef.current || undefined, cursor: codexNextCursor, limit: 50 });
+      if (generation.current === expected) {
+        setCodexSessions((current) => [...(current ?? []), ...result.threads]);
+        setCodexNextCursor(result.nextCursor ?? undefined);
+      }
+    } catch (cause) {
+      if (generation.current === expected) setError(String(cause));
+    } finally {
+      setLoadingMoreCodex(false);
+    }
+  };
+  const toggleCodexSessions = () => {
+    if (showCodexSessions) setShowCodexSessions(false);
+    else {
+      setShowCodexSessions(true);
+      void loadCodexSessions();
     }
   };
   useEffect(() => {
@@ -289,18 +418,27 @@ export function TaskWorkSessions({
     setAnswers({});
     setRequestBusy("");
     setEditingSettings(true);
+    setSettingsExpanded(false);
     setSelectedRunId("");
     setRetryOfRunId(undefined);
     setSyncBusy("");
     setSyncError({});
-    setMessageMode("note");
     try {
       const stored: unknown = JSON.parse(localStorage.getItem("llm-wiki:recent-project-folders") ?? "[]");
       setRecentFolders(Array.isArray(stored) ? stored.filter((value): value is string => typeof value === "string").slice(0, 10) : []);
     } catch {
       setRecentFolders([]);
     }
-    void loadList(expected);
+    setShowCodexSessions(false);
+    setCodexSessions(undefined);
+    setLinkingThreadId("");
+    setExternalTranscript(undefined);
+    setCodexNextCursor(undefined);
+    setLoadingMoreCodex(false);
+    setLoadingEarlierTurns(false);
+    void loadList(expected).then((next) => {
+      if (generation.current === expected && !activeRef.current && next?.[0]) void open(next[0].id);
+    });
     return () => {
       generation.current += 1;
     };
@@ -322,9 +460,11 @@ export function TaskWorkSessions({
     }
     const expected = ++generation.current;
     activeRef.current = id;
+    followLatestRef.current = true;
     setActiveId(id);
     setRecord(undefined);
     setExecution(undefined);
+    setExternalTranscript(undefined);
     setSelectedRunId("");
     setRetryOfRunId(undefined);
     setRequestBusy("");
@@ -339,8 +479,10 @@ export function TaskWorkSessions({
     if (!id) return;
     try {
       const next = await taskClient.workSession(task.id, id);
-      if (generation.current === expected && activeRef.current === id)
+      if (generation.current === expected && activeRef.current === id) {
         setRecord(next);
+        void loadLinkedTranscript(id, expected);
+      }
     } catch (cause) {
       if (generation.current === expected) setError(String(cause));
     }
@@ -373,6 +515,29 @@ export function TaskWorkSessions({
       if (generation.current === expected) setError(String(cause));
     } finally {
       setBusy(false);
+    }
+  };
+  const linkCodexSession = async (thread: CodexThreadSummary) => {
+    if (linkingThreadId || busy) return;
+    setLinkingThreadId(thread.id);
+    setError("");
+    const expected = generation.current;
+    try {
+      const linked = await taskExecutionClient.linkExternalThread({
+        taskId: task.id,
+        sessionId: activeRef.current || undefined,
+        threadId: thread.id,
+      });
+      if (generation.current !== expected) return;
+      await loadList(expected);
+      await open(linked.sessionId);
+      if (activeRef.current === linked.sessionId) setExternalTranscript(linked);
+      setShowCodexSessions(false);
+      setStatus(t.linked);
+    } catch (cause) {
+      if (generation.current === expected) setError(String(cause));
+    } finally {
+      setLinkingThreadId("");
     }
   };
   const updateSession = (patch: Partial<TaskWorkSession>) =>
@@ -515,7 +680,8 @@ export function TaskWorkSessions({
     } catch (cause) { if (generation.current === expected) setError(String(cause)); }
     finally { if (generation.current === expected) setRunSubmitting(false); }
   };
-  const activeRun = execution?.runs.find((value) => value.id === selectedRunId) ?? execution?.selectedRun ?? execution?.runs.find((value) => value.id === execution.activeRunId) ?? execution?.runs[0];
+  const currentRun = execution?.runs.find((value) => value.id === execution.activeRunId);
+  const activeRun = currentRun ?? execution?.runs.find((value) => value.id === selectedRunId) ?? execution?.selectedRun ?? execution?.runs[0];
   const runCanAcceptResponse = Boolean(activeRun && ["queued", "running", "awaiting_response"].includes(activeRun.status));
   const requestIsLive = (request: TaskExecutionFormalRequest) => runCanAcceptResponse && ["pending", "submitting", "error"].includes(request.status);
   const requestCanAcceptResponse = (request: TaskExecutionFormalRequest) => runCanAcceptResponse && ["pending", "error"].includes(request.status);
@@ -607,6 +773,22 @@ export function TaskWorkSessions({
     ),
   ];
   const linkedUserEntryIds = new Set((execution?.runs ?? []).flatMap((run) => run.userEntryId ? [run.userEntryId] : []));
+  const localTurnIds = new Set((execution?.runs ?? []).flatMap((run) => run.turnId ? [run.turnId] : []));
+  const conversationTimeline = [
+    ...(externalTranscript?.turns.filter((turn) => !localTurnIds.has(turn.id)).map((turn, index) => ({
+      type: "external" as const,
+      turn,
+      timestamp: Date.parse(turn.createdAt ?? turn.items?.find((item) => item.createdAt)?.createdAt ?? turn.completedAt ?? "") || index,
+      sequence: index,
+    })) ?? []),
+    ...(record?.entries.filter((entry) => !linkedUserEntryIds.has(entry.id)).map((entry, index) => ({ type: "entry" as const, entry, timestamp: Date.parse(entry.createdAt) || 0, sequence: 10_000 + index })) ?? []),
+    ...(execution?.runs.map((run, index) => ({ type: "run" as const, run, timestamp: Date.parse(run.startedAt ?? "") || 0, sequence: 20_000 + index })) ?? []),
+  ].sort((left, right) => left.timestamp - right.timestamp || left.sequence - right.sequence);
+  useLayoutEffect(() => {
+    const timeline = timelineRef.current;
+    if (!timeline || !followLatestRef.current) return;
+    timeline.scrollTop = timeline.scrollHeight;
+  }, [activeId, conversationTimeline.length, currentRun?.liveStatus?.output, currentRun?.liveStatus?.text, execution?.revision, externalTranscript?.turns.length]);
   return (
     <section className="task-session-space" aria-label={t.title}>
       <header className="task-session-toolbar">
@@ -614,19 +796,43 @@ export function TaskWorkSessions({
           <h3>{t.title}</h3>
           <p>{t.workspaceHint}</p>
         </div>
-        <button
-          type="button"
-          data-control="task-session-create"
-          disabled={busy}
-          onClick={() => void create()}
-        >
-          {t.create}
-        </button>
+        <div className="task-session-toolbar-actions">
+          <button type="button" data-control="task-session-link" disabled={busy} aria-expanded={showCodexSessions} onClick={toggleCodexSessions}>{showCodexSessions ? t.closePicker : t.link}</button>
+          <button
+            type="button"
+            data-control="task-session-create"
+            disabled={busy}
+            onClick={() => void create()}
+          >
+            {t.create}
+          </button>
+        </div>
       </header>
       {error && (
         <p role="alert" className="task-session-error">
           {error}
         </p>
+      )}
+      {showCodexSessions && (
+        <section className="task-session-link-panel" aria-label={t.linkTitle}>
+          <header><div><h4>{t.linkTitle}</h4><p>{t.linkHint}</p></div></header>
+          {codexSessions === undefined ? <p role="status">{t.codexLoading}</p> : codexSessions.length === 0 ? <p>{t.noCodexSessions}</p> : (
+            <ol>
+              {codexSessions.map((thread) => {
+                const linkedHere = thread.linkedSessionId === activeId;
+                return <li key={thread.id}>
+                  <div>
+                    <strong>{thread.title || thread.preview}</strong>
+                    {thread.preview && thread.preview !== thread.title && <p>{thread.preview}</p>}
+                    <span>{thread.source} · {thread.cwd || t.workspace} · {formatSystemTime(thread.updatedAt, document.documentElement.lang || navigator.language, { dateStyle: "medium", timeStyle: "short" })}</span>
+                  </div>
+                  <button type="button" data-control="task-session-link-choice" disabled={Boolean(linkingThreadId) || linkedHere} onClick={() => void linkCodexSession(thread)}>{linkedHere ? t.alreadyLinked : t.linkAction}</button>
+                </li>;
+              })}
+            </ol>
+          )}
+          {codexNextCursor && <button type="button" data-control="task-session-link-more" disabled={loadingMoreCodex} onClick={() => void loadMoreCodexSessions()}>{t.loadMore}</button>}
+        </section>
       )}
       {sessions === undefined ? (
         <p>{t.loading}</p>
@@ -652,46 +858,106 @@ export function TaskWorkSessions({
               ))}
             </select>
           </label>
-          {record && (
-            <div className="task-session-layout">
+          <div className="task-session-layout">
+              <nav className="task-session-rail" aria-label={t.title}>
+                <p>{t.select}</p>
+                <ol>
+                  {sessions.map((session) => (
+                    <li key={session.id}>
+                      <button
+                        type="button"
+                        aria-current={activeId === session.id ? "page" : undefined}
+                        onClick={() => void open(session.id)}
+                      >
+                        <strong>{session.title}</strong>
+                        <span>{formatSystemTime(session.updatedAt ?? session.createdAt ?? "", document.documentElement.lang || navigator.language, { dateStyle: "medium" })}</span>
+                      </button>
+                    </li>
+                  ))}
+                </ol>
+              </nav>
+              {record ? <>
               <div className="task-session-chat">
-                <ol className="task-session-entries">
-                  {record.entries.filter((entry) => !linkedUserEntryIds.has(entry.id)).map((entry) => (
-                    <li key={entry.id} data-entry-author={entry.author}>
+                <header className="task-session-chat-header">
+                  <div>
+                    <h4>{record.session.title}</h4>
+                    <p>{record.session.model} · {record.session.workspacePath || t.workspace}</p>
+                  </div>
+                  {currentRun && <span className="task-session-running" data-status={currentRun.status}><i aria-hidden="true" />{t.status[currentRun.status]}</span>}
+                </header>
+                <ol
+                  className="task-session-entries"
+                  ref={timelineRef}
+                  onScroll={(event) => {
+                    const timeline = event.currentTarget;
+                    followLatestRef.current = timeline.scrollHeight - timeline.scrollTop - timeline.clientHeight < 80;
+                  }}
+                >
+                  {externalTranscript?.nextCursor && <li className="task-session-load-earlier"><button type="button" disabled={loadingEarlierTurns} onClick={() => void loadEarlierTurns()}>{t.loadEarlier}</button></li>}
+                  {conversationTimeline.map((item) => item.type === "external" ? (
+                    <li className="task-session-external-turn" key={item.turn.id}>
+                      {(item.turn.items ?? [
+                        ...item.turn.messages.map((message) => ({ ...message, type: "message" as const })),
+                        ...item.turn.activity.map((activity) => ({ ...activity, type: "activity" as const })),
+                      ]).map((item) => item.type === "message" ? (
+                          <article key={item.id} data-entry-author={item.role}>
+                            <header><strong>{item.role === "user" ? t.user : "Codex"}</strong></header>
+                            {item.role === "assistant" ? <SessionMarkdown>{item.body}</SessionMarkdown> : <p>{item.body}</p>}
+                          </article>
+                        ) : (
+                          <details className="task-execution-event" key={item.id} data-kind={item.kind}>
+                            <summary><span className="task-execution-event-icon" aria-hidden="true">{item.command ? ">_" : "·"}</span><strong>{item.command ? t.runCommand : item.label}</strong><span className="task-execution-event-status">{item.exitCode === undefined ? item.status : `exit ${item.exitCode}`}</span></summary>
+                            {(item.command || item.output) && <pre>{[item.command, item.output].filter(Boolean).join("\n\n")}</pre>}
+                          </details>
+                        ))}
+                    </li>
+                  ) : item.type === "entry" ? (
+                    <li key={item.entry.id} data-entry-author={item.entry.author}>
                       <header>
                         <strong>
-                          {entry.author === "user" ? t.user : entry.author}
+                          {item.entry.author === "user" ? t.user : item.entry.author}
                         </strong>
                         <span>
-                          {entry.kind === "note" ? t.note : entry.kind}
+                          {item.entry.kind === "note" ? t.note : item.entry.kind}
                         </span>
                         <time>
                           {formatSystemTime(
-                            entry.createdAt,
+                            item.entry.createdAt,
                             document.documentElement.lang || navigator.language,
                             { dateStyle: "medium", timeStyle: "short" },
                           )}
                         </time>
                       </header>
-                      {entry.body && <p>{entry.body}</p>}
-                      {entry.attachment && (
+                      {item.entry.body && (item.entry.author === "assistant" ? <SessionMarkdown>{item.entry.body}</SessionMarkdown> : <p>{item.entry.body}</p>)}
+                      {item.entry.attachment && (
                         <>
-                          {entry.attachment.mediaType.startsWith("image/") && (
+                          {item.entry.attachment.mediaType.startsWith("image/") && (
                             <img
                               className="task-session-saved-image"
-                              src={`data:${entry.attachment.mediaType};base64,${entry.attachment.data}`}
-                              alt={entry.attachment.name}
+                              src={`data:${item.entry.attachment.mediaType};base64,${item.entry.attachment.data}`}
+                              alt={item.entry.attachment.name}
                             />
                           )}
                           <a
                             data-control="task-session-attachment-download"
-                            download={entry.attachment.name}
-                            href={`data:${entry.attachment.mediaType};base64,${entry.attachment.data}`}
+                            download={item.entry.attachment.name}
+                            href={`data:${item.entry.attachment.mediaType};base64,${item.entry.attachment.data}`}
                           >
-                            {t.download}: {entry.attachment.name}
+                            {t.download}: {item.entry.attachment.name}
                           </a>
                         </>
                       )}
+                    </li>
+                  ) : (
+                    <li className="task-session-run-turn" key={item.run.id}>
+                      <article data-entry-author="user"><header><strong>{t.user}</strong><span>{t.status[item.run.status]}</span></header><p>{item.run.instruction}</p></article>
+                      {item.run.evidence.map((evidence) => evidence.kind === "agentMessage" && !item.run.finalReport
+                        ? <article key={evidence.id} data-entry-author="assistant"><header><strong>Codex</strong></header><SessionMarkdown>{evidence.summary}</SessionMarkdown></article>
+                        : <EvidenceRow key={evidence.id} evidence={evidence} runCommand={t.runCommand} />)}
+                      {item.run.id === currentRun?.id && item.run.liveStatus?.text && <article data-entry-author="assistant"><header><strong>Codex</strong><span>{t.status.running}</span></header><SessionMarkdown>{item.run.liveStatus.text}</SessionMarkdown></article>}
+                      {item.run.finalReport && <article data-entry-author="assistant"><header><strong>Codex</strong></header><SessionMarkdown>{item.run.finalReport}</SessionMarkdown></article>}
+                      {!item.run.finalReport && ["succeeded", "failed", "cancelled", "interrupted", "needs_attention"].includes(item.run.status) && <p className="task-execution-meta">{t.noReport}</p>}
+                      {item.run.error && <p role="alert">{item.run.error.message}</p>}
                     </li>
                   ))}
                 </ol>
@@ -710,8 +976,11 @@ export function TaskWorkSessions({
                         <button type="button" data-control="task-session-stop" disabled={busy || activeRun.stopRequested} onClick={() => void stop()}>{activeRun.stopRequested ? t.stopRequested : t.stop}</button>
                       )}
                     </header>
-                    <p>{activeRun.instruction}</p>
                     <p className="task-execution-live" role="status">{activeRun.stopRequested ? t.stopRequested : activeRun.status === "awaiting_response" && activeRun.formalRequests.some((request) => ["pending", "submitting", "error"].includes(request.status)) ? (activeRun.formalRequests.some((request) => request.kind === "user_input") ? t.questionWaiting : t.approvalWaiting) : ["interrupted", "needs_attention"].includes(activeRun.status) ? t.outcomeUnknown : activeRun.liveStatus ? `${t.liveKinds[activeRun.liveStatus.kind as keyof typeof t.liveKinds] ?? t.activeRun} · ${activeRun.liveStatus.status === "completed" ? t.status.succeeded : t.status.running}` : t.status[activeRun.status]}</p>
+                    {activeRun.liveStatus && (activeRun.liveStatus.command || activeRun.liveStatus.output) && <details className="task-execution-event task-execution-event-live">
+                      <summary><span className="task-execution-event-icon" aria-hidden="true">{activeRun.liveStatus.command ? ">_" : "·"}</span><strong>{activeRun.liveStatus.command ? t.runCommand : t.liveKinds[activeRun.liveStatus.kind as keyof typeof t.liveKinds] ?? t.activeRun}</strong><span className="task-execution-event-status">{activeRun.liveStatus.status === "completed" ? t.status.succeeded : t.status.running}</span></summary>
+                      <pre>{[activeRun.liveStatus.command, activeRun.liveStatus.output].filter(Boolean).join("\n\n")}</pre>
+                    </details>}
                     {activeRun.formalRequests.map((request) => (
                       <section className="task-execution-request" key={request.id} aria-label={request.title}>
                         <h5>{request.title}</h5><p>{request.prompt}</p>
@@ -731,37 +1000,16 @@ export function TaskWorkSessions({
                         )}
                       </section>
                     ))}
-                    <section className="task-execution-summary" aria-label={t.outcome}>
-                      <h5>{t.outcome}</h5>
-                      {activeRun.finalReport ? <section><h6>{t.report}</h6><p>{activeRun.finalReport}</p></section> : ["succeeded", "failed", "cancelled", "interrupted", "needs_attention"].includes(activeRun.status) && <p>{t.noReport}</p>}
-                      {activeRun.error && <p role="alert">{activeRun.error.message}</p>}
-                    </section>
-                    <section className="task-execution-sync" aria-label={t.workLog}>
-                      <h5>{t.workLog}</h5>
-                      {activeRun.workLogEntryId ? <>
-                        <p>{activeRun.workLogSyncState === "synced" ? t.syncWorkLog : activeRun.workLogSyncState === "failed" ? t.syncFailed : t.syncPending}</p>
-                        <button type="button" data-control="task-session-worklog-open" onClick={() => onOpenWorkLog?.(activeRun.workLogEntryId!)}>{t.workLog}</button>
-                      </> : <p>{t.noReport}</p>}
-                      {activeRun.workLogSyncState === "failed" && <><p role="alert">{syncError[activeRun.id] || activeRun.workLogSyncError}</p><button type="button" data-control="task-session-worklog-sync" disabled={syncBusy === activeRun.id} onClick={() => void syncWorkLog(activeRun)}>{t.syncWorkLog}</button></>}
-                    </section>
-                    {!!activeRun.evidence.length && <details className="task-execution-details"><summary>{t.evidence}</summary><ul>{activeRun.evidence.map((evidence) => <li key={evidence.id}><strong>{evidence.label}</strong>: {evidence.summary}</li>)}</ul></details>}
+                    {activeRun.workLogEntryId && <button type="button" data-control="task-session-worklog-open" onClick={() => onOpenWorkLog?.(activeRun.workLogEntryId!)}>{t.workLog}</button>}
+                    {activeRun.workLogSyncState === "synced" && <p className="task-execution-meta">{t.syncSucceeded}</p>}
+                    {activeRun.workLogSyncState === "pending" && <p role="status">{t.syncPending}</p>}
+                    {activeRun.workLogSyncState === "failed" && <><p role="alert">{t.syncFailed} {syncError[activeRun.id] || activeRun.workLogSyncError}</p><button type="button" data-control="task-session-worklog-sync" disabled={syncBusy === activeRun.id} onClick={() => void syncWorkLog(activeRun)}>{t.syncWorkLog}</button></>}
                     {["failed", "cancelled", "interrupted", "needs_attention"].includes(activeRun.status) && <><button type="button" data-control="task-session-run-retry" disabled={busy || Boolean(draft.trim())} onClick={() => { setDraft(activeRun.instruction); setRetryOfRunId(activeRun.id); }}>{t.retryRun}</button>{draft.trim() && <p>{t.retryDraftHint}</p>}</>}
                   </section>
                 )}
-                {execution?.effectiveConfig && <section className="task-execution-effective"><h5>{execution.effectiveConfig.provenance === "bound_thread" ? t.effective : t.prepare}</h5><dl><dt>{t.model}</dt><dd>{execution.effectiveConfig.model}</dd><dt>{t.workspace}</dt><dd>{execution.effectiveConfig.cwd}</dd><dt>{t.approval}</dt><dd>{execution.effectiveConfig.approvalPolicy} · {execution.effectiveConfig.approvalsReviewer}</dd><dt>Sandbox</dt><dd>{execution.effectiveConfig.sandbox}</dd></dl>{execution.effectiveConfig.readinessError && <p role="alert">{execution.effectiveConfig.readinessError.message}</p>}<button type="button" data-control="task-session-settings-edit" onClick={() => setEditingSettings(true)}>{t.editSettings}</button></section>}
+                {execution?.effectiveConfig && <section className="task-execution-effective"><h5>{execution.effectiveConfig.provenance === "bound_thread" ? t.effective : t.prepare}</h5><dl><dt>{t.model}</dt><dd>{execution.effectiveConfig.model}</dd><dt>{t.workspace}</dt><dd>{execution.effectiveConfig.cwd}</dd><dt>{t.approval}</dt><dd>{execution.effectiveConfig.approvalPolicy} · {execution.effectiveConfig.approvalsReviewer}</dd><dt>Sandbox</dt><dd>{execution.effectiveConfig.sandbox}</dd></dl>{execution.effectiveConfig.readinessError && <p role="alert">{execution.effectiveConfig.readinessError.message}</p>}<button type="button" data-control="task-session-settings-edit" onClick={() => { setEditingSettings(true); setSettingsExpanded(true); }}>{t.editSettings}</button></section>}
                 <label>
                   {t.message}
-                  {activeRun && <select
-                    className="task-session-message-mode"
-                    aria-label={t.messageMode}
-                    data-control="task-session-message-mode"
-                    value={messageMode}
-                    onChange={(event) => setMessageMode(event.target.value as "note" | "queue" | "steer")}
-                  >
-                    <option value="note">{t.noteMode}</option>
-                    <option value="queue">{t.queueMode}</option>
-                    <option value="steer">{t.steerMode}</option>
-                  </select>}
                   <textarea
                     data-control="task-session-message"
                     disabled={busy}
@@ -777,7 +1025,6 @@ export function TaskWorkSessions({
                     }}
                   />
                 </label>
-                {activeRun && messageMode !== "note" && <p className="task-session-message-limitation" role="status">{messageMode === "queue" ? t.queueUnavailable : t.steerUnavailable}</p>}
                 {attachment && (
                   <div className="task-session-pending">
                     <span>
@@ -814,10 +1061,9 @@ export function TaskWorkSessions({
                     />
                   </label>
                   <button
-                    className="primary"
                     type="button"
                     data-control="task-session-send"
-                    disabled={busy || messageMode !== "note" || (!draft.trim() && !attachment)}
+                    disabled={busy || (!draft.trim() && !attachment)}
                     onClick={() => void send()}
                   >
                     {t.send}
@@ -826,8 +1072,9 @@ export function TaskWorkSessions({
                 </footer>
               </div>
               <aside className="task-session-sidebar">
-                <section>
-                  <h4>{t.context}</h4>
+                <details className="task-session-context">
+                  <summary>{t.context}</summary>
+                  <div>
                   {task.detail && <p>{task.detail}</p>}
                   {task.outcome && (
                     <p>
@@ -844,13 +1091,16 @@ export function TaskWorkSessions({
                   ) : (
                     <p>{t.noReferences}</p>
                   )}
-                </section>
-                <section className="task-session-settings">
+                  </div>
+                </details>
+                <details className="task-session-settings" open={settingsExpanded} onToggle={(event) => setSettingsExpanded(event.currentTarget.open)}>
+                  <summary>{t.effective}</summary>
+                  <div className="task-session-settings-body">
                   <button type="button" data-control="task-session-prepare" disabled={busy} onClick={() => void prepare()}>{execution?.effectiveConfig ? t.checkSettings : t.prepare}</button>
                   <p>{t.prepareHint}</p>
                   {editingSettings && <>
                   <label>
-                    {t.select}
+                    {t.sessionTitle}
                     <input
                       data-control="task-session-title"
                       disabled={busy}
@@ -879,6 +1129,9 @@ export function TaskWorkSessions({
                       value={record.session.model}
                       onChange={(e) => updateSession({ model: e.target.value })}
                     >
+                      {!models.some(([id]) => id === record.session.model) && (
+                        <option value={record.session.model}>{record.session.model}</option>
+                      )}
                       {models.map(([id, label]) => (
                         <option key={id} value={id}>
                           {label}
@@ -932,10 +1185,11 @@ export function TaskWorkSessions({
                   </button>
                   </>}
                   {status && <p role="status">{status}</p>}
-                </section>
+                  </div>
+                </details>
               </aside>
+              </> : <div className="task-session-empty"><p>{t.loading}</p></div>}
             </div>
-          )}
         </>
       )}
     </section>

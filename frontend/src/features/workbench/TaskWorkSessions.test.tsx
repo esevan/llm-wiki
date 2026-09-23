@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { Profiler } from "react";
 import { TaskWorkSessions, type WorkSessionDraft } from "./TaskWorkSessions";
 import type { TaskAggregate, TaskWorkSession, TaskExecutionSnapshot } from "../../types/taskWorkbench";
@@ -8,6 +8,8 @@ const execution = vi.hoisted(() => ({
   prepare: vi.fn(),
   subscribe: vi.fn().mockResolvedValue({ runs: [], activeRunId: null, selectedRun: null }),
   execute: vi.fn(), interrupt: vi.fn(), respond: vi.fn(), syncWorkLog: vi.fn(),
+  externalThreads: vi.fn().mockResolvedValue({ threads: [] }),
+  externalThread: vi.fn(), linkExternalThread: vi.fn(),
 }));
 vi.mock("../../services/taskExecutionClient", () => ({ taskExecutionClient: execution }));
 
@@ -43,6 +45,98 @@ const response = (body: unknown, ok = true) => ({
 });
 
 describe("Task work sessions", () => {
+  beforeEach(() => {
+    execution.subscribe.mockReset().mockResolvedValue({ runs: [], activeRunId: null, selectedRun: null });
+    execution.externalThreads.mockReset().mockResolvedValue({ threads: [] });
+    execution.externalThread.mockReset().mockRejectedValue(new Error("not linked"));
+    execution.linkExternalThread.mockReset();
+  });
+
+  it("keeps imported activity in provider order and de-duplicates turns already saved as local Runs", async () => {
+    const saved = { ...session("linked", "Imported work"), workspacePath: "/project" };
+    const localRun = { id: "run-local", taskId: task.id, sessionId: "linked", instruction: "Local prompt", status: "succeeded" as const, stopRequested: false, provider: "codex" as const, model: "gpt-5.6-sol", workspacePath: "/project", threadId: "thread-one", turnId: "turn-local", startedAt: "2026-09-22T11:00:00Z", evidence: [], formalRequests: [], workLogSyncState: "synced" as const, revision: 1, finalReport: "Local answer" };
+    execution.subscribe.mockResolvedValue({ runs: [localRun], activeRunId: null, selectedRun: localRun });
+    execution.externalThread.mockResolvedValue({
+      thread: { id: "thread-one", title: "Imported work", preview: "Earlier work", cwd: "/project", model: "gpt-5.6-sol", source: "vscode", status: "idle", createdAt: "2026-09-20T10:00:00Z", updatedAt: "2026-09-22T10:00:00Z", linkedTaskId: task.id, linkedSessionId: "linked" },
+      turns: [
+        { id: "turn-old", status: "completed", createdAt: "2026-09-22T10:00:00Z", messages: [], activity: [], items: [
+          { type: "message", id: "old-user", role: "user", body: "Old prompt", order: 0 },
+          { type: "activity", id: "old-command", kind: "commandExecution", label: "check", status: "completed", command: "npm test", output: "passed", exitCode: 0, order: 1 },
+          { type: "message", id: "old-answer", role: "assistant", body: "Old answer", order: 2 },
+        ] },
+        { id: "turn-local", status: "completed", createdAt: "2026-09-22T11:00:00Z", messages: [{ id: "duplicate", role: "assistant", body: "Duplicate local answer" }], activity: [], items: [{ type: "message", id: "duplicate", role: "assistant", body: "Duplicate local answer", order: 0 }] },
+        { id: "turn-after", status: "completed", createdAt: "2026-09-22T12:00:00Z", messages: [{ id: "after-user", role: "user", body: "VS Code follow-up" }], activity: [], items: [{ type: "message", id: "after-user", role: "user", body: "VS Code follow-up", order: 0 }] },
+      ],
+    });
+    window.llmWikiApplication = { request: vi.fn().mockImplementation(({ path }: { path: string }) => path.endsWith("work-sessions") ? Promise.resolve(response({ sessions: [saved] })) : Promise.resolve(response({ session: saved, entries: [] }))) };
+
+    render(<TaskWorkSessions task={task} />);
+    const oldPrompt = await screen.findByText("Old prompt");
+    const command = screen.getByText("Run command");
+    const oldAnswer = screen.getByText("Old answer");
+    expect(oldPrompt.compareDocumentPosition(command) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(command.compareDocumentPosition(oldAnswer) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    await waitFor(() => expect(screen.queryByText("Duplicate local answer")).not.toBeInTheDocument());
+    const localPrompt = screen.getByText("Local prompt");
+    const laterPrompt = screen.getByText("VS Code follow-up");
+    expect(oldAnswer.compareDocumentPosition(localPrompt) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(localPrompt.compareDocumentPosition(laterPrompt) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByText("Local answer")).toBeVisible();
+  });
+
+  it("follows new output only while the conversation is near the bottom", async () => {
+    const saved = { ...session("one", "Follow output"), workspacePath: "/project" };
+    let deliver: (snapshot: TaskExecutionSnapshot) => void = () => {};
+    execution.subscribe.mockImplementation((_input, onSnapshot) => {
+      deliver = onSnapshot;
+      return Promise.resolve({ runs: [], activeRunId: null, selectedRun: null });
+    });
+    window.llmWikiApplication = { request: vi.fn().mockImplementation(({ path }: { path: string }) => path.endsWith("work-sessions") ? Promise.resolve(response({ sessions: [saved] })) : Promise.resolve(response({ session: saved, entries: [] }))) };
+    const view = render(<TaskWorkSessions task={task} />);
+    await screen.findByRole("heading", { name: "Follow output" });
+    const timeline = view.container.querySelector<HTMLOListElement>(".task-session-entries")!;
+    Object.defineProperty(timeline, "scrollHeight", { configurable: true, value: 1000 });
+    Object.defineProperty(timeline, "clientHeight", { configurable: true, value: 300 });
+    timeline.scrollTop = 690;
+    fireEvent.scroll(timeline);
+    const running = { id: "run-live", taskId: task.id, sessionId: "one", instruction: "Watch", status: "running" as const, stopRequested: false, provider: "codex" as const, model: "gpt-5.6-sol", workspacePath: "/project", evidence: [], formalRequests: [], workLogSyncState: "synced" as const, revision: 1, liveStatus: { kind: "agentMessage", status: "running" as const, text: "First update" } };
+    await act(async () => deliver({ revision: 1, runs: [running], activeRunId: running.id, selectedRun: running }));
+    expect(timeline.scrollTop).toBe(1000);
+
+    timeline.scrollTop = 200;
+    fireEvent.scroll(timeline);
+    await act(async () => deliver({ revision: 2, runs: [{ ...running, revision: 2, liveStatus: { ...running.liveStatus, text: "Second update" } }], activeRunId: running.id, selectedRun: running }));
+    expect(timeline.scrollTop).toBe(200);
+  });
+
+  it("links an existing VS Code session to an empty Task and renders its readable transcript", async () => {
+    const thread = { id: "thread-one", title: "Fix sync", preview: "Trace the failing sync", cwd: "/project", model: "gpt-5.6-sol", source: "vscode", status: "idle", createdAt: "2026-09-21T10:00:00Z", updatedAt: "2026-09-22T10:00:00Z" };
+    const created = { ...session("linked", "Fix sync"), workspacePath: "/project" };
+    const transcript = { thread: { ...thread, linkedTaskId: task.id, linkedSessionId: "linked" }, turns: [{ id: "turn-one", status: "completed", messages: [{ id: "user-one", role: "user", body: "Run the checks" }, { id: "assistant-one", role: "assistant", body: "## Result\n\nThe check **passed**." }], activity: [{ id: "command-one", kind: "commandExecution", label: "npm test", status: "completed", command: "npm test", output: "12 passed", exitCode: 0 }] }] };
+    let linked = false;
+    execution.externalThreads.mockResolvedValueOnce({ threads: [thread] }).mockResolvedValue({ threads: [{ ...thread, linkedTaskId: task.id, linkedSessionId: "linked" }] });
+    execution.linkExternalThread.mockImplementation(async () => {
+      linked = true;
+      return { ...transcript, taskId: task.id, sessionId: "linked", threadId: thread.id, linked: true };
+    });
+    execution.externalThread.mockResolvedValue(transcript);
+    window.llmWikiApplication = { request: vi.fn().mockImplementation(({ path }: { path: string }) => {
+      if (path.endsWith("work-sessions")) return Promise.resolve(response({ sessions: linked ? [created] : [] }));
+      return Promise.resolve(response({ session: created, entries: [] }));
+    }) };
+
+    render(<TaskWorkSessions task={task} />);
+    expect(await screen.findByText("Create a session when you are ready to record focused work.")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Link Codex session" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Link to Task" }));
+
+    await waitFor(() => expect(execution.linkExternalThread).toHaveBeenCalledWith({ taskId: "task-a", sessionId: undefined, threadId: "thread-one" }));
+    expect(await screen.findByRole("heading", { name: "Result" })).toBeVisible();
+    expect(screen.getByText(/12 passed/)).not.toBeVisible();
+    fireEvent.click(screen.getByText("Run command"));
+    expect(screen.getByText(/12 passed/)).toBeVisible();
+  });
+
   it("starts Codex only from the explicit Run action and leaves an unsupported attachment unsent", async () => {
     const saved = { ...session("one", "Investigation"), workspacePath: "/project" };
     const prepared = { runs: [], activeRunId: null, selectedRun: null, effectiveConfig: { model: "gpt-5.6-sol", cwd: "/project", approvalPolicy: "ask", approvalsReviewer: "user", sandbox: "workspace-write", provenance: "preflight", settingsRevision: "settings-1", ready: true, capabilities: { structuredUserInput: true } } };
@@ -100,6 +194,21 @@ describe("Task work sessions", () => {
     fireEvent.change(await screen.findByLabelText("Session"), { target: { value: "one" } });
     expect(await screen.findByRole("button", { name: "Safe" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByLabelText("Instruction or note")).toHaveValue("separate note");
+  });
+  it("keeps current Run controls pinned when a historical Run is selected", async () => {
+    const saved = { ...session("one", "Investigation"), workspacePath: "/project" };
+    const historical = { id: "run-old", taskId: task.id, sessionId: "one", instruction: "old work", status: "succeeded" as const, stopRequested: false, provider: "codex" as const, model: "gpt-5.6-sol", workspacePath: "/project", evidence: [], formalRequests: [], workLogSyncState: "synced" as const, revision: 1, finalReport: "Old result" };
+    const current = { id: "run-current", taskId: task.id, sessionId: "one", instruction: "current work", status: "awaiting_response" as const, stopRequested: false, provider: "codex" as const, model: "gpt-5.6-sol", workspacePath: "/project", evidence: [], workLogSyncState: "synced" as const, revision: 2, formalRequests: [{ id: "approval-current", kind: "command_approval" as const, status: "pending" as const, isBlocking: true, title: "Approve command", prompt: "Run it?", choices: [{ value: "approve", label: "Proceed" }], questions: [] }] };
+    const snapshot = { runs: [current, historical], activeRunId: current.id, selectedRun: current };
+    execution.subscribe.mockResolvedValue(snapshot);
+    execution.respond.mockResolvedValue(snapshot);
+    window.llmWikiApplication = { request: vi.fn().mockImplementation(({ path }: { path: string }) => path.endsWith("work-sessions") ? Promise.resolve(response({ sessions: [saved] })) : Promise.resolve(response({ session: saved, entries: [] }))) };
+
+    render(<TaskWorkSessions task={task} />);
+    fireEvent.click(await screen.findByRole("button", { name: /Finished · old work/ }));
+    expect(screen.getByRole("button", { name: "Stop" })).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Proceed" }));
+    await waitFor(() => expect(execution.respond).toHaveBeenCalledWith(expect.objectContaining({ runId: "run-current", requestId: "approval-current" })));
   });
   it("keeps completed Runs selectable and makes retry load an instruction without dispatching it", async () => {
     execution.execute.mockClear();
@@ -215,7 +324,7 @@ describe("Task work sessions", () => {
       workLogSyncState: "synced" as const, revision: index + 1,
       liveStatus: { kind, status: index % 2 ? "completed" as const : "running" as const },
     }));
-    execution.subscribe.mockResolvedValue({ runs, activeRunId: "run-0", selectedRun: runs[0] });
+    execution.subscribe.mockResolvedValue({ runs, activeRunId: null, selectedRun: runs[0] });
     window.llmWikiApplication = { request: vi.fn().mockImplementation(({ path }: { path: string }) => path.endsWith("work-sessions") ? Promise.resolve(response({ sessions: [saved] })) : Promise.resolve(response({ session: saved, entries: [] }))) };
     render(<TaskWorkSessions task={task} />);
     fireEvent.change(await screen.findByLabelText("Session"), { target: { value: "one" } });
@@ -277,7 +386,7 @@ describe("Task work sessions", () => {
     for (const [index, status] of ["interrupted", "needs_attention"].entries()) {
       fireEvent.click(await screen.findByRole("button", { name: new RegExp(status) }));
       expect(screen.getByRole("status", { name: "" })).toHaveTextContent("Outcome unknown — work may already have happened");
-      expect(screen.getByText("Codex did not provide a final report.")).toBeVisible();
+      expect(screen.getAllByText("Codex did not provide a final report.")).toHaveLength(2);
       expect(screen.getByRole("button", { name: "Use instruction again" })).toBeEnabled();
       expect(screen.getByRole("heading", { name: `Run status: ${index === 0 ? "Interrupted" : "Needs attention"}` })).toBeVisible();
     }
@@ -307,7 +416,7 @@ describe("Task work sessions", () => {
     first.unmount();
     render(<TaskWorkSessions task={task} />);
     fireEvent.change(await screen.findByLabelText("Session"), { target: { value: "one" } });
-    await waitFor(() => expect(execution.subscribe).toHaveBeenCalledTimes(2), { timeout: 1000 });
+    await waitFor(() => expect(execution.subscribe.mock.calls.length).toBeGreaterThanOrEqual(2), { timeout: 1000 });
     expect(await screen.findByText("Continue safely")).toBeVisible();
   });
   it("does not regress to older snapshots or show a prior session while the next loads", async () => {
@@ -451,6 +560,7 @@ describe("Task work sessions", () => {
     expect(
       screen.getByRole("link", { name: /Download attachment/ }),
     ).toHaveAttribute("download", "pixel.png");
+    fireEvent.click(screen.getByText("Current Task context"));
     expect(screen.getByText("Canonical detail")).toBeVisible();
     expect(screen.getByText(/Problem p1/)).toBeVisible();
   });
@@ -513,20 +623,14 @@ describe("Task work sessions", () => {
 
   it("does not attach a file whose read finishes after switching sessions", async () => {
     const sessions = [session("one", "First"), session("two", "Second")];
-    let reader:
-      | {
-          result: string;
-          onload: null | (() => void);
-          onerror: null | (() => void);
-        }
-      | undefined;
+    let finishRead: (() => void) | undefined;
     class DeferredFileReader {
       result = "data:image/png;base64,aGVsbG8=";
       error = null;
       onload: null | (() => void) = null;
       onerror: null | (() => void) = null;
       readAsDataURL() {
-        reader = this;
+        finishRead = () => this.onload?.();
       }
     }
     vi.stubGlobal("FileReader", DeferredFileReader);
@@ -554,7 +658,7 @@ describe("Task work sessions", () => {
     await waitFor(() =>
       expect(screen.getByLabelText("Session")).toHaveValue("two"),
     );
-    reader?.onload?.();
+    finishRead?.();
     await waitFor(() =>
       expect(screen.queryByText(/late\.png/)).not.toBeInTheDocument(),
     );

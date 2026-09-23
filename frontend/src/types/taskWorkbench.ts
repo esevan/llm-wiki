@@ -219,7 +219,7 @@ export type TaskExecutionRun = {
   provider: "codex"; model: string; workspacePath: string; threadId?: string; turnId?: string; startedAt?: string; finishedAt?: string;
   userEntryId?: string;
   finalReport?: string; error?: { code: string; message: string }; evidence: TaskExecutionEvidence[];
-  liveStatus?: { kind: string; status: "running" | "completed" };
+  liveStatus?: { kind: string; status: "running" | "completed"; itemId?: string; command?: string; text?: string; output?: string };
   formalRequests: TaskExecutionFormalRequest[]; workLogEntryId?: string; workLogSyncState: "pending" | "synced" | "failed";
   workLogSyncError?: string; retryOfRunId?: string; revision: number;
 };
@@ -230,3 +230,21 @@ export type TaskWorkSession = {
   approvalMode: "ask" | "auto"; approvalsReviewer?: "user" | "auto_review"; workspacePath: string; createdAt: string; updatedAt: string;
 };
 export type TaskWorkSessionRecord = { session: TaskWorkSession; entries: TaskWorkSessionEntry[] };
+export type CodexThreadSummary = {
+  id: string; title: string; preview: string; cwd?: string; model?: string; source: string; status: string;
+  createdAt: string; updatedAt: string; linkedTaskId?: string; linkedSessionId?: string;
+};
+export type CodexThreadActivity = {
+  id: string; kind: string; label: string; status: string; command?: string; output?: string; exitCode?: number; order?: number; createdAt?: string;
+};
+export type CodexThreadMessage = { id: string; role: "user" | "assistant"; body: string; order?: number; createdAt?: string };
+export type CodexThreadItem = ({ type: "message" } & CodexThreadMessage) | ({ type: "activity" } & CodexThreadActivity);
+export type CodexThreadTurn = {
+  id: string; status: string; createdAt?: string; completedAt?: string;
+  messages: CodexThreadMessage[];
+  activity: CodexThreadActivity[];
+  items?: CodexThreadItem[];
+};
+export type CodexThreadTranscript = { thread: CodexThreadSummary; turns: CodexThreadTurn[]; nextCursor?: string | null };
+export type CodexThreadList = { threads: CodexThreadSummary[]; nextCursor?: string | null };
+export type CodexThreadLinkResult = CodexThreadTranscript & { taskId: string; sessionId: string; threadId: string; linked: boolean };

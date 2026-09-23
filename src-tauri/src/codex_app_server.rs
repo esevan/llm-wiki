@@ -15,7 +15,9 @@ use tokio::{
 };
 
 const EVENT_CAPACITY: usize = 256;
-const MAX_PROTOCOL_LINE_BYTES: usize = 1024 * 1024;
+// History is paginated, but one persisted turn can still contain sizeable command output.
+// Keep a hard bound while allowing a single normal history page to clear the transport.
+const MAX_PROTOCOL_LINE_BYTES: usize = 8 * 1024 * 1024;
 const RPC_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 type PendingRequests = HashMap<(i64, u64), oneshot::Sender<Result<Value, String>>>;
 
@@ -83,6 +85,11 @@ impl CodexAppServer {
                 events,
             }),
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_executable(executable: PathBuf) -> Self {
+        Self::from_optional_executable(Some(executable))
     }
 
     pub(crate) fn subscribe(&self) -> broadcast::Receiver<AppServerEvent> {
