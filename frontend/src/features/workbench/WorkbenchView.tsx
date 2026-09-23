@@ -238,6 +238,7 @@ export function WorkbenchView({ active }: { active: boolean }) {
       key={`${item.kind}-${item.id}`}
       data-entity-id={item.id}
     >
+      <div className="canonical-card-body">
       <small>
         {item.kind === "task"
           ? stateLabel(item)
@@ -259,6 +260,7 @@ export function WorkbenchView({ active }: { active: boolean }) {
             : ""}
         </p>
       )}
+      </div>
       <footer>
         {item.kind === "task" ? (
           <>

@@ -12,7 +12,7 @@ The refreshed Korean and English Workbench captures and build checks are recorde
 
 The Workbench places Capture first and in-progress Tasks immediately below it. Category swim lanes follow, with General always first and Inbox, Refining, and Refined Tasks columns inside each category. Each category body scrolls vertically within a maximum height of 480px or 65% of the viewport, whichever is smaller. Save text as a Capture or create a Task directly; completed Tasks can be expanded in the right lane. A Problem is optional context that may be linked to a Task; it is not a required stage.
 
-In-progress Task cards fit the available panel width and use compact spacing with content-based heights. The card list scrolls vertically when needed, keeping long titles, metadata, and wrapped action buttons reachable without a separate scrollbar inside each card.
+In-progress Task cards share the same width and height in one horizontally scrolling row, whether or not they include the original Capture text. Long card content scrolls above the bottom-aligned action buttons. The active panel and recent completed list share the same height when displayed side by side; the completed list scrolls independently.
 
 ![Workbench with Capture and Task entry plus saved work](images/workbench-tasks.en.png)
 
