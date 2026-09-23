@@ -61,8 +61,11 @@ Task journey: an evidence-backed trace of the original idea, refinements, record
 and completion. Its pale chronological connectors show recorded order only; they do not claim that one event caused
 another. Opening it reads a saved graph or queues one durable refresh. AI may supply descriptive
 labels of up to 48 characters and optional evidence-backed relationship suggestions;
-the recorded events, their order, and chronological links remain immutable. Select a node to read
-the complete recorded Activity, including its time and source content. A current saved graph is
+the recorded events, their order, and chronological links remain immutable. Select a node to open
+the recorded Activity in a focus-trapped detail dialog, including its time, source content,
+structured changes, results, and clearly labelled AI relationship evidence. Previous, next, and
+linked-event controls move through the same dialog, and closing it restores the selected graph
+position and keyboard focus. A current saved graph is
 reused, and a missing or failed AI interpretation falls back to short local labels and the recorded
 chronology.
 The journey is laid out as a spacious three-column flowchart so long labels remain readable. Start,

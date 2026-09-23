@@ -21,7 +21,12 @@ snake path; on a narrow panel, they become a single vertical path. Pale arrows p
 chronology and never claim cause. Nodes keep fixed visual spacing regardless of elapsed time; a gap
 of at least 24 hours gets a dated torn-paper marker. Origin, material refinement or Task changes,
 decisions, completion, and highly connected junctions receive
-distinct shapes or emphasis. Selecting a node opens its full recorded activity.
+distinct shapes or emphasis. Selecting a node opens a spacious Activity details dialog without moving
+the graph. The dialog separates recorded content, the initial Task definition, field-level
+before/after changes, decision context, completion results, and AI-interpreted relationship rationale
+and quotes. It labels AI interpretation explicitly, keeps long content scrollable, and offers
+previous, next, and linked-activity navigation without closing. Escape or the close control returns
+focus to the graph node that opened it.
 
 AI may add short, locale-specific labels and the later-to-earlier relationships `supersedes`,
 `derived_from`, and `depends_on`, shown as **Supersedes** (a later choice replaces an earlier one),
@@ -50,7 +55,7 @@ source boundary and does not trigger journey inference automatically.
 The Details view shows the current Task journey. The Review view shows the journey captured by the
 selected draft, so a later graph refresh cannot silently change the evidence behind an existing
 draft; when no draft snapshot exists, Review falls back to the current journey. Switching the
-interface language localizes graph chrome and dates. A newly generated current graph can have labels
+interface language localizes graph chrome, detail labels, and dates. A newly generated current graph can have labels
 for that locale, while an immutable draft keeps the labels and locale captured
 when it was generated; switching language does not retranslate that snapshot.
 

@@ -860,7 +860,7 @@ main:has(.task-workbench.active :is(.task-detail, .refinement-panel)) {
 /* Refinement opens as a focused conversation workspace. The result stays visible beside the chat. */
 .refinement-modal-layer {
   position: fixed;
-  z-index: calc(var(--layer-menu) + 1);
+  z-index: calc(var(--layer-menu) + 3);
   inset: 0;
   display: grid;
   place-items: center;
