@@ -647,7 +647,7 @@ async fn run_inner(
         Value::String(prompt)
     };
     let request = Client::builder()
-        .timeout(Duration::from_secs(30))
+        .timeout(Duration::from_secs(120))
         .build()
         .map_err(|e| e.to_string())?
         .post(format!(
