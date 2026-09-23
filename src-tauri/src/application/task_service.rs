@@ -1,5 +1,6 @@
 use crate::adapters::sqlite::task_repository::{self, SqliteTaskRepository};
 use crate::domain::task::{content_hash, validate_state_transition, READINESS_FIELDS};
+use base64::{engine::general_purpose::STANDARD, Engine};
 use rusqlite::{params, OptionalExtension, Transaction};
 use serde_json::{json, Value};
 use std::path::Path;
@@ -31,6 +32,13 @@ impl TaskApplicationService {
             "workbench.get" => self.workbench(),
             "task.readiness.get" => self.readiness(req(input, "taskId")?),
             "task.work-log.get" => self.work_log(req(input, "taskId")?),
+            "task.work-session.list" => self.work_sessions(req(input, "taskId")?),
+            "task.work-session.get" => {
+                self.work_session(req(input, "taskId")?, req(input, "sessionId")?)
+            }
+            "task.work-session.create" => self.work_session_create(input),
+            "task.work-session.update" => self.work_session_update(input),
+            "task.work-session.entry.create" => self.work_session_entry(input),
             "task.create"
             | "task.revision"
             | "task.transition"
@@ -257,9 +265,16 @@ impl TaskApplicationService {
             None => req(input, "to")?,
         };
         let state = validate_state_transition(&from, requested_state)?;
-        if state == "completed" { return self.complete_tx(tx,id,input,at); }
+        if state == "completed" {
+            return self.complete_tx(tx, id, input, at);
+        }
         if from == "completed" && state == "in_progress" {
-            crate::native::task_hierarchy::reopen_ancestors(tx,id,req(input,"operationId")?,at)?;
+            crate::native::task_hierarchy::reopen_ancestors(
+                tx,
+                id,
+                req(input, "operationId")?,
+                at,
+            )?;
         }
         tx.execute("UPDATE tasks SET state=?,completed_at=CASE WHEN ?='in_progress' THEN NULL ELSE completed_at END,started_at=CASE WHEN ?='in_progress' AND started_at IS NULL THEN ? ELSE started_at END,reopened_at=CASE WHEN ?='in_progress' AND ?='completed' THEN ? ELSE reopened_at END WHERE id=?", params![state, state, state, at, state, from, at, id]).map_err(|e| e.to_string())?;
         self.record_task_activity(tx, id, "transition", input, at)?;
@@ -471,7 +486,7 @@ impl TaskApplicationService {
         if state != "in_progress" {
             return Err("transition_invalid: task must be in_progress before completion".into());
         }
-        crate::native::task_hierarchy::ensure_children_completed(tx,task)?;
+        crate::native::task_hierarchy::ensure_children_completed(tx, task)?;
         let id = task_repository::new_id();
         tx.execute("INSERT INTO task_completions(id,task_id,task_revision,evidence,report,operation_id,created_at) VALUES(?,?,?,?,?,?,?)", params![id, task, revision, req(input, "evidence")?, input.get("report").and_then(Value::as_str).unwrap_or(""), req(input, "operationId")?, at]).map_err(|e| e.to_string())?;
         tx.execute(
@@ -480,7 +495,13 @@ impl TaskApplicationService {
         )
         .map_err(|e| e.to_string())?;
         self.record_task_activity(tx, task, "completed", input, at)?;
-        crate::native::task_hierarchy::child_completed(tx,task,&id,req(input,"operationId")?,at)?;
+        crate::native::task_hierarchy::child_completed(
+            tx,
+            task,
+            &id,
+            req(input, "operationId")?,
+            at,
+        )?;
         Ok(
             json!({"id":id,"taskId":task,"taskRevision":revision,"state":"completed","createdAt":at}),
         )
@@ -607,7 +628,9 @@ impl TaskApplicationService {
     fn capture(&self, input: &Value) -> Result<Value, String> {
         let images = crate::adapters::sqlite::input_images::validate_all(input)?;
         let text = input["text"].as_str().unwrap_or("").trim();
-        if text.is_empty() && images.is_empty() { return Err("invalid_input: text or image is required".into()); }
+        if text.is_empty() && images.is_empty() {
+            return Err("invalid_input: text or image is required".into());
+        }
         self.repo.transaction(|tx| {
             if let Some(result) = self.op(tx, input, "capture.create")? { return Ok(result); }
             let id = task_repository::new_id();
@@ -687,27 +710,202 @@ impl TaskApplicationService {
     fn work_log(&self, id: &str) -> Result<Value, String> {
         let c = crate::native::database::open(self.repo.path())?;
         let mut statement = c.prepare("SELECT id,body,image_data,image_media_type,image_summary,created_at FROM task_work_log_entries WHERE task_id=? ORDER BY created_at").map_err(|e| e.to_string())?;
-        let entries = statement.query_map([id], |row| Ok(json!({"id":row.get::<_, String>(0)?,"body":row.get::<_, String>(1)?,"imageData":row.get::<_, String>(2)?,"imageMediaType":row.get::<_, String>(3)?,"imageSummary":row.get::<_, String>(4)?,"createdAt":row.get::<_, String>(5)?}))).map_err(|e| e.to_string())?.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())?;
+        let mut entries = statement.query_map([id], |row| Ok(json!({"id":row.get::<_, String>(0)?,"body":row.get::<_, String>(1)?,"imageData":row.get::<_, String>(2)?,"imageMediaType":row.get::<_, String>(3)?,"imageSummary":row.get::<_, String>(4)?,"createdAt":row.get::<_, String>(5)?}))).map_err(|e| e.to_string())?.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())?;
+        drop(statement);
+        for entry in &mut entries {
+            let entry_id = entry["id"].as_str().unwrap_or_default();
+            let execution=c.query_row("SELECT id,session_id,status,provider,model,final_report,work_log_sync_state,error_message FROM task_work_session_runs WHERE work_log_entry_id=? AND task_id=?",params![entry_id,id],|row|Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?,row.get::<_,String>(2)?,row.get::<_,String>(3)?,row.get::<_,String>(4)?,row.get::<_,Option<String>>(5)?,row.get::<_,String>(6)?,row.get::<_,Option<String>>(7)?))).optional().map_err(|e|e.to_string())?;
+            if let Some(run) = execution {
+                let mut evidence_statement=c.prepare("SELECT provider_item_id,kind,status,content_json,created_at FROM task_work_session_run_items WHERE run_id=? ORDER BY provider_order,provider_item_id LIMIT 20").map_err(|e|e.to_string())?;
+                let evidence=evidence_statement.query_map([&run.0],|row|{let raw:String=row.get(3)?;let item:Value=serde_json::from_str(&raw).unwrap_or(json!({}));let summary=item.get("text").or_else(||item.get("aggregatedOutput")).or_else(||item.get("command")).and_then(Value::as_str).unwrap_or(item.get("type").and_then(Value::as_str).unwrap_or("Completed provider item"));Ok(json!({"id":row.get::<_,String>(0)?,"kind":row.get::<_,String>(1)?,"status":row.get::<_,String>(2)?,"label":item.get("type").and_then(Value::as_str).unwrap_or("item"),"summary":summary.chars().take(1000).collect::<String>(),"command":item.get("command"),"paths":item.get("changes"),"exitCode":item.get("exitCode"),"createdAt":row.get::<_,String>(4)?}))}).map_err(|e|e.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|e|e.to_string())?;
+                let artifacts = evidence
+                    .iter()
+                    .flat_map(|item| {
+                        item.get("paths")
+                            .and_then(Value::as_array)
+                            .into_iter()
+                            .flatten()
+                    })
+                    .filter_map(|path| {
+                        path.get("path")
+                            .or_else(|| path.as_str().map(|_| path))
+                            .and_then(Value::as_str)
+                    })
+                    .take(20)
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>();
+                let report = run
+                    .5
+                    .map(|text| text.chars().take(4000).collect::<String>());
+                let mut limitations = Vec::new();
+                if report.is_none() {
+                    limitations.push(
+                        "A model-authored final report is unavailable for this Run.".to_owned(),
+                    );
+                }
+                if let Some(error) = run.7 {
+                    limitations.push(error.chars().take(1000).collect());
+                }
+                entry["execution"] = json!({"runId":run.0,"sessionId":run.1,"status":run.2,"provider":run.3,"model":run.4,"reportExcerpt":report,"evidence":evidence,"artifacts":artifacts,"limitations":limitations,"syncState":run.6});
+            }
+        }
         Ok(json!({"entries":entries}))
+    }
+    fn task_exists(tx: &Transaction<'_>, task_id: &str) -> Result<(), String> {
+        let exists: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM tasks WHERE id=? AND NOT EXISTS(SELECT 1 FROM deleted_entities WHERE entity_type='tasks' AND entity_id=?))",
+            params![task_id, task_id], |row| row.get(0),
+        ).map_err(|error| error.to_string())?;
+        if exists {
+            Ok(())
+        } else {
+            Err("Task not found".into())
+        }
+    }
+
+    fn work_sessions(&self, task_id: &str) -> Result<Value, String> {
+        let connection = crate::native::database::open(self.repo.path())?;
+        let tx = connection
+            .unchecked_transaction()
+            .map_err(|error| error.to_string())?;
+        Self::task_exists(&tx, task_id)?;
+        let mut statement = tx.prepare("SELECT id,title,provider,model,approval_mode,workspace_path,created_at,updated_at,approvals_reviewer FROM task_work_sessions WHERE task_id=? ORDER BY updated_at DESC,id")
+            .map_err(|error| error.to_string())?;
+        let sessions = statement
+            .query_map([task_id], |row| {
+                Ok(json!({
+                    "id":row.get::<_,String>(0)?, "taskId":task_id, "title":row.get::<_,String>(1)?,
+                    "provider":row.get::<_,String>(2)?, "model":row.get::<_,String>(3)?,
+                    "approvalMode":row.get::<_,String>(4)?, "workspacePath":row.get::<_,String>(5)?,
+                    "createdAt":row.get::<_,String>(6)?, "updatedAt":row.get::<_,String>(7)?,
+                    "approvalsReviewer":row.get::<_,String>(8)?
+                }))
+            })
+            .map_err(|error| error.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| error.to_string())?;
+        drop(statement);
+        tx.commit().map_err(|error| error.to_string())?;
+        Ok(json!({"sessions":sessions}))
+    }
+
+    fn work_session(&self, task_id: &str, session_id: &str) -> Result<Value, String> {
+        let connection = crate::native::database::open(self.repo.path())?;
+        let task_exists: bool = connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM tasks WHERE id=? AND NOT EXISTS(SELECT 1 FROM deleted_entities WHERE entity_type='tasks' AND entity_id=?))",
+            params![task_id,task_id], |row| row.get(0),
+        ).map_err(|error| error.to_string())?;
+        if !task_exists {
+            return Err("Task not found".into());
+        }
+        let session = connection.query_row(
+            "SELECT title,provider,model,approval_mode,workspace_path,created_at,updated_at,approvals_reviewer FROM task_work_sessions WHERE id=? AND task_id=?",
+            params![session_id,task_id], |row| Ok(json!({
+                "id":session_id,"taskId":task_id,"title":row.get::<_,String>(0)?,
+                "provider":row.get::<_,String>(1)?,"model":row.get::<_,String>(2)?,
+                "approvalMode":row.get::<_,String>(3)?,"workspacePath":row.get::<_,String>(4)?,
+                "createdAt":row.get::<_,String>(5)?,"updatedAt":row.get::<_,String>(6)?,
+                "approvalsReviewer":row.get::<_,String>(7)?
+            })),
+        ).optional().map_err(|error| error.to_string())?.ok_or("Work session not found")?;
+        let mut statement = connection.prepare("SELECT id,author,kind,body,attachment_json,created_at FROM task_work_session_entries WHERE session_id=? ORDER BY created_at,id")
+            .map_err(|error| error.to_string())?;
+        let entries = statement.query_map([session_id], |row| {
+            let attachment: Option<String> = row.get(4)?;
+            Ok(json!({"id":row.get::<_,String>(0)?,"author":row.get::<_,String>(1)?,"kind":row.get::<_,String>(2)?,"body":row.get::<_,String>(3)?,"attachment":attachment.and_then(|value| serde_json::from_str::<Value>(&value).ok()),"createdAt":row.get::<_,String>(5)?}))
+        }).map_err(|error| error.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|error| error.to_string())?;
+        Ok(json!({"session":session,"entries":entries}))
+    }
+
+    fn work_session_create(&self, input: &Value) -> Result<Value, String> {
+        self.repo.transaction(|tx| {
+            if let Some(result) = self.op(tx,input,"task.work-session.create")? { return Ok(result); }
+            let task_id=req(input,"taskId")?; Self::task_exists(tx,task_id)?;
+            let id=task_repository::new_id(); let at=task_repository::now();
+            let title=req(input,"title")?;
+            if title.trim().is_empty() || title.len()>200 { return Err("invalid_input: work session title".into()); }
+            tx.execute("INSERT INTO task_work_sessions(id,task_id,title,created_at,updated_at) VALUES(?,?,?,?,?)",params![id,task_id,title,at,at]).map_err(|error|error.to_string())?;
+            let result=json!({"id":id,"taskId":task_id,"title":title,"provider":"codex","model":"gpt-5.6-sol","approvalMode":"ask","approvalsReviewer":"user","workspacePath":"","createdAt":at,"updatedAt":at});
+            self.finish(tx,input,"task.work-session.create",&result)?; Ok(result)
+        })
+    }
+
+    fn work_session_update(&self, input: &Value) -> Result<Value, String> {
+        self.repo.transaction(|tx| {
+            if let Some(result)=self.op(tx,input,"task.work-session.update")? { return Ok(result); }
+            let task_id=req(input,"taskId")?; let session_id=req(input,"sessionId")?; Self::task_exists(tx,task_id)?;
+            let approval=input.get("approvalMode").and_then(Value::as_str).unwrap_or("ask");
+            if !["ask","auto"].contains(&approval) { return Err("invalid_input: approvalMode".into()); }
+            let title=req(input,"title")?; let provider=input.get("provider").and_then(Value::as_str).unwrap_or("").trim();
+            let model=input.get("model").and_then(Value::as_str).unwrap_or("").trim();
+            let workspace=input.get("workspacePath").and_then(Value::as_str).unwrap_or("").trim();
+            let reviewer=input.get("approvalsReviewer").and_then(Value::as_str).unwrap_or("user");
+            if !["user","auto_review"].contains(&reviewer) { return Err("invalid_input: approvalsReviewer".into()); }
+            if title.len()>200 || provider.len()>200 || model.len()>200 || workspace.len()>4096 { return Err("invalid_input: work session setting is too long".into()); }
+            if provider != "codex" || !["gpt-6-astra","gpt-5.6-sol","gpt-5.6-terra","gpt-5.6-luna","gpt-5.5"].contains(&model) { return Err("invalid_input: unsupported provider or model".into()); }
+            let at=task_repository::now();
+            let changed=tx.execute("UPDATE task_work_sessions SET title=?,provider=?,model=?,approval_mode=?,approvals_reviewer=?,workspace_path=?,effective_settings_revision=NULL,updated_at=? WHERE id=? AND task_id=?",params![title,provider,model,approval,reviewer,workspace,at,session_id,task_id]).map_err(|error|error.to_string())?;
+            if changed!=1 { return Err("Work session not found".into()); }
+            let result=json!({"id":session_id,"taskId":task_id,"title":title,"provider":provider,"model":model,"approvalMode":approval,"approvalsReviewer":reviewer,"workspacePath":workspace,"updatedAt":at});
+            self.finish(tx,input,"task.work-session.update",&result)?; Ok(result)
+        })
+    }
+
+    fn work_session_entry(&self, input: &Value) -> Result<Value, String> {
+        self.repo.transaction(|tx| {
+            if let Some(result)=self.op(tx,input,"task.work-session.entry.create")? { return Ok(result); }
+            let task_id=req(input,"taskId")?; let session_id=req(input,"sessionId")?; Self::task_exists(tx,task_id)?;
+            let owned:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM task_work_sessions WHERE id=? AND task_id=?)",params![session_id,task_id],|row|row.get(0)).map_err(|error|error.to_string())?;
+            if !owned { return Err("Work session not found".into()); }
+            let author=input.get("author").and_then(Value::as_str).unwrap_or("user");
+            let kind=input.get("kind").and_then(Value::as_str).unwrap_or("note");
+            if !["user","assistant","system"].contains(&author) || !["note","ai_output","execution_result"].contains(&kind) { return Err("invalid_input: entry type".into()); }
+            let body=input.get("body").and_then(Value::as_str).unwrap_or("").trim();
+            let attachment=input.get("attachment").filter(|value|!value.is_null());
+            if body.is_empty() && attachment.is_none() { return Err("invalid_input: body or attachment is required".into()); }
+            let attachment_json=if let Some(value)=attachment {
+                let name=req(value,"name")?; let media=req(value,"mediaType")?; let data=req(value,"data")?;
+                let decoded=STANDARD.decode(data).map_err(|_|"invalid_input: attachment data is not valid base64")?;
+                if name.len()>255 || media.len()>200 || decoded.len()>10*1024*1024 { return Err("invalid_input: attachment is too large".into()); }
+                Some(json!({"name":name,"mediaType":media,"data":data}).to_string())
+            } else { None };
+            let id=task_repository::new_id(); let at=task_repository::now();
+            tx.execute("INSERT INTO task_work_session_entries(id,session_id,author,kind,body,attachment_json,created_at) VALUES(?,?,?,?,?,?,?)",params![id,session_id,author,kind,body,attachment_json,at]).map_err(|error|error.to_string())?;
+            tx.execute("UPDATE task_work_sessions SET updated_at=? WHERE id=? AND task_id=?",params![at,session_id,task_id]).map_err(|error|error.to_string())?;
+            let result=json!({"id":id,"sessionId":session_id,"author":author,"kind":kind,"body":body,"attachment":attachment,"createdAt":at});
+            self.finish(tx,input,"task.work-session.entry.create",&result)?; Ok(result)
+        })
     }
     fn get(&self, id: &str) -> Result<Value, String> {
         let c = crate::native::database::open(self.repo.path())?;
         let deleted: bool = c.query_row("SELECT EXISTS(SELECT 1 FROM deleted_entities WHERE entity_type='tasks' AND entity_id=?)", [id], |r| r.get(0)).map_err(|e| e.to_string())?;
-        if deleted { return Err("Task not found".into()); }
+        if deleted {
+            return Err("Task not found".into());
+        }
         let mut x=c.query_row("SELECT t.current_revision,t.state,r.title,r.detail,r.outcome,r.scope,r.non_goals,r.validation_criteria,t.category,t.created_at,t.last_user_activity_at FROM tasks t JOIN task_revisions r ON r.task_id=t.id AND r.revision=t.current_revision WHERE t.id=?",[id],|r|Ok(json!({"id":id,"taskRevision":r.get::<_,i64>(0)?,"state":r.get::<_,String>(1)?,"title":r.get::<_,String>(2)?,"detail":r.get::<_,String>(3)?,"outcome":r.get::<_,String>(4)?,"scope":r.get::<_,String>(5)?,"nonGoals":r.get::<_,String>(6)?,"validationCriteria":r.get::<_,String>(7)?,"category":r.get::<_,String>(8)?,"createdAt":r.get::<_,String>(9)?,"lastUserActivityAt":r.get::<_,String>(10)?}))).optional().map_err(|x|x.to_string())?.ok_or("Task not found")?;
         x["contentVersions"] = crate::native::localization::task_versions(&c, id)?;
         x["originCapture"] = c.query_row(
             "SELECT c.id,c.text,c.created_at FROM captures c JOIN tasks t ON t.origin_capture_id=c.id WHERE t.id=?",
             [id], |r| Ok(json!({"id":r.get::<_,String>(0)?,"text":r.get::<_,String>(1)?,"createdAt":r.get::<_,String>(2)?})),
         ).optional().map_err(|e| e.to_string())?.unwrap_or(Value::Null);
-        for (key,value) in crate::native::task_hierarchy::metadata(&c,id)?.as_object().ok_or("invalid metadata")? { x[key] = value.clone(); }
-        x["hierarchy"] = crate::native::task_hierarchy::context(&c,id)?;
+        for (key, value) in crate::native::task_hierarchy::metadata(&c, id)?
+            .as_object()
+            .ok_or("invalid metadata")?
+        {
+            x[key] = value.clone();
+        }
+        x["hierarchy"] = crate::native::task_hierarchy::context(&c, id)?;
         let mut work_log = self.work_log(id)?["entries"].clone();
         if let Some(entries) = work_log.as_array_mut() {
             for entry in entries {
                 let entry_id = entry["id"].as_str().unwrap_or("");
                 let attachment=c.query_row("SELECT name,media_type,data FROM task_attachments WHERE entry_id=? LIMIT 1",[entry_id],|r|Ok(json!({"name":r.get::<_,String>(0)?,"mediaType":r.get::<_,String>(1)?,"data":r.get::<_,String>(2)?}))).optional().map_err(|e|e.to_string())?;
-                let localized = crate::native::localization::overlay(&c, "task_work_log_entries", json!({"id":entry_id}), "en")?;
+                let localized = crate::native::localization::overlay(
+                    &c,
+                    "task_work_log_entries",
+                    json!({"id":entry_id}),
+                    "en",
+                )?;
                 let summary_job = c.query_row("SELECT id,status,error_message FROM ai_jobs_v2 WHERE task_kind='image_summary' AND entity_type='task_work_log_entries' AND entity_id=? ORDER BY rowid DESC LIMIT 1", [entry_id], |r| Ok(json!({"id":r.get::<_,String>(0)?,"status":r.get::<_,String>(1)?,"error":r.get::<_,String>(2)?}))).optional().map_err(|e|e.to_string())?;
                 let translation_job = c.query_row("SELECT id,status,error_message FROM ai_jobs_v2 WHERE task_kind='derived_translation' AND entity_type='task_work_log_entries' AND entity_id=? ORDER BY rowid DESC LIMIT 1", [entry_id], |r| Ok(json!({"id":r.get::<_,String>(0)?,"status":r.get::<_,String>(1)?,"error":r.get::<_,String>(2)?}))).optional().map_err(|e|e.to_string())?;
                 let comments=c.prepare("SELECT id,body,created_at FROM task_work_log_comments WHERE entry_id=? ORDER BY created_at").map_err(|e|e.to_string())?.query_map([entry_id],|r|Ok(json!({"id":r.get::<_,String>(0)?,"body":r.get::<_,String>(1)?,"createdAt":r.get::<_,String>(2)?}))).map_err(|e|e.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|e|e.to_string())?;
@@ -715,10 +913,20 @@ impl TaskApplicationService {
                     if let Some(a) = attachment {
                         o.insert("attachment".into(), a);
                     }
-                    o.insert("bodyVersions".into(), localized["localized_versions"].clone());
-                    if let Some(job) = translation_job { o.insert("translationJob".into(), job); }
-                    o.insert("imageSummaryVersions".into(), localized["localized_versions"].clone());
-                    if let Some(job) = summary_job { o.insert("imageSummaryJob".into(), job); }
+                    o.insert(
+                        "bodyVersions".into(),
+                        localized["localized_versions"].clone(),
+                    );
+                    if let Some(job) = translation_job {
+                        o.insert("translationJob".into(), job);
+                    }
+                    o.insert(
+                        "imageSummaryVersions".into(),
+                        localized["localized_versions"].clone(),
+                    );
+                    if let Some(job) = summary_job {
+                        o.insert("imageSummaryJob".into(), job);
+                    }
                     o.insert("comments".into(), json!(comments));
                 }
             }
@@ -728,7 +936,7 @@ impl TaskApplicationService {
         let completion = c.query_row("SELECT id,evidence,report,created_at FROM task_completions WHERE task_id=? ORDER BY created_at DESC LIMIT 1",[id],|r|Ok(json!({"id":r.get::<_,String>(0)?,"evidence":r.get::<_,String>(1)?,"report":r.get::<_,String>(2)?,"createdAt":r.get::<_,String>(3)?}))).optional().map_err(|e|e.to_string())?;
         let publication = c.query_row("SELECT revision,state,content_hash,lineage_json,body_markdown FROM task_knowledge_drafts WHERE task_id=? ORDER BY revision DESC LIMIT 1",[id],|r| {
             let lineage: Value = serde_json::from_str(&r.get::<_,String>(3)?).unwrap_or(Value::Null);
-            Ok(json!({"draftRevision":r.get::<_,i64>(0)?,"state":r.get::<_,String>(1)?,"contentHash":r.get::<_,String>(2)?,"sourceHash":lineage["sourceHash"],"bodyMarkdown":r.get::<_,String>(4)?}))
+            Ok(json!({"draftRevision":r.get::<_,i64>(0)?,"state":r.get::<_,String>(1)?,"contentHash":r.get::<_,String>(2)?,"sourceHash":lineage["sourceHash"],"lineage":lineage,"bodyMarkdown":r.get::<_,String>(4)?}))
         }).optional().map_err(|e|e.to_string())?;
         // A newer private draft must not hide the last published document. A
         // withdrawal suppresses earlier revisions of the same published file.
@@ -746,12 +954,16 @@ impl TaskApplicationService {
         object.insert("relationships".into(), json!(relationships));
         object.insert("readinessEntries".into(), readiness["entries"].clone());
         if object.get("state").and_then(Value::as_str) == Some("completed") {
-            if let Some(completion) = completion { object.insert("completion".into(), completion); }
+            if let Some(completion) = completion {
+                object.insert("completion".into(), completion);
+            }
         }
         let auto_error: Option<String> = c.query_row("SELECT error FROM task_auto_publications WHERE task_id=? AND state='pending' AND error!='' ORDER BY revision LIMIT 1",[id],|r|r.get(0)).optional().map_err(|e|e.to_string())?;
-        object.insert("autoPublicationError".into(),json!(auto_error));
+        object.insert("autoPublicationError".into(), json!(auto_error));
         if let Some((state, published)) = published_knowledge {
-            if state == "published" { object.insert("publishedKnowledge".into(), published); }
+            if state == "published" {
+                object.insert("publishedKnowledge".into(), published);
+            }
         }
         if let Some(publication) = publication {
             object.insert("publication".into(), publication);
@@ -761,10 +973,18 @@ impl TaskApplicationService {
     fn delete(&self, id: &str) -> Result<Value, String> {
         let c = crate::native::database::open(self.repo.path())?;
         let exists: bool = c.query_row("SELECT EXISTS(SELECT 1 FROM tasks WHERE id=? AND NOT EXISTS(SELECT 1 FROM deleted_entities d WHERE d.entity_type='tasks' AND d.entity_id=tasks.id))", [id], |r| r.get(0)).map_err(|e| e.to_string())?;
-        if !exists { return Err("Task not found".into()); }
+        if !exists {
+            return Err("Task not found".into());
+        }
         let owned: bool = c.query_row("SELECT EXISTS(SELECT 1 FROM task_subtasks WHERE child_task_id=? OR parent_task_id=?)",params![id,id],|r|r.get(0)).map_err(|e|e.to_string())?;
-        if owned { return Err("Task hierarchy must be retained; complete or reopen its Subtasks".into()); }
-        c.execute("INSERT OR REPLACE INTO deleted_entities(entity_type,entity_id) VALUES ('tasks',?)", [id]).map_err(|e| e.to_string())?;
+        if owned {
+            return Err("Task hierarchy must be retained; complete or reopen its Subtasks".into());
+        }
+        c.execute(
+            "INSERT OR REPLACE INTO deleted_entities(entity_type,entity_id) VALUES ('tasks',?)",
+            [id],
+        )
+        .map_err(|e| e.to_string())?;
         Ok(Value::Null)
     }
 
@@ -774,7 +994,9 @@ impl TaskApplicationService {
         let mut rows=s.query_map([],|r|Ok(json!({"kind":"task","id":r.get::<_,String>(0)?,"taskRevision":r.get::<_,i64>(1)?,"state":r.get::<_,String>(2)?,"title":r.get::<_,String>(3)?,"category":r.get::<_,String>(4)?,"lastUserActivityAt":r.get::<_,String>(5)?,"refinedRevision":r.get::<_,Option<i64>>(6)?,"parentTaskId":r.get::<_,Option<String>>(7)?,"originCaptureText":r.get::<_,Option<String>>(8)?,"completedAt":r.get::<_,Option<String>>(9)?}))).map_err(|x|x.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|x|x.to_string())?;
         let mut translations = crate::native::localization::current_task_versions(&c)?;
         for item in &mut rows {
-            item["contentVersions"] = translations.remove(item["id"].as_str().unwrap_or_default()).unwrap_or_else(|| json!({}));
+            item["contentVersions"] = translations
+                .remove(item["id"].as_str().unwrap_or_default())
+                .unwrap_or_else(|| json!({}));
         }
         let mut captures=c.prepare("SELECT c.id,c.text,c.created_at,COALESCE(o.category,'General'),EXISTS(SELECT 1 FROM input_images i WHERE i.capture_id=c.id) FROM captures c LEFT JOIN workbench_category_overrides o ON o.entity_type='captures' AND o.entity_id=c.id WHERE c.source_mode='capture' AND c.id NOT IN (SELECT origin_capture_id FROM tasks WHERE origin_capture_id IS NOT NULL) AND NOT EXISTS(SELECT 1 FROM deleted_entities d WHERE d.entity_type='captures' AND d.entity_id=c.id) ORDER BY c.last_user_activity_at DESC").map_err(|x|x.to_string())?;
         rows.extend(captures.query_map([],|r|Ok(json!({"kind":"capture","id":r.get::<_,String>(0)?,"text":r.get::<_,String>(1)?,"lastUserActivityAt":r.get::<_,String>(2)?,"category":r.get::<_,String>(3)?,"hasImage":r.get::<_,bool>(4)?}))).map_err(|x|x.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|x|x.to_string())?);
@@ -837,13 +1059,19 @@ mod tests {
         let service = TaskApplicationService::new(&db);
         let initial = "Keep this exact first thought";
         let created = service
-            .execute("task.create", &json!({"operationId":"direct-task","inputText":initial,"title":"A Task"}))
+            .execute(
+                "task.create",
+                &json!({"operationId":"direct-task","inputText":initial,"title":"A Task"}),
+            )
             .unwrap();
         let id = created["id"].as_str().unwrap();
 
         assert_eq!(service.get(id).unwrap()["originCapture"]["text"], initial);
         let snapshot = service.workbench().unwrap();
-        let has_initial = snapshot["categories"].as_array().unwrap().iter()
+        let has_initial = snapshot["categories"]
+            .as_array()
+            .unwrap()
+            .iter()
             .flat_map(|category| category["items"].as_array().unwrap())
             .any(|item| item["id"] == id && item["originCaptureText"] == initial);
         assert!(has_initial);
@@ -860,8 +1088,22 @@ mod tests {
         let saved = service.execute("capture.create", &input).unwrap();
         assert_eq!(service.execute("capture.create", &input).unwrap(), saved);
         let connection = crate::native::database::open(&db).unwrap();
-        assert_eq!(crate::adapters::sqlite::input_images::get(&connection, true, saved["id"].as_str().unwrap()).unwrap(), Some(image));
-        assert_eq!(connection.query_row("SELECT count(*) FROM input_images", [], |r| r.get::<_,i64>(0)).unwrap(), 1);
+        assert_eq!(
+            crate::adapters::sqlite::input_images::get(
+                &connection,
+                true,
+                saved["id"].as_str().unwrap()
+            )
+            .unwrap(),
+            Some(image)
+        );
+        assert_eq!(
+            connection
+                .query_row("SELECT count(*) FROM input_images", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
         let mut invalid = input.clone();
         invalid["operationId"] = json!("invalid-image");
         invalid["image"]["mediaType"] = json!("image/svg+xml");
@@ -869,8 +1111,15 @@ mod tests {
         invalid["image"]["mediaType"] = json!("image/png");
         invalid["image"]["data"] = json!("not base64");
         assert!(service.execute("capture.create", &invalid).is_err());
-        assert_eq!(connection.query_row("SELECT count(*) FROM captures", [], |r| r.get::<_,i64>(0)).unwrap(), 1);
-        assert!(service.execute("capture.create", &json!({"operationId":"empty","text":""})).is_err());
+        assert_eq!(
+            connection
+                .query_row("SELECT count(*) FROM captures", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+        assert!(service
+            .execute("capture.create", &json!({"operationId":"empty","text":""}))
+            .is_err());
     }
 
     #[test]
@@ -887,15 +1136,39 @@ mod tests {
         let saved = service.execute("capture.create", &input).unwrap();
         assert_eq!(service.execute("capture.create", &input).unwrap(), saved);
         let connection = crate::native::database::open(&db).unwrap();
-        assert_eq!(json!(crate::adapters::sqlite::input_images::get_all(&connection, true, saved["id"].as_str().unwrap()).unwrap()), images);
+        assert_eq!(
+            json!(crate::adapters::sqlite::input_images::get_all(
+                &connection,
+                true,
+                saved["id"].as_str().unwrap()
+            )
+            .unwrap()),
+            images
+        );
         let mut invalid = input.clone();
         invalid["operationId"] = json!("invalid-batch");
         invalid["images"][1]["data"] = json!("not base64");
         assert!(service.execute("capture.create", &invalid).is_err());
-        assert_eq!(connection.query_row("SELECT count(*) FROM captures", [], |r| r.get::<_,i64>(0)).unwrap(), 1);
-        assert_eq!(connection.query_row("SELECT count(*) FROM input_images", [], |r| r.get::<_,i64>(0)).unwrap(), 2);
+        assert_eq!(
+            connection
+                .query_row("SELECT count(*) FROM captures", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            connection
+                .query_row("SELECT count(*) FROM input_images", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            2
+        );
         for images in [json!([]), json!([null]), json!({})] {
-            assert!(service.execute("capture.create", &json!({"operationId":"bad","text":"","images":images})).is_err());
+            assert!(service
+                .execute(
+                    "capture.create",
+                    &json!({"operationId":"bad","text":"","images":images})
+                )
+                .is_err());
         }
     }
 
@@ -981,21 +1254,37 @@ mod tests {
         let db = root.path().join("state.db");
         crate::native::database::initialize(&db).unwrap();
         let service = TaskApplicationService::new(&db);
-        let task = service.execute("task.create", &json!({"operationId":"create","inputText":"input","title":"Review saved draft"})).unwrap();
+        let task = service
+            .execute(
+                "task.create",
+                &json!({"operationId":"create","inputText":"input","title":"Review saved draft"}),
+            )
+            .unwrap();
         let task_id = task["id"].as_str().unwrap();
         service.execute("task.transition", &json!({"operationId":"start","taskId":task_id,"expectedTaskRevision":1,"to":"in_progress"})).unwrap();
         service.execute("task.completion.create", &json!({"operationId":"complete","taskId":task_id,"expectedTaskRevision":1,"evidence":"done"})).unwrap();
         let repo = SqliteTaskRepository::new(&db);
-        repo.transaction(|tx| crate::native::task_assistance::save_supplied_knowledge_draft_tx(
-            tx,
-            &json!({"operationId":"saved-draft","taskId":task_id,"expectedTaskRevision":1}),
-            "# Saved Knowledge\n\nReview this private draft.",
-            "supplied",
-        )).unwrap();
+        let saved = repo
+            .transaction(|tx| {
+                crate::native::task_assistance::save_supplied_knowledge_draft_tx(
+                    tx,
+                    &json!({"operationId":"saved-draft","taskId":task_id,"expectedTaskRevision":1}),
+                    "# Saved Knowledge\n\nReview this private draft.",
+                    "supplied",
+                )
+            })
+            .unwrap();
 
-        let loaded = service.execute("task.get", &json!({"taskId":task_id})).unwrap();
+        let loaded = service
+            .execute("task.get", &json!({"taskId":task_id}))
+            .unwrap();
         assert_eq!(loaded["publication"]["state"], "draft");
-        assert_eq!(loaded["publication"]["bodyMarkdown"], "# Saved Knowledge\n\nReview this private draft.");
+        assert_eq!(
+            loaded["publication"]["bodyMarkdown"],
+            "# Saved Knowledge\n\nReview this private draft."
+        );
+        assert!(loaded["publication"]["lineage"].is_object());
+        assert_eq!(loaded["publication"]["lineage"], saved["lineage"]);
     }
 
     #[test]
@@ -1014,7 +1303,12 @@ mod tests {
         }
         let board = service.execute("workbench.get", &json!({})).unwrap();
         assert_eq!(board["refiningShortcuts"].as_array().unwrap().len(), 8);
-        connection.execute("UPDATE refinement_sessions SET state='completed' WHERE id='session-0'", []).unwrap();
+        connection
+            .execute(
+                "UPDATE refinement_sessions SET state='completed' WHERE id='session-0'",
+                [],
+            )
+            .unwrap();
         let board = service.execute("workbench.get", &json!({})).unwrap();
         assert_eq!(board["refiningShortcuts"].as_array().unwrap().len(), 7);
     }
@@ -1104,16 +1398,27 @@ mod tests {
             )
             .unwrap();
 
-        service.execute("task.delete", &json!({"taskId":task_id})).unwrap();
-        assert!(service.execute("task.delete", &json!({"taskId":"missing"})).unwrap_err().contains("Task not found"));
-        assert!(service.execute("task.get", &json!({"taskId":task_id})).unwrap_err().contains("Task not found"));
+        service
+            .execute("task.delete", &json!({"taskId":task_id}))
+            .unwrap();
+        assert!(service
+            .execute("task.delete", &json!({"taskId":"missing"}))
+            .unwrap_err()
+            .contains("Task not found"));
+        assert!(service
+            .execute("task.get", &json!({"taskId":task_id}))
+            .unwrap_err()
+            .contains("Task not found"));
 
         // A new service and connection emulate the next desktop launch. The tombstone hides the
         // Task while its work log remains durable for audit and recovery tooling.
         let reloaded = TaskApplicationService::new(&db);
         let workbench = reloaded.execute("workbench.get", &json!({})).unwrap();
         assert!(workbench["activeShortcuts"].as_array().unwrap().is_empty());
-        assert!(workbench["refiningShortcuts"].as_array().unwrap().is_empty());
+        assert!(workbench["refiningShortcuts"]
+            .as_array()
+            .unwrap()
+            .is_empty());
         assert!(workbench["categories"]
             .as_array()
             .unwrap()
@@ -1122,7 +1427,16 @@ mod tests {
             .all(|item| item["id"] != task_id));
         let connection = crate::native::database::open(&db).unwrap();
         assert_eq!(connection.query_row("SELECT count(*) FROM deleted_entities WHERE entity_type='tasks' AND entity_id=?", [task_id], |row| row.get::<_, i64>(0)).unwrap(), 1);
-        assert_eq!(connection.query_row("SELECT count(*) FROM task_work_log_entries WHERE task_id=?", [task_id], |row| row.get::<_, i64>(0)).unwrap(), 1);
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT count(*) FROM task_work_log_entries WHERE task_id=?",
+                    [task_id],
+                    |row| row.get::<_, i64>(0)
+                )
+                .unwrap(),
+            1
+        );
     }
 
     #[test]
@@ -1342,5 +1656,127 @@ mod tests {
                 1,
             );
         }
+    }
+    #[test]
+    fn task_work_session_persists_isolates_retries_and_does_not_change_task_state() {
+        let root = tempdir().unwrap();
+        let db = root.path().join("state.db");
+        crate::native::database::initialize(&db).unwrap();
+        let service = TaskApplicationService::new(&db);
+        let task_a = service
+            .execute(
+                "task.create",
+                &json!({"operationId":"task-a","inputText":"a","title":"A"}),
+            )
+            .unwrap();
+        let task_b = service
+            .execute(
+                "task.create",
+                &json!({"operationId":"task-b","inputText":"b","title":"B"}),
+            )
+            .unwrap();
+        let a = task_a["id"].as_str().unwrap();
+        let b = task_b["id"].as_str().unwrap();
+        assert_eq!(
+            service
+                .execute("task.work-session.list", &json!({"taskId":a}))
+                .unwrap()["sessions"]
+                .as_array()
+                .unwrap()
+                .len(),
+            0
+        );
+        assert!(service
+            .execute(
+                "task.work-session.create",
+                &json!({"operationId":"invalid-title","taskId":a,"title":"x".repeat(201)}),
+            )
+            .is_err());
+        let session = service
+            .execute(
+                "task.work-session.create",
+                &json!({"operationId":"session-a","taskId":a,"title":"Investigation"}),
+            )
+            .unwrap();
+        let session_id = session["id"].as_str().unwrap();
+        let append = json!({"operationId":"entry-a","taskId":a,"sessionId":session_id,"author":"user","kind":"note","body":"persistent note","attachment":{"name":"evidence.txt","mediaType":"text/plain","data":"aGVsbG8="}});
+        let first = service
+            .execute("task.work-session.entry.create", &append)
+            .unwrap();
+        let replay = service
+            .execute("task.work-session.entry.create", &append)
+            .unwrap();
+        assert_eq!(first, replay);
+        let second = service
+            .execute(
+                "task.work-session.create",
+                &json!({"operationId":"session-a-two","taskId":a,"title":"Implementation"}),
+            )
+            .unwrap();
+        let second_id = second["id"].as_str().unwrap();
+        service.execute("task.work-session.entry.create",&json!({"operationId":"entry-a-two","taskId":a,"sessionId":second_id,"body":"second session only"})).unwrap();
+        assert_eq!(
+            service
+                .execute("task.work-session.list", &json!({"taskId":a}))
+                .unwrap()["sessions"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+        let second_record = service
+            .execute(
+                "task.work-session.get",
+                &json!({"taskId":a,"sessionId":second_id}),
+            )
+            .unwrap();
+        assert_eq!(second_record["entries"].as_array().unwrap().len(), 1);
+        assert_eq!(second_record["entries"][0]["body"], "second session only");
+        assert!(service
+            .execute(
+                "task.work-session.get",
+                &json!({"taskId":b,"sessionId":session_id})
+            )
+            .is_err());
+        assert!(service
+            .execute(
+                "task.work-session.entry.create",
+                &json!({"operationId":"cross","taskId":b,"sessionId":session_id,"body":"wrong"})
+            )
+            .is_err());
+        drop(service);
+        let reopened = TaskApplicationService::new(&db);
+        let record = reopened
+            .execute(
+                "task.work-session.get",
+                &json!({"taskId":a,"sessionId":session_id}),
+            )
+            .unwrap();
+        assert_eq!(record["entries"].as_array().unwrap().len(), 1);
+        assert_eq!(record["entries"][0]["body"], "persistent note");
+        assert_eq!(record["entries"][0]["attachment"]["data"], "aGVsbG8=");
+        assert_eq!(
+            reopened.execute("task.get", &json!({"taskId":a})).unwrap()["state"],
+            task_a["state"]
+        );
+        let activity: i64 = crate::native::database::open(&db)
+            .unwrap()
+            .query_row(
+                "SELECT count(*) FROM user_activity_events WHERE entity_id=?",
+                [a],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(activity, 1, "only Task creation records user activity");
+        reopened
+            .execute("task.delete", &json!({"taskId":a}))
+            .unwrap();
+        assert!(reopened
+            .execute(
+                "task.work-session.get",
+                &json!({"taskId":a,"sessionId":session_id})
+            )
+            .unwrap_err()
+            .contains("Task not found"));
     }
 }

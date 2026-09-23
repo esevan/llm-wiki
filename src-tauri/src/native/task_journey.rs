@@ -62,7 +62,7 @@ pub(crate) fn build_tx(connection: &Transaction<'_>, task_id: &str) -> Result<Va
         .map_err(|error| error.to_string())?;
     let mut prior: Option<Vec<String>> = None;
     for (revision, title, detail, outcome, scope, non_goals, validation_criteria, source, created_at) in revisions {
-        let fields = vec![title.clone(), detail, outcome, scope, non_goals, validation_criteria];
+        let fields = vec![title.clone(), detail.clone(), outcome.clone(), scope.clone(), non_goals.clone(), validation_criteria.clone()];
         let changes = prior
             .as_ref()
             .map(|previous| revision_changes(previous, &fields))
@@ -74,11 +74,29 @@ pub(crate) fn build_tx(connection: &Transaction<'_>, task_id: &str) -> Result<Va
         } else {
             "task_updated"
         };
+        let event_detail = if revision == 1 {
+            json!({
+                "taskRevision":revision,
+                "title":title,
+                "changes":changes,
+                "source":source,
+                "definition":{
+                    "title":fields[0],
+                    "detail":fields[1],
+                    "outcome":fields[2],
+                    "scope":fields[3],
+                    "nonGoals":fields[4],
+                    "validationCriteria":fields[5]
+                }
+            })
+        } else {
+            json!({"taskRevision":revision,"title":title,"changes":changes,"source":source})
+        };
         events.push(event(
             format!("revision:{task_id}:{revision}"),
             event_type,
             created_at,
-            json!({"taskRevision":revision,"title":title,"changes":changes,"source":source}),
+            event_detail,
         ));
         prior = Some(fields);
     }
@@ -195,6 +213,7 @@ mod tests {
         let tx = connection.transaction().unwrap();
         let journey = build_tx(&tx, "task").unwrap();
         assert!(journey["events"].as_array().unwrap().iter().any(|event| event["type"] == "refinement_input" && event["detail"]["summary"] == "Edge Case: 빈 파일이면 기존 결정을 번복"));
+        assert!(journey["events"].as_array().unwrap().iter().any(|event| event["type"] == "task_created" && event["detail"]["definition"]["scope"] == "파일"));
         assert!(journey["events"].as_array().unwrap().iter().any(|event| event["type"] == "refinement_applied" && event["detail"]["changes"][0]["field"] == "title"));
         assert!(journey["edges"].as_array().unwrap().iter().any(|edge| edge["kind"] == "refinement_context"));
         let input_position = journey["events"].as_array().unwrap().iter().position(|event| event["type"] == "refinement_input").unwrap();

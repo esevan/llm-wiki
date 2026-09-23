@@ -20,6 +20,7 @@ struct AppSettings {
     intro_completed: Option<bool>,
     locale: Option<SavedLocale>,
     provider: Option<SavedProvider>,
+    codex_home: Option<PathBuf>,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -266,6 +267,47 @@ pub fn save_vault_path(settings_path: &Path, vault: &Path) -> Result<(), String>
     Ok(())
 }
 
+/// Returns the Codex state exposed to the Settings screen.  Keeping the
+/// alternate value absent is intentional: Codex then chooses its normal local
+/// home (`~/.codex`) just as the CLI and IDE extension do.
+pub fn codex_home(settings_path: &Path) -> Result<Value, String> {
+    let alternate_path = read(settings_path)?.codex_home;
+    let default_path = dirs::home_dir()
+        .map(|home| home.join(".codex").to_string_lossy().into_owned())
+        .unwrap_or_else(|| "~/.codex".into());
+    Ok(json!({
+        "mode": if alternate_path.is_some() { "alternate" } else { "default" },
+        "defaultPath": default_path,
+        "alternatePath": alternate_path.map(|path| path.to_string_lossy().into_owned()),
+    }))
+}
+
+/// Save only an explicit, existing alternate home. An empty value restores the
+/// shared Codex default rather than persisting a second implicit location.
+pub fn save_codex_home(settings_path: &Path, input: &Value) -> Result<Value, String> {
+    let alternate = input
+        .get("alternatePath")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from);
+    let alternate = match alternate {
+        Some(path) => {
+            if !path.is_absolute() || !path.is_dir() {
+                return Err("Choose an existing absolute Codex home folder".into());
+            }
+            Some(path.canonicalize().map_err(|error| error.to_string())?)
+        }
+        None => None,
+    };
+    update(settings_path, |settings| settings.codex_home = alternate)?;
+    codex_home(settings_path)
+}
+
+pub fn configured_codex_home(settings_path: &Path) -> Result<Option<PathBuf>, String> {
+    Ok(read(settings_path)?.codex_home)
+}
+
 pub fn resources(locale: &str) -> Result<Value, String> {
     let raw = match locale {
         "en" => include_str!("../../../frontend/public/i18n/en.json"),
@@ -495,6 +537,25 @@ mod tests {
         let public = provider(&settings_path).unwrap();
         assert_eq!(public["base_url"], "https://example.test/v1");
         assert_eq!(public["api_key_configured"], false);
+    }
+
+    #[test]
+    fn codex_home_defaults_to_the_shared_local_home_and_only_persists_an_explicit_alternate() {
+        let state = tempfile::tempdir().unwrap();
+        let settings_path = state.path().join("settings.json");
+        let default = codex_home(&settings_path).unwrap();
+        assert_eq!(default["mode"], "default");
+        assert!(default["alternatePath"].is_null());
+
+        let alternate = state.path().join("alternate-codex");
+        fs::create_dir(&alternate).unwrap();
+        let saved = save_codex_home(&settings_path, &json!({"alternatePath":alternate})).unwrap();
+        assert_eq!(saved["mode"], "alternate");
+        assert_eq!(configured_codex_home(&settings_path).unwrap(), Some(alternate.canonicalize().unwrap()));
+
+        let restored = save_codex_home(&settings_path, &json!({"alternatePath":""})).unwrap();
+        assert_eq!(restored["mode"], "default");
+        assert_eq!(configured_codex_home(&settings_path).unwrap(), None);
     }
 
     #[test]

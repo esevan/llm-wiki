@@ -16,6 +16,7 @@
   않으면서 인앱 Chat과 로컬 외부 Chat을 같은 workflow에 연결합니다.
 - [Task 중심 Workbench](conflict-gated-workflow.ko.md)는 Capture, 선택적 Refinement, Problem과
   독립적으로 추적하는 Task를 하나의 보이는 workflow로 구성합니다.
+- [Task 작업 세션](task-work-sessions.ko.md)은 Task 상태를 바꾸지 않고 각 Task 안에 비공개 기록과 명시적인 Codex 실행을 저장하고 이어가게 합니다.
 - [Refinement Preview](refinement-preview-status.ko.md)는 AI 제안을 검토하는 동안 맥락을 보존합니다.
 - [Compass](direction-dashboard.ko.md)는 사람을 점수화하지 않고 방향을 기록합니다.
 

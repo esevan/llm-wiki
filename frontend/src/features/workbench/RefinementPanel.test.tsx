@@ -526,7 +526,7 @@ describe("Refinement panel", () => {
     }
   });
 
-  it("guards duplicate sends, supports control-or-command Enter, and allows retry after a provider error", async () => {
+  it("guards duplicate sends, supports Enter, and allows retry after a provider error", async () => {
     let attempts = 0;
     const request = vi.fn().mockImplementation(({ path }: { path: string }) => {
       const result = (json: unknown) => Promise.resolve({ ok: true, status: 200, json: async () => json, text: async () => "", body: null });
@@ -541,7 +541,7 @@ describe("Refinement panel", () => {
     render(<RefinementPanel kind="task" subjectId="retry-task" onClose={vi.fn()} />);
     const message = await screen.findByLabelText("Refinement message");
     fireEvent.change(message, { target: { value: "retry this turn" } });
-    fireEvent.keyDown(message, { key: "Enter", ctrlKey: true });
+    fireEvent.keyDown(message, { key: "Enter" });
     await screen.findByRole("alert");
     expect(message).toHaveValue("retry this turn");
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
@@ -550,7 +550,7 @@ describe("Refinement panel", () => {
     expect(request.mock.calls.filter(([input]) => input.path.endsWith("/messages"))).toHaveLength(2);
   });
 
-  it("does not send control Enter while a Korean IME composition is active", async () => {
+  it("keeps Shift Enter as a newline and does not send during IME composition", async () => {
     const request = vi.fn().mockImplementation(({ path }: { path: string }) =>
       Promise.resolve({ ok: true, status: 200, json: async () => path.endsWith('/refinement') ? { id: 'ime', messages: [] } : [], text: async () => '', body: null }),
     );
@@ -558,7 +558,9 @@ describe("Refinement panel", () => {
     render(<RefinementPanel kind="task" subjectId="ime-task" onClose={vi.fn()} />);
     const message = await screen.findByLabelText('Refinement message');
     fireEvent.change(message, { target: { value: '조합 중' } });
-    fireEvent.keyDown(message, { key: 'Enter', ctrlKey: true, isComposing: true });
+    fireEvent.keyDown(message, { key: 'Enter', shiftKey: true });
+    fireEvent.keyDown(message, { key: 'Enter', isComposing: true });
+    fireEvent.keyDown(message, { key: 'Enter', keyCode: 229 });
     expect(request.mock.calls.some(([input]) => input.path.endsWith('/messages'))).toBe(false);
   });
 

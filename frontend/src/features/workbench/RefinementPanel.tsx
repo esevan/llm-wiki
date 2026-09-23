@@ -675,7 +675,7 @@ export function RefinementPanel({
           <div className="refinement-composer-input">
           <textarea disabled={saving} onPaste={!saving && !responding ? attachment.paste : undefined} aria-label={text.refinementMessage} data-control="refinement-message" value={message}
             onChange={event => { latest.current.message = event.target.value; setMessage(event.target.value); }} onKeyDown={event => {
-              if (event.key === "Enter" && (event.metaKey || event.ctrlKey) && !event.nativeEvent.isComposing) { event.preventDefault(); void send(); }
+              if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229) { event.preventDefault(); void send(); }
             }} placeholder={text.refinementPlaceholder} rows={2} />
           <InputImageAttachment attachment={attachment} disabled={saving || responding} />
           </div>

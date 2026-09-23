@@ -23,10 +23,12 @@
 
 ## Implementation Readiness
 
-- [x] All 40 functional requirements map semantically to implementation and verification tasks
-- [x] All 9 measurable outcomes have verification work
+- [x] Historical schema-8 baseline: all original 40 functional requirements mapped semantically to
+  implementation and verification tasks
+- [x] Historical schema-8 baseline: all original 9 measurable outcomes had verification work
 - [x] All 8 user stories have an independent test
-- [x] All 77 tasks use valid sequential checklist format and concrete paths
+- [x] Historical schema-8 baseline: all original 77 tasks used valid sequential checklist format
+  and concrete paths
 - [x] 25 parallel opportunities are marked without overlapping dependent work
 - [x] Final release build, packaged E2E, UI review, and fixed-corpus provider QA reuse one artifact
 - [x] Missing provider configuration is reported as blocked rather than replaced by fallback output
@@ -39,6 +41,15 @@
 - [x] Localization work points to the actual JSON resource paths
 
 ## Notes
+
+- [x] Recorded chronology and optional AI interpretation are separate layers; interpretation cannot
+  mutate events or `followed_by` edges.
+- [x] Details reads the current journey while Review reads the exact draft snapshot, falling back to
+  current journey only when no draft snapshot exists.
+- [x] Locale-bound caches and immutable draft snapshots avoid silently retranslating historical
+  evidence when interface language changes.
+- [x] Async persistence rechecks Task, completion, source, and journey currentness.
+- [ ] Real-provider localized label/rationale UI review is complete for both English and Korean.
 
 - Final post-remediation analysis: 0 critical, 0 high, 0 unresolved ambiguities, 0 uncovered buildable
   requirements. Historical specs remain evidence; schema-8 normative rules are linked explicitly.

@@ -38,6 +38,7 @@ const manifest: readonly ControlSpec[] = [
   task('vault-change', 'F39', 'frontend/src/features/settings/SettingsView.tsx', 'native Vault picker starts and the app restarts with the selected location'),
   task('vault-retry', 'F39', 'frontend/src/features/settings/SettingsView.tsx', 'Vault settings reload after a failed status request'),
   task('vault-regenerate-embeddings', 'F39', 'frontend/src/features/settings/SettingsView.tsx', 'current Vault embeddings are rebuilt and status is reported'),
+  ...['home-alternate-toggle', 'home-alternate', 'home-save', 'home-retry'].map(name => task(`codex-${name}`, 'F39', 'frontend/src/features/settings/SettingsView.tsx', 'Codex home mode, path, or reload changes visibly')),
   ...['name', 'topics', 'create'].map(name => task(`mcp-connection-${name}`, 'F41', 'frontend/src/features/settings/McpConnections.tsx', 'connection input and exact grants persist')),
   ...['session:read', 'session:write', 'topic:read', 'workbench:current:read', 'workbench:overview:read', 'vault:search:lexical', 'vault:search:semantic', 'vault:evidence:read', 'knowledge:draft:write', 'knowledge:publish'].map(name => existing(`mcp-scope-${name}`, 'F41', `[data-control="mcp-scope-${name}"]`, 'frontend/src/features/settings/McpConnections.tsx', name, 'individual MCP grant persists')),
   ...['access', 'revoke'].map(name => task(`mcp-connection-${name}`, 'F42', 'frontend/src/features/settings/McpConnections.tsx', name === 'access' ? 'connection command and grants disclose' : 'connection revokes')),
@@ -75,7 +76,15 @@ const manifest: readonly ControlSpec[] = [
   ...['decisions', 'lineage'].map(name => task(`task-${name}-details`, 'F9', 'frontend/src/features/workbench/TaskDetail.tsx', 'secondary Task detail section discloses')),
   task('task-lineage-open', 'F30', 'frontend/src/features/workbench/TaskDetail.tsx', 'opening Task lineage reads its saved graph or queues one refresh'),
   task('task-lineage-retry', 'F30', 'frontend/src/features/workbench/TaskDetail.tsx', 'terminal Task lineage generation retries through the durable Queue'),
-  ...['work', 'details', 'review'].map(name => task(`task-detail-tab-${name}`, 'F9', 'frontend/src/features/workbench/TaskDetail.tsx', 'Task detail section changes without losing drafts')),
+  ...['work', 'sessions', 'details', 'review'].map(name => task(`task-detail-tab-${name}`, 'F9', 'frontend/src/features/workbench/TaskDetail.tsx', 'Task detail section changes without losing drafts')),
+  ...['create','select','message','attachment','attachment-remove','send','prepare','run','run-open','stop','run-retry','settings-edit','title','provider','model','workspace','approval','settings-save','attachment-download','approval-choice','question-text','question-option','question-other','request-submit','worklog-open','worklog-sync'].map(name => task(`task-session-${name}`, 'F69', 'frontend/src/features/workbench/TaskWorkSessions.tsx', 'Task-owned session state, explicit Codex Run, or formal response changes visibly', 'A session operation is pending or required input is absent.')),
+  ...['link', 'link-choice', 'link-more'].map(name => task(`task-session-${name}`, 'F69', 'frontend/src/features/workbench/TaskWorkSessions.tsx', 'Existing Codex conversations are listed, paged, or explicitly linked to this Task without starting work', 'The list or link request is pending, or the conversation is already selected.')),
+  ...['workspace-browse', 'workspace-recent'].map(name => task(`task-session-${name}`, 'F69', 'frontend/src/features/workbench/TaskWorkSessions.tsx', 'The unsaved project folder changes through the native picker or saved recent folders', 'A session operation is pending.')),
+  existing('task-session-rail-open', 'F69', '.task-session-rail button', 'frontend/src/features/workbench/TaskWorkSessions.tsx', 'void open(session.id)', 'The selected saved session opens while each session draft is retained'),
+  existing('task-session-load-earlier', 'F69', '.task-session-load-earlier button', 'frontend/src/features/workbench/TaskWorkSessions.tsx', 'void loadEarlierTurns()', 'An earlier page of the exact linked conversation appears', 'An earlier-history request is pending.'),
+  { ...existing('task-session-command-details', 'F69', 'details.task-execution-event', 'frontend/src/features/workbench/TaskWorkSessions.tsx', 'className="task-execution-event', 'Bounded command or activity output is disclosed without running it'), kind: 'details' },
+  { ...existing('task-session-context-details', 'F69', 'details.task-session-context', 'frontend/src/features/workbench/TaskWorkSessions.tsx', 'className="task-session-context"', 'Current Task context and references are disclosed'), kind: 'details' },
+  { ...existing('task-session-settings-details', 'F69', 'details.task-session-settings', 'frontend/src/features/workbench/TaskWorkSessions.tsx', 'className="task-session-settings"', 'Session configuration controls are disclosed without starting work'), kind: 'details' },
   ...['edit', 'cancel'].map(name => task(`task-definition-${name}`, 'F12', 'frontend/src/features/workbench/TaskDetail.tsx', 'definition editing is explicitly entered or cancelled')),
   ...['keep-mine', 'use-latest', 'guard-save', 'guard-discard', 'guard-keep-editing'].map(name => task(`task-draft-${name}`, 'F9', 'frontend/src/features/workbench/TaskDetail.tsx', 'dirty Task draft conflict or leave choice has an explicit effect')),
   task('task-detail-refine', 'F10', 'frontend/src/features/workbench/TaskDetail.tsx', 'task refinement opens'),
@@ -90,6 +99,7 @@ const manifest: readonly ControlSpec[] = [
   task('task-revision-save', 'F12', 'frontend/src/features/workbench/TaskDetail.tsx', 'immutable task revision reflects the edit', 'No definition changes, overlapping revision conflicts awaiting a choice, or a save is in progress.'),
   task('task-image-summary', 'F13', 'frontend/src/features/workbench/TaskDetail.tsx', 'bilingual image summary job completes and renders', 'Task mutation is in progress'),
   ...['text','file','add'].map(name => task(`task-worklog-${name}`, 'F13', 'frontend/src/features/workbench/TaskDetail.tsx', 'work-log entry persists')),
+  task('task-worklog-execution-open', 'F69', 'frontend/src/features/workbench/TaskDetail.tsx', 'linked execution opens its exact Task session and Run'),
   ...['text','add'].map(name => task(`task-comment-${name}`, 'F14', 'frontend/src/features/workbench/TaskDetail.tsx', 'comment persists')),
   ...['text','add','toggle'].map(name => task(`task-checklist-${name}`, 'F15', 'frontend/src/features/workbench/TaskDetail.tsx', 'checklist state persists')),
   task('task-checklist-completed-toggle', 'F15', 'frontend/src/features/workbench/TaskDetail.tsx', 'completed checklist items are disclosed or collapsed'),
@@ -167,4 +177,4 @@ export const taskInteractiveManifest: readonly ControlSpec[] = manifest.map(cont
   disabledReason: disabledPreconditions.get(control.id) ?? control.disabledReason,
 }));
 
-export const inventoryFamilyCount = 68;
+export const inventoryFamilyCount = 69;

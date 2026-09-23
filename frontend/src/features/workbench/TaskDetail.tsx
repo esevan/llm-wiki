@@ -8,6 +8,7 @@ import type { LineageSnapshot, TaskAggregate, TaskCard } from "../../types/taskW
 import { ConflictReviewPanel } from "./ConflictReviewPanel";
 import { RefinementPanel } from "./RefinementPanel";
 import { TaskJourneyGraph } from "./TaskJourneyGraph";
+import { TaskWorkSessions, type WorkSessionDraft } from "./TaskWorkSessions";
 import { useTaskWorkbenchText } from "./taskWorkbenchText";
 import { useModalInteraction } from "./useModalInteraction";
 
@@ -23,7 +24,7 @@ type DetailScrollLock = {
 
 let detailScrollLock: DetailScrollLock | undefined;
 
-type DetailTab = "work" | "details" | "review";
+type DetailTab = "work" | "sessions" | "details" | "review";
 type KnowledgeDraft = {
   draftRevision: number;
   bodyMarkdown: string;
@@ -31,6 +32,7 @@ type KnowledgeDraft = {
   contentHash: string;
   sourceHash?: string;
   state: string;
+  lineage?: NonNullable<TaskAggregate["publication"]>["lineage"];
 };
 
 const orderedWorkLog = (workLog: TaskAggregate["workLog"] = []) =>
@@ -69,6 +71,7 @@ export type DetailSession = {
   tab: DetailTab;
   editing: boolean;
   scrollTop: number;
+  workSessionDrafts?: Map<string, WorkSessionDraft>;
 };
 
 export function TaskDetail({
@@ -136,7 +139,9 @@ export function TaskDetail({
     },
   );
   const [tab, setTab] = useState<DetailTab>(session?.tab ?? "work");
+  const [executionFocus, setExecutionFocus] = useState<{ sessionId: string; runId: string }>();
   const [editing, setEditing] = useState(session?.editing ?? false);
+  const workSessionDrafts = useRef(session?.workSessionDrafts ?? new Map<string, WorkSessionDraft>()).current;
   const [showCompletedChecklist, setShowCompletedChecklist] = useState(false);
   const [knowledgeAction, setKnowledgeAction] = useState<"create" | "correct" | "publish">();
   const knowledgeBusy = Boolean(knowledgeAction);
@@ -168,7 +173,7 @@ export function TaskDetail({
   const mutationQueue = useRef<Promise<void>>(Promise.resolve());
   const mutationBusyRef = useRef(false);
   useEffect(() => {
-    detailSessions.set(taskId, { detailState, entry, check, decision, attachment, comments, completionEvidence, relatedTaskId, relatedTaskSearch, relationshipKind, readinessReasons, knowledgeDraft, tab, editing, scrollTop: restoredScroll.current ? panelRef.current?.scrollTop ?? 0 : initialScrollTop.current });
+    detailSessions.set(taskId, { detailState, entry, check, decision, attachment, comments, completionEvidence, relatedTaskId, relatedTaskSearch, relationshipKind, readinessReasons, knowledgeDraft, tab, editing, workSessionDrafts, scrollTop: restoredScroll.current ? panelRef.current?.scrollTop ?? 0 : initialScrollTop.current });
   }, [attachment, check, comments, completionEvidence, decision, detailSessions, detailState, editing, entry, knowledgeDraft, readinessReasons, relatedTaskId, relatedTaskSearch, relationshipKind, session?.scrollTop, tab, taskId]);
   useEffect(() => {
     const panel = panelRef.current;
@@ -197,6 +202,7 @@ export function TaskDetail({
             contentHash: publication.contentHash,
             sourceHash: publication.sourceHash,
             state: publication.state,
+            lineage: publication.lineage,
           };
           setKnowledgeDraft((current) => current ?? persistedDraft);
         }
@@ -221,18 +227,18 @@ export function TaskDetail({
     catch (e) { setError(String(e instanceof Error ? e.message : e)); }
   }, [taskId]);
   useEffect(() => {
-    if (!lineageExpanded || !detailState?.persisted) return;
+    if (!(lineageExpanded || tab === "review") || !detailState?.persisted) return;
     void loadLineage();
-  }, [detailState?.persisted, displayLocale, lineageExpanded, loadLineage, refreshKey]);
+  }, [detailState?.persisted, displayLocale, lineageExpanded, loadLineage, refreshKey, tab]);
   useEffect(() => {
     if (openJourney && loaded) { setTab("details"); setLineageExpanded(true); }
   }, [loaded, openJourney]);
   useEffect(() => {
     const status = lineage?.journeyStatus?.status;
-    if (!lineageExpanded || !["queued", "running", "retryable"].includes(status ?? "")) return;
+    if (!(lineageExpanded || tab === "review") || !["queued", "running", "retryable"].includes(status ?? "")) return;
     const timer = window.setTimeout(() => void loadLineage(), 700);
     return () => window.clearTimeout(timer);
-  }, [lineage, lineageExpanded, loadLineage]);
+  }, [lineage, lineageExpanded, loadLineage, tab]);
   useEffect(() => {
     let cancelled = false;
     setRelatedTasksError("");
@@ -554,6 +560,19 @@ export function TaskDetail({
       .some((value) => value.toLocaleLowerCase().includes(taskSearch))),
   );
   const selectedRelatedTask = taskById.get(relatedTaskId);
+  const draftJourneySnapshot = knowledgeDraft?.lineage?.journey;
+  const reviewJourney = draftJourneySnapshot?.journey;
+  const visibleJourney = tab === "review" ? reviewJourney ?? lineage?.journey : lineage?.journey;
+  const visibleModelStatus = tab === "review" && reviewJourney ? draftJourneySnapshot?.modelStatus : lineage?.modelStatus;
+  const visibleModelError = tab === "review" && reviewJourney ? draftJourneySnapshot?.modelError : lineage?.modelError;
+  const lineageContent = visibleJourney ? <>
+    <TaskJourneyGraph journey={visibleJourney} />
+    {visibleModelStatus === "fallback" && <p className="task-journey-empty" role="status">{text.journeyFallback}{visibleModelError ? ` ${visibleModelError}` : ""}</p>}
+  </> : lineage?.journeyStatus && ["queued", "running", "retryable"].includes(lineage.journeyStatus.status ?? "")
+    ? <p className="task-journey-empty" aria-live="polite">{text.lineagePreparing}</p>
+    : lineage?.journeyStatus
+      ? <div className="task-journey-empty" role="alert"><p>{lineage.journeyStatus.error || text.journeyFailed}</p>{lineage.journeyStatus.jobId && <button type="button" data-control="task-lineage-retry" disabled={lineageRetrying} onClick={() => { setLineageRetrying(true); void taskClient.retryJob(lineage.journeyStatus!.jobId!).then(loadLineage).catch((cause) => setError(String(cause instanceof Error ? cause.message : cause))).finally(() => setLineageRetrying(false)); }}>{text.retry}</button>}</div>
+      : <p className="task-journey-empty" aria-live="polite">{text.loading}</p>;
   return modal(
     <aside
       ref={panelRef}
@@ -593,12 +612,13 @@ export function TaskDetail({
         <p>{text.subtaskHint}</p>
       </details>}
       <nav className="task-detail-tabs" aria-label={text.taskDetails} role="tablist" onKeyDown={(event) => {
-        const tabs: DetailTab[] = ["work", "details", "review"];
+        const tabs: DetailTab[] = ["work", "sessions", "details", "review"];
         const current = tabs.indexOf(tab);
         const next = event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : event.key === "ArrowRight" ? (current + 1) % tabs.length : event.key === "ArrowLeft" ? (current + tabs.length - 1) % tabs.length : -1;
         if (next >= 0) { event.preventDefault(); focusInTab(tabs[next], `[data-control="task-detail-tab-${tabs[next]}"]`); }
       }}>
         <button id="task-detail-tab-work" type="button" role="tab" tabIndex={tab === "work" ? 0 : -1} data-control="task-detail-tab-work" aria-controls="task-tab-work" aria-selected={tab === "work"} onClick={() => setTab("work")}>{text.work}</button>
+        <button id="task-detail-tab-sessions" type="button" role="tab" tabIndex={tab === "sessions" ? 0 : -1} data-control="task-detail-tab-sessions" aria-controls="task-tab-sessions" aria-selected={tab === "sessions"} onClick={() => setTab("sessions")}>{text.workSessionsTab}</button>
         <button id="task-detail-tab-details" type="button" role="tab" tabIndex={tab === "details" ? 0 : -1} data-control="task-detail-tab-details" aria-controls="task-tab-details" aria-selected={tab === "details"} onClick={() => setTab("details")}>{text.detailsTab}</button>
         <button id="task-detail-tab-review" type="button" role="tab" tabIndex={tab === "review" ? 0 : -1} data-control="task-detail-tab-review" aria-controls="task-tab-review" aria-selected={tab === "review"} onClick={() => setTab("review")}>{text.reviewTab}</button>
       </nav></div>
@@ -674,6 +694,9 @@ export function TaskDetail({
           {text.deleteItem}
         </button>}
       </section>
+      <div id="task-tab-sessions" aria-labelledby="task-detail-tab-sessions" className="task-tab-panel" role="tabpanel" data-task-tab="sessions" hidden={tab !== "sessions"}>
+        {tab === "sessions" && <TaskWorkSessions task={task} draftStore={workSessionDrafts} focusExecution={executionFocus} onOpenWorkLog={(entryId) => focusInTab("work", `#work-log-${entryId}`)} />}
+      </div>
       {refining && (
         <RefinementPanel
           kind="task"
@@ -802,9 +825,26 @@ export function TaskDetail({
         </button>
         {imageQueueError && <p role="alert">{text.imageSummaryFailed} {imageQueueError}</p>}
         {orderedWorkLog(task.workLog).map((log) => (
-          <article className="log-entry" key={log.id} data-work-log-entry={log.id} tabIndex={-1}>
+          <article className="log-entry" id={`work-log-${log.id}`} key={log.id} data-work-log-entry={log.id} tabIndex={-1}>
             {log.createdAt && <time dateTime={log.createdAt}>{workLogTimestamp(log.createdAt)}</time>}
             <p>{log.bodyVersions?.[document.documentElement.lang.startsWith("ko") ? "ko" : "en"]?.body || log.body}</p>
+            {log.execution && <section className="work-log-execution" aria-label="Codex execution">
+              {(() => {
+                const status = { queued: text.executionQueued, running: text.executionRunning, awaiting_response: text.executionAwaitingResponse, succeeded: text.executionSucceeded, failed: text.executionFailed, cancelled: text.executionCancelled, interrupted: text.executionInterrupted, needs_attention: text.executionNeedsAttention }[log.execution.status];
+                return <>
+              <section className="work-log-execution-summary">
+              <p><strong>Codex · {status}</strong></p>
+              <p><small>{text.executionModel}: {log.execution.model}</small></p>
+              {log.execution.reportExcerpt ? <section><h4>{text.executionModelReport}</h4><p>{log.execution.reportExcerpt}</p></section> : ["succeeded", "failed", "cancelled", "interrupted", "needs_attention"].includes(log.execution.status) && <p>{text.executionReportUnavailable}</p>}
+              </section>
+              <p className="work-log-execution-sync"><strong>{text.executionWorkLogSync}:</strong> {log.execution.syncState === "synced" ? text.executionWorkLogSynced : log.execution.syncState === "failed" ? text.executionWorkLogFailed : text.executionWorkLogPending}</p>
+              {log.execution.evidence.length > 0 && <section><h4>{text.executionObservedEvidence}</h4><ul>{log.execution.evidence.map((evidence) => <li key={evidence.id}>{evidence.label}: {evidence.summary}</li>)}</ul></section>}
+              {log.execution.artifacts.length > 0 && <section><h4>{text.executionArtifacts}</h4><ul>{log.execution.artifacts.map((artifact) => <li key={artifact}>{artifact}</li>)}</ul></section>}
+              {log.execution.limitations.length > 0 && <section><h4>{text.executionLimitations}</h4><ul>{log.execution.limitations.map((limitation) => <li key={limitation}>{limitation}</li>)}</ul></section>}
+              <button type="button" data-control="task-worklog-execution-open" onClick={() => { setExecutionFocus({ sessionId: log.execution!.sessionId, runId: log.execution!.runId }); focusInTab("sessions", "[data-control=task-execution-heading]"); }}>{text.openExecution}</button>
+                </>;
+              })()}
+            </section>}
             {log.attachment && (
               <small>{log.attachment.name ?? log.attachment.mediaType}</small>
             )}
@@ -918,6 +958,10 @@ export function TaskDetail({
       </details>
       </div>
       <div id="task-tab-review" aria-labelledby="task-detail-tab-review" className="task-tab-panel" role="tabpanel" data-task-tab="review" hidden={tab !== "review"}>
+      {tab === "review" && <section className="task-panel" aria-label={text.flow}>
+        <p>{reviewJourney ? text.draftLineageHint : text.reviewLineageHint}</p>
+        {lineageContent}
+      </section>}
       <section className="task-panel">
         <h3>{text.readiness}</h3>
         {task.readinessEntries?.map((item) => (
@@ -1250,7 +1294,7 @@ export function TaskDetail({
         <small>{formatSystemTime(task.originCapture.createdAt, document.documentElement.lang || navigator.language)}</small>
       </details>}
       <details className="task-panel" data-control="task-lineage-details" open={lineageExpanded} onToggle={(event) => setLineageExpanded(event.currentTarget.open)}><summary data-control="task-lineage-open">{text.flow}</summary>
-        {lineage?.journey ? <><TaskJourneyGraph journey={lineage.journey} />{lineage.modelStatus === "fallback" && <p className="task-journey-empty" role="status">{text.journeyFallback}{lineage.modelError ? ` ${lineage.modelError}` : ""}</p>}</> : lineage?.journeyStatus && ["queued", "running", "retryable"].includes(lineage.journeyStatus.status ?? "") ? <p className="task-journey-empty" role="status">{text.loading}</p> : lineage?.journeyStatus ? <div className="task-journey-empty" role="alert"><p>{lineage.journeyStatus.error || text.journeyFailed}</p>{lineage.journeyStatus.jobId && <button type="button" data-control="task-lineage-retry" disabled={lineageRetrying} onClick={() => { setLineageRetrying(true); void taskClient.retryJob(lineage.journeyStatus!.jobId!).then(loadLineage).catch((error) => setError(String(error instanceof Error ? error.message : error))).finally(() => setLineageRetrying(false)); }}>{text.retry}</button>}</div> : <p className="task-journey-empty" role="status">{text.loading}</p>}
+        {tab === "details" && lineageContent}
       </details>
       </div>
     </aside>,

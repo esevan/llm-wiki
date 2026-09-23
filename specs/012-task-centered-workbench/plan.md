@@ -157,6 +157,12 @@ accessible responsive states. Remove only Workbench legacy bindings. Exit when f
 Replace Problem/Solution events and resources with Task contracts, graph lineage, separate Problem
 resolution, and exact Knowledge publication. Exit when desktop and MCP see the same revisions.
 
+The current graph delivery keeps recorded chronology immutable and layers bounded, grounded AI
+labels and later-to-earlier semantic relationships over it. App-generated Knowledge preparation
+creates or reuses the requested-locale journey first, embeds the exact snapshot in the draft, and
+rechecks Task/completion/source/journey currentness before asynchronous persistence. Details reads
+the current graph; Review reads the draft snapshot. Supplied-body drafts remain provider-free.
+
 ### Phase 5 - Documentation and Final Validation
 
 Update all bilingual current docs and characterization coverage. Build release once; run packaged E2E
@@ -212,3 +218,13 @@ Nine actual Korean-light documentation captures replace retired assets. See
 [acceptance verification](acceptance-verification.md) and the
 [portable evidence record](../../docs/testing/evidence/ui-ux-improvements.json) for source,
 package, geometry, coverage, screenshot provenance, and manual limitations.
+
+## Journey visual and snapshot follow-up (2026-09-22)
+
+The Task journey now uses a wide three-column snake and narrow single-column layout, fixed timestamp
+spacing, 24-hour gap markers, differentiated key nodes, and separately styled semantic links.
+Provider output is constrained to 48-character locale labels and three grounded later-to-earlier
+relationship kinds. Knowledge Review is bound to its captured journey rather than the live Details
+graph. Focused graph, Task detail, native journey, and Knowledge-boundary tests passed; broad project
+test results are recorded in acceptance verification. Existing captures validate localized chrome
+and mixed long titles only, so real-provider English/Korean label rendering remains unverified.

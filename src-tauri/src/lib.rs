@@ -1,5 +1,6 @@
 mod adapters;
 pub mod application;
+mod codex_app_server;
 mod conversation;
 mod desktop_e2e;
 mod domain;
@@ -166,6 +167,162 @@ fn execute_domain(
     Ok(application.execute_domain(domain, operation))
 }
 
+fn execution_error(error: String) -> NativeResponse {
+    let code = if error.starts_with("Codex CLI is not installed") {
+        "missing_executable"
+    } else if error.to_ascii_lowercase().contains("authentication")
+        || error.to_ascii_lowercase().contains("not logged in")
+    {
+        "authentication_required"
+    } else if error.starts_with("Codex app-server initialization failed") {
+        "initialization_failed"
+    } else if error.contains(':') {
+        error.split(':').next().unwrap_or("execution_unavailable")
+    } else {
+        "execution_unavailable"
+    };
+    let status = if code == "invalid_input" {
+        400
+    } else if code == "ownership_failure" {
+        404
+    } else if matches!(
+        code,
+        "active_run_conflict"
+            | "active_thread_conflict"
+            | "operation_conflict"
+            | "session_history_conflict"
+            | "settings_revision_conflict"
+            | "workspace_thread_mismatch"
+    ) || code.starts_with("stale_")
+    {
+        409
+    } else if code == "secret_input_unsupported" || code.starts_with("unsupported_") {
+        422
+    } else {
+        503
+    };
+    NativeResponse {
+        status,
+        body: serde_json::json!({"error":{"code":code,"message":error}}),
+    }
+}
+
+#[tauri::command]
+async fn task_session_external_threads_list(
+    runtime: tauri::State<'_, native::task_execution_runtime::TaskExecutionRuntime>,
+    input: serde_json::Value,
+) -> Result<NativeResponse, String> {
+    Ok(match runtime.external_threads(&input).await {
+        Ok(body) => NativeResponse { status: 200, body },
+        Err(error) => execution_error(error),
+    })
+}
+
+#[tauri::command]
+async fn task_session_external_thread_read(
+    runtime: tauri::State<'_, native::task_execution_runtime::TaskExecutionRuntime>,
+    input: serde_json::Value,
+) -> Result<NativeResponse, String> {
+    Ok(match runtime.external_thread_read(&input).await {
+        Ok(body) => NativeResponse { status: 200, body },
+        Err(error) => execution_error(error),
+    })
+}
+
+#[tauri::command]
+async fn task_session_external_thread_link(
+    runtime: tauri::State<'_, native::task_execution_runtime::TaskExecutionRuntime>,
+    input: serde_json::Value,
+) -> Result<NativeResponse, String> {
+    Ok(match runtime.link_external_thread(&input).await {
+        Ok(body) => NativeResponse { status: 200, body },
+        Err(error) => execution_error(error),
+    })
+}
+
+#[tauri::command]
+async fn task_session_prepare(
+    runtime: tauri::State<'_, native::task_execution_runtime::TaskExecutionRuntime>,
+    input: serde_json::Value,
+    on_event: tauri::ipc::Channel<serde_json::Value>,
+) -> Result<NativeResponse, String> {
+    let response = match runtime.prepare(&input).await {
+        Ok(body) => {
+            runtime.subscribe_channel(&input, on_event)?;
+            NativeResponse { status: 200, body }
+        }
+        Err(error) => execution_error(error),
+    };
+    Ok(response)
+}
+
+#[tauri::command]
+async fn task_session_execute(
+    runtime: tauri::State<'_, native::task_execution_runtime::TaskExecutionRuntime>,
+    input: serde_json::Value,
+    on_event: tauri::ipc::Channel<serde_json::Value>,
+) -> Result<NativeResponse, String> {
+    let response = match runtime.execute(&input).await {
+        Ok(body) => {
+            runtime.subscribe_channel(&input, on_event)?;
+            NativeResponse { status: 200, body }
+        }
+        Err(error) => execution_error(error),
+    };
+    Ok(response)
+}
+
+#[tauri::command]
+fn task_session_execution_subscribe(
+    runtime: tauri::State<'_, native::task_execution_runtime::TaskExecutionRuntime>,
+    input: serde_json::Value,
+    on_event: tauri::ipc::Channel<serde_json::Value>,
+) -> Result<NativeResponse, String> {
+    match runtime.snapshot(&input) {
+        Ok(body) => {
+            runtime.subscribe_channel(&input, on_event)?;
+            Ok(NativeResponse { status: 200, body })
+        }
+        Err(error) => Ok(execution_error(error)),
+    }
+}
+
+#[tauri::command]
+async fn task_session_interrupt(
+    runtime: tauri::State<'_, native::task_execution_runtime::TaskExecutionRuntime>,
+    input: serde_json::Value,
+    _on_event: tauri::ipc::Channel<serde_json::Value>,
+) -> Result<NativeResponse, String> {
+    Ok(match runtime.interrupt(&input).await {
+        Ok(body) => NativeResponse { status: 200, body },
+        Err(error) => execution_error(error),
+    })
+}
+
+#[tauri::command]
+async fn task_session_formal_response(
+    runtime: tauri::State<'_, native::task_execution_runtime::TaskExecutionRuntime>,
+    input: serde_json::Value,
+    _on_event: tauri::ipc::Channel<serde_json::Value>,
+) -> Result<NativeResponse, String> {
+    Ok(match runtime.respond(&input).await {
+        Ok(body) => NativeResponse { status: 200, body },
+        Err(error) => execution_error(error),
+    })
+}
+
+#[tauri::command]
+fn task_session_work_log_sync(
+    runtime: tauri::State<'_, native::task_execution_runtime::TaskExecutionRuntime>,
+    input: serde_json::Value,
+    _on_event: tauri::ipc::Channel<serde_json::Value>,
+) -> Result<NativeResponse, String> {
+    Ok(match runtime.sync_work_log(&input) {
+        Ok(body) => NativeResponse { status: 200, body },
+        Err(error) => execution_error(error),
+    })
+}
+
 #[tauri::command]
 fn system_command(
     application: tauri::State<'_, NativeApplication>,
@@ -292,6 +449,12 @@ async fn choose_vault(
 }
 
 #[tauri::command]
+async fn choose_project_folder(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    Ok(first_run::pick_folder(&app, "Choose a project folder")?
+        .map(|path| path.to_string_lossy().into_owned()))
+}
+
+#[tauri::command]
 async fn enqueue_ai_job(
     application: tauri::State<'_, NativeApplication>,
     operation: NativeOperation,
@@ -339,11 +502,22 @@ pub fn run() {
                 .get("recovery")
                 .is_some_and(|recovery| !recovery.is_null());
             let background_index = application.clone();
+            let execution_service =
+                application::task_execution_service::TaskExecutionApplicationService::new(
+                    application.db_path(),
+                );
+            if !recovery_pending {
+                execution_service.recover_nonterminal()?;
+            }
+            let codex_home = native::settings::configured_codex_home(&application.settings_path())?;
+            let execution_runtime =
+                native::task_execution_runtime::TaskExecutionRuntime::new(execution_service, codex_home);
             let background_projector = application.work_tracking_service();
             let mcp_service = application.work_tracking_service();
             let mcp_listener_shutdown = mcp_ipc::McpListenerShutdown::default();
             let should_index = !setup_required && !recovery_pending;
             app.manage(application);
+            app.manage(execution_runtime);
             app.manage(mcp_listener_shutdown.clone());
             if !recovery_pending {
                 tauri::async_runtime::spawn(native::work_tracking_projector::run(
@@ -387,6 +561,16 @@ pub fn run() {
             migration_recovery_retry,
             complete_first_run_intro,
             choose_vault,
+            choose_project_folder,
+            task_session_prepare,
+            task_session_external_threads_list,
+            task_session_external_thread_read,
+            task_session_external_thread_link,
+            task_session_execute,
+            task_session_execution_subscribe,
+            task_session_interrupt,
+            task_session_formal_response,
+            task_session_work_log_sync,
             conversation::conversation_stream,
             conversation::cancel_conversation,
             desktop_e2e::desktop_e2e_mode,
@@ -405,6 +589,13 @@ pub fn run() {
         .run(|app, event| {
             if mcp_listener_needs_shutdown(&event) {
                 app.state::<mcp_ipc::McpListenerShutdown>().shutdown();
+                let execution = app
+                    .state::<native::task_execution_runtime::TaskExecutionRuntime>()
+                    .inner()
+                    .clone();
+                tauri::async_runtime::spawn(async move {
+                    execution.shutdown().await;
+                });
             }
         });
 }
@@ -414,7 +605,21 @@ mod tests {
     use super::*;
     use crate::native::settings::VaultStartup;
     use serde_json::json;
+    use std::future::Future;
     use tempfile::tempdir;
+
+    fn assert_async_project_folder_command<F, Fut>(command: F)
+    where
+        F: Fn(tauri::AppHandle) -> Fut,
+        Fut: Future<Output = Result<Option<String>, String>>,
+    {
+        let _ = command;
+    }
+
+    #[test]
+    fn project_folder_picker_dispatches_off_the_main_thread() {
+        assert_async_project_folder_command(choose_project_folder);
+    }
 
     #[test]
     fn mcp_listener_shutdown_covers_all_tauri_exit_events() {

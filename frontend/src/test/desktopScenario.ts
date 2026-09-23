@@ -37,6 +37,11 @@ import {
   runVaultChooseScenario,
   runVaultRetryScenario,
 } from "./globalScenarios";
+import {
+  prepareTaskWorkSessionRestartScenario,
+  runTaskCodexExecutionScenario,
+  restoreTaskWorkSessionRestartScenario,
+} from "./workSessionScenarios";
 
 type Task = {
   id: string;
@@ -1280,10 +1285,6 @@ export function installDesktopScenario() {
     const introScenario = state.scenario.startsWith("global-intro-");
     if (introSurface !== introScenario) return;
     e2eProviderUrl = state.providerUrl;
-    if (state.restoreCapture)
-      return state.scenario === "task-refinement-relaunch"
-        ? restoredRefinement(state.restoreCapture, state.restoreSteps)
-        : restored(state.restoreCapture, state.restoreSteps);
     const steps: string[] = [];
     const step: Step = async (message) => {
       steps.push(message);
@@ -1306,7 +1307,21 @@ export function installDesktopScenario() {
         enter,
         step,
         request: api,
+        executionCwd: state.executionCwd,
       };
+      if (state.restoreCapture) {
+        if (state.scenario === "task-refinement-relaunch") return restoredRefinement(state.restoreCapture, state.restoreSteps);
+        if (state.scenario === "task-work-session-restart") {
+          try {
+            await restoreTaskWorkSessionRestartScenario(scenarioHarness, state.restoreCapture, state.restoreSteps);
+            await report({ status: "passed", steps: state.restoreSteps, error: null, coverage: coverage.report() });
+          } catch (error) {
+            await report({ status: "failed", steps: state.restoreSteps, error: error instanceof Error ? error.message : String(error), coverage: coverage.report() });
+          }
+          return;
+        }
+        return restored(state.restoreCapture, state.restoreSteps);
+      }
       const activateView = async (view: string) => {
         click(`[data-control="sidebar-view-${view}"]`, `Open ${view}`);
         await waitFor(() => document.getElementById(view)?.classList.contains("active") ?? false, `${view} view`);
@@ -1358,6 +1373,11 @@ export function installDesktopScenario() {
           const captureId = await prepareRefinementRelaunchScenario({ ...scenarioHarness, providerUrl: e2eProviderUrl });
           await report({ status: "relaunch", steps, error: null, capture: captureId, coverage: coverage.report() });
         },
+        "task-work-session-restart": async () => {
+          const restartState = await prepareTaskWorkSessionRestartScenario(scenarioHarness);
+          await report({ status: "relaunch", steps, error: null, capture: JSON.stringify(restartState), coverage: coverage.report() });
+        },
+        "task-codex-execution": () => runTaskCodexExecutionScenario(scenarioHarness),
         "task-mcp-continuation": taskMcpContinuation,
         "global-shell": () => runShellNavigationScenario(scenarioHarness),
         "global-search": async () => {
@@ -1398,7 +1418,7 @@ export function installDesktopScenario() {
       if (!run)
         throw new Error(`Unknown Task desktop scenario ${state.scenario}`);
       await run(step);
-      if (!["task-persistence", "task-refinement-relaunch"].includes(state.scenario))
+      if (!["task-persistence", "task-refinement-relaunch", "task-work-session-restart"].includes(state.scenario))
         await report({ status: "passed", steps, error: null, coverage: coverage.report() });
     } catch (error) {
       await report({

@@ -75,9 +75,10 @@ async function startProvider({ providerPort, logs }) {
 async function runScenario(scenario, artifactRoot) {
   const state = await mkdtemp(path.join(root, ".tmp", `desktop-e2e-${scenario.name}-`));
   const vault = path.join(state, "vault");
+  const executionCwd = path.join(state, "codex-project");
   const result = path.join(state, "result.json");
   const logs = path.join(state, "logs");
-  await Promise.all([mkdir(vault), mkdir(logs)]);
+  await Promise.all([mkdir(vault), mkdir(logs), mkdir(executionCwd)]);
   await writeFile(path.join(vault, "startup.md"), "# Startup indexing\n\nThe bundled embedding model indexes this note after launch.\n", "utf8");
   await Promise.all(Array.from({ length: 24 }, (_, index) =>
     writeFile(path.join(vault, `startup-${String(index + 1).padStart(2, "0")}.md`), `# Startup indexing ${index + 1}\n\nDeterministic packaged search coverage document ${index + 1}.\n`, "utf8"),
@@ -96,6 +97,10 @@ async function runScenario(scenario, artifactRoot) {
       LLM_WORKBENCH_HOME: path.join(state, ".llm-workbench"), LLM_WIKI_E2E_RESULT: result,
       LLM_WIKI_E2E_SCENARIO: scenario.name, LLM_WIKI_E2E_ARTIFACT_DIR: path.join(artifactRoot, scenario.name),
       LLM_WIKI_E2E_PROVIDER_URL: `http://127.0.0.1:${providerPort}/v1`,
+      ...(scenario.name === "task-codex-execution" ? {
+        LLM_WIKI_CODEX_EXECUTABLE: path.join(root, "tests/fakes/codex_app_server.mjs"),
+        LLM_WIKI_E2E_EXECUTION_CWD: executionCwd,
+      } : {}),
       LLM_WIKI_MCP_ENDPOINT: process.platform === "win32" ? `\\\\.\\pipe\\llm-wiki-e2e-${path.basename(state)}` : path.join(path.relative(root, state), "ipc", "mcp.sock"),
     };
     await mkdir(environment.LLM_WIKI_E2E_ARTIFACT_DIR, { recursive: true });

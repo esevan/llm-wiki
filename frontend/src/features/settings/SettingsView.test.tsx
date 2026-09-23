@@ -12,6 +12,23 @@ describe('Chat connection scopes',()=>{
     document.documentElement.lang = 'en';
   });
 
+  it('uses the shared Codex home by default and saves an explicit alternate only on request', async () => {
+    const request = vi.fn().mockImplementation((input: { path: string; method?: string }) => {
+      if (input.path === '/settings/vault') return Promise.resolve({ ok: true, status: 200, json: async () => ({ path: '/vault' }) });
+      if (input.path === '/settings/codex-home' && !input.method) return Promise.resolve({ ok: true, status: 200, json: async () => ({ mode: 'default', defaultPath: '/Users/me/.codex', alternatePath: null }) });
+      if (input.path === '/settings/codex-home') return Promise.resolve({ ok: true, status: 200, json: async () => ({ mode: 'alternate', defaultPath: '/Users/me/.codex', alternatePath: '/Volumes/team-codex' }) });
+      return Promise.resolve({ ok: true, status: 200, text: async () => '', json: async () => ({ connections: [] }) });
+    });
+    window.llmWikiApplication = { request };
+    render(<SettingsView active />);
+    expect(await screen.findByText('/Users/me/.codex')).toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText('Use a different Codex home for LLM Wiki'));
+    fireEvent.change(screen.getByLabelText('Alternate Codex home'), { target: { value: '/Volumes/team-codex' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save Codex home' }));
+    await waitFor(() => expect(request).toHaveBeenCalledWith({ path: '/settings/codex-home', method: 'PUT', body: JSON.stringify({ alternatePath: '/Volumes/team-codex' }) }));
+    expect(await screen.findByText('Saved. Restart LLM Wiki before opening or running a Codex conversation.')).toBeInTheDocument();
+  });
+
   it('keeps whole-Workbench, topic, and publication grants explicit',async()=>{
     const request=vi.fn().mockResolvedValue({ok:true,status:200,text:async()=>'',json:async()=>({connections:[]})});
     window.llmWikiApplication={request};

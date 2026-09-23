@@ -3,7 +3,7 @@ use reqwest::Client;
 use rusqlite::{params, OptionalExtension};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -647,7 +647,7 @@ async fn run_inner(
         Value::String(prompt)
     };
     let request = Client::builder()
-        .timeout(Duration::from_secs(30))
+        .timeout(Duration::from_secs(120))
         .build()
         .map_err(|e| e.to_string())?
         .post(format!(
@@ -722,76 +722,311 @@ fn journey_fallback_title(event_type: &str, locale: &str) -> String {
 
 fn compact_title(value: &str, fallback: &str) -> String {
     let value = value.trim();
-    if value.is_empty() { return fallback.to_owned(); }
-    let mut result = value.chars().take(15).collect::<String>();
-    if value.chars().count() > 15 { result.pop(); result.push('…'); }
+    if value.is_empty() {
+        return fallback.to_owned();
+    }
+    let mut result = value.chars().take(48).collect::<String>();
+    if value.chars().count() > 48 {
+        result.pop();
+        result.push('…');
+    }
     result
 }
 
-fn journey_graph(recorded: &Value, locale: &str, titles: Option<&Value>) -> Value {
+fn event_contains_quote(event: &Value, quote: &str) -> bool {
+    fn contains_narrative(value: &Value, quote: &str, payload: bool) -> bool {
+        match value {
+            Value::String(text) => text.contains(quote),
+            Value::Array(values) => values
+                .iter()
+                .any(|value| contains_narrative(value, quote, payload)),
+            Value::Object(values) => values.iter().any(|(key, value)| {
+                (payload
+                    || matches!(
+                        key.as_str(),
+                        "summary"
+                            | "title"
+                            | "report"
+                            | "before"
+                            | "after"
+                            | "payload"
+                            | "rationale"
+                    ))
+                    && contains_narrative(value, quote, payload || key == "payload")
+            }),
+            _ => false,
+        }
+    }
+    (4..=280).contains(&quote.chars().count()) && contains_narrative(&event["detail"], quote, false)
+}
+
+fn validated_journey_relationships(recorded: &Value, suggested: Option<&Value>) -> Vec<Value> {
+    let events = recorded["events"].as_array().cloned().unwrap_or_default();
+    let positions = events
+        .iter()
+        .enumerate()
+        .filter_map(|(index, event)| event["id"].as_str().map(|id| (id.to_owned(), index)))
+        .collect::<HashMap<_, _>>();
+    let by_id = events
+        .iter()
+        .filter_map(|event| event["id"].as_str().map(|id| (id.to_owned(), event)))
+        .collect::<HashMap<_, _>>();
+    let mut seen = HashSet::new();
+    suggested.and_then(Value::as_array).into_iter().flatten().filter_map(|relationship| {
+        let from = relationship["from"].as_str()?.trim();
+        let to = relationship["to"].as_str()?.trim();
+        let kind = relationship["kind"].as_str()?;
+        let rationale = relationship["rationale"].as_str()?.trim();
+        if !matches!(kind, "supersedes" | "derived_from" | "depends_on")
+            || from == to || rationale.is_empty() || rationale.chars().count() > 500
+            || positions.get(from)? <= positions.get(to)?
+        { return None; }
+        let evidence = relationship["evidence"].as_array()?;
+        let mut grounded = Vec::new();
+        let mut covered = HashSet::new();
+        for item in evidence {
+            let event_id = item["eventId"].as_str()?.trim();
+            let quote = item["quote"].as_str()?.trim();
+            if event_id != from && event_id != to { return None; }
+            let event = by_id.get(event_id)?;
+            if !event_contains_quote(event, quote) { return None; }
+            covered.insert(event_id);
+            grounded.push(json!({"eventId":event_id,"quote":quote}));
+        }
+        if !covered.contains(from) || !covered.contains(to) { return None; }
+        if !seen.insert((from.to_owned(), to.to_owned(), kind.to_owned())) { return None; }
+        Some(json!({"from":from,"to":to,"kind":kind,"provenance":"inferred","rationale":rationale,"evidence":grounded}))
+    }).collect()
+}
+
+fn journey_graph(recorded: &Value, locale: &str, inference: Option<&Value>) -> Value {
     let mut graph = recorded.clone();
-    let title_map = titles.and_then(Value::as_object);
-    let localized = graph["events"].as_array().map(|events| events.iter().map(|event| {
-        let fallback = journey_fallback_title(event["type"].as_str().unwrap_or(""), locale);
-        let suggested = title_map.and_then(|map| map.get(event["id"].as_str().unwrap_or("")))
-            .and_then(Value::as_object).and_then(|value| value.get(if locale.starts_with("ko") { "ko" } else { "en" }))
-            .and_then(Value::as_str).unwrap_or(&fallback);
-        json!({"id":event["id"],"title":compact_title(suggested,&fallback)})
-    }).collect::<Vec<_>>()).unwrap_or_default();
+    let title_map = inference.and_then(|value| value["titles"].as_object());
+    let localized = graph["events"]
+        .as_array()
+        .map(|events| {
+            events
+                .iter()
+                .map(|event| {
+                    let fallback =
+                        journey_fallback_title(event["type"].as_str().unwrap_or(""), locale);
+                    let suggested = title_map
+                        .and_then(|map| map.get(event["id"].as_str().unwrap_or("")))
+                        .and_then(Value::as_object)
+                        .and_then(|value| {
+                            value.get(if locale.starts_with("ko") { "ko" } else { "en" })
+                        })
+                        .and_then(Value::as_str)
+                        .unwrap_or(&fallback);
+                    json!({"id":event["id"],"title":compact_title(suggested,&fallback)})
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
     graph["titles"] = Value::Array(localized);
+    graph["relationships"] = Value::Array(validated_journey_relationships(
+        recorded,
+        inference.and_then(|value| value.get("relationships")),
+    ));
     graph
 }
 
-async fn run_task_journey(
-    db_path: &Path, settings_path: &Path, token: &CancellationToken, generation: &str,
-    job_id: &str, task_id: &str, input: &Value,
-) -> Result<(), String> {
-    let locale = input.get("locale").and_then(Value::as_str).unwrap_or("en");
-    let snapshot = crate::native::task_assistance::task_lineage_for_locale(db_path, task_id, locale)?;
-    let source_hash = snapshot["journeySourceHash"].as_str().ok_or("Task journey source is unavailable")?.to_owned();
-    if input.get("sourceHash").and_then(Value::as_str) != Some(source_hash.as_str()) {
-        database::open(db_path)?.execute("UPDATE ai_jobs_v2 SET status='stale',finished_at=CURRENT_TIMESTAMP WHERE id=? AND status='running' AND worker_id=?", params![job_id,generation]).map_err(|error| error.to_string())?;
-        return Ok(());
-    }
-    let recorded = snapshot["recordedJourney"].clone();
+pub(crate) const TASK_JOURNEY_SCHEMA_VERSION: u32 = 2;
+
+pub(crate) fn task_journey_source_hash(recorded: &Value) -> String {
+    format!(
+        "{:x}",
+        Sha256::digest(
+            json!({"schemaVersion":TASK_JOURNEY_SCHEMA_VERSION,"journey":recorded})
+                .to_string()
+                .as_bytes()
+        )
+    )
+}
+
+async fn prepare_task_journey(
+    settings_path: &Path,
+    recorded: &Value,
+    locale: &str,
+    token: Option<&CancellationToken>,
+) -> Result<Option<Value>, String> {
     let mut model_error = String::new();
     let mut model_status = "fallback";
     let mut suggested: Option<Value> = None;
     match crate::native::settings::provider_credentials_for(settings_path, "lineage_inference") {
         Ok((base_url, model, api_key)) => {
-            let prompt = format!("Create only compact labels for the supplied recorded Task events. Do not add, remove, reorder, classify, or infer events or relationships. Return JSON exactly as {{\"titles\":{{event_id:{{\"en\":string,\"ko\":string}}}}}}. Each label must be at most 15 characters. Korean labels must be Korean and use 사용자 when applicable.\n\n{}", recorded);
-            let response = tokio::select! { _ = token.cancelled() => return Ok(()), response = Client::builder().timeout(Duration::from_secs(30)).build().map_err(|error|error.to_string())?.post(format!("{}/chat/completions",base_url.trim_end_matches('/'))).bearer_auth(api_key).json(&json!({"model":model,"messages":[{"role":"user","content":prompt}],"stream":false})).send() => response };
+            let prompt = format!("Analyze only the supplied recorded Task events. Return JSON exactly as {{\"titles\":{{event_id:{{\"en\":string,\"ko\":string}}}},\"relationships\":[{{\"from\":event_id,\"to\":event_id,\"kind\":\"supersedes|derived_from|depends_on\",\"rationale\":string,\"evidence\":[{{\"eventId\":event_id,\"quote\":string}}]}}]}}. Create compact descriptive labels of at most 48 characters in each language; Korean labels must use 사용자 when applicable. Write each rationale in the requested locale ({locale}). Relationships are optional and must be supported by explicit event text, with at least one short verbatim quote from each endpoint event. Direction is always from a later event to an earlier event. Use supersedes only when the later event explicitly replaces, reverses, or invalidates an earlier choice; a mere update is insufficient. Use derived_from only when new work or a new conclusion explicitly stems from earlier material. Use depends_on only when the earlier event is a true prerequisite for the later event, not merely prior in time. Do not add, remove, reorder, or rewrite events. Do not infer a relationship from chronology, event type, or keywords alone. Omit uncertain relationships.\n\n{}", recorded);
+            let request = Client::builder().timeout(Duration::from_secs(30)).build()
+                .map_err(|error|error.to_string())?
+                .post(format!("{}/chat/completions",base_url.trim_end_matches('/')))
+                .bearer_auth(api_key)
+                .json(&json!({"model":model,"messages":[{"role":"user","content":prompt}],"stream":false}))
+                .send();
+            let response = if let Some(token) = token {
+                tokio::select! { _ = token.cancelled() => return Ok(None), response = request => response }
+            } else {
+                request.await
+            };
             match response {
-                Ok(response) if response.status().is_success() => match response.json::<Value>().await.ok().and_then(|body| body.pointer("/choices/0/message/content").and_then(Value::as_str).and_then(|raw| serde_json::from_str::<Value>(raw).ok())) {
-                    Some(value) if value["titles"].is_object() => { suggested = Some(value["titles"].clone()); model_status = "ai"; }
-                    _ => model_error = "Provider returned no usable journey titles".into(),
-                },
-                Ok(response) => model_error = format!("Provider request failed ({})", response.status()),
+                Ok(response) if response.status().is_success() => {
+                    let body = if let Some(token) = token {
+                        tokio::select! { _ = token.cancelled() => return Ok(None), body = response.json::<Value>() => body.ok() }
+                    } else {
+                        response.json::<Value>().await.ok()
+                    };
+                    match body.and_then(|body| {
+                        body.pointer("/choices/0/message/content")
+                            .and_then(Value::as_str)
+                            .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
+                    }) {
+                        Some(value)
+                            if value["titles"].is_object() && value["relationships"].is_array() =>
+                        {
+                            suggested = Some(value);
+                            model_status = "ai";
+                        }
+                        _ => model_error = "Provider returned no usable journey inference".into(),
+                    }
+                }
+                Ok(response) => {
+                    model_error = format!("Provider request failed ({})", response.status())
+                }
                 Err(error) => model_error = error.to_string(),
             }
         }
         Err(error) => model_error = error,
     }
-    if token.is_cancelled() { return Ok(()); }
-    let graph = journey_graph(&recorded, locale, suggested.as_ref());
-    finalize_task_journey(db_path, generation, job_id, task_id, locale, &source_hash,
-        &json!({"journey":graph,"modelStatus":model_status,"modelError":model_error}))
+    if token.is_some_and(CancellationToken::is_cancelled) {
+        return Ok(None);
+    }
+    Ok(Some(json!({
+        "journey":journey_graph(recorded, locale, suggested.as_ref()),
+        "modelStatus":model_status,
+        "modelError":model_error,
+    })))
+}
+
+pub(crate) async fn ensure_task_journey(
+    db_path: &Path,
+    settings_path: &Path,
+    task_id: &str,
+    locale: &str,
+) -> Result<Value, String> {
+    let available: bool = database::open(db_path)?.query_row(
+        "SELECT EXISTS(SELECT 1 FROM tasks WHERE id=? AND NOT EXISTS(SELECT 1 FROM deleted_entities WHERE entity_type='tasks' AND entity_id=?))",
+        params![task_id,task_id], |row| row.get(0),
+    ).map_err(|error| error.to_string())?;
+    if !available {
+        return Err("Task not found".into());
+    }
+    let snapshot =
+        crate::native::task_assistance::task_lineage_for_locale(db_path, task_id, locale)?;
+    let source_hash = snapshot["journeySourceHash"]
+        .as_str()
+        .ok_or("Task journey source is unavailable")?
+        .to_owned();
+    if !snapshot["journey"].is_null() {
+        return Ok(
+            json!({"sourceHash":source_hash,"journey":snapshot["journey"],
+            "modelStatus":snapshot["modelStatus"],"modelError":snapshot["modelError"]}),
+        );
+    }
+    let prepared = prepare_task_journey(settings_path, &snapshot["recordedJourney"], locale, None)
+        .await?
+        .ok_or("Task journey generation was cancelled")?;
+    let mut connection = database::open(db_path)?;
+    let tx = connection
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .map_err(|error| error.to_string())?;
+    let deleted: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM deleted_entities WHERE entity_type='tasks' AND entity_id=?)",
+        [task_id], |row| row.get(0),
+    ).map_err(|error| error.to_string())?;
+    if deleted {
+        return Err("Task was deleted while journey inference was running".into());
+    }
+    let fresh = crate::native::task_assistance::task_lineage_tx_locale(&tx, task_id, locale)?;
+    if fresh["journeySourceHash"].as_str() != Some(source_hash.as_str()) {
+        return Err("Task journey evidence changed while inference was running".into());
+    }
+    if !fresh["journey"].is_null() {
+        let cached = json!({"sourceHash":source_hash,"journey":fresh["journey"],
+            "modelStatus":fresh["modelStatus"],"modelError":fresh["modelError"]});
+        tx.commit().map_err(|error| error.to_string())?;
+        return Ok(cached);
+    }
+    let graph = &prepared["journey"];
+    let model_status = prepared["modelStatus"].as_str().unwrap_or("fallback");
+    let model_error = prepared["modelError"].as_str().unwrap_or("");
+    tx.execute("INSERT INTO task_journey_graphs(task_id,locale,source_hash,graph_json,model_status,model_error,created_at) VALUES(?,?,?,?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(task_id,locale) DO UPDATE SET source_hash=excluded.source_hash,graph_json=excluded.graph_json,model_status=excluded.model_status,model_error=excluded.model_error,created_at=CURRENT_TIMESTAMP", params![task_id,locale,source_hash,graph.to_string(),model_status,model_error]).map_err(|error| error.to_string())?;
+    tx.commit().map_err(|error| error.to_string())?;
+    Ok(json!({"sourceHash":source_hash,"journey":graph,
+        "modelStatus":model_status,"modelError":model_error}))
+}
+
+async fn run_task_journey(
+    db_path: &Path,
+    settings_path: &Path,
+    token: &CancellationToken,
+    generation: &str,
+    job_id: &str,
+    task_id: &str,
+    input: &Value,
+) -> Result<(), String> {
+    let locale = input.get("locale").and_then(Value::as_str).unwrap_or("en");
+    let snapshot =
+        crate::native::task_assistance::task_lineage_for_locale(db_path, task_id, locale)?;
+    let source_hash = snapshot["journeySourceHash"]
+        .as_str()
+        .ok_or("Task journey source is unavailable")?
+        .to_owned();
+    if input.get("sourceHash").and_then(Value::as_str) != Some(source_hash.as_str()) {
+        database::open(db_path)?.execute("UPDATE ai_jobs_v2 SET status='stale',finished_at=CURRENT_TIMESTAMP WHERE id=? AND status='running' AND worker_id=?", params![job_id,generation]).map_err(|error| error.to_string())?;
+        return Ok(());
+    }
+    let Some(prepared) = prepare_task_journey(
+        settings_path,
+        &snapshot["recordedJourney"],
+        locale,
+        Some(token),
+    )
+    .await?
+    else {
+        return Ok(());
+    };
+    finalize_task_journey(
+        db_path,
+        generation,
+        job_id,
+        task_id,
+        locale,
+        &source_hash,
+        &prepared,
+    )
 }
 
 /// Commit the graph and Queue result atomically only for the current worker and
 /// unchanged evidence. A cancelled or superseded worker cannot replace the cache.
 fn finalize_task_journey(
-    db_path: &Path, generation: &str, job_id: &str, task_id: &str,
-    locale: &str, source_hash: &str, prepared: &Value,
+    db_path: &Path,
+    generation: &str,
+    job_id: &str,
+    task_id: &str,
+    locale: &str,
+    source_hash: &str,
+    prepared: &Value,
 ) -> Result<(), String> {
     let mut connection = database::open(db_path)?;
-    let tx = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+    let tx = connection
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
         .map_err(|error| error.to_string())?;
     let running = tx.execute(
         "UPDATE ai_jobs_v2 SET source_hash=? WHERE id=? AND status='running' AND worker_id=? AND entity_type='tasks' AND entity_id=? AND task_kind='lineage_inference'",
         params![source_hash,job_id,generation,task_id],
     ).map_err(|error| error.to_string())?;
-    if running == 0 { return Ok(()); }
+    if running == 0 {
+        return Ok(());
+    }
     let deleted: bool = tx.query_row(
         "SELECT EXISTS(SELECT 1 FROM deleted_entities WHERE entity_type='tasks' AND entity_id=?)",
         [task_id], |row| row.get(0),
@@ -821,15 +1056,31 @@ fn complete_without_provider(db_path: &Path, job_id: &str, result: Value) -> Res
 
 /// Commits the draft and its durable Queue result together.  A cancellation that
 /// wins before this transaction starts leaves neither a private draft nor a result.
-pub(crate) fn finalize_knowledge_draft(db_path: &Path, job_id: &str, input: &Value, prepared: &Value) -> Result<(), String> {
-    let body = prepared.get("bodyMarkdown").and_then(Value::as_str).ok_or("Prepared Knowledge body is unavailable")?;
-    let expected_source = prepared.get("sourceHash").and_then(Value::as_str).ok_or("Prepared Knowledge source is unavailable")?;
-    let model_status = prepared.get("modelStatus").and_then(Value::as_str).unwrap_or("deterministic");
+pub(crate) fn finalize_knowledge_draft(
+    db_path: &Path,
+    job_id: &str,
+    input: &Value,
+    prepared: &Value,
+) -> Result<(), String> {
+    let expected_source = prepared
+        .get("sourceHash")
+        .and_then(Value::as_str)
+        .ok_or("Prepared Knowledge source is unavailable")?;
     let mut connection = database::open(db_path)?;
-    let tx = connection.transaction().map_err(|error| error.to_string())?;
-    let running = tx.execute("UPDATE ai_jobs_v2 SET source_hash=? WHERE id=? AND status='running'", params![expected_source, job_id]).map_err(|error| error.to_string())?;
-    if running == 0 { return Err("Knowledge draft job was cancelled before it could be saved".into()); }
-    let result = crate::native::task_assistance::save_supplied_knowledge_draft_tx(&tx, input, body, model_status)?;
+    let tx = connection
+        .transaction()
+        .map_err(|error| error.to_string())?;
+    let running = tx
+        .execute(
+            "UPDATE ai_jobs_v2 SET source_hash=? WHERE id=? AND status='running'",
+            params![expected_source, job_id],
+        )
+        .map_err(|error| error.to_string())?;
+    if running == 0 {
+        return Err("Knowledge draft job was cancelled before it could be saved".into());
+    }
+    let result =
+        crate::native::task_assistance::save_prepared_knowledge_draft_tx(&tx, input, prepared)?;
     if result.get("sourceHash").and_then(Value::as_str) != Some(expected_source) {
         return Err("Task evidence changed while the Knowledge draft was running".into());
     }
@@ -943,26 +1194,64 @@ mod image_summary_tests {
             {"id":"work","type":"work_recorded","detail":{"summary":"A complete, deliberately long recorded Work Log entry"}},
             {"id":"decision","type":"decision_recorded","detail":{"payload":{"rationale":"Keep original evidence"}}
         }],"edges":[{"from":"work","to":"decision","kind":"followed_by"}]});
-        let malformed = json!({"work":{"en":"This label is much too long for a graph node"}});
-        let graph = journey_graph(&recorded, "en", Some(&malformed));
+        let inference = json!({"titles":{"work":{"en":"This is a deliberately overlong graph node label that must be bounded"}},"relationships":[]});
+        let graph = journey_graph(&recorded, "en", Some(&inference));
         assert_eq!(graph["events"], recorded["events"]);
         assert_eq!(graph["edges"], recorded["edges"]);
-        assert!(graph["titles"].as_array().unwrap().iter().all(|title| title["title"].as_str().unwrap().chars().count() <= 15));
-        assert_eq!(graph["titles"][0]["title"], "This label is …");
+        assert!(graph["titles"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|title| title["title"].as_str().unwrap().chars().count() <= 48));
+        assert_eq!(
+            graph["titles"][0]["title"],
+            "This is a deliberately overlong graph node labe…"
+        );
         let fallback = journey_graph(&recorded, "ko", None);
         assert_eq!(fallback["titles"][0]["title"], "작업 기록");
+        assert_eq!(fallback["relationships"], json!([]));
+    }
+
+    #[test]
+    fn task_journey_keeps_only_ordered_relationships_grounded_in_both_endpoints() {
+        let recorded = json!({"events":[
+            {"id":"decision-old","type":"decision_recorded","detail":{"payload":{"rationale":"Use CSV export"}}},
+            {"id":"work","type":"work_recorded","detail":{"summary":"The API must exist before the UI can ship"}},
+            {"id":"decision-new","type":"decision_recorded","detail":{"payload":{"rationale":"Replace CSV export with JSON export"}}}
+        ],"edges":[]});
+        let inference = json!({"titles":{},"relationships":[
+            {"from":"decision-new","to":"decision-old","kind":"supersedes","rationale":"Malformed duplicate first.","evidence":[{"eventId":"decision-new","quote":"not recorded"},{"eventId":"decision-old","quote":"Use CSV export"}]},
+            {"from":"decision-new","to":"decision-old","kind":"supersedes","rationale":"The later choice explicitly replaces the old format.","evidence":[{"eventId":"decision-new","quote":"Replace CSV export"},{"eventId":"decision-old","quote":"Use CSV export"}]},
+            {"from":"work","to":"decision-old","kind":"invented","rationale":"Unsupported kind","evidence":[{"eventId":"work","quote":"API must exist"},{"eventId":"decision-old","quote":"Use CSV"}]},
+            {"from":"decision-old","to":"decision-new","kind":"depends_on","rationale":"Forward link","evidence":[{"eventId":"decision-old","quote":"Use CSV"},{"eventId":"decision-new","quote":"JSON export"}]},
+            {"from":"decision-new","to":"work","kind":"derived_from","rationale":"Hallucinated evidence","evidence":[{"eventId":"decision-new","quote":"Replace CSV"},{"eventId":"work","quote":"a database migration"}]},
+            {"from":"decision-new","to":"decision-new","kind":"supersedes","rationale":"Self link","evidence":[{"eventId":"decision-new","quote":"JSON export"}]},
+            {"from":"missing","to":"work","kind":"depends_on","rationale":"Missing endpoint","evidence":[]}
+        ]});
+        let graph = journey_graph(&recorded, "en", Some(&inference));
+        assert_eq!(graph["relationships"].as_array().unwrap().len(), 1);
+        assert_eq!(graph["relationships"][0]["kind"], "supersedes");
+        assert_eq!(graph["relationships"][0]["provenance"], "inferred");
+        assert_eq!(graph["relationships"][0]["from"], "decision-new");
+        assert_eq!(graph["relationships"][0]["to"], "decision-old");
     }
 
     #[test]
     fn task_journey_cache_and_active_job_are_locale_bound() {
         let (_root, db, task, _) = fixture();
-        let before = crate::native::task_assistance::task_lineage_for_locale(&db, &task, "en").unwrap();
+        let before =
+            crate::native::task_assistance::task_lineage_for_locale(&db, &task, "en").unwrap();
         let source = before["journeySourceHash"].as_str().unwrap();
         let connection = database::open(&db).unwrap();
         connection.execute("INSERT INTO task_journey_graphs(task_id,locale,source_hash,graph_json) VALUES(?,?,?,?)", params![task,"en",source,json!({"events":[],"titles":[{"id":"x","title":"English"}]}).to_string()]).unwrap();
         connection.execute("INSERT INTO task_journey_graphs(task_id,locale,source_hash,graph_json) VALUES(?,?,?,?)", params![task,"ko",source,json!({"events":[],"titles":[{"id":"x","title":"한국어"}]}).to_string()]).unwrap();
         connection.execute("INSERT INTO ai_jobs_v2(id,task_kind,entity_type,entity_id,status,input_json,idempotency_key) VALUES('journey','lineage_inference','tasks','task-placeholder','running',?,'journey-key')", [json!({"sourceHash":source,"locale":"en"}).to_string()]).unwrap();
-        connection.execute("UPDATE ai_jobs_v2 SET entity_id=? WHERE id='journey'", [&task]).unwrap();
+        connection
+            .execute(
+                "UPDATE ai_jobs_v2 SET entity_id=? WHERE id='journey'",
+                [&task],
+            )
+            .unwrap();
         let en = crate::native::task_assistance::task_lineage_for_locale(&db, &task, "en").unwrap();
         let ko = crate::native::task_assistance::task_lineage_for_locale(&db, &task, "ko").unwrap();
         assert_eq!(en["journey"]["titles"][0]["title"], "English");
@@ -970,39 +1259,130 @@ mod image_summary_tests {
         assert_eq!(en["journeyStatus"]["jobId"], "journey");
         assert!(ko["journeyStatus"].is_null());
     }
+
+    #[test]
+    fn task_journey_source_hash_versions_the_inference_contract() {
+        let recorded = json!({"events":[],"edges":[]});
+        let legacy_hash = format!("{:x}", Sha256::digest(recorded.to_string().as_bytes()));
+        assert_ne!(task_journey_source_hash(&recorded), legacy_hash);
+    }
+
+    #[tokio::test]
+    async fn ensure_task_journey_persists_and_reuses_grounded_fallback() {
+        let (root, db, task, _) = fixture();
+        let settings = root.path().join("missing-settings.json");
+        let first = ensure_task_journey(&db, &settings, &task, "en")
+            .await
+            .unwrap();
+        assert_eq!(first["modelStatus"], "fallback");
+        assert_eq!(first["journey"]["relationships"], json!([]));
+        let second = ensure_task_journey(&db, &settings, &task, "en")
+            .await
+            .unwrap();
+        assert_eq!(second["sourceHash"], first["sourceHash"]);
+        assert_eq!(second["journey"], first["journey"]);
+        let count: i64 = database::open(&db)
+            .unwrap()
+            .query_row(
+                "SELECT count(*) FROM task_journey_graphs WHERE task_id=? AND locale='en'",
+                [&task],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[tokio::test]
+    async fn ensure_task_journey_does_not_create_cache_for_deleted_task() {
+        let (root, db, task, _) = fixture();
+        database::open(&db)
+            .unwrap()
+            .execute(
+                "INSERT INTO deleted_entities(entity_type,entity_id) VALUES('tasks',?)",
+                [&task],
+            )
+            .unwrap();
+        let result =
+            ensure_task_journey(&db, &root.path().join("missing-settings.json"), &task, "en").await;
+        assert_eq!(result.unwrap_err(), "Task not found");
+        let count: i64 = database::open(&db)
+            .unwrap()
+            .query_row(
+                "SELECT count(*) FROM task_journey_graphs WHERE task_id=?",
+                [&task],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 0);
+    }
     #[test]
     fn task_journey_finalizer_preserves_cache_on_stale_cancelled_and_superseded_jobs() {
         for case in ["fresh", "stale", "cancelled", "superseded", "deleted"] {
             let (_root, db, task, entry) = fixture();
-            let snapshot = crate::native::task_assistance::task_lineage_for_locale(&db, &task, "en").unwrap();
+            let snapshot =
+                crate::native::task_assistance::task_lineage_for_locale(&db, &task, "en").unwrap();
             let source = snapshot["journeySourceHash"].as_str().unwrap();
             let prepared = json!({"journey":journey_graph(&snapshot["recordedJourney"],"en",None),"modelStatus":"fallback","modelError":"No provider configured"});
             let connection = database::open(&db).unwrap();
             connection.execute("INSERT INTO task_journey_graphs(task_id,locale,source_hash,graph_json) VALUES(?,'en','prior',?)", params![task,json!({"retained":true}).to_string()]).unwrap();
             connection.execute("INSERT INTO ai_jobs_v2(id,task_kind,entity_type,entity_id,status,input_json,idempotency_key,worker_id) VALUES('journey-finalize','lineage_inference','tasks',?,'running',?,'journey-finalize','worker')", params![task,json!({"sourceHash":source,"locale":"en"}).to_string()]).unwrap();
             match case {
-                "stale" => { connection.execute("UPDATE task_work_log_entries SET body='New evidence after snapshot' WHERE id=?", [&entry]).unwrap(); },
-                "cancelled" => { connection.execute("UPDATE ai_jobs_v2 SET status='cancelled' WHERE id='journey-finalize'", []).unwrap(); },
-                "superseded" => { connection.execute("UPDATE ai_jobs_v2 SET worker_id='new-worker' WHERE id='journey-finalize'", []).unwrap(); },
-                "deleted" => { connection.execute("INSERT INTO deleted_entities(entity_type,entity_id) VALUES('tasks',?)", [&task]).unwrap(); },
-                _ => {},
+                "stale" => {
+                    connection.execute("UPDATE task_work_log_entries SET body='New evidence after snapshot' WHERE id=?", [&entry]).unwrap();
+                }
+                "cancelled" => {
+                    connection
+                        .execute(
+                            "UPDATE ai_jobs_v2 SET status='cancelled' WHERE id='journey-finalize'",
+                            [],
+                        )
+                        .unwrap();
+                }
+                "superseded" => {
+                    connection.execute("UPDATE ai_jobs_v2 SET worker_id='new-worker' WHERE id='journey-finalize'", []).unwrap();
+                }
+                "deleted" => {
+                    connection
+                        .execute(
+                            "INSERT INTO deleted_entities(entity_type,entity_id) VALUES('tasks',?)",
+                            [&task],
+                        )
+                        .unwrap();
+                }
+                _ => {}
             }
-            finalize_task_journey(&db,"worker","journey-finalize",&task,"en",source,&prepared).unwrap();
+            finalize_task_journey(
+                &db,
+                "worker",
+                "journey-finalize",
+                &task,
+                "en",
+                source,
+                &prepared,
+            )
+            .unwrap();
             let (hash, graph): (String,String) = connection.query_row("SELECT source_hash,graph_json FROM task_journey_graphs WHERE task_id=? AND locale='en'", [&task], |row| Ok((row.get(0)?,row.get(1)?))).unwrap();
-            let job = result(&db,"journey-finalize").unwrap();
+            let job = result(&db, "journey-finalize").unwrap();
             if case == "fresh" {
                 assert_eq!(hash, source);
-                assert_eq!(serde_json::from_str::<Value>(&graph).unwrap(), prepared["journey"]);
+                assert_eq!(
+                    serde_json::from_str::<Value>(&graph).unwrap(),
+                    prepared["journey"]
+                );
                 assert_eq!(job["status"], "completed");
                 assert_eq!(job["result"]["modelStatus"], "fallback");
                 assert_eq!(job["result"]["journey"], prepared["journey"]);
             } else {
                 assert_eq!(hash, "prior", "{case}");
-                assert_eq!(serde_json::from_str::<Value>(&graph).unwrap(), json!({"retained":true}));
+                assert_eq!(
+                    serde_json::from_str::<Value>(&graph).unwrap(),
+                    json!({"retained":true})
+                );
                 assert!(job["result"].get("journey").is_none(), "{case}");
-                if case == "stale" || case == "deleted" { assert_eq!(job["status"], "stale"); }
+                if case == "stale" || case == "deleted" {
+                    assert_eq!(job["status"], "stale");
+                }
             }
         }
     }
-
 }

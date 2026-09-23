@@ -83,6 +83,27 @@ Knowledge drafts bind exact Task revision, completion, Problem revisions, lineag
 hash. Publication decision binds exact draft revision/hash. Existing external-change guards and
 reversible patch evidence remain required.
 
+### Task journey projection
+
+`task_journey_graphs` caches one projection per Task and locale. `source_hash` identifies the exact
+recorded input; `graph_json` contains immutable `events` and `followed_by` edges plus optional
+locale-bound `titles` and interpreted `relationships`; `model_status` and `model_error` record
+whether provider interpretation or deterministic fallback produced the overlay.
+
+Recorded chronology is never rewritten by interpretation. A semantic relationship is limited to
+`supersedes`, `derived_from`, or `depends_on`, points from a later event to an earlier event, and is
+retained only when its quoted evidence occurs in both referenced endpoint records. Display titles
+are limited to 48 characters.
+
+For an app-generated Knowledge draft, `lineage_json.journey` stores the exact immutable object
+`{ sourceHash, journey, modelStatus, modelError }` selected before draft generation. The stored draft
+snapshot remains the Review source even if the current per-locale cache changes later. User- or
+MCP-supplied draft bodies do not require or trigger provider journey inference.
+
+Journey caching rejects a deleted Task. Knowledge finalization rechecks expected Task revision,
+completion, base lineage source hash, and journey source hash in the same persistence boundary. A
+mismatch leaves the earlier cache or draft intact and rejects the late result.
+
 ## Migration Mapping and Invariants
 
 - legacy feature ID → Task ID; `proposed→task`, `approved|in_progress→in_progress`,

@@ -26,6 +26,7 @@ export interface DesktopE2eResult {
 export interface DesktopE2eState {
   providerUrl: string;
   scenario: string;
+  executionCwd?: string;
   restoreCapture: string | null;
   restoreSteps: string[];
 }
@@ -62,6 +63,8 @@ const operationFor = (request: ApplicationRequest): NativeOperation => {
   if (method === 'POST' && path === '/index') return { name: 'vault.index', input: {} };
   if (method === 'POST' && path === '/index/embeddings') return { name: 'vault.index', input: { semantic: true, forceEmbeddings: true } };
   if (method === 'GET' && path === '/settings/vault') return { name: 'settings.vault.get', input: {} };
+  if (method === 'GET' && path === '/settings/codex-home') return { name: 'settings.codex_home.get', input: {} };
+  if (method === 'PUT' && path === '/settings/codex-home') return { name: 'settings.codex_home.save', input: body };
   if (method === 'GET' && path === '/search') return { name: 'vault.search', input: { query: url.searchParams.get('q') ?? '', limit: Number(url.searchParams.get('limit') ?? 20), offset: Number(url.searchParams.get('offset') ?? 0), semantic: url.searchParams.get('semantic') === 'true' } };
   if (method === 'GET' && path === '/settings/locale') return { name: 'locale.get', input: { browserLocale: url.searchParams.get('browser_locale') ?? 'en' } };
   if (method === 'PUT' && path === '/settings/locale') return { name: 'locale.save', input: body };

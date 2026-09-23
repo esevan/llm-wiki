@@ -27,6 +27,12 @@ export function SettingsView({ active }: { active: boolean }) {
   const [vaultState, setVaultState] = useState<'loading' | 'ready' | 'error'>('loading');
   const [vaultAction, setVaultAction] = useState('');
   const [indexing, setIndexing] = useState(false);
+  const [codexHomeState, setCodexHomeState] = useState<'loading' | 'ready' | 'error'>('loading');
+  const [codexHomeDefault, setCodexHomeDefault] = useState('~/.codex');
+  const [codexHomeAlternate, setCodexHomeAlternate] = useState('');
+  const [useAlternateCodexHome, setUseAlternateCodexHome] = useState(false);
+  const [codexHomeAction, setCodexHomeAction] = useState('');
+  const [savingCodexHome, setSavingCodexHome] = useState(false);
   const ko = useSyncExternalStore(
     (changed) => { const observer = new MutationObserver(changed); observer.observe(document.documentElement, { attributes: true, attributeFilter: ['lang'] }); return () => observer.disconnect(); },
     () => document.documentElement.lang.startsWith('ko'), () => false,
@@ -43,7 +49,19 @@ export function SettingsView({ active }: { active: boolean }) {
       setVaultPath(''); setVaultState('error');
     });
   };
-  useEffect(loadVault, []);
+  const loadCodexHome = () => {
+    setCodexHomeState('loading');
+    if (!window.llmWikiApplication) { setCodexHomeState('error'); return; }
+    void window.llmWikiApplication.request({ path: '/settings/codex-home' }).then(async response => {
+      if (!response.ok) throw new Error('codex_home_settings_failed');
+      const home = await response.json<{ mode: 'default' | 'alternate'; defaultPath: string; alternatePath: string | null }>();
+      setCodexHomeDefault(home.defaultPath);
+      setCodexHomeAlternate(home.alternatePath ?? '');
+      setUseAlternateCodexHome(home.mode === 'alternate');
+      setCodexHomeState('ready');
+    }).catch(() => setCodexHomeState('error'));
+  };
+  useEffect(() => { loadVault(); loadCodexHome(); }, []);
   const regenerateEmbeddings = async () => {
     if (indexing || !window.llmWikiApplication) return;
     setIndexing(true); setVaultAction(t('vault.regenerating'));
@@ -51,6 +69,17 @@ export function SettingsView({ active }: { active: boolean }) {
       const response = await window.llmWikiApplication.request({ path: '/index/embeddings', method: 'POST' });
       setVaultAction(response.ok ? t('vault.regenerated') : t('vault.regenerate_failed'));
     } catch { setVaultAction(t('vault.regenerate_failed')); } finally { setIndexing(false); }
+  };
+  const saveCodexHome = async () => {
+    if (savingCodexHome || !window.llmWikiApplication) return;
+    setSavingCodexHome(true); setCodexHomeAction('');
+    try {
+      const response = await window.llmWikiApplication.request({ path: '/settings/codex-home', method: 'PUT', body: JSON.stringify({ alternatePath: useAlternateCodexHome ? codexHomeAlternate : '' }) });
+      if (!response.ok) throw new Error('codex_home_save_failed');
+      const home = await response.json<{ mode: 'default' | 'alternate'; defaultPath: string; alternatePath: string | null }>();
+      setCodexHomeDefault(home.defaultPath); setCodexHomeAlternate(home.alternatePath ?? ''); setUseAlternateCodexHome(home.mode === 'alternate');
+      setCodexHomeAction(t('codex.restart_required'));
+    } catch { setCodexHomeAction(t('codex.save_failed')); } finally { setSavingCodexHome(false); }
   };
   const securityNote = useSyncExternalStore(
     (changed) => {
@@ -86,6 +115,24 @@ export function SettingsView({ active }: { active: boolean }) {
             <button className="tiny vault-secondary-action" type="button" data-control="vault-regenerate-embeddings" disabled={indexing || vaultState !== 'ready'} onClick={() => void regenerateEmbeddings()}>{indexing ? t('vault.regenerating') : t('vault.regenerate')}</button>
           </footer>
           {vaultAction && <p className="meta" role="status" aria-live="polite">{vaultAction}</p>}
+        </section>
+        <section className="settings-group vault-settings codex-home-settings" aria-labelledby="codex-home-settings-title" aria-busy={codexHomeState === 'loading'}>
+          <header className="vault-settings-heading">
+            <h2 id="codex-home-settings-title">{t('codex.title')}</h2>
+            {codexHomeState === 'ready' && <span className="vault-state">{useAlternateCodexHome ? t('codex.alternate') : t('codex.default')}</span>}
+          </header>
+          <p className="meta">{t('codex.description')}</p>
+          <div className="vault-location">
+            <span className="vault-location-label">{t('codex.current_location')}</span>
+            <code className={`vault-path ${codexHomeState === 'error' ? 'is-error' : ''}`} data-control="codex-home-path">{codexHomeState === 'loading' ? t('codex.loading') : codexHomeState === 'error' ? t('codex.unavailable') : useAlternateCodexHome ? codexHomeAlternate : codexHomeDefault}</code>
+          </div>
+          <label className="codex-home-toggle"><input type="checkbox" data-control="codex-home-alternate-toggle" checked={useAlternateCodexHome} disabled={codexHomeState !== 'ready' || savingCodexHome} onChange={(event) => setUseAlternateCodexHome(event.target.checked)} /> <span>{t('codex.use_alternate')}</span></label>
+          {useAlternateCodexHome && <label className="codex-home-field" htmlFor="codex-home-alternate"><span>{t('codex.alternate_location')}</span><input id="codex-home-alternate" data-control="codex-home-alternate" value={codexHomeAlternate} disabled={codexHomeState !== 'ready' || savingCodexHome} onChange={(event) => setCodexHomeAlternate(event.target.value)} placeholder={t('codex.alternate_placeholder')} /></label>}
+          <footer className="vault-actions">
+            <button className="tiny vault-secondary-action" type="button" data-control="codex-home-save" disabled={codexHomeState !== 'ready' || savingCodexHome} onClick={() => void saveCodexHome()}>{savingCodexHome ? t('codex.saving') : t('codex.save')}</button>
+            {codexHomeState === 'error' && <button className="tiny" type="button" data-control="codex-home-retry" onClick={loadCodexHome}>{t('vault.retry')}</button>}
+          </footer>
+          {codexHomeAction && <p className="meta" role="status" aria-live="polite">{codexHomeAction}</p>}
         </section>
         <form className="modal" id="provider-form" data-control="provider-form">
           <fieldset className="settings-group">

@@ -12,6 +12,7 @@ mod refinement;
 pub(crate) mod semantic;
 pub mod settings;
 pub(crate) mod task_assistance;
+pub(crate) mod task_execution_runtime;
 pub(crate) mod task_hierarchy;
 pub(crate) mod task_journey;
 pub(crate) mod vault;
@@ -329,6 +330,7 @@ impl NativeApplication {
                     || operation.name.starts_with("provider.")
                     || operation.name.starts_with("i18n.")
                     || operation.name == "settings.vault.get"
+                    || operation.name.starts_with("settings.codex_home.")
             }
             "workflow" => matches!(
                 operation.name.split('.').next().unwrap_or_default(),
@@ -552,6 +554,11 @@ impl NativeApplication {
             | "task.readiness.decision"
             | "task.work-log.get"
             | "task.work-log.create"
+            | "task.work-session.list"
+            | "task.work-session.get"
+            | "task.work-session.create"
+            | "task.work-session.update"
+            | "task.work-session.entry.create"
             | "work-log.comment.create"
             | "task.checklist.create"
             | "task.checklist.update"
@@ -603,6 +610,8 @@ impl NativeApplication {
             "provider.save" => settings::save_provider(&self.settings_path, input)?,
             "settings.vault.get" => self.vault_settings()?,
             "vault.settings.get" => self.vault_settings()?,
+            "settings.codex_home.get" => settings::codex_home(&self.settings_path)?,
+            "settings.codex_home.save" => settings::save_codex_home(&self.settings_path, input)?,
             "board.get" => workflow::board_for_locale(
                 &self.db_path,
                 input.get("locale").and_then(Value::as_str).unwrap_or("en"),
@@ -817,6 +826,59 @@ fn error_status(error: &str) -> u16 {
 mod recovery_tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn work_sessions_are_available_through_native_workflow_dispatch() {
+        let root = tempdir().unwrap();
+        let app = NativeApplication::isolated(
+            &root.path().join("vault"),
+            &root.path().join("state.sqlite3"),
+        )
+        .unwrap();
+        let execute = |name: &str, input: Value| {
+            let response = app.execute_domain(
+                "workflow",
+                NativeOperation {
+                    name: name.into(),
+                    input,
+                },
+            );
+            assert_eq!(response.status, 200, "{name}: {}", response.body);
+            response.body
+        };
+        let task = execute(
+            "task.create",
+            json!({"operationId":"task","inputText":"Task","title":"Task"}),
+        );
+        let task_id = &task["id"];
+        assert_eq!(
+            execute("task.work-session.list", json!({"taskId":task_id}))["sessions"],
+            json!([])
+        );
+        let session = execute(
+            "task.work-session.create",
+            json!({"operationId":"session","taskId":task_id,"title":"Session"}),
+        );
+        let session_id = &session["id"];
+        execute(
+            "task.work-session.update",
+            json!({"operationId":"settings","taskId":task_id,"sessionId":session_id,"title":"Updated","provider":"codex","model":"gpt-5.6-luna","approvalMode":"ask","workspacePath":"/workspace"}),
+        );
+        execute(
+            "task.work-session.entry.create",
+            json!({"operationId":"entry","taskId":task_id,"sessionId":session_id,"body":"Saved note"}),
+        );
+        let record = execute(
+            "task.work-session.get",
+            json!({"taskId":task_id,"sessionId":session_id}),
+        );
+        assert_eq!(record["session"]["title"], "Updated");
+        assert_eq!(record["entries"][0]["body"], "Saved note");
+        assert_eq!(
+            execute("task.work-session.list", json!({"taskId":task_id}))["sessions"][0]["id"],
+            *session_id
+        );
+    }
 
     #[test]
     fn failed_migration_starts_read_only_until_an_explicit_retry() {

@@ -30,7 +30,8 @@ full conversation history and composer stay together in a right-hand chat pane. 
 is unavailable until the dialog closes. Closing restores keyboard focus after the dialog has been removed. The docked conversation’s Context control expands or collapses context independently of its preview selection. The docked conversation permits the next message as soon as the response is received, without waiting for its text animation. Keep working notes with the proposed result; the saved notes,
 scroll position, and conversation history support returning later. New messages scroll the conversation to the bottom. The view follows answer animation and image loading until you scroll up to read earlier messages.
 
-**Send**, `Ctrl+Enter`, and `Cmd+Enter` submit a message. Plain Enter writes another line. Send is
+**Send** or `Enter` submits a message; `Shift+Enter` inserts a line break. `Ctrl+Enter` and `Cmd+Enter`
+also submit. Send is
 unavailable while the current submission or response is being processed. Every provider turn includes
 the original Capture and ordered conversation history, even after a transient draft is cleared.
 
@@ -126,7 +127,7 @@ the topmost dialog and cancels the default key action. Task detail also handles 
 showing a load error. A blocked close during a Task mutation still consumes the key. Unsaved Task
 changes retain their confirmation, and refinement saves its draft before closing; a save failure
 keeps the dialog open. Closing restores focus to the trigger when available. Native confirmation
-dialogs and IME composition retain their own Escape handling. `Cmd+Enter` and `Ctrl+Enter` send only
+dialogs and IME composition retain their own Escape handling. `Enter`, `Cmd+Enter`, and `Ctrl+Enter` send only
 outside an active IME composition. Real macOS fullscreen, Korean IME, and VoiceOver verification
 remain manual checks.
 
