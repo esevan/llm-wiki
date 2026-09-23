@@ -28,6 +28,7 @@ struct Inner {
     operation: Mutex<()>,
     signals: broadcast::Sender<ExecutionSignal>,
     early_events: Mutex<VecDeque<AppServerEvent>>,
+    event_order: Mutex<()>,
     active_threads: Mutex<HashMap<String, ActiveThread>>,
     live_status: StdMutex<HashMap<String, Value>>,
     live_revision: AtomicU64,
@@ -65,6 +66,7 @@ impl TaskExecutionRuntime {
                 operation: Mutex::new(()),
                 signals,
                 early_events: Mutex::new(VecDeque::new()),
+                event_order: Mutex::new(()),
                 active_threads: Mutex::new(HashMap::new()),
                 live_status: StdMutex::new(HashMap::new()),
                 live_revision: AtomicU64::new(0),
@@ -456,7 +458,7 @@ impl TaskExecutionRuntime {
         let response = match self
             .inner
             .server
-            .request(
+            .request_with_event_barrier(
                 "turn/start",
                 json!({"threadId":thread_id,"input":turn_input}),
             )
@@ -470,7 +472,18 @@ impl TaskExecutionRuntime {
                 return Err(format!("uncertain_dispatch: {error}"));
             }
         };
-        let returned_thread = response["turn"]["threadId"].as_str().unwrap_or(&thread_id);
+        let response_value = match &response.result {
+            Ok(value) => value,
+            Err(error) => {
+                self.inner
+                    .service
+                    .mark_dispatch_uncertain(&run_id, error)?;
+                return Err(format!("uncertain_dispatch: {error}"));
+            }
+        };
+        let returned_thread = response_value["turn"]["threadId"]
+            .as_str()
+            .unwrap_or(&thread_id);
         if returned_thread != thread_id {
             self.inner.service.mark_dispatch_uncertain(
                 &run_id,
@@ -478,18 +491,25 @@ impl TaskExecutionRuntime {
             )?;
             return Err("ownership_failure: Codex returned a different conversation".into());
         }
-        let turn_id = response["turn"]["id"]
+        let turn_id = response_value["turn"]["id"]
             .as_str()
-            .ok_or("uncertain_dispatch: Codex accepted the request without a turn id")?;
+            .ok_or("uncertain_dispatch: Codex accepted the request without a turn id")?
+            .to_owned();
+        let event_order = self.inner.event_order.lock().await;
         self.inner
             .service
-            .accept_turn(&run_id, &thread_id, turn_id)?;
+            .accept_turn(&run_id, &thread_id, &turn_id)?;
+        // turn/start is the ownership boundary for later provider events. Release the
+        // transport reader as soon as that exact identity is durable and before replaying
+        // buffered events or doing any operation that could wait on the server.
+        response.release();
+        self.drain_early(&thread_id, &turn_id).await;
+        drop(event_order);
         if sent_context_delta {
             self.inner
                 .service
                 .mark_context_sent(&prepared.session_id, &prepared.context_hash)?;
         }
-        self.drain_early(&thread_id, turn_id).await;
         self.emit_for_run(&run_id);
         Ok(self.enrich_snapshot(self.inner.service.snapshot(
             required(input, "taskId")?,
@@ -614,24 +634,10 @@ impl TaskExecutionRuntime {
         }
         if !*started {
             let runtime = self.clone();
-            let mut events = self.inner.server.subscribe();
+            let mut events = self.inner.server.subscribe()?;
             tauri::async_runtime::spawn(async move {
-                loop {
-                    match events.recv().await {
-                        Ok(event) => runtime.handle_event(event).await,
-                        Err(broadcast::error::RecvError::Lagged(_)) => {
-                            let _ = runtime.inner.service.mark_connection_lost(
-                                "Codex event delivery lagged; the terminal state is uncertain",
-                            );
-                            runtime.inner.server.shutdown().await;
-                            let _ = runtime.inner.signals.send(ExecutionSignal {
-                                task_id: String::new(),
-                                session_id: String::new(),
-                                run_id: String::new(),
-                            });
-                        }
-                        Err(broadcast::error::RecvError::Closed) => break,
-                    }
+                while let Some(event) = events.recv().await {
+                    runtime.handle_event(event).await;
                 }
             });
             *started = true;
@@ -641,6 +647,11 @@ impl TaskExecutionRuntime {
     }
 
     async fn handle_event(&self, event: AppServerEvent) {
+        let _event_order = self.inner.event_order.lock().await;
+        self.handle_event_in_order(event).await;
+    }
+
+    async fn handle_event_in_order(&self, event: AppServerEvent) {
         let generation = match &event {
             AppServerEvent::Notification { generation, .. }
             | AppServerEvent::Request { generation, .. }
@@ -796,7 +807,7 @@ impl TaskExecutionRuntime {
             *early = retained;
         }
         for event in matched {
-            Box::pin(self.handle_event(event)).await;
+            Box::pin(self.handle_event_in_order(event)).await;
         }
     }
 
@@ -1403,6 +1414,112 @@ mod tests {
         let command = runtime.snapshot(&json!({"taskId":task,"sessionId":session,"runId":run})).unwrap();
         assert_eq!(command["selectedRun"]["liveStatus"]["kind"], "commandExecution");
         assert_eq!(command["selectedRun"]["liveStatus"]["output"], "ok");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn turn_start_burst_preserves_identity_formal_request_and_completion() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = tempdir().unwrap();
+        let db = root.path().join("state.sqlite3");
+        let workspace = root.path().join("workspace");
+        std::fs::create_dir(&workspace).unwrap();
+        crate::native::database::initialize(&db).unwrap();
+        let tasks = TaskApplicationService::new(&db);
+        let task = tasks
+            .execute(
+                "task.create",
+                &json!({"operationId":"burst-task","inputText":"Route a provider burst","title":"Provider burst"}),
+            )
+            .unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let session = tasks
+            .execute(
+                "task.work-session.create",
+                &json!({"operationId":"burst-session","taskId":task,"title":"Burst"}),
+            )
+            .unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        tasks.execute("task.work-session.update", &json!({"operationId":"burst-settings","taskId":task,"sessionId":session,"title":"Burst","provider":"codex","model":"gpt-5.6-sol","approvalMode":"ask","approvalsReviewer":"user","workspacePath":workspace})).unwrap();
+
+        let fake = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../tests/fakes/codex_app_server.mjs")
+            .canonicalize()
+            .unwrap();
+        let wrapper = root.path().join("fake-codex-burst");
+        std::fs::write(
+            &wrapper,
+            format!(
+                "#!/bin/sh\nexport LLM_WIKI_FAKE_CODEX_BURST=1\nexec '{}'\n",
+                fake.display()
+            ),
+        )
+        .unwrap();
+        let mut permissions = std::fs::metadata(&wrapper).unwrap().permissions();
+        permissions.set_mode(0o700);
+        std::fs::set_permissions(&wrapper, permissions).unwrap();
+
+        let runtime = TaskExecutionRuntime::with_test_server(
+            TaskExecutionApplicationService::new(&db),
+            wrapper,
+        );
+        let prepared = runtime
+            .prepare(&json!({"taskId":task,"sessionId":session}))
+            .await
+            .unwrap();
+        let settings_revision = prepared["effectiveConfig"]["settingsRevision"]
+            .as_str()
+            .unwrap();
+        let started = runtime.execute(&json!({"taskId":task,"sessionId":session,"operationId":"burst-run","instruction":"Emit the deterministic burst","settingsRevision":settings_revision})).await.unwrap();
+        let run = started["selectedRun"]["id"].as_str().unwrap().to_owned();
+        let turn = started["selectedRun"]["turnId"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+
+        let completed = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                let snapshot = runtime
+                    .snapshot(&json!({"taskId":task,"sessionId":session,"runId":run}))
+                    .unwrap();
+                if snapshot["selectedRun"]["status"] == "succeeded"
+                    && snapshot["selectedRun"]["finalReport"].is_string()
+                {
+                    break snapshot;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        let selected = &completed["selectedRun"];
+        assert_eq!(selected["turnId"], turn);
+        assert!(selected["error"].is_null());
+        assert!(selected["finalReport"]
+            .as_str()
+            .unwrap()
+            .contains("Controlled Codex fixture completed"));
+        assert_eq!(selected["evidence"].as_array().unwrap().len(), 2);
+        let formal = selected["formalRequests"].as_array().unwrap();
+        assert_eq!(formal.len(), 1);
+        assert_eq!(formal[0]["status"], "stale");
+        let formal_turn: String = crate::native::database::open(&db)
+            .unwrap()
+            .query_row(
+                "SELECT provider_turn_id FROM task_work_session_formal_requests WHERE run_id=?",
+                [&run],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(formal_turn, turn);
+        assert!(runtime.inner.early_events.lock().await.is_empty());
+        assert!(runtime.inner.server.generation().await.is_ok());
+        runtime.shutdown().await;
     }
 
     #[tokio::test]
