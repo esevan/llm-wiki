@@ -832,9 +832,12 @@ export function TaskDetail({
               {(() => {
                 const status = { queued: text.executionQueued, running: text.executionRunning, awaiting_response: text.executionAwaitingResponse, succeeded: text.executionSucceeded, failed: text.executionFailed, cancelled: text.executionCancelled, interrupted: text.executionInterrupted, needs_attention: text.executionNeedsAttention }[log.execution.status];
                 return <>
+              <section className="work-log-execution-summary">
               <p><strong>Codex · {status}</strong></p>
               <p><small>{text.executionModel}: {log.execution.model}</small></p>
               {log.execution.reportExcerpt ? <section><h4>{text.executionModelReport}</h4><p>{log.execution.reportExcerpt}</p></section> : ["succeeded", "failed", "cancelled", "interrupted", "needs_attention"].includes(log.execution.status) && <p>{text.executionReportUnavailable}</p>}
+              </section>
+              <p className="work-log-execution-sync"><strong>{text.executionWorkLogSync}:</strong> {log.execution.syncState === "synced" ? text.executionWorkLogSynced : log.execution.syncState === "failed" ? text.executionWorkLogFailed : text.executionWorkLogPending}</p>
               {log.execution.evidence.length > 0 && <section><h4>{text.executionObservedEvidence}</h4><ul>{log.execution.evidence.map((evidence) => <li key={evidence.id}>{evidence.label}: {evidence.summary}</li>)}</ul></section>}
               {log.execution.artifacts.length > 0 && <section><h4>{text.executionArtifacts}</h4><ul>{log.execution.artifacts.map((artifact) => <li key={artifact}>{artifact}</li>)}</ul></section>}
               {log.execution.limitations.length > 0 && <section><h4>{text.executionLimitations}</h4><ul>{log.execution.limitations.map((limitation) => <li key={limitation}>{limitation}</li>)}</ul></section>}

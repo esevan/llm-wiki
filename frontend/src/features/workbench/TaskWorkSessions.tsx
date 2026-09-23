@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { taskClient } from "../../services/taskClient";
 import { taskExecutionClient } from "../../services/taskExecutionClient";
 import { formatSystemTime } from "../../services/systemTime";
+import { chooseProjectFolder } from "../../services/projectFolderClient";
 import type {
   TaskAggregate,
   TaskWorkSession,
@@ -41,12 +42,21 @@ const copy = {
     workspace: "Project folder path",
     workspaceHint:
       "Saved for a future Codex Run. The effective folder and safety policy appear before execution.",
+    recentFolders: "Recent folders",
+    browse: "Browse…",
+    folderPickerFailed: "The folder picker could not be opened. Enter a path manually.",
     settings: "Save settings",
     saved: "Settings saved",
     message: "Instruction or note",
     placeholder: "Record what you tried, decided, or want to continue…",
     attach: "Attach file",
     send: "Save note",
+    messageMode: "While Codex is running",
+    noteMode: "Save as note",
+    queueMode: "Queue for next Run",
+    steerMode: "Steer current Run",
+    queueUnavailable: "Queueing is unavailable until the native Queue API is connected. This draft is not sent.",
+    steerUnavailable: "Steering is unavailable until the native turn/steer API is connected. This draft is not sent.",
     run: "Run with Codex",
     prepare: "Prepare conversation",
     checkSettings: "Check settings",
@@ -111,12 +121,21 @@ const copy = {
     workspace: "프로젝트 폴더 경로",
     workspaceHint:
       "향후 Codex 실행에 사용할 설정입니다. 실행 전 실제 폴더와 안전 정책을 표시합니다.",
+    recentFolders: "최근 폴더",
+    browse: "찾아보기…",
+    folderPickerFailed: "폴더 선택기를 열지 못했습니다. 경로를 직접 입력하세요.",
     settings: "설정 저장",
     saved: "설정을 저장했습니다",
     message: "지시 또는 메모",
     placeholder: "시도한 내용, 결정, 다음에 이어갈 내용을 기록하세요…",
     attach: "파일 첨부",
     send: "메모 저장",
+    messageMode: "Codex 실행 중 입력",
+    noteMode: "메모로 저장",
+    queueMode: "다음 실행에 Queue",
+    steerMode: "현재 실행에 Steering",
+    queueUnavailable: "native Queue API가 연결되기 전까지 Queueing을 사용할 수 없습니다. 이 초안은 전송되지 않았습니다.",
+    steerUnavailable: "native turn/steer API가 연결되기 전까지 Steering을 사용할 수 없습니다. 이 초안은 전송되지 않았습니다.",
     run: "Codex로 실행",
     prepare: "대화 준비",
     checkSettings: "설정 확인",
@@ -223,6 +242,8 @@ export function TaskWorkSessions({
   const [retryOfRunId, setRetryOfRunId] = useState<string>();
   const [syncBusy, setSyncBusy] = useState("");
   const [syncError, setSyncError] = useState<Record<string, string>>({});
+  const [recentFolders, setRecentFolders] = useState<string[]>([]);
+  const [messageMode, setMessageMode] = useState<"note" | "queue" | "steer">("note");
   const generation = useRef(0);
   const activeRef = useRef("");
   const draftRef = useRef(draft);
@@ -272,6 +293,13 @@ export function TaskWorkSessions({
     setRetryOfRunId(undefined);
     setSyncBusy("");
     setSyncError({});
+    setMessageMode("note");
+    try {
+      const stored: unknown = JSON.parse(localStorage.getItem("llm-wiki:recent-project-folders") ?? "[]");
+      setRecentFolders(Array.isArray(stored) ? stored.filter((value): value is string => typeof value === "string").slice(0, 10) : []);
+    } catch {
+      setRecentFolders([]);
+    }
     void loadList(expected);
     return () => {
       generation.current += 1;
@@ -373,6 +401,11 @@ export function TaskWorkSessions({
             item.id === id ? { ...item, ...saved } : item,
           ),
         );
+        if (saved.workspacePath.trim()) {
+          const next = [saved.workspacePath.trim(), ...recentFolders.filter((path) => path !== saved.workspacePath.trim())].slice(0, 10);
+          setRecentFolders(next);
+          localStorage.setItem("llm-wiki:recent-project-folders", JSON.stringify(next));
+        }
         setStatus(t.saved);
         setExecution(undefined);
         setEditingSettings(false);
@@ -437,6 +470,14 @@ export function TaskWorkSessions({
         setError(t.retry);
     } finally {
       if (generation.current === expected) setBusy(false);
+    }
+  };
+  const browseProjectFolder = async () => {
+    try {
+      const selected = await chooseProjectFolder();
+      if (selected && activeRef.current) updateSession({ workspacePath: selected });
+    } catch (cause) {
+      setError(`${t.folderPickerFailed} ${String(cause)}`);
     }
   };
   const run = async () => {
@@ -690,18 +731,37 @@ export function TaskWorkSessions({
                         )}
                       </section>
                     ))}
-                    {activeRun.finalReport ? <section><h5>{t.report}</h5><p>{activeRun.finalReport}</p></section> : ["succeeded", "failed", "cancelled", "interrupted", "needs_attention"].includes(activeRun.status) && <p>{t.noReport}</p>}
-                    {activeRun.error && <p role="alert">{activeRun.error.message}</p>}
-                    {!!activeRun.evidence.length && <section><h5>{t.evidence}</h5><ul>{activeRun.evidence.map((evidence) => <li key={evidence.id}><strong>{evidence.label}</strong>: {evidence.summary}</li>)}</ul></section>}
-                    {activeRun.workLogEntryId && <button type="button" data-control="task-session-worklog-open" onClick={() => onOpenWorkLog?.(activeRun.workLogEntryId!)}>{t.workLog}</button>}
-                    {activeRun.workLogSyncState === "pending" && <p role="status">{t.syncPending}</p>}
-                    {activeRun.workLogSyncState === "failed" && <><p role="alert">{t.syncFailed} {syncError[activeRun.id] || activeRun.workLogSyncError}</p><button type="button" data-control="task-session-worklog-sync" disabled={syncBusy === activeRun.id} onClick={() => void syncWorkLog(activeRun)}>{t.syncWorkLog}</button></>}
+                    <section className="task-execution-summary" aria-label={t.outcome}>
+                      <h5>{t.outcome}</h5>
+                      {activeRun.finalReport ? <section><h6>{t.report}</h6><p>{activeRun.finalReport}</p></section> : ["succeeded", "failed", "cancelled", "interrupted", "needs_attention"].includes(activeRun.status) && <p>{t.noReport}</p>}
+                      {activeRun.error && <p role="alert">{activeRun.error.message}</p>}
+                    </section>
+                    <section className="task-execution-sync" aria-label={t.workLog}>
+                      <h5>{t.workLog}</h5>
+                      {activeRun.workLogEntryId ? <>
+                        <p>{activeRun.workLogSyncState === "synced" ? t.syncWorkLog : activeRun.workLogSyncState === "failed" ? t.syncFailed : t.syncPending}</p>
+                        <button type="button" data-control="task-session-worklog-open" onClick={() => onOpenWorkLog?.(activeRun.workLogEntryId!)}>{t.workLog}</button>
+                      </> : <p>{t.noReport}</p>}
+                      {activeRun.workLogSyncState === "failed" && <><p role="alert">{syncError[activeRun.id] || activeRun.workLogSyncError}</p><button type="button" data-control="task-session-worklog-sync" disabled={syncBusy === activeRun.id} onClick={() => void syncWorkLog(activeRun)}>{t.syncWorkLog}</button></>}
+                    </section>
+                    {!!activeRun.evidence.length && <details className="task-execution-details"><summary>{t.evidence}</summary><ul>{activeRun.evidence.map((evidence) => <li key={evidence.id}><strong>{evidence.label}</strong>: {evidence.summary}</li>)}</ul></details>}
                     {["failed", "cancelled", "interrupted", "needs_attention"].includes(activeRun.status) && <><button type="button" data-control="task-session-run-retry" disabled={busy || Boolean(draft.trim())} onClick={() => { setDraft(activeRun.instruction); setRetryOfRunId(activeRun.id); }}>{t.retryRun}</button>{draft.trim() && <p>{t.retryDraftHint}</p>}</>}
                   </section>
                 )}
                 {execution?.effectiveConfig && <section className="task-execution-effective"><h5>{execution.effectiveConfig.provenance === "bound_thread" ? t.effective : t.prepare}</h5><dl><dt>{t.model}</dt><dd>{execution.effectiveConfig.model}</dd><dt>{t.workspace}</dt><dd>{execution.effectiveConfig.cwd}</dd><dt>{t.approval}</dt><dd>{execution.effectiveConfig.approvalPolicy} · {execution.effectiveConfig.approvalsReviewer}</dd><dt>Sandbox</dt><dd>{execution.effectiveConfig.sandbox}</dd></dl>{execution.effectiveConfig.readinessError && <p role="alert">{execution.effectiveConfig.readinessError.message}</p>}<button type="button" data-control="task-session-settings-edit" onClick={() => setEditingSettings(true)}>{t.editSettings}</button></section>}
                 <label>
                   {t.message}
+                  {activeRun && <select
+                    className="task-session-message-mode"
+                    aria-label={t.messageMode}
+                    data-control="task-session-message-mode"
+                    value={messageMode}
+                    onChange={(event) => setMessageMode(event.target.value as "note" | "queue" | "steer")}
+                  >
+                    <option value="note">{t.noteMode}</option>
+                    <option value="queue">{t.queueMode}</option>
+                    <option value="steer">{t.steerMode}</option>
+                  </select>}
                   <textarea
                     data-control="task-session-message"
                     disabled={busy}
@@ -717,6 +777,7 @@ export function TaskWorkSessions({
                     }}
                   />
                 </label>
+                {activeRun && messageMode !== "note" && <p className="task-session-message-limitation" role="status">{messageMode === "queue" ? t.queueUnavailable : t.steerUnavailable}</p>}
                 {attachment && (
                   <div className="task-session-pending">
                     <span>
@@ -756,7 +817,7 @@ export function TaskWorkSessions({
                     className="primary"
                     type="button"
                     data-control="task-session-send"
-                    disabled={busy || (!draft.trim() && !attachment)}
+                    disabled={busy || messageMode !== "note" || (!draft.trim() && !attachment)}
                     onClick={() => void send()}
                   >
                     {t.send}
@@ -827,16 +888,24 @@ export function TaskWorkSessions({
                   </label>
                   <label>
                     {t.workspace}
-                    <input
-                      data-control="task-session-workspace"
-                      disabled={busy}
-                      value={record.session.workspacePath}
-                      placeholder="/path/to/project"
-                      onChange={(e) =>
-                        updateSession({ workspacePath: e.target.value })
-                      }
-                    />
+                    <div className="task-session-workspace-picker">
+                      <input
+                        data-control="task-session-workspace"
+                        disabled={busy}
+                        value={record.session.workspacePath}
+                        placeholder="/path/to/project"
+                        onChange={(e) => updateSession({ workspacePath: e.target.value })}
+                      />
+                      <button type="button" data-control="task-session-workspace-browse" disabled={busy} onClick={() => void browseProjectFolder()}>{t.browse}</button>
+                    </div>
                   </label>
+                  {recentFolders.length > 0 && <label className="task-session-recent-folders">
+                    {t.recentFolders}
+                    <select data-control="task-session-workspace-recent" disabled={busy} value="" onChange={(e) => e.target.value && updateSession({ workspacePath: e.target.value })}>
+                      <option value="">—</option>
+                      {recentFolders.map((path) => <option key={path} value={path}>{path}</option>)}
+                    </select>
+                  </label>}
                   <label className="task-session-approval">
                     <select
                       data-control="task-session-approval"

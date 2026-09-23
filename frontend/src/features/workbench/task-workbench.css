@@ -443,6 +443,10 @@ main:has(.task-workbench.active :is(.task-detail, .refinement-panel)) {
 .task-session-sidebar p,.task-session-sidebar li { overflow-wrap:anywhere; font-size:var(--font-size-sm); }
 .task-session-settings { display:grid; gap:var(--space-3); }
 .task-session-settings label { display:grid; gap:var(--space-2); font-weight:700; }
+.task-session-workspace-picker { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:var(--space-2); align-items:center; }
+.task-session-recent-folders { font-size:var(--font-size-sm); }
+.task-session-message-mode { display:block; max-width:280px; margin-top:var(--space-2); }
+.task-session-message-limitation { padding:var(--space-2) var(--space-3); border-left:3px solid var(--color-status-warning); background:var(--color-bg-muted); font-size:var(--font-size-sm); overflow-wrap:anywhere; }
 .task-session-settings .task-session-approval { grid-template-columns:auto 1fr; align-items:start; }
 .task-session-approval input { width:auto; margin-top:3px; }
 .task-session-approval small { display:block; color:var(--color-text-secondary); font-weight:400; }
@@ -468,8 +472,14 @@ main:has(.task-workbench.active :is(.task-detail, .refinement-panel)) {
 .task-execution-effective dt { font-weight:700; }
 .task-execution-effective dd { margin:0; }
 .task-execution-live:empty { display:none; }
+.task-execution-summary,.task-execution-sync { display:grid; gap:var(--space-2); padding:var(--space-3); border:var(--border-default); border-radius:var(--radius-control); background:var(--color-bg-surface); }
+.task-execution-summary h5,.task-execution-sync h5 { margin:0; }
+.task-execution-summary h6 { margin:0; }
+.task-execution-details { padding:var(--space-2) 0; overflow-wrap:anywhere; }
 .work-log-execution { display:grid; gap:var(--space-2); margin-top:var(--space-3); padding:var(--space-3); border-left:3px solid var(--color-accent-primary); background:var(--color-bg-accent-subtle); }
 .work-log-execution p { margin:0; overflow-wrap:anywhere; }
+.work-log-execution-summary { display:grid; gap:var(--space-2); }
+.work-log-execution-sync { padding-top:var(--space-2); border-top:var(--border-default); }
 @media(max-width:760px){.task-session-layout{grid-template-columns:1fr}.task-session-picker{grid-template-columns:1fr}.task-session-toolbar{flex-direction:column}.task-detail-tabs{overflow-x:auto}.task-session-chat>footer{align-items:stretch;flex-direction:column}.task-session-attach{text-align:center}}
 .task-panel textarea,
 .task-panel input,

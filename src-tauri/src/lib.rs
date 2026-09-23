@@ -414,6 +414,12 @@ async fn choose_vault(
 }
 
 #[tauri::command]
+fn choose_project_folder(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    Ok(first_run::pick_folder(&app, "Choose a project folder")?
+        .map(|path| path.to_string_lossy().into_owned()))
+}
+
+#[tauri::command]
 async fn enqueue_ai_job(
     application: tauri::State<'_, NativeApplication>,
     operation: NativeOperation,
@@ -519,6 +525,7 @@ pub fn run() {
             migration_recovery_retry,
             complete_first_run_intro,
             choose_vault,
+            choose_project_folder,
             task_session_prepare,
             task_session_execute,
             task_session_execution_subscribe,

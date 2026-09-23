@@ -49,17 +49,22 @@ pub fn choose_vault(
     app: &tauri::AppHandle,
     application: &NativeApplication,
 ) -> Result<bool, String> {
-    let selected = app
-        .dialog()
-        .file()
-        .set_title("Choose your LLM Wiki Vault")
-        .blocking_pick_folder();
-    let Some(selected) = selected else {
+    let Some(path) = pick_folder(app, "Choose your LLM Wiki Vault")? else {
         return Ok(false);
     };
-    let path = selected.into_path().map_err(|error| error.to_string())?;
     application.save_vault_selection(&path)?;
     Ok(true)
+}
+
+/// Reuse the native folder picker without changing Vault settings.
+pub fn pick_folder(
+    app: &tauri::AppHandle,
+    title: &str,
+) -> Result<Option<std::path::PathBuf>, String> {
+    let selected = app.dialog().file().set_title(title).blocking_pick_folder();
+    selected
+        .map(|file| file.into_path().map_err(|error| error.to_string()))
+        .transpose()
 }
 
 pub fn complete_intro_and_choose_vault(
