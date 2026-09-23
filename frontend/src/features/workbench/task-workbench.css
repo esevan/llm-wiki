@@ -530,6 +530,10 @@ main:has(.task-workbench.active :is(.task-detail, .refinement-panel)) {
 .task-execution-event-icon,.task-execution-event-status { color:var(--color-text-secondary); font:400 var(--font-size-sm)/1 var(--font-family-mono); }
 .task-execution-event-status { text-align:right; }
 .task-execution-event pre { max-height:220px; margin:0; padding:var(--space-3); overflow:auto; border-top:var(--border-default); background:var(--color-bg-neutral); white-space:pre-wrap; overflow-wrap:anywhere; font:400 var(--font-size-sm)/1.55 var(--font-family-mono); }
+.task-execution-retry { display:flex; align-items:center; gap:var(--space-3); padding-top:var(--space-2); }
+.task-execution-retry button { flex:0 0 auto; }
+.task-execution-retry-copy { display:grid; gap:var(--space-1); }
+.task-execution-retry p { margin:0; color:var(--color-text-secondary); font-size:var(--font-size-sm); line-height:1.45; overflow-wrap:anywhere; }
 .task-session-link-panel { margin-top:var(--space-3); padding:var(--space-4); box-shadow:var(--shadow-card); }
 .task-session-link-panel h4,.task-session-link-panel p { margin:0; }
 .task-session-link-panel header p { margin-top:var(--space-1); color:var(--color-text-secondary); }
@@ -542,7 +546,7 @@ main:has(.task-workbench.active :is(.task-detail, .refinement-panel)) {
 .work-log-execution p { margin:0; overflow-wrap:anywhere; }
 .work-log-execution-summary { display:grid; gap:var(--space-2); }
 .work-log-execution-sync { padding-top:var(--space-2); border-top:var(--border-default); }
-@container(max-width:680px){.task-session-layout{grid-template-columns:1fr}.task-session-rail{position:static}.task-session-rail ol{display:flex;max-height:none;overflow:auto}.task-session-rail li{flex:0 0 min(220px,75vw)}.task-session-picker{position:static;width:auto;height:auto;clip-path:none;display:grid;gap:var(--space-2);margin:var(--space-3) 0}.task-session-sidebar{grid-column:auto;grid-template-columns:1fr}.task-session-toolbar{align-items:stretch;flex-direction:column}.task-session-toolbar-actions{justify-content:flex-start}.task-session-chat>footer{align-items:stretch;flex-direction:column}.task-session-chat>footer .task-session-attach{margin:0;text-align:center}.task-session-link-panel li{align-items:stretch;flex-direction:column}.task-session-link-panel li button{width:100%}}
+@container(max-width:680px){.task-session-layout{grid-template-columns:1fr}.task-session-rail{position:static}.task-session-rail ol{display:flex;max-height:none;overflow:auto}.task-session-rail li{flex:0 0 min(220px,75vw)}.task-session-picker{position:static;width:auto;height:auto;clip-path:none;display:grid;gap:var(--space-2);margin:var(--space-3) 0}.task-session-sidebar{grid-column:auto;grid-template-columns:1fr}.task-session-toolbar{align-items:stretch;flex-direction:column}.task-session-toolbar-actions{justify-content:flex-start}.task-session-chat>footer{align-items:stretch;flex-direction:column}.task-session-chat>footer .task-session-attach{margin:0;text-align:center}.task-execution-retry{align-items:stretch;flex-direction:column}.task-execution-retry button{width:100%}.task-session-link-panel li{align-items:stretch;flex-direction:column}.task-session-link-panel li button{width:100%}}
 @media(max-width:700px){.task-detail-tabs{overflow-x:auto}}
 @media(prefers-reduced-motion:reduce){.task-session-running i{animation:none}}
 .task-panel textarea,

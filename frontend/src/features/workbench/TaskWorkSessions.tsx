@@ -11,6 +11,7 @@ import type {
   TaskWorkSessionAttachment,
   TaskWorkSessionRecord,
   TaskExecutionSnapshot,
+  TaskExecutionRun,
   TaskExecutionFormalRequest,
   TaskExecutionEvidence,
   CodexThreadSummary,
@@ -24,6 +25,7 @@ export type WorkSessionDraft = {
   attemptedPayload?: string;
   formalAnswers?: Record<string, string[]>;
   executionAttempt?: { payload: string; operationId: string; retryOfRunId?: string };
+  retryAttempts?: Record<string, { payload: string; operationId: string }>;
 };
 const models = [
   ["gpt-5.6-sol", "GPT-5.6-Sol"],
@@ -93,7 +95,12 @@ const copy = {
     outcomeUnknown: "Outcome unknown — work may already have happened. Check the saved evidence before starting another Run.",
     continues: "Codex can continue while you answer this request.",
     blocking: "Codex is waiting for this response.",
-    retryRun: "Use instruction again",
+    retryRun: "Retry Run",
+    retryingRun: "Retrying…",
+    retryRunHint: "Starts a new Run with the previous instruction. Your current draft and attachment are not sent.",
+    retryUncertainHint: "Review the saved evidence first — work may already have happened. Your current draft and attachment are not sent.",
+    retryNeedsPreparation: "Prepare the conversation before retrying.",
+    reuseInstruction: "Use instruction again",
     retryDraftHint: "Save or clear your current draft before reusing this instruction.",
     workLog: "Open Work Log entry",
     syncWorkLog: "Retry Work Log sync",
@@ -187,7 +194,12 @@ const copy = {
     outcomeUnknown: "결과를 알 수 없습니다. 작업이 이미 수행되었을 수 있으니 새 실행 전 저장된 근거를 확인하세요.",
     continues: "이 요청에 답하는 동안 Codex는 계속 진행할 수 있습니다.",
     blocking: "Codex가 이 응답을 기다리고 있습니다.",
-    retryRun: "지시 다시 사용",
+    retryRun: "실행 재시도",
+    retryingRun: "재시도 중…",
+    retryRunHint: "이전 지시로 새 실행을 시작합니다. 현재 초안과 첨부는 보내지 않습니다.",
+    retryUncertainHint: "작업이 이미 수행되었을 수 있으니 저장된 근거를 먼저 확인하세요. 현재 초안과 첨부는 보내지 않습니다.",
+    retryNeedsPreparation: "재시도 전에 대화를 준비하세요.",
+    reuseInstruction: "지시 다시 사용",
     retryDraftHint: "이 지시를 다시 사용하려면 현재 초안을 저장하거나 비우세요.",
     workLog: "Work Log 항목 열기",
     syncWorkLog: "Work Log 동기화 다시 시도",
@@ -299,6 +311,7 @@ export function TaskWorkSessions({
   const [status, setStatus] = useState("");
   const [busy, setBusy] = useState(false);
   const [runSubmitting, setRunSubmitting] = useState(false);
+  const [retrySubmittingRunId, setRetrySubmittingRunId] = useState("");
   const [execution, setExecution] = useState<TaskExecutionSnapshot>();
   const receiveExecution = (snapshot: TaskExecutionSnapshot) => setExecution((current) =>
     current?.revision !== undefined && snapshot.revision !== undefined && snapshot.revision < current.revision
@@ -325,6 +338,7 @@ export function TaskWorkSessions({
   const attachmentRef = useRef(attachment);
   const timelineRef = useRef<HTMLOListElement>(null);
   const followLatestRef = useRef(true);
+  const retrySubmittingKeys = useRef(new Set<string>());
   useEffect(() => {
     draftRef.current = draft;
     attachmentRef.current = attachment;
@@ -630,7 +644,17 @@ export function TaskWorkSessions({
         pending.operationId,
       );
       if (generation.current !== expected || activeRef.current !== id) return;
-      drafts.delete(id);
+      const current = drafts.get(id);
+      if (current?.retryAttempts && Object.keys(current.retryAttempts).length > 0) {
+        drafts.set(id, {
+          body: "",
+          operationId: operationId(),
+          formalAnswers: current.formalAnswers,
+          retryAttempts: current.retryAttempts,
+        });
+      } else {
+        drafts.delete(id);
+      }
       setDraft("");
       setAttachment(undefined);
       try {
@@ -657,7 +681,7 @@ export function TaskWorkSessions({
     }
   };
   const run = async () => {
-    if (!record || runSubmitting || execution?.activeRunId || !draft.trim() || !record.session.workspacePath.trim()) {
+    if (!record || runSubmitting || retrySubmittingKeys.current.size > 0 || execution?.activeRunId || !draft.trim() || !record.session.workspacePath.trim()) {
       if (record && !record.session.workspacePath.trim()) setError(t.runUnavailable);
       return;
     }
@@ -674,7 +698,7 @@ export function TaskWorkSessions({
     const attempt = savedDraft?.executionAttempt?.payload === payload
       ? savedDraft.executionAttempt
       : { payload, operationId: operationId(), retryOfRunId };
-    drafts.set(id, { body: draft, attachment, operationId: savedDraft?.operationId ?? operationId(), formalAnswers: answers, executionAttempt: attempt });
+    drafts.set(id, { ...savedDraft, body: draft, attachment, operationId: savedDraft?.operationId ?? operationId(), formalAnswers: answers, executionAttempt: attempt });
     setRunSubmitting(true); setError("");
     try {
       const snapshot = await taskExecutionClient.execute({ taskId: task.id, sessionId: id, operationId: attempt.operationId, instruction: submittedInstruction, settingsRevision: execution.effectiveConfig.settingsRevision, retryOfRunId: attempt.retryOfRunId, attachment: submittedAttachment }, (next) => {
@@ -703,6 +727,50 @@ export function TaskWorkSessions({
   const currentRun = execution?.runs.find((value) => value.id === execution.activeRunId);
   const activeRun = currentRun ?? execution?.runs.find((value) => value.id === selectedRunId) ?? execution?.selectedRun ?? execution?.runs[0];
   const runCanAcceptResponse = Boolean(activeRun && ["queued", "running", "awaiting_response"].includes(activeRun.status));
+  const retryRun = async (sourceRun: TaskExecutionRun) => {
+    if (!record || busy || runSubmitting || retrySubmittingKeys.current.size > 0 || execution?.activeRunId || !execution?.effectiveConfig?.ready) return;
+    const id = record.session.id;
+    const expected = generation.current;
+    const key = `${task.id}/${id}/${sourceRun.id}`;
+    const payload = JSON.stringify({ instruction: sourceRun.instruction, settingsRevision: execution.effectiveConfig.settingsRevision, retryOfRunId: sourceRun.id });
+    const savedDraft = drafts.get(id);
+    const savedAttempt = savedDraft?.retryAttempts?.[sourceRun.id];
+    const attempt = savedAttempt?.payload === payload ? savedAttempt : { payload, operationId: operationId() };
+    drafts.set(id, {
+      ...savedDraft,
+      body: savedDraft?.body ?? draftRef.current,
+      attachment: savedDraft?.attachment ?? attachmentRef.current,
+      operationId: savedDraft?.operationId ?? operationId(),
+      retryAttempts: { ...savedDraft?.retryAttempts, [sourceRun.id]: attempt },
+    });
+    retrySubmittingKeys.current.add(key);
+    setRetrySubmittingRunId(sourceRun.id);
+    setError("");
+    try {
+      const snapshot = await taskExecutionClient.execute({
+        taskId: task.id,
+        sessionId: id,
+        operationId: attempt.operationId,
+        instruction: sourceRun.instruction,
+        settingsRevision: execution.effectiveConfig.settingsRevision,
+        retryOfRunId: sourceRun.id,
+      }, (next) => {
+        if (generation.current === expected && activeRef.current === id) receiveExecution(next);
+      });
+      const current = drafts.get(id);
+      if (current?.retryAttempts?.[sourceRun.id]?.operationId === attempt.operationId) {
+        const nextAttempts = { ...current.retryAttempts };
+        delete nextAttempts[sourceRun.id];
+        drafts.set(id, { ...current, retryAttempts: nextAttempts });
+      }
+      if (generation.current === expected && activeRef.current === id) receiveExecution(snapshot);
+    } catch (cause) {
+      if (generation.current === expected && activeRef.current === id) setError(String(cause));
+    } finally {
+      retrySubmittingKeys.current.delete(key);
+      setRetrySubmittingRunId("");
+    }
+  };
   const requestIsLive = (request: TaskExecutionFormalRequest) => runCanAcceptResponse && ["pending", "submitting", "error"].includes(request.status);
   const requestCanAcceptResponse = (request: TaskExecutionFormalRequest) => runCanAcceptResponse && ["pending", "error"].includes(request.status);
   useEffect(() => {
@@ -980,6 +1048,24 @@ export function TaskWorkSessions({
                       {item.run.finalReport && <article data-entry-author="assistant"><header><strong>Codex</strong></header><SessionMarkdown>{item.run.finalReport}</SessionMarkdown></article>}
                       {!item.run.finalReport && ["succeeded", "failed", "cancelled", "interrupted", "needs_attention"].includes(item.run.status) && <p className="task-execution-meta">{t.noReport}</p>}
                       {item.run.error && <p role="alert">{item.run.error.message}</p>}
+                      {["failed", "cancelled", "interrupted", "needs_attention"].includes(item.run.status) && (
+                        <div className="task-execution-retry">
+                          <button
+                            type="button"
+                            data-control="task-session-run-retry"
+                            aria-label={`${t.retryRun}: ${item.run.instruction}`}
+                            aria-describedby={`task-session-run-retry-hint-${item.run.id}`}
+                            disabled={busy || runSubmitting || Boolean(execution?.activeRunId) || Boolean(retrySubmittingRunId) || !execution?.effectiveConfig?.ready}
+                            onClick={() => void retryRun(item.run)}
+                          >
+                            {retrySubmittingRunId === item.run.id ? t.retryingRun : t.retryRun}
+                          </button>
+                          <div className="task-execution-retry-copy" id={`task-session-run-retry-hint-${item.run.id}`}>
+                            <p>{["interrupted", "needs_attention"].includes(item.run.status) ? t.retryUncertainHint : t.retryRunHint}</p>
+                            {!execution?.effectiveConfig?.ready && <p>{t.retryNeedsPreparation}</p>}
+                          </div>
+                        </div>
+                      )}
                     </li>
                   ))}
                 </ol>
@@ -1026,7 +1112,7 @@ export function TaskWorkSessions({
                     {activeRun.workLogSyncState === "synced" && <p className="task-execution-meta">{t.syncSucceeded}</p>}
                     {activeRun.workLogSyncState === "pending" && <p role="status">{t.syncPending}</p>}
                     {activeRun.workLogSyncState === "failed" && <><p role="alert">{t.syncFailed} {syncError[activeRun.id] || activeRun.workLogSyncError}</p><button type="button" data-control="task-session-worklog-sync" disabled={syncBusy === activeRun.id} onClick={() => void syncWorkLog(activeRun)}>{t.syncWorkLog}</button></>}
-                    {["failed", "cancelled", "interrupted", "needs_attention"].includes(activeRun.status) && <><button type="button" data-control="task-session-run-retry" disabled={busy || Boolean(draft.trim())} onClick={() => { setDraft(activeRun.instruction); setRetryOfRunId(activeRun.id); }}>{t.retryRun}</button>{draft.trim() && <p>{t.retryDraftHint}</p>}</>}
+                    {["failed", "cancelled", "interrupted", "needs_attention"].includes(activeRun.status) && <><button type="button" data-control="task-session-run-reuse" disabled={busy || Boolean(draft.trim())} onClick={() => { setDraft(activeRun.instruction); setRetryOfRunId(activeRun.id); }}>{t.reuseInstruction}</button>{draft.trim() && <p>{t.retryDraftHint}</p>}</>}
                   </section>
                 )}
                 {execution?.effectiveConfig && <section className="task-execution-effective"><h5>{execution.effectiveConfig.provenance === "bound_thread" ? t.effective : t.prepare}</h5><dl><dt>{t.model}</dt><dd>{execution.effectiveConfig.model}</dd><dt>{t.workspace}</dt><dd>{execution.effectiveConfig.cwd}</dd><dt>{t.approval}</dt><dd>{execution.effectiveConfig.approvalPolicy} · {execution.effectiveConfig.approvalsReviewer}</dd><dt>Sandbox</dt><dd>{execution.effectiveConfig.sandbox}</dd></dl>{execution.effectiveConfig.readinessError && <p role="alert">{execution.effectiveConfig.readinessError.message}</p>}<button type="button" data-control="task-session-settings-edit" onClick={() => { setEditingSettings(true); setSettingsExpanded(true); }}>{t.editSettings}</button></section>}
@@ -1096,7 +1182,7 @@ export function TaskWorkSessions({
                   >
                     {t.send}
                   </button>
-                  <button className="primary" type="button" data-control="task-session-run" disabled={runSubmitting || !draft.trim() || !record.session.workspacePath.trim() || Boolean(execution?.activeRunId) || !execution?.effectiveConfig?.ready} onClick={() => void run()}>{t.run}</button>
+                  <button className="primary" type="button" data-control="task-session-run" disabled={runSubmitting || Boolean(retrySubmittingRunId) || !draft.trim() || !record.session.workspacePath.trim() || Boolean(execution?.activeRunId) || !execution?.effectiveConfig?.ready} onClick={() => void run()}>{t.run}</button>
                 </footer>
               </div>
               <aside className="task-session-sidebar">
