@@ -1,5 +1,6 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import type { TaskExecutionSnapshot } from "../types/taskWorkbench";
+import type { TaskWorkSessionAttachment } from "../types/taskWorkbench";
 
 type NativeResponse<T> = { status: number; body: T };
 type ExecutionInput = { taskId: string; sessionId: string; runId?: string };
@@ -13,7 +14,7 @@ const unwrap = async <T>(command: string, input: Record<string, unknown>, onSnap
 
 export const taskExecutionClient = {
   prepare: (input: ExecutionInput, onSnapshot?: (snapshot: TaskExecutionSnapshot) => void) => unwrap<TaskExecutionSnapshot>("task_session_prepare", input, onSnapshot),
-  execute: (input: ExecutionInput & { operationId: string; instruction: string; settingsRevision: string; retryOfRunId?: string }, onSnapshot?: (snapshot: TaskExecutionSnapshot) => void) => unwrap<TaskExecutionSnapshot>("task_session_execute", input, onSnapshot),
+  execute: (input: ExecutionInput & { operationId: string; instruction: string; settingsRevision: string; retryOfRunId?: string; attachment?: TaskWorkSessionAttachment }, onSnapshot?: (snapshot: TaskExecutionSnapshot) => void) => unwrap<TaskExecutionSnapshot>("task_session_execute", input, onSnapshot),
   subscribe: (input: ExecutionInput, onSnapshot?: (snapshot: TaskExecutionSnapshot) => void) => unwrap<TaskExecutionSnapshot>("task_session_execution_subscribe", input, onSnapshot),
   interrupt: (input: Required<ExecutionInput>) => unwrap<TaskExecutionSnapshot>("task_session_interrupt", input),
   respond: (input: Required<ExecutionInput> & { requestId: string; response: { decision?: string; answers?: Record<string, { answers: string[] }> } }) => unwrap<TaskExecutionSnapshot>("task_session_formal_response", input),

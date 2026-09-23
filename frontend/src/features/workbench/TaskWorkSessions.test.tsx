@@ -61,6 +61,23 @@ describe("Task work sessions", () => {
     expect(window.llmWikiApplication.request).not.toHaveBeenCalledWith(expect.objectContaining({ path: expect.stringContaining("/entries") }));
   });
 
+  it("passes an attached image to the explicit Codex Run", async () => {
+    const saved = { ...session("one", "Investigation"), workspacePath: "/project" };
+    const prepared = { runs: [], activeRunId: null, selectedRun: null, effectiveConfig: { model: "gpt-5.6-sol", cwd: "/project", approvalPolicy: "ask", approvalsReviewer: "user", sandbox: "workspace-write", provenance: "preflight", settingsRevision: "settings-1", ready: true, capabilities: { structuredUserInput: true } } };
+    execution.prepare.mockResolvedValue(prepared);
+    execution.execute.mockResolvedValue(prepared);
+    window.llmWikiApplication = { request: vi.fn().mockImplementation(({ path }: { path: string }) => path.endsWith("work-sessions") ? Promise.resolve(response({ sessions: [saved] })) : Promise.resolve(response({ session: saved, entries: [] }))) };
+    render(<TaskWorkSessions task={task} />);
+    fireEvent.change(await screen.findByLabelText("Session"), { target: { value: "one" } });
+    fireEvent.change(await screen.findByLabelText("Instruction or note"), { target: { value: "Inspect this screenshot" } });
+    fireEvent.change(document.querySelector<HTMLInputElement>('[data-control="task-session-attachment"]')!, { target: { files: [new File(["png"], "screen.png", { type: "image/png" })] } });
+    await waitFor(() => expect(screen.getByAltText("screen.png")).toBeVisible());
+    fireEvent.click(screen.getByRole("button", { name: "Prepare conversation" }));
+    await waitFor(() => expect(execution.prepare).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole("button", { name: "Run with Codex" }));
+    await waitFor(() => expect(execution.execute).toHaveBeenCalledWith(expect.objectContaining({ attachment: { name: "screen.png", mediaType: "image/png", data: "cG5n" } }), expect.any(Function)));
+  });
+
   it("submits the actual selected structured answer once and retains it after an error", async () => {
     const saved = { ...session("one", "Investigation"), workspacePath: "/project" };
     const snapshot = { activeRunId: "run-1", selectedRun: { id: "run-1", taskId: task.id, sessionId: "one", instruction: "Ask", status: "awaiting_response", stopRequested: false, provider: "codex", model: "gpt-5.6-sol", workspacePath: "/project", evidence: [], workLogSyncState: "synced", revision: 1, formalRequests: [{ id: "request-1", kind: "user_input", status: "pending", isBlocking: true, title: "Choose", prompt: "Pick one", choices: [], questions: [{ id: "question-1", header: "Target", prompt: "Which?", options: [{ value: "safe", label: "Safe" }], allowOther: false, isSecret: false }] }] }, runs: [], effectiveConfig: undefined };

@@ -451,7 +451,7 @@ export function TaskWorkSessions({
     const id = record.session.id;
     const expected = generation.current;
     const submittedInstruction = draft;
-    const payload = JSON.stringify({ instruction: submittedInstruction, settingsRevision: execution.effectiveConfig.settingsRevision, retryOfRunId });
+    const payload = JSON.stringify({ instruction: submittedInstruction, settingsRevision: execution.effectiveConfig.settingsRevision, retryOfRunId, attachment });
     const savedDraft = drafts.get(id);
     const attempt = savedDraft?.executionAttempt?.payload === payload
       ? savedDraft.executionAttempt
@@ -459,7 +459,7 @@ export function TaskWorkSessions({
     drafts.set(id, { body: draft, attachment, operationId: savedDraft?.operationId ?? operationId(), formalAnswers: answers, executionAttempt: attempt });
     setRunSubmitting(true); setError("");
     try {
-      const snapshot = await taskExecutionClient.execute({ taskId: task.id, sessionId: id, operationId: attempt.operationId, instruction: submittedInstruction, settingsRevision: execution.effectiveConfig.settingsRevision, retryOfRunId: attempt.retryOfRunId }, (next) => {
+      const snapshot = await taskExecutionClient.execute({ taskId: task.id, sessionId: id, operationId: attempt.operationId, instruction: submittedInstruction, settingsRevision: execution.effectiveConfig.settingsRevision, retryOfRunId: attempt.retryOfRunId, attachment }, (next) => {
         if (generation.current === expected && activeRef.current === id) receiveExecution(next);
       });
       if (generation.current === expected && activeRef.current === id) {
