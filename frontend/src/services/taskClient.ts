@@ -3,6 +3,8 @@ import type {
   InputImage,
   ConflictReview,
   ConflictReviewHistory,
+  KnowledgeReviewProjection,
+  KnowledgeArchiveProposal,
   RefinementProposal,
   RefinementSession,
   TaskAggregate,
@@ -10,6 +12,12 @@ import type {
   TaskWorkSessionAttachment,
   TaskWorkSessionRecord,
   WorkbenchSnapshot,
+  ReferenceWorkspace,
+  WorkPreviewVersion,
+  PreviewComparison,
+  ExactReferenceBinding,
+  DocumentMention,
+  WorkPreviewFields,
 } from "../types/taskWorkbench";
 
 const locale = () =>
@@ -68,6 +76,18 @@ export const taskClient = {
     ),
   task: (id: string) =>
     request<TaskAggregate>(`/tasks/${encodeURIComponent(id)}`),
+  prepareKnowledgeArchive: (input: { operationId: string; taskId: string; knowledgeRevision: number; expectedKnowledgeContentHash: string; expectedGenerationSnapshotHash: string; selectedIdeaRevisionIds: Array<{ id: string; revision: number }>; locale: "en" | "ko" }) =>
+    request<KnowledgeArchiveProposal>("/knowledge/archive/prepare", "POST", input),
+  organizeKnowledgeArchive: (input: { operationId: string; documentId: string; expectedRevision: string; intent: "move" | "rename" | "withdraw" | "repair"; requestedPath?: string }) =>
+    request<KnowledgeArchiveProposal>("/knowledge/archive/organize", "POST", input),
+  publishKnowledgeArchive: (input: { operationId: string; proposalId: string; proposalVersion: number; proposalHash: string }) =>
+    request<{ operationId?: string; state: "writing" | "index_pending" | "index_failed" | "complete" | "conflict" | "repair_required" | "compensated"; error?: string }>("/knowledge/archive/publish", "POST", input),
+  knowledgeArchiveStatus: (archiveOperationId: string) =>
+    request<{ operationId?: string; state: "writing" | "index_pending" | "index_failed" | "complete" | "conflict" | "repair_required" | "compensated"; error?: string }>(`/knowledge/archive/operations/${encodeURIComponent(archiveOperationId)}`),
+  retryKnowledgeArchive: (archiveOperationId: string) =>
+    request<{ operationId?: string; state: "writing" | "index_pending" | "index_failed" | "complete" | "conflict" | "repair_required" | "compensated"; error?: string }>(`/knowledge/archive/operations/${encodeURIComponent(archiveOperationId)}/retry`, "POST"),
+  recoverKnowledgeArchive: (input: { operationId: string; choice: "finish" | "compensate" }) =>
+    request<{ operationId?: string; state: "writing" | "index_pending" | "index_failed" | "complete" | "conflict" | "repair_required" | "compensated"; error?: string }>(`/knowledge/archive/operations/${encodeURIComponent(input.operationId)}/recover`, "POST", input),
   workSessions: (taskId: string) => request<{ sessions: TaskWorkSession[] }>(`/tasks/${encodeURIComponent(taskId)}/work-sessions`),
   createWorkSession: (taskId: string, title: string) => request<TaskWorkSession>(`/tasks/${encodeURIComponent(taskId)}/work-sessions`, "POST", { title }),
   workSession: (taskId: string, sessionId: string) => request<TaskWorkSessionRecord>(`/tasks/${encodeURIComponent(taskId)}/work-sessions/${encodeURIComponent(sessionId)}`),
@@ -222,12 +242,38 @@ export const taskClient = {
     request<RefinementProposal[]>(
       `/refinement/${encodeURIComponent(id)}/proposals`,
     ),
-  message: (id: string, message: string, images?: InputImage[]) =>
+  message: (id: string, message: string, images?: InputImage[], mentions?: DocumentMention[]) =>
     request<RefinementSession>(
       `/refinement/${encodeURIComponent(id)}/messages`,
       "POST",
-      { message, images },
+      { message, images, mentions },
     ),
+  referenceWorkspace: (id: string) =>
+    request<ReferenceWorkspace>(`/refinement/${encodeURIComponent(id)}/reference-workspace`),
+  generatePreview: (id: string, expectedContextRevision?: string, expectedTaskRevision?: number) =>
+    request<{ jobId: string; status: string }>(`/refinement/${encodeURIComponent(id)}/preview-generations`, "POST", {
+      expectedContextRevision, expectedTaskRevision, locale: locale(),
+    }),
+  investigate: (id: string, input: Record<string, unknown> = {}) =>
+    request<{ status: string }>(`/refinement/${encodeURIComponent(id)}/investigations`, "POST", input),
+  references: (id: string, query = "") =>
+    request<{ items: ExactReferenceBinding[]; orderEpoch?: number }>(`/refinement/${encodeURIComponent(id)}/references${query ? `?query=${encodeURIComponent(query)}` : ""}`),
+  openReference: (id: string, binding: ExactReferenceBinding, version?: number) =>
+    request<{ reference: ExactReferenceBinding; source: { markdown?: string; body?: string } }>(`/refinement/${encodeURIComponent(id)}/references/open`, "POST", { ...binding, version }),
+  referenceUsage: (id: string, binding: ExactReferenceBinding, kind: "used" | "excluded", reason = "Explicit user reference choice") =>
+    request(`/refinement/${encodeURIComponent(id)}/references/${encodeURIComponent(binding.documentId)}/usage`, "POST", { ...binding, kind, reason, useScope: "preview" }),
+  saveMentionDraft: (id: string, mentions: DocumentMention[], text: string, expectedDraftRevision?: number) =>
+    request(`/refinement/${encodeURIComponent(id)}/mention-draft`, "PUT", { mentions, text, expectedDraftRevision }),
+  previewVersion: (id: string, version: number) =>
+    request<WorkPreviewVersion>(`/refinement/${encodeURIComponent(id)}/preview-versions/${version}`),
+  comparePreview: (id: string, left: number, right: number) =>
+    request<{ left: WorkPreviewVersion; right: WorkPreviewVersion; comparison: PreviewComparison }>(`/refinement/${encodeURIComponent(id)}/preview-versions/${left}/compare/${right}`),
+  editPreview: (id: string, version: number, fields: WorkPreviewFields, expectedCurrentPreviewVersion: number, expectedContentHash: string) =>
+    request(`/refinement/${encodeURIComponent(id)}/preview-versions/${version}/edits`, "POST", { version, fields, expectedCurrentPreviewVersion, expectedContentHash }),
+  restorePreview: (id: string, version: number, expectedCurrentPreviewVersion: number) =>
+    request(`/refinement/${encodeURIComponent(id)}/preview-versions/${version}/restore`, "POST", { version, expectedCurrentPreviewVersion }),
+  applyPreview: (id: string, version: number, expectedCurrentPreviewVersion: number, expectedContentHash: string, expectedTaskRevision?: number, editedFieldHashes?: Record<string, string>) =>
+    request<{ task: { id: string; taskRevision: number }; transitionCause: "preview_adopted"; version: number }>(`/refinement/${encodeURIComponent(id)}/preview-versions/${version}/apply`, "POST", { version, expectedCurrentPreviewVersion, expectedContentHash, expectedTaskRevision, editedFieldHashes }),
   proposalDecision: (
     id: string,
     proposalId: string,
@@ -252,6 +298,8 @@ export const taskClient = {
     request<ConflictReviewHistory>("/conflict-reviews", "GET", { subject }),
   cancelReview: (id: string) =>
     request(`/conflict-reviews/${encodeURIComponent(id)}/cancel`, "POST"),
+  knowledge: (id: string) =>
+    request<KnowledgeReviewProjection>(`/tasks/${encodeURIComponent(id)}/knowledge`),
   knowledgeDraft: (id: string, expectedTaskRevision: number) =>
     request<{
       id: string;
@@ -287,6 +335,22 @@ export const taskClient = {
       "POST",
       { expectedContentHash, expectedSourceHash, bodyMarkdown },
     ),
+  restoreKnowledge: (
+    id: string,
+    revision: number,
+    expectedCurrentPrivateRevision: number,
+  ) => request<{
+    taskId: string;
+    draftRevision: number;
+    derivedFromRevision: number;
+    contentHash: string;
+    bodyMarkdown: string;
+    state: string;
+  }>(
+    `/tasks/${encodeURIComponent(id)}/knowledge/versions/${revision}/restore`,
+    "POST",
+    { expectedCurrentPrivateRevision },
+  ),
   regenerateKnowledge: (
     id: string,
     draftRevision: number,
@@ -313,4 +377,5 @@ export const taskClient = {
       `/tasks/${encodeURIComponent(id)}/lineage`,
     ),
   retryJob: (id: string) => request(`/jobs/${encodeURIComponent(id)}/retry`, "POST"),
+  repairDistillation: (id: string, reason = "explicit repair", runId?: string) => request(`/tasks/${encodeURIComponent(id)}/distillation-repair`, "POST", { reason, runId }),
 };

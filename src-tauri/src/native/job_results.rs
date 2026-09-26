@@ -9,6 +9,7 @@ fn id() -> String {
 }
 
 pub(super) struct JobContext<'a> {
+    pub(super) job_id: &'a str,
     pub(super) connection: &'a rusqlite::Connection,
     pub(super) db_path: &'a Path,
     pub(super) task: &'a str,
@@ -21,6 +22,7 @@ pub(super) struct JobContext<'a> {
 
 pub(super) fn prepare_result(context: JobContext<'_>, result: Value) -> Result<Value, String> {
     let JobContext {
+        job_id,
         connection,
         db_path,
         task,
@@ -33,6 +35,11 @@ pub(super) fn prepare_result(context: JobContext<'_>, result: Value) -> Result<V
     let locale = crate::native::localization::normalize_locale(
         input.get("locale").and_then(Value::as_str).unwrap_or("en"),
     );
+    if task == "capture_distillation" {
+        return crate::native::capture_distillation::publish_result(
+            db_path, job_id, input, &result,
+        );
+    }
     if matches!(task, "workflow_draft" | "workflow_refinement") {
         let versions = result
             .as_object()

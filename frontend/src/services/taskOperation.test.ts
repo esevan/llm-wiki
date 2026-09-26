@@ -23,6 +23,26 @@ describe('Task contract routing', () => {
     expect(taskOperation('POST', '/tasks/t%201/knowledge/drafts', { expectedTaskRevision: 4 }, 'en'))
       .toEqual({ name: 'jobs.enqueue', input: expect.objectContaining({ taskKind: 'knowledge_draft', entityType: 'tasks', entityId: 't 1', taskId: 't 1', expectedTaskRevision: 4, locale: 'en' }) });
   });
+  it('routes read-only Knowledge review and restore-as-new separately', () => {
+    expect(taskOperation('GET', '/tasks/task%201/knowledge', {}, 'en'))
+      .toEqual({ name: 'task-knowledge.get', input: { taskId: 'task 1', locale: 'en' } });
+    expect(taskOperation('POST', '/tasks/task%201/knowledge/versions/7/restore', { expectedCurrentPrivateRevision: 9 }, 'ko'))
+      .toEqual({ name: 'task-knowledge.restore', input: { taskId: 'task 1', revision: 7, expectedCurrentPrivateRevision: 9, locale: 'ko' } });
+  });
+  it('routes archive review, organization, publication, status, retry, and recovery commands', () => {
+    expect(taskOperation('POST', '/knowledge/archive/prepare', { operationId: 'prepare-1', taskId: 'task-1' }, 'en'))
+      .toEqual({ name: 'task-knowledge.archive-prepare', input: { operationId: 'prepare-1', taskId: 'task-1', locale: 'en' } });
+    expect(taskOperation('POST', '/knowledge/archive/organize', { operationId: 'organize-1', documentId: 'doc-1', intent: 'rename' }, 'en'))
+      .toEqual({ name: 'task-knowledge.archive-organize', input: { operationId: 'organize-1', documentId: 'doc-1', intent: 'rename', locale: 'en' } });
+    expect(taskOperation('POST', '/knowledge/archive/publish', { operationId: 'publish-1', proposalId: 'proposal-1' }, 'ko'))
+      .toEqual({ name: 'task-knowledge.archive-publish', input: { operationId: 'publish-1', proposalId: 'proposal-1', locale: 'ko' } });
+    expect(taskOperation('GET', '/knowledge/archive/operations/publish%201', { operationId: 'forged' }, 'en'))
+      .toEqual({ name: 'task-knowledge.archive-status', input: { operationId: 'publish 1', locale: 'en' } });
+    expect(taskOperation('POST', '/knowledge/archive/operations/publish%201/retry', { operationId: 'forged' }, 'en'))
+      .toEqual({ name: 'task-knowledge.archive-retry', input: { operationId: 'publish 1', locale: 'en' } });
+    expect(taskOperation('POST', '/knowledge/archive/operations/publish%201/recover', { operationId: 'forged', choice: 'finish' }, 'ko'))
+      .toEqual({ name: 'task-knowledge.archive-recover', input: { operationId: 'publish 1', choice: 'finish', locale: 'ko' } });
+  });
   it('queues image summaries for the URL Work Log entry without body overrides', () => {
     expect(taskOperation('POST', '/work-log/entry%201/image-summary', { entityId: 'forged', entityType: 'features', taskKind: 'other' }, 'ko'))
       .toEqual({ name: 'jobs.enqueue', input: { taskKind: 'image_summary', entityType: 'task_work_log_entries', entityId: 'entry 1', locale: 'ko' } });

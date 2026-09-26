@@ -48,16 +48,20 @@ fn get(h: &Harness, id: &str) -> NativeResponse {
 #[test]
 fn capture_is_canonical_workbench_item() {
     let h = Harness::new();
-    ok(&h.call(
+    let saved = h.call(
         "workflow",
         "capture.create",
         json!({"operationId":"capture","text":"Native thought"}),
-    ));
-    assert!(h
-        .call("workflow", "workbench.get", json!({}))
-        .body
-        .to_string()
-        .contains("Native thought"));
+    );
+    ok(&saved);
+    assert_eq!(saved.body["source"]["text"], "Native thought");
+    assert_eq!(saved.body["distillation"]["status"], "queued");
+    let board = h.call("workflow", "workbench.get", json!({}));
+    assert!(board.body.to_string().contains("Native thought"));
+    assert_eq!(
+        board.body["categories"][0]["items"][0]["captureDistillation"]["captureId"],
+        saved.body["id"]
+    );
 }
 #[test]
 fn direct_task_is_persisted() {
@@ -259,6 +263,15 @@ async fn refinement_workspace_restores_exact_draft_and_tab() {
     );
     ok(&capture);
     let capture_id = id(&capture);
+    let jobs_before_open: i64 = rusqlite::Connection::open(h.root.path().join("state.sqlite3"))
+        .unwrap()
+        .query_row(
+            "SELECT count(*) FROM ai_jobs_v2 WHERE task_kind='capture_distillation' AND entity_id=?",
+            [&capture_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(jobs_before_open, 1);
     let capture_session = h
         .app
         .execute_workflow(NativeOperation {
@@ -267,6 +280,16 @@ async fn refinement_workspace_restores_exact_draft_and_tab() {
         })
         .await;
     ok(&capture_session);
+    assert_eq!(capture_session.body["captureDistillation"]["captureId"],capture_id);
+    let jobs_after_open: i64 = rusqlite::Connection::open(h.root.path().join("state.sqlite3"))
+        .unwrap()
+        .query_row(
+            "SELECT count(*) FROM ai_jobs_v2 WHERE task_kind='capture_distillation' AND entity_id=?",
+            [&capture_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(jobs_after_open, jobs_before_open);
     let board = h.call("workflow", "workbench.get", json!({}));
     ok(&board);
     assert!(board.body["refiningShortcuts"]
@@ -284,67 +307,66 @@ async fn refinement_workspace_restores_exact_draft_and_tab() {
 }
 #[tokio::test]
 async fn explicit_knowledge_publish_and_external_edit_guard_work() {
+    use std::io::BufRead;
+    struct Provider(std::process::Child);
+    impl Drop for Provider {
+        fn drop(&mut self) { let _ = self.0.kill(); let _ = self.0.wait(); }
+    }
+    let mut provider = Provider(std::process::Command::new("node")
+        .arg(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/fakes/openai_server.mjs"))
+        .args(["--port","0"]).stdout(std::process::Stdio::piped()).spawn().unwrap());
+    let mut port = String::new();
+    std::io::BufReader::new(provider.0.stdout.take().unwrap()).read_line(&mut port).unwrap();
+    let port: u16 = port.trim().parse().unwrap();
     let h = Harness::new();
+    ok(&h.call("settings","provider.save",json!({"base_url":format!("http://127.0.0.1:{port}/v1"),"model":"fixture","api_key":"fixture"})));
     let t = h.task("Knowledge");
     let x = id(&t);
-    ok(&h.call(
-        "workflow",
-        "task.transition",
-        json!({"operationId":"start","taskId":x,"expectedTaskRevision":1,"to":"in_progress"}),
-    ));
-    ok(&h.call(
-        "workflow",
-        "task.completion.create",
-        json!({"operationId":"complete","taskId":x,"expectedTaskRevision":1,"evidence":"verified"}),
-    ));
-    let d = h
-        .app
-        .execute_workflow(NativeOperation {
-            name: "task-knowledge.draft".into(),
-            input: json!({"operationId":"draft","taskId":x,"expectedTaskRevision":1}),
-        })
-        .await;
-    ok(&d);
-    let corrected = h
-        .app
-        .execute_workflow(NativeOperation {
-            name: "task-knowledge.correction".into(),
-            input: json!({"operationId":"correct","taskId":x,"draftRevision":d.body["draftRevision"],"expectedContentHash":d.body["contentHash"],"expectedSourceHash":d.body["sourceHash"],"bodyMarkdown":"# Corrected Knowledge"}),
-        })
-        .await;
+    ok(&h.call("workflow","task.transition",json!({"operationId":"start","taskId":x,"expectedTaskRevision":1,"to":"in_progress"})));
+    ok(&h.call("workflow","task.completion.create",json!({"operationId":"complete","taskId":x,"expectedTaskRevision":1,"evidence":"Recorded completion evidence"})));
+    let call = |name: &str,input| h.app.execute_workflow(NativeOperation{name:name.into(),input});
+    let draft = call("task-knowledge.draft",json!({"operationId":"draft","taskId":x,"expectedTaskRevision":1})).await;
+    ok(&draft);
+    let body = format!("{}\n\n## Reviewed organization\n",draft.body["bodyMarkdown"].as_str().unwrap());
+    let corrected = call("task-knowledge.correction",json!({"operationId":"correct","taskId":x,"draftRevision":draft.body["draftRevision"],"expectedContentHash":draft.body["contentHash"],"expectedSourceHash":draft.body["sourceHash"],"bodyMarkdown":body})).await;
     ok(&corrected);
-    let stale = h
-        .app
-        .execute_workflow(NativeOperation {
-            name: "task-knowledge.correction".into(),
-            input: json!({"operationId":"stale-correct","taskId":x,"draftRevision":d.body["draftRevision"],"expectedContentHash":d.body["contentHash"],"expectedSourceHash":d.body["sourceHash"],"bodyMarkdown":"# Stale"}),
-        })
-        .await;
-    assert_eq!(stale.status, 409);
-    let published=h.app.execute_workflow(NativeOperation{name:"task-knowledge.publish".into(),input:json!({"operationId":"publish","taskId":x,"draftRevision":d.body["draftRevision"],"expectedContentHash":corrected.body["contentHash"],"expectedSourceHash":corrected.body["sourceHash"]})}).await;
-    ok(&published);
-    let aggregate = h.call("workflow", "task.get", json!({"taskId":x}));
-    assert_eq!(aggregate.body["publication"]["state"], "published");
-    assert_eq!(
-        aggregate.body["publication"]["contentHash"],
-        corrected.body["contentHash"]
-    );
-    let regenerated=h.app.execute_workflow(NativeOperation{name:"task-knowledge.regenerate".into(),input:json!({"operationId":"regenerate","taskId":x,"draftRevision":d.body["draftRevision"],"expectedTaskRevision":1})}).await;
+    assert_eq!(corrected.body["draftRevision"],2);
+    let stale = call("task-knowledge.correction",json!({"operationId":"stale","taskId":x,"draftRevision":1,"expectedContentHash":draft.body["contentHash"],"expectedSourceHash":draft.body["sourceHash"],"bodyMarkdown":body})).await;
+    assert!(stale.status>=400,"{}",stale.body);
+    let proposal = call("task-knowledge.archive-prepare",json!({"operationId":"prepare","taskId":x,"knowledgeRevision":2,"expectedKnowledgeContentHash":corrected.body["contentHash"],"expectedGenerationSnapshotHash":corrected.body["sourceHash"],"selectedIdeaRevisionIds":[]})).await;
+    ok(&proposal);
+    let publish = call("task-knowledge.archive-publish",json!({"operationId":"publish","proposalId":proposal.body["proposalId"],"proposalVersion":proposal.body["proposalVersion"],"proposalHash":proposal.body["proposalHash"]})).await;
+    ok(&publish);
+    tokio::time::timeout(std::time::Duration::from_secs(10),async {
+        loop {
+            let state = call("task-knowledge.archive-status",json!({"operationId":"publish"})).await;
+            ok(&state);
+            if state.body["state"]=="complete" { break; }
+            assert_ne!(state.body["state"],"index_failed","{}",state.body);
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    }).await.expect("exact publication index receipt");
+    let projection = call("task-knowledge.get",json!({"taskId":x})).await;
+    ok(&projection);
+    assert_eq!(projection.body["pointers"]["publishedRevision"],2);
+    let path = h.root.path().join("vault").join(proposal.body["target"]["path"].as_str().unwrap());
+    let artifact = proposal.body["artifacts"].as_array().unwrap().iter().find(|item| item["documentId"]==proposal.body["target"]["documentId"]).unwrap();
+    assert_eq!(std::fs::read_to_string(&path).unwrap(),artifact["bytes"].as_str().unwrap());
+    let regenerated = call("task-knowledge.regenerate",json!({"operationId":"regenerate","taskId":x,"expectedTaskRevision":1})).await;
     ok(&regenerated);
-    let republished=h.app.execute_workflow(NativeOperation{name:"task-knowledge.publish".into(),input:json!({"operationId":"republish","taskId":x,"draftRevision":regenerated.body["draftRevision"],"expectedContentHash":regenerated.body["contentHash"],"expectedSourceHash":regenerated.body["sourceHash"]})}).await;
-    ok(&republished);
-    let withdrawn_regenerated=h.app.execute_workflow(NativeOperation{name:"task-knowledge.withdraw".into(),input:json!({"operationId":"withdraw-regenerated","taskId":x,"draftRevision":regenerated.body["draftRevision"],"expectedContentHash":regenerated.body["contentHash"],"expectedSourceHash":regenerated.body["sourceHash"]})}).await;
-    ok(&withdrawn_regenerated);
-    assert_eq!(withdrawn_regenerated.body["state"], "withdrawn");
-    let path = h
-        .root
-        .path()
-        .join("vault")
-        .join(republished.body["path"].as_str().unwrap());
-    std::fs::write(path, "external").unwrap();
-    let withdrawn=h.app.execute_workflow(NativeOperation{name:"task-knowledge.withdraw".into(),input:json!({"operationId":"withdraw","taskId":x,"draftRevision":d.body["draftRevision"],"expectedContentHash":corrected.body["contentHash"],"expectedSourceHash":corrected.body["sourceHash"]})}).await;
-    assert_eq!(withdrawn.status, 409);
+    assert_eq!(regenerated.body["draftRevision"],3);
+    let projection = call("task-knowledge.get",json!({"taskId":x})).await;
+    assert_eq!(projection.body["pointers"]["publishedRevision"],2);
+    let withdrawal = call("task-knowledge.archive-organize",json!({"operationId":"prepare-withdraw","documentId":projection.body["pointers"]["publicationDocumentId"],"expectedRevision":projection.body["pointers"]["publicationContentHash"],"intent":"withdraw"})).await;
+    ok(&withdrawal);
+    std::fs::write(&path,"external edit").unwrap();
+    let rejected = call("task-knowledge.archive-publish",json!({"operationId":"withdraw","proposalId":withdrawal.body["proposalId"],"proposalVersion":withdrawal.body["proposalVersion"],"proposalHash":withdrawal.body["proposalHash"]})).await;
+    assert!(rejected.status>=400,"{}",rejected.body);
+    assert_eq!(std::fs::read_to_string(path).unwrap(),"external edit");
+    let final_projection = call("task-knowledge.get",json!({"taskId":x})).await;
+    assert_eq!(final_projection.body["pointers"]["publishedRevision"],2);
 }
+
 #[test]
 fn vault_search_read_and_domain_boundary_remain_safe() {
     let h = Harness::new();

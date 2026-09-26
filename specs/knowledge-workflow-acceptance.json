@@ -1,0 +1,83 @@
+{
+  "schema": 1,
+  "purpose": "Cross-feature acceptance fixtures; expected meaning, not required literal wording",
+  "cases": [
+    {
+      "id": "receipt-is-not-approval",
+      "sources": [
+        {"id":"log-1","kind":"performed","text":"변경 전후 비교표를 첨부해 변경안을 발송했다."},
+        {"id":"log-2","kind":"observed","text":"고객은 확인했습니다라고 회신했다. 변경안 승인 여부는 명시하지 않았다."},
+        {"id":"log-3","kind":"performed","text":"명시적 승인 여부를 다시 요청했고 답변을 기다리고 있다."}
+      ],
+      "must_preserve": ["비교표 첨부 발송", "수신 확인", "명시적 승인 미확보", "추가 요청 및 대기"],
+      "must_not_claim": ["고객 승인 완료", "업무 완료", "직접 연락의 효과 검증"],
+      "source_links_required": true
+    },
+    {
+      "id": "control-request-is-not-decision",
+      "sources": [
+        {"id":"user-1","kind":"user","text":"다시 실행해"},
+        {"id":"run-2","kind":"result","text":"동일 설정으로 재시도했으나 네트워크 연결에 실패했다."}
+      ],
+      "expected": "Keep retry request as inspectable source, no independent decision node. Consolidate repeated attempt with existing work; preserve relevant unresolved connection failure."
+    },
+    {
+      "id": "retry-with-material-change",
+      "sources": [
+        {"id":"user-2","kind":"user","text":"타임아웃을 10초에서 30초로 바꿔 다시 실행해."},
+        {"id":"run-3","kind":"result","text":"30초 설정을 적용했다. 실행은 아직 진행 중이다."}
+      ],
+      "expected": "Record the 10-to-30-second change as an explicit approach decision with user source, preserve running/unverified state. Do not discard solely because text contains 다시 실행."
+    },
+    {
+      "id": "report-is-not-verification",
+      "sources": [
+        {"id":"final-1","kind":"final_report","text":"테스트를 통과했고 작업을 완료했다."},
+        {"id":"command-1","kind":"completed_command","exit_code":1,"text":"Tests failed: expected approval, got receipt."}
+      ],
+      "expected": "Expose report/evidence contradiction. Do not mark tests verified or task complete. Preserve exact failing check evidence and report provenance."
+    },
+    {
+      "id": "missing-final-report",
+      "sources": [
+        {"id":"run-4","kind":"run_status","text":"interrupted"},
+        {"id":"command-2","kind":"completed_command","exit_code":0,"text":"Created comparison.md"}
+      ],
+      "expected": "Distill known artifact creation and interruption only. Mark missing report and unknown completion; do not synthesize a successful final report."
+    },
+    {
+      "id": "historical-choice-to-current-decision",
+      "decisions": [
+        {"id":"decision-a","status":"superseded","text":"회신을 받으면 완료","successor":"decision-b"},
+        {"id":"decision-b","status":"final","text":"명시적 승인 확인까지 완료 기준에 포함","condition":"고객 동의가 필요한 변경","reason":"수신 확인이 동의로 오해된 사례"}
+      ],
+      "query": "변경안 보낸 뒤 답장 오면 끝내도 되나",
+      "expected": "Return decision-b with condition and transition reason, retain decision-a as matching history, never recommend decision-a as current."
+    },
+    {
+      "id": "deferred-idea-not-general-lesson",
+      "sources": [
+        {"id":"idea-1","kind":"exploration","text":"자동 리마인더를 검토했지만 이번에는 직접 연락했다. 자동 알림의 효과는 확인하지 않았다."}
+      ],
+      "expected": "Separate idea draft, deferred/unverified, related source links. No exploration body in final Knowledge and no claim that direct contact is better than automation."
+    },
+    {
+      "id": "stale-preview-result",
+      "request": {"revision":1,"approver":"담당자"},
+      "current": {"revision":2,"approver":"구매 책임자","user_edit":true},
+      "expected": "Do not replace revision-2 user content with revision-1 result. Re-evaluate applicable evidence or keep a visible proposal; preserve input/focus and source identities."
+    },
+    {
+      "id": "incremental-evidence-enrichment",
+      "before": {"node_id":"node-approval","decision":"명시적 승인 확인","sources":["decision-b"]},
+      "change": {"id":"approval-mail","kind":"observed","text":"변경안에 동의합니다라는 고객 회신을 받았다."},
+      "expected": "Enrich matching work/result evidence or add a meaningful completion event as appropriate; retain decision identity. Unrelated nodes remain byte-equivalent except global projection metadata."
+    },
+    {
+      "id": "restore-draft-not-work-history",
+      "versions": [1,2,3],
+      "restore":1,
+      "expected": "Create version 4 derived from version 1 with exact assumptions/references; preserve versions 1–3, actual work logs, adopted decisions, and published version."
+    }
+  ]
+}

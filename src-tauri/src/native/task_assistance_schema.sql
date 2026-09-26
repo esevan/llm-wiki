@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS task_assistance_operations (
 CREATE TABLE IF NOT EXISTS task_assistance_jobs (
  id TEXT PRIMARY KEY, kind TEXT NOT NULL, subject_id TEXT NOT NULL, status TEXT NOT NULL,
  input_json TEXT NOT NULL, result_json TEXT NOT NULL DEFAULT '{}', error TEXT NOT NULL DEFAULT '',
+ prompt_id TEXT NOT NULL DEFAULT '', prompt_version INTEGER NOT NULL DEFAULT 0,
  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, started_at TEXT, finished_at TEXT,
  CHECK(status IN ('queued','running','completed','failed','cancelled'))
 );
@@ -37,6 +38,7 @@ CREATE TABLE IF NOT EXISTS task_conflict_review_runs (
  trigger_kind TEXT NOT NULL, status TEXT NOT NULL, subject_json TEXT NOT NULL,
  findings_json TEXT NOT NULL DEFAULT '[]', evidence_json TEXT NOT NULL DEFAULT '[]',
  error TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ prompt_id TEXT NOT NULL DEFAULT '', prompt_version INTEGER NOT NULL DEFAULT 0,
  started_at TEXT, first_evidence_at TEXT, finished_at TEXT, cancel_requested_at TEXT,
  superseded_by_run_id TEXT
 );

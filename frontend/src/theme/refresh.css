@@ -205,3 +205,49 @@ dialog::backdrop { background: rgb(39 36 42 / 44%); backdrop-filter: blur(4px); 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition-duration: 0.01ms !important; }
 }
+
+/* Semantic content replacement: layers stay fixed while the masks explain a live revision change. */
+.content-revision-transition[data-transitioning] {
+  display: grid;
+  min-width: 0;
+}
+
+.content-revision-transition[data-transitioning] > [data-content-layer] {
+  grid-area: 1 / 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.content-revision-transition-title[data-transitioning] > [data-content-layer='previous'] {
+  animation: content-revision-title-exit var(--motion-fast) ease-in both;
+}
+
+.content-revision-transition-title[data-transitioning] > [data-content-layer='current'] {
+  animation: content-revision-title-enter calc(var(--motion-normal) - var(--motion-fast)) ease-out var(--motion-fast) both;
+}
+
+.content-revision-transition-body[data-transitioning] > [data-content-layer='current'] {
+  animation: content-revision-body-enter var(--motion-normal) ease-out both;
+}
+
+@keyframes content-revision-title-exit {
+  from { clip-path: inset(0 0 0 0); }
+  to { clip-path: inset(0 100% 0 0); }
+}
+
+@keyframes content-revision-title-enter {
+  from { clip-path: inset(0 100% 0 0); }
+  to { clip-path: inset(0 0 0 0); }
+}
+
+@keyframes content-revision-body-enter {
+  from { color: var(--color-text-muted); opacity: .42; }
+  to { color: inherit; opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .content-revision-transition[data-transitioning] > [data-content-layer] {
+    animation: none !important;
+    clip-path: none !important;
+  }
+}

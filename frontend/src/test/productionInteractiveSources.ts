@@ -16,7 +16,13 @@ import deleteDialog from '../features/workbench/DeleteItemDialog.tsx?raw';
 import taskDetail from '../features/workbench/TaskDetail.tsx?raw';
 import taskJourney from '../features/workbench/TaskJourneyGraph.tsx?raw';
 import taskWorkSessions from '../features/workbench/TaskWorkSessions.tsx?raw';
+import workLogDistillation from '../features/workbench/WorkLogDistillation.tsx?raw';
 import workbench from '../features/workbench/WorkbenchView.tsx?raw';
+import knowledgeReview from '../features/workbench/KnowledgeReviewPanel.tsx?raw';
+import referenceList from '../features/workbench/ReferenceList.tsx?raw';
+import referenceAwarePreview from '../features/workbench/ReferenceAwarePreview.tsx?raw';
+import referenceViewer from '../components/ReferenceViewer.tsx?raw';
+import draftVersionControls from '../components/DraftVersionControls.tsx?raw';
 import modalInteraction from '../features/workbench/useModalInteraction.ts?raw';
 import archiveRuntime from '../../public/runtime/archive.js?raw';
 import completedRuntime from '../../public/runtime/completed-workspace.js?raw';
@@ -53,8 +59,14 @@ export const productionInteractiveSources = new Map<string, string>([
   ['frontend/src/features/workbench/TaskDetail.tsx', taskDetail],
   ['frontend/src/features/workbench/TaskJourneyGraph.tsx', taskJourney],
   ['frontend/src/features/workbench/TaskWorkSessions.tsx', taskWorkSessions],
+  ['frontend/src/features/workbench/WorkLogDistillation.tsx', workLogDistillation],
   ['frontend/src/features/workbench/DeleteItemDialog.tsx', deleteDialog],
   ['frontend/src/features/workbench/WorkbenchView.tsx', workbench],
+  ['frontend/src/features/workbench/KnowledgeReviewPanel.tsx', knowledgeReview],
+  ['frontend/src/features/workbench/ReferenceList.tsx', referenceList],
+  ['frontend/src/features/workbench/ReferenceAwarePreview.tsx', referenceAwarePreview],
+  ['frontend/src/components/ReferenceViewer.tsx', referenceViewer],
+  ['frontend/src/components/DraftVersionControls.tsx', draftVersionControls],
   ['frontend/src/features/workbench/useModalInteraction.ts', modalInteraction],
   ['frontend/public/runtime/archive.js', archiveRuntime],
   ['frontend/public/runtime/completed-workspace.js', completedRuntime],

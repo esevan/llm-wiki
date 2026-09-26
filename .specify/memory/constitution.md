@@ -1,10 +1,9 @@
 <!--
 Sync Impact Report
-Version change: 2.1.0 -> 3.0.0
-Modified principles: IV. Organize Around Problems, Not Tasks -> IV. Tasks Carry Work; Problems Carry Context;
-C. Human Authority over AI clarifies that optional assistance never gates ordinary Task work;
-D. Evidence and Logical Consistency requires exact-revision, nonblocking conflict review.
-Added sections: Durable Workflow Migration requirements in Governance.
+Version change: 3.0.0 -> 4.0.0
+Modified principles: V permits deliberate, labelled idea archival; C permits source-preserving
+initial Capture cleanup and automatic working-preview updates; F permits Capture image interpretation.
+Added sections: Evidence distillation and incremental decision history under D.
 Removed sections: none.
 Follow-up TODOs: none.
 -->
@@ -40,7 +39,10 @@ belong to Task, and Task completion MUST NOT resolve a Problem or publish Knowle
 
 ### V. Private Process, Portable Knowledge
 Exploration, unfinished reasoning, chats, drafts, and intermediate work records MUST remain private
-local process by default. Only a user-approved completed result MUST become reusable Knowledge.
+local process by default. User-reviewed completed results MAY become reusable Knowledge. Users MAY
+deliberately archive selected explorations as separate idea documents with unverified, deferred, or
+rejected status and source links. Ideas MUST NOT be presented as established conclusions or silently
+inserted into final Knowledge bodies.
 Knowledge MUST use portable, inspectable formats such as Obsidian-compatible Markdown and MUST not
 depend on LLM Wiki to remain useful. The system MUST preserve the boundary between private working
 context and deliberately published knowledge.
@@ -66,9 +68,13 @@ CLIProxyAPI, provider aliases, or provider-specific configuration.
 
 ### C. Human Authority over AI
 AI is a required product capability for organizing, refining, comparing, and reporting work, but
-users own workflow state, priority, completion, Problem resolution, and Knowledge publication. AI
-MUST NOT autonomously create a durable Task or Problem revision, apply a proposal, advance a Task,
-resolve a Problem, or publish Knowledge. Optional refinement, readiness, and review results MUST NOT
+users own workflow state, priority, completion, Problem resolution, and publication. AI MAY clean up
+new Captures after immediate persistence and prepare or refresh working previews with evidence
+without a clarification round. These operations MUST preserve raw input, identify assumptions and
+provenance, and MUST NOT overwrite intervening edits or explicitly conflicting user conditions.
+Draft preparation/application MUST NOT imply user adoption, execution, verification, or finality.
+AI MUST NOT autonomously create a durable Task or Problem revision, advance a Task, resolve a
+Problem, or publish Knowledge or ideas. Optional refinement, readiness, and review results MUST NOT
 prevent Task creation, Work Log updates, start, or completion. Provider failure fallbacks MUST
 preserve private process and human authority.
 
@@ -78,6 +84,13 @@ Task revision, Vault revision, and evidence scope; failed, cancelled, insufficie
 MUST NOT appear clear. Unresolved findings MAY produce a nonblocking warning and an explicit user
 decision. Knowledge-file writes MUST be reviewed structured patches, atomic, reversible, and guarded
 against external changes.
+
+Work Logs MUST distill recorded evidence rather than invent facts or merely shorten all events.
+Run final reports are a primary source; execution evidence preserves material omissions, conditions,
+failures, and verification limits. Decision history MUST distinguish proposal, adoption, execution,
+and verification. Routine control requests MUST NOT become independent decisions. History updates
+MUST preserve identities and prior decisions while updating affected evidence and relationships
+incrementally. Explicit full rebuilds MAY support repair or changed interpretation rules.
 
 ### E. Local and Cross-Platform
 The application MUST run independently on macOS and Windows. SQLite WAL, platform-specific data
@@ -91,7 +104,8 @@ duplicate domain behavior across JavaScript, Rust, Python, or HTTP handlers. Pyt
 packaged sidecar while it owns substantial stable domain behavior, provided it is never contacted
 directly by the web UI, is bound to loopback only, is lifecycle-managed by the desktop shell, and
 has a documented domain-by-domain removal path. Version one continues to exclude sync,
-collaborative users, OCR, attachment indexing, and Obsidian application integration.
+collaborative users, general-purpose OCR, broad attachment indexing, and Obsidian application
+integration. Source-preserving interpretation of new Capture text and images is in scope.
 
 ## Performance Standards
 
@@ -141,4 +155,10 @@ remain canonical; Problem-only records remain discoverable as resumable refineme
 Problem approval and Solution conflict gates are retired at one release boundary without a runtime
 compatibility shim.
 
-**Version**: 3.0.0 | **Ratified**: 2026-08-18 | **Last Amended**: 2026-09-05
+Migration note for 4.0.0: initial automatic cleanup applies to newly created Captures; existing raw
+records and workflow states remain intact. Work Log distillation retains original evidence. Existing
+Knowledge is not silently reclassified or rewritten. Draft versions, source references, and decision
+identities remain traceable. This amendment records the user's September 26 workflow decisions;
+it does not assert that these features have shipped.
+
+**Version**: 4.0.0 | **Ratified**: 2026-08-18 | **Last Amended**: 2026-09-26

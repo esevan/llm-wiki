@@ -56,7 +56,7 @@ const operationFor = (request: ApplicationRequest): NativeOperation => {
   const withIds = (name: string, ids: Record<string, string>): NativeOperation => ({ name, input: { ...body, ...ids } });
   let ids: string[] | undefined;
 
-  const task = taskOperation(method, path, body, locale);
+  const task = taskOperation(method, `${path}${url.search}`, body, locale);
   if (task) return task;
 
   if (method === 'GET' && path === '/health') return { name: 'health.get', input: {} };

@@ -11,6 +11,7 @@ pub mod mcp_ipc;
 mod native;
 mod ports;
 mod provider;
+pub mod workflow_foundation;
 
 pub use native::{NativeApplication, NativeOperation, NativeResponse};
 use std::path::PathBuf;
@@ -511,7 +512,7 @@ pub fn run() {
             }
             let codex_home = native::settings::configured_codex_home(&application.settings_path())?;
             let execution_runtime =
-                native::task_execution_runtime::TaskExecutionRuntime::new(execution_service, codex_home);
+                native::task_execution_runtime::TaskExecutionRuntime::with_distillation_scheduler(execution_service, codex_home, application.clone());
             let background_projector = application.work_tracking_service();
             let mcp_service = application.work_tracking_service();
             let mcp_listener_shutdown = mcp_ipc::McpListenerShutdown::default();
@@ -862,7 +863,8 @@ mod tests {
             input: json!({}),
         });
         assert_eq!(health.body["semantic_available"], true);
-        assert_eq!(health.body["semantic_documents"], 2);
+        assert_eq!(health.body["documents"], 2);
+        assert_eq!(health.body["semantic_units"], 2);
         let search = app.execute(NativeOperation {
             name: "vault.search".into(),
             input: json!({"query":"인터넷", "semantic":true}),

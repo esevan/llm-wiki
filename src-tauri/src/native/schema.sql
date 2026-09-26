@@ -277,6 +277,67 @@ CREATE TRIGGER IF NOT EXISTS vault_documents_au AFTER UPDATE ON vault_documents 
   INSERT INTO vault_documents_fts(rowid,path,title,body)
   VALUES (new.rowid,new.path,new.title,new.body);
 END;
+CREATE TABLE IF NOT EXISTS vault_search_units (
+  unit_id TEXT PRIMARY KEY,
+  document_id TEXT NOT NULL,
+  path TEXT NOT NULL REFERENCES vault_documents(path) ON DELETE CASCADE,
+  title TEXT NOT NULL,
+  source_revision TEXT NOT NULL,
+  declared_revision TEXT,
+  section TEXT NOT NULL,
+  chunk_index INTEGER NOT NULL CHECK(chunk_index >= 0),
+  chunk_count INTEGER NOT NULL CHECK(chunk_count > 0),
+  aspect TEXT NOT NULL CHECK(aspect IN ('applicability','decision','content','exploration')),
+  information_type TEXT NOT NULL CHECK(information_type IN ('knowledge','idea')),
+  status TEXT CHECK(status IS NULL OR status IN ('current','historical','unverified','deferred','rejected')),
+  input_hash TEXT NOT NULL,
+  text TEXT NOT NULL,
+  unit_json TEXT NOT NULL,
+  indexed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS vault_search_units_document
+  ON vault_search_units(document_id,source_revision);
+CREATE INDEX IF NOT EXISTS vault_search_units_path
+  ON vault_search_units(path,source_revision);
+CREATE INDEX IF NOT EXISTS vault_search_units_aspect
+  ON vault_search_units(aspect,information_type,status);
+CREATE VIRTUAL TABLE IF NOT EXISTS vault_search_units_fts USING fts5(
+  unit_id UNINDEXED,
+  document_id UNINDEXED,
+  path,
+  title,
+  section,
+  text,
+  content='vault_search_units',
+  content_rowid='rowid'
+);
+CREATE TRIGGER IF NOT EXISTS vault_search_units_ai AFTER INSERT ON vault_search_units BEGIN
+  INSERT INTO vault_search_units_fts(rowid,unit_id,document_id,path,title,section,text)
+  VALUES(new.rowid,new.unit_id,new.document_id,new.path,new.title,new.section,new.text);
+END;
+CREATE TRIGGER IF NOT EXISTS vault_search_units_ad AFTER DELETE ON vault_search_units BEGIN
+  INSERT INTO vault_search_units_fts(vault_search_units_fts,rowid,unit_id,document_id,path,title,section,text)
+  VALUES('delete',old.rowid,old.unit_id,old.document_id,old.path,old.title,old.section,old.text);
+END;
+CREATE TRIGGER IF NOT EXISTS vault_search_units_au AFTER UPDATE ON vault_search_units BEGIN
+  INSERT INTO vault_search_units_fts(vault_search_units_fts,rowid,unit_id,document_id,path,title,section,text)
+  VALUES('delete',old.rowid,old.unit_id,old.document_id,old.path,old.title,old.section,old.text);
+  INSERT INTO vault_search_units_fts(rowid,unit_id,document_id,path,title,section,text)
+  VALUES(new.rowid,new.unit_id,new.document_id,new.path,new.title,new.section,new.text);
+END;
+CREATE TABLE IF NOT EXISTS vault_search_unit_embeddings (
+  unit_id TEXT NOT NULL REFERENCES vault_search_units(unit_id) ON DELETE CASCADE,
+  source_revision TEXT NOT NULL,
+  input_hash TEXT NOT NULL,
+  model_id TEXT NOT NULL,
+  model_version TEXT NOT NULL,
+  dimensions INTEGER NOT NULL CHECK(dimensions > 0),
+  vector BLOB NOT NULL,
+  indexed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY(unit_id,model_id,model_version)
+);
+CREATE INDEX IF NOT EXISTS vault_search_unit_embedding_identity
+  ON vault_search_unit_embeddings(model_id,model_version,dimensions,source_revision,input_hash);
 CREATE TABLE IF NOT EXISTS localized_content (
   entity_type TEXT NOT NULL,
   entity_id TEXT NOT NULL,
@@ -308,8 +369,36 @@ CREATE TABLE IF NOT EXISTS ai_jobs_v2 (
   attempt INTEGER NOT NULL DEFAULT 0, worker_id TEXT NOT NULL DEFAULT '', lease_token TEXT NOT NULL DEFAULT '',
   lease_expires_at TEXT, heartbeat_at TEXT, available_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   error_code TEXT NOT NULL DEFAULT '', error_message TEXT NOT NULL DEFAULT '',
+  prompt_id TEXT NOT NULL DEFAULT '', prompt_version INTEGER NOT NULL DEFAULT 0,
+  source_revision TEXT NOT NULL DEFAULT '',
+  execution_outcome TEXT NOT NULL DEFAULT 'pending'
+    CHECK(execution_outcome IN ('pending','succeeded','failed','cancelled')),
+  application_disposition TEXT NOT NULL DEFAULT 'pending'
+    CHECK(application_disposition IN ('pending','review_needed','applied','superseded','rejected','not_applicable')),
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, started_at TEXT, finished_at TEXT
 );
+CREATE TABLE IF NOT EXISTS workflow_version_provenance (
+  owner_type TEXT NOT NULL, owner_id TEXT NOT NULL, owner_version TEXT NOT NULL,
+  source_owner_type TEXT, source_owner_id TEXT, source_owner_version TEXT,
+  prompt_id TEXT NOT NULL DEFAULT '', prompt_version INTEGER NOT NULL DEFAULT 0,
+  operation_id TEXT NOT NULL DEFAULT '', restored_from_version TEXT,
+  source_references_json TEXT NOT NULL DEFAULT '[]',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY(owner_type,owner_id,owner_version),
+  CHECK((source_owner_type IS NULL AND source_owner_id IS NULL AND source_owner_version IS NULL)
+     OR (source_owner_type IS NOT NULL AND source_owner_id IS NOT NULL AND source_owner_version IS NOT NULL))
+);
+CREATE INDEX IF NOT EXISTS workflow_provenance_operation
+  ON workflow_version_provenance(operation_id) WHERE operation_id<>'';
+CREATE TABLE IF NOT EXISTS workflow_document_references (
+  id TEXT PRIMARY KEY, owner_type TEXT NOT NULL, owner_id TEXT NOT NULL,
+  owner_version TEXT NOT NULL, document_id TEXT NOT NULL, document_version TEXT NOT NULL,
+  section TEXT NOT NULL DEFAULT '', excerpt TEXT NOT NULL DEFAULT '', claim_id TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(owner_type,owner_id,owner_version,document_id,document_version,section,claim_id)
+);
+CREATE INDEX IF NOT EXISTS workflow_reference_owner
+  ON workflow_document_references(owner_type,owner_id,owner_version);
 CREATE TABLE IF NOT EXISTS notifications (
   id TEXT PRIMARY KEY, job_id TEXT NOT NULL, kind TEXT NOT NULL, title TEXT NOT NULL,
   target_json TEXT NOT NULL, read_at TEXT, dismissed_at TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,

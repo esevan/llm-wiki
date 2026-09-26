@@ -16,11 +16,14 @@ import {
   type MigrationRecovery,
 } from "../services/vaultSetupClient";
 import { Sidebar } from "./Sidebar";
+import { taskClient } from "../services/taskClient";
+import type { TaskApplicationEvent } from "../types/taskWorkbench";
 
 export type ViewId = "workbench" | "search" | "compass" | "ai-setup";
 
 export function App() {
   const [activeView, setActiveView] = useState<ViewId>("workbench");
+  const [taskApplication, setTaskApplication] = useState<TaskApplicationEvent>();
   const [vaultSetup, setVaultSetup] = useState<
     "checking" | "ready" | "required" | "choosing" | "error"
   >("checking");
@@ -88,7 +91,17 @@ export function App() {
       <div className="app" inert={vaultSetupBlocking ? true : undefined}>
         <Sidebar activeView={activeView} onSelectView={setActiveView} />
         <main>
-          <WorkbenchView active={activeView === "workbench"} />
+          <WorkbenchView
+            active={activeView === "workbench"}
+            taskApplication={taskApplication}
+            onTaskApplication={setTaskApplication}
+            onPrepareKnowledgeArchive={taskClient.prepareKnowledgeArchive}
+            onOrganizeKnowledgeArchive={taskClient.organizeKnowledgeArchive}
+            onPublishKnowledgeArchive={taskClient.publishKnowledgeArchive}
+            onKnowledgeArchiveStatus={taskClient.knowledgeArchiveStatus}
+            onRetryKnowledgeArchive={taskClient.retryKnowledgeArchive}
+            onRecoverKnowledgeArchive={taskClient.recoverKnowledgeArchive}
+          />
           <SearchView active={activeView === "search"} />
           <CompassView active={activeView === "compass"} />
           <SettingsView active={activeView === "ai-setup"} />

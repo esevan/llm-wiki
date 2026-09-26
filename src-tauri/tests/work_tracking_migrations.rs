@@ -1,6 +1,8 @@
 use llm_wiki_desktop::NativeApplication;
 use tempfile::tempdir;
 
+const CURRENT_SCHEMA_VERSION: i64 = 22;
+
 #[test]
 fn work_tracking_schema_is_complete_and_idempotent() {
     let root = tempdir().unwrap();
@@ -36,7 +38,7 @@ fn work_tracking_schema_is_complete_and_idempotent() {
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        15
+        CURRENT_SCHEMA_VERSION
     );
 }
 

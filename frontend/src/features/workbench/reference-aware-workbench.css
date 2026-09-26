@@ -1,0 +1,367 @@
+.reference-aware-preview {
+  display: grid;
+  gap: var(--space-4);
+  padding: var(--space-4);
+  background: var(--color-bg-surface);
+  border: var(--border-default);
+  border-radius: var(--radius-panel);
+}
+.reference-aware-preview-header,
+.reference-aware-preview-actions,
+.reference-edit-actions,
+.draft-version-selectors {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+.reference-aware-preview-header {
+  justify-content: space-between;
+}
+.reference-aware-preview-header h3 {
+  margin: var(--space-1) 0 0;
+}
+.reference-aware-preview-header small,
+.reference-status,
+.reference-historical {
+  color: var(--color-text-secondary);
+}
+.reference-aware-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-5);
+  margin: 0;
+}
+.reference-aware-fields > div:first-child,
+.reference-aware-fields > div:nth-child(2) {
+  grid-column: 1 / -1;
+}
+.reference-aware-fields dt {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  margin-bottom: var(--space-2);
+}
+.reference-aware-fields dd {
+  margin: 0;
+  white-space: pre-wrap;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+.reference-aware-fields textarea {
+  width: 100%;
+  min-height: 84px;
+  resize: vertical;
+}
+.reference-critical {
+  border-left: 3px solid var(--color-status-warning);
+  background: var(--color-bg-primary);
+  padding: var(--space-3);
+}
+.reference-aware-reference-list,
+.draft-version-controls {
+  display: grid;
+  gap: var(--space-3);
+  border-top: var(--border-default);
+  padding-top: var(--space-4);
+}
+.reference-list-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.reference-list-controls label,
+.draft-version-controls label {
+  display: grid;
+  gap: var(--space-1);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  min-width: 0;
+}
+.reference-list-controls label:first-child {
+  flex: 1 1 180px;
+}
+.reference-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--space-3);
+  border-bottom: var(--border-default);
+  padding: var(--space-2) 0;
+}
+.reference-row > button {
+  text-align: left;
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+.reference-row small {
+  display: block;
+  color: var(--color-text-secondary);
+}
+.reference-row > span {
+  display: flex;
+  gap: var(--space-1);
+  flex-shrink: 0;
+}
+.reference-mention-tokens {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+.reference-mention-tokens > span {
+  background: var(--color-bg-accent-subtle);
+  border-radius: var(--radius-control);
+  padding: var(--space-1) var(--space-2);
+  overflow-wrap: anywhere;
+}
+.reference-mention-tokens button {
+  margin-left: var(--space-2);
+}
+.reference-mention-lookup {
+  max-height: 230px;
+  overflow: auto;
+  display: grid;
+  border: var(--border-default);
+  background: var(--color-bg-surface);
+  border-radius: var(--radius-control);
+}
+.reference-mention-lookup button {
+  text-align: left;
+}
+.reference-mention-lookup [aria-selected="true"] {
+  background: var(--color-bg-accent-subtle);
+  outline: 2px solid var(--color-accent-strong);
+  outline-offset: -2px;
+}
+.reference-viewer-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 2500;
+  display: grid;
+  place-items: center;
+  padding: var(--space-6);
+}
+.reference-viewer-backdrop {
+  position: absolute;
+  inset: 0;
+  background: var(--color-overlay-veil);
+}
+.reference-viewer {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: min(860px, 100%);
+  max-height: 90vh;
+  min-width: 0;
+  padding: var(--space-6);
+  background: var(--color-bg-surface);
+  border: var(--border-default);
+  border-radius: var(--radius-dialog);
+  box-shadow: var(--shadow-dialog);
+}
+.reference-viewer > header {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+.reference-viewer h2 {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.reference-viewer header small {
+  display: block;
+  margin-top: var(--space-2);
+  color: var(--color-text-secondary);
+  overflow-wrap: anywhere;
+}
+.reference-viewer nav {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  padding: var(--space-4) 0;
+}
+.reference-viewer-content {
+  overflow: auto;
+  min-height: 0;
+  overscroll-behavior: contain;
+  line-height: 1.65;
+}
+.reference-viewer-content img {
+  max-width: 100%;
+}
+.reference-viewer-content pre {
+  overflow: auto;
+}
+.draft-version-comparison {
+  display: grid;
+  gap: var(--space-3);
+}
+.draft-version-comparison article > div {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+.draft-version-comparison header {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+.draft-version-comparison pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  min-width: 0;
+  padding: var(--space-3);
+  background: var(--color-bg-primary);
+  font: inherit;
+}
+.reference-aware-preview button,
+.reference-viewer button,
+.draft-version-controls button {
+  min-height: var(--control-height);
+}
+.reference-aware-preview :is(button, input, select, textarea):focus-visible,
+.reference-viewer :is(button, a):focus-visible {
+  outline: 2px solid var(--color-accent-strong);
+  outline-offset: 3px;
+}
+@media (max-width: 800px) {
+  .reference-aware-fields,
+  .draft-version-comparison article > div {
+    grid-template-columns: 1fr;
+  }
+  .reference-viewer-layer {
+    padding: var(--space-3);
+  }
+  .reference-viewer {
+    padding: var(--space-4);
+    max-height: 95vh;
+  }
+  .reference-row {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .reference-aware-preview *,
+  .reference-viewer * {
+    scroll-behavior: auto;
+  }
+}
+
+.reference-viewer > header {
+  align-items: flex-start;
+}
+.reference-viewer > header > button {
+  flex: 0 0 var(--control-height);
+  min-width: var(--control-height);
+}
+.reference-viewer button,
+.draft-version-controls button,
+.reference-aware-preview :is(input, select, textarea),
+.draft-version-controls select {
+  min-height: var(--control-height);
+  padding: var(--space-2) var(--space-3);
+  border: var(--border-default);
+  border-radius: var(--radius-control);
+  background: var(--color-bg-surface);
+  color: var(--color-text-primary);
+  font: inherit;
+}
+.reference-viewer button,
+.draft-version-controls button {
+  cursor: pointer;
+}
+.reference-viewer button:hover:not(:disabled),
+.draft-version-controls button:hover:not(:disabled) {
+  background: var(--color-bg-primary);
+}
+.reference-viewer button:active:not(:disabled),
+.draft-version-controls button:active:not(:disabled) {
+  transform: translateY(1px);
+}
+.reference-viewer button:disabled,
+.draft-version-controls button:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+.reference-aware-preview :is(input, select, textarea),
+.draft-version-controls select {
+  width: 100%;
+  min-width: 0;
+}
+
+.reference-document-group {
+  border: var(--border-default);
+  border-radius: var(--radius-control);
+  padding: var(--space-3);
+  min-width: 0;
+}
+.reference-document-group header {
+  display: grid;
+  gap: var(--space-1);
+}
+.reference-document-group h5 {
+  margin: 0;
+  font-size: var(--font-size-md);
+}
+.reference-document-group header small {
+  color: var(--color-text-secondary);
+  overflow-wrap: anywhere;
+}
+.reference-document-group .reference-row:last-child {
+  border-bottom: 0;
+}
+.reference-arrivals,
+.reference-pagination,
+.reference-mention-batch {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+.reference-arrivals {
+  padding: var(--space-3);
+  background: var(--color-bg-positive-subtle);
+  border: 1px solid var(--color-border-positive);
+  border-radius: var(--radius-control);
+}
+.reference-pagination,
+.reference-assumption-status {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+}
+.reference-assumption-status {
+  display: block;
+  margin: var(--space-1) 0 var(--space-3);
+}
+.reference-mention-picker {
+  display: grid;
+  gap: var(--space-2);
+}
+.reference-mention-lookup > button {
+  display: grid;
+  text-align: left;
+  gap: var(--space-1);
+}
+.reference-mention-lookup small {
+  color: var(--color-text-secondary);
+  overflow-wrap: anywhere;
+}
+.reference-mention-lookup [aria-selected="true"] {
+  background: var(--color-bg-accent-subtle);
+  border-color: var(--color-accent-primary);
+}
+.reference-mention-batch {
+  padding: var(--space-2);
+}
+@media (max-width: 700px) {
+  .reference-list-controls label {
+    flex: 1 1 130px;
+  }
+  .reference-document-group .reference-row {
+    align-items: stretch;
+  }
+  .reference-mention-batch > button {
+    width: 100%;
+  }
+}

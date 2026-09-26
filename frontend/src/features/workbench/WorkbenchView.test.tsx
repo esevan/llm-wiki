@@ -58,6 +58,52 @@ const response = (body: unknown, ok = true, status = ok ? 200 : 500) => ({
 });
 
 describe("Task Workbench", () => {
+  it("animates a Task title only for the exact preview adoption event", async () => {
+    let board = { ...snapshot, categories: [{ ...snapshot.categories[0], items: snapshot.categories[0].items.map(item => item.kind === "task" && item.id === "ready" ? { ...item, title: "Draft release", taskRevision: 1 } : item) }] };
+    window.llmWikiApplication = { request: vi.fn().mockImplementation(() => Promise.resolve(response(board))) };
+    const view = render(<WorkbenchView active />);
+    await screen.findByText("Draft release");
+
+    board = { ...board, categories: [{ ...board.categories[0], items: board.categories[0].items.map(item => item.kind === "task" && item.id === "ready" ? { ...item, title: "Adopted release", taskRevision: 2 } : item) }] };
+    const application = { taskId: "ready", revision: 2, cause: "preview_adopted" as const };
+    view.rerender(<WorkbenchView active={false} taskApplication={application} />);
+    view.rerender(<WorkbenchView active taskApplication={application} />);
+    const card = document.querySelector<HTMLElement>('article[data-entity-id="ready"]')!;
+    await waitFor(() => expect(card).toHaveTextContent("Adopted release"));
+    const transition = card.querySelector<HTMLElement>('[data-transitioning="title"]');
+    expect(transition).toBeInTheDocument();
+    const layer = transition?.querySelector("[data-content-layer='current']");
+    if (layer) fireEvent.animationEnd(layer);
+
+    board = { ...board, categories: [{ ...board.categories[0], items: board.categories[0].items.map(item => item.kind === "task" && item.id === "ready" ? { ...item, title: "Polled release", taskRevision: 3 } : item) }] };
+    window.dispatchEvent(new CustomEvent("llm-wiki:queue-changed", { detail: [] }));
+    await waitFor(() => expect(card).toHaveTextContent("Polled release"));
+    expect(card.querySelector('[data-transitioning="title"]')).not.toBeInTheDocument();
+  });
+
+  it("reconciles a Capture result in place with the automatic content transition", async () => {
+    let revision = 0;
+    const capture = { kind: "capture" as const, id: "distilled", text: "rough source",
+      captureDistillation: { captureId:"distilled", sourceRevision:"r1", sourceNumber:1, currentRevision:1, contextRevision:0, eligible:true,
+        source:{ text:"rough source", images:[] }, display:{ title:"rough source",content:"rough source",context:"",explicitRequests:[],locale:"en" as const,revision:0,placeholder:true },
+        distillation:{ jobId:"job",logicalOperationId:"op",status:"running",executionOutcome:"pending",applicationDisposition:"pending",retryAllowed:false,attempt:1,sourceRevision:"r1" } } };
+    window.llmWikiApplication = { request: vi.fn().mockImplementation(() => {
+      const item = revision === 0 ? capture : { ...capture, captureDistillation:{ ...capture.captureDistillation,
+        display:{ ...capture.captureDistillation.display,title:"Readable title",content:"Organized body",revision:1,placeholder:false },
+        distillation:{ ...capture.captureDistillation.distillation,status:"completed",executionOutcome:"succeeded",applicationDisposition:"applied" } } };
+      return Promise.resolve(response({ revision,activeShortcuts:[],refiningShortcuts:[],categories:[{id:"general",label:"General",items:[item]}] }));
+    }) };
+    render(<WorkbenchView active />);
+    const raw = await screen.findByText("rough source");
+    const card = raw.closest("article");
+    revision = 1;
+    window.dispatchEvent(new CustomEvent("llm-wiki:queue-changed", { detail:[{ id:"job",status:"completed" }] }));
+    await waitFor(() => expect(screen.getAllByText("Readable title").length).toBeGreaterThan(0));
+    expect(screen.getByText("Organized body")).toBeInTheDocument();
+    expect(screen.getByText("Organized from the saved source")).toBeInTheDocument();
+    expect(document.querySelector('[data-accessible-content="true"]')?.closest("article")).toBe(card);
+  });
+
   it("places Capture before active work and isolates category lanes with General first", async () => {
     const categorized = { ...snapshot, categories: [
       { id: "security", label: "Security", items: [{ kind: "capture", id: "security-capture", text: "Review permissions" }] },

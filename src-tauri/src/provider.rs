@@ -1,6 +1,7 @@
 use crate::{native, NativeApplication, NativeOperation, NativeResponse};
 use serde_json::{json, Value};
 use std::time::Duration;
+use crate::workflow_foundation::{build_prompt, validate_prompt_output, PromptId};
 
 #[tauri::command]
 pub(crate) async fn provider_request(
@@ -25,13 +26,19 @@ pub(crate) async fn provider_request(
         if operation.name == "problem.enrich" {
             let statement = operation.input.get("statement").and_then(Value::as_str).filter(|value| !value.trim().is_empty()).ok_or("statement is required")?;
             let citations = operation.input.get("citations").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).take(8).collect::<Vec<_>>().join(", ");
+            let prompt = build_prompt(
+                PromptId::ProblemEnrichment,
+                &json!({"context":{"statement":statement,"citations":citations}}),
+            ).map_err(|error| error.to_string())?;
             let response = client.post(format!("{}/chat/completions", base_url.trim_end_matches('/')))
-                .bearer_auth(api_key).json(&json!({"model":model,"messages":[{"role":"user","content":format!("Return JSON only with normalized_problem, pain, non_goals, categories, and importance_rationale. Use only cited context; never change workflow state or give implementation steps.\nProblem: {statement}\nCitations: {citations}")}],"stream":false})).send().await.map_err(|error| error.to_string())?;
+                .bearer_auth(api_key).json(&json!({"model":model,"messages":[{"role":"user","content":prompt.content}],"stream":false})).send().await.map_err(|error| error.to_string())?;
             if !response.status().is_success() { return Err(format!("Problem enrichment failed ({})", response.status())); }
             let payload = response.json::<Value>().await.map_err(|error| error.to_string())?;
             let raw = payload.pointer("/choices/0/message/content").and_then(Value::as_str).ok_or("Problem enrichment response did not include content")?;
-            let result = serde_json::from_str::<Value>(raw).map_err(|error| error.to_string())?;
-            for field in ["normalized_problem","pain","non_goals","categories","importance_rationale"] { if result.get(field).is_none() { return Err("Problem enrichment response missed required fields".into()); } }
+            let mut result = serde_json::from_str::<Value>(raw).map_err(|error| error.to_string())?;
+            validate_prompt_output(PromptId::ProblemEnrichment, &result)
+                .map_err(|error| error.to_string())?;
+            result["_prompt"] = json!({"id":prompt.id.as_str(),"version":prompt.version});
             return Ok(result);
         }
         let response = client.get(format!("{}/models", base_url.trim_end_matches('/')))

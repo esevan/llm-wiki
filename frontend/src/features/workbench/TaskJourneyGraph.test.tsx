@@ -1,8 +1,21 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { Profiler } from "react";
 import { describe, expect, it } from "vitest";
 import { TaskJourneyGraph } from "./TaskJourneyGraph";
 
 describe("TaskJourneyGraph", () => {
+  it("places explicit topic state above saved semantic nodes and opens prepared detail locally", () => {
+    render(<TaskJourneyGraph language="en" journey={{
+      freshness: "stale",
+      topicStates: [{ topicKey: "storage", status: "superseded", replacementNodeId: "sqlite" }],
+      events: [{ id: "sqlite", type: "decision", detail: { title: "Use SQLite", summary: "Offline durability", changes: [{ field: "storage", before: "JSON", after: "SQLite" }], result: "Migration completed" } }],
+      titles: [{ id: "sqlite", title: "Use SQLite" }],
+    }} />);
+    expect(screen.getByText("storage")).toBeInTheDocument();
+    expect(screen.getByText("Superseded")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Use SQLite" }));
+    expect(screen.getByText("Migration completed")).toBeInTheDocument();
+  });
   it("keeps long AI titles readable and reveals untruncated recorded Activity on click", () => {
     const long = "Edge case: blank exports need a safe path and preserve every recorded detail";
     render(<TaskJourneyGraph language="en" journey={{ events: [{ id: "idea", type: "refinement_input", occurredAt: "2026-09-20T09:30:00Z", detail: { summary: long } }], titles: [{ id: "idea", title: long }] }} />);
@@ -87,5 +100,26 @@ describe("TaskJourneyGraph", () => {
     fireEvent.keyDown(document.body, { key: "Escape" });
     await waitFor(() => expect(opener).toHaveFocus());
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("opens prepared node detail locally within the 100 ms p95 budget", () => {
+    const durations: number[] = [];
+    const events = Array.from({ length: 40 }, (_, index) => ({
+      id: `decision-${index}`,
+      type: "decision_recorded",
+      detail: { summary: `Decision ${index} with a long saved explanation and exact evidence` },
+    }));
+    const titles = events.map(event => ({ id: event.id, title: event.detail.summary }));
+    for (let cycle = 0; cycle < 20; cycle += 1) {
+      render(<Profiler id={`journey-${cycle}`} onRender={(_id, _phase, duration) => durations.push(duration)}>
+        <TaskJourneyGraph language="en" journey={{ events, titles }} />
+      </Profiler>);
+      fireEvent.click(screen.getByRole("button", { name: titles[0].title }));
+      expect(screen.getByRole("dialog", { name: titles[0].title })).toBeVisible();
+      cleanup();
+    }
+    const sorted = [...durations].sort((a, b) => a - b);
+    const p95 = sorted[Math.max(0, Math.ceil(sorted.length * 0.95) - 1)];
+    expect(p95).toBeLessThan(100);
   });
 });

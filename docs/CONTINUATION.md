@@ -1,5 +1,65 @@
 # LLM Wiki — Continuation handoff
 
+## Authorized push and local installation (2026-09-26)
+
+The user authorized pushing the integrated workflow and installing the tested
+application. The 82 unpublished integration commits were retained on local
+`backup/knowledge-workflow-before-push-20260926` and consolidated for one normal
+fast-forward push over `0a7da6a`; remote history rewriting is unnecessary.
+
+The signed bundle built from `db4ada7` was installed at `/Applications/LLM Wiki.app`
+and launched normally (PID 99227 at verification). Later changes only update docs.
+Its CDHash is `e5cb2b5d549b9277f5f9cf1d02d2917bf80d3162`; strict signature verification
+and the existing designated requirement passed. The guarded installer retained
+`/Applications/LLM Wiki.app.previous-1790443863821-99146` and did not reset app data,
+Keychain or TCC permissions. Previous selected Capture/refinement/publication
+checks apply to the installed code; no redundant full E2E or rebuild was needed.
+The earlier visual/extended-coverage limitations remain; installing does not
+complete those checks. Earlier “no install/push” entries below are historical.
+
+## Active knowledge workflow program (2026-09-26)
+
+Work packages 1–15 and 17 are implemented and merged into local main through
+`db4ada7`; work 16 focused automated checks passed, with the recorded visual and extended
+coverage limitations still open. Report progress by number using
+[the program ledger](../specs/knowledge-workflow-program.md). The installed app,
+remote branches and personal Obsidian Vault remain unchanged.
+
+- Specs 015–021 cover the workflow; schema head is 22. Final fixes live in
+  `.worktrees/knowledge-workflow-final-checks` before main integration. Cargo uses
+  shared cache; serialize it with release builds.
+- Frontend 375 tests passed; later changes passed focused suites, lint/typecheck.
+  Sequential native units passed 252 with one authenticated live test ignored.
+  All 15 integration binaries passed across the targeted final runs; historical
+  v8 fixture cleanup and schema assertions were repaired without weakening actual
+  migrations. Latest native provenance 17, archive 16 and Knowledge 14 passed.
+- Capture-adoption references retain exact actual-use/counterevidence authority
+  through Knowledge/archive; unrelated/candidate/viewed/excluded sources cannot
+  become published authority. Archive overlap now drops full viewer bodies and
+  caps ranked passages at eight and 6,000 estimated tokens.
+- Packaged `task-capture` passed (artifacts `desktop-e2e-artifacts-2ZohfQ`).
+  `task-publication` passed after current-UI harness corrections (artifacts
+  `desktop-e2e-artifacts-qZOCVD`): immutable correction, reviewed exact artifact
+  hash/index receipt, explicit withdrawal and retained private history.
+- `task-refinement` passed on the final signed `db4ada7` build (artifacts
+  `desktop-e2e-artifacts-i2GYOb`): note/image restore, completed chat, overflow
+  scroll, editable preview, immutable save and exact adoption into the original
+  Task ID. All three selected scenarios now pass. Harness corrections retain
+  every behavioral assertion. One initial 180s timeout was not reproduced and
+  must not be described as a diagnosed app deadlock.
+- Knowledge Review timing: 25 independent 40-revision cycles, p95 projection
+  18.67 ms/selection 17.31 ms. Reference list 1,000-document timing: p95 mount
+  6.84 ms/filter-sort 12.59 ms. These are mounted jsdom results, not native visual
+  checks. Missing-report factual fallback already has executable coverage; the
+  all-four-idea-disposition regression was added to the actual validator.
+- Latest rendered wide/narrow EN/KO list/artifact/transient state matrix remains
+  blocked by locked Mac; user was asked to unlock while automated work continued.
+  Full generation/archive-stage timing and expanded retry/idea-publication
+  permutations remain unverified; no blanket Spec Kit convergence is claimed.
+- Only the three named packaged scenarios are justified by native background
+  application, modal/adoption and file/index risks. No full E2E, install or remote
+  push. Older entries below are historical and do not supersede this program.
+
 **Updated:** 2026-09-22
 **Current status:** The React/Tauri/Rust desktop now uses the Task as the canonical unit of work.
 Capture remains a lightweight input; Work Log, refinement, exact Problem revisions, Task
@@ -298,3 +358,14 @@ remains a user decision. English and Korean feature guides are updated.
 provider, and signing checks. Native tests and release packaging were stopped
 at the user's request; packaged desktop E2E was skipped. Native verification
 remains outstanding for this change.
+
+
+## Active Knowledge workflow integration — 2026-09-26
+
+User authorized full execution of all 17 packages, Spec Kit, isolated worktrees and final main merge.
+The current program ledger is `specs/knowledge-workflow-program.md` in
+`.worktrees/knowledge-workflow-integration` (`feat/knowledge-workflow-integration`).
+Main has not yet been merged. A/B/C/D and F native contracts are integrated; E consumer rescue,
+F review UI, G journaled archive completion and final cross-feature/packaged verification remain.
+Keep every existing worktree and uncommitted edit. Cargo builds share a target and require one
+explicit lane owner. Do not interpret checkpoint commits or old frontend test passes as completion.

@@ -1,10 +1,11 @@
 use rusqlite::{
     params, types::ValueRef, Connection, OptionalExtension, Transaction, TransactionBehavior,
 };
+use sha2::{Digest, Sha256};
 use serde_json::{json, Map, Value};
 use std::collections::BTreeMap;
 
-pub const CURRENT_SCHEMA_VERSION: i64 = 15;
+pub const CURRENT_SCHEMA_VERSION: i64 = 22;
 
 type MigrationFunction = for<'connection> fn(&Transaction<'connection>) -> Result<(), String>;
 type LegacyLocalizationRow = (String, String, String, String, String, String, String);
@@ -91,7 +92,304 @@ const MIGRATIONS: &[Migration] = &[
         name: "add Task Codex execution",
         run: add_task_codex_execution,
     },
+    Migration {
+        version: 16,
+        name: "add workflow foundation contracts",
+        run: add_workflow_foundation,
+    },
+    Migration {
+        version: 17,
+        name: "add Capture distillation provenance",
+        run: add_capture_distillation,
+    },
+    Migration {
+        version: 18,
+        name: "add Task work Distillation projections",
+        run: add_task_distillation,
+    },
+    Migration {
+        version: 19,
+        name: "add persistent multi-aspect retrieval units",
+        run: add_multiaspect_retrieval,
+    },
+    Migration { version:20, name:"add reference-aware work previews", run:add_reference_aware_workbench },
+    Migration { version:21, name:"add immutable Knowledge generation", run:add_knowledge_distillation },
+    Migration { version:22, name:"add Knowledge archive proposals and journal", run:add_knowledge_archive },
 ];
+
+fn add_knowledge_archive(tx:&Transaction<'_>)->Result<(),String>{
+    tx.execute_batch(include_str!("knowledge_archive_schema.sql")).map_err(|error|error.to_string())
+}
+
+fn add_knowledge_distillation(tx:&Transaction<'_>)->Result<(),String>{
+    tx.execute_batch(include_str!("knowledge_distillation_schema.sql")).map_err(|error|error.to_string())
+}
+
+fn add_reference_aware_workbench(tx:&Transaction<'_>)->Result<(),String>{
+    tx.execute_batch(include_str!("reference_aware_workbench_schema.sql")).map_err(|error|error.to_string())
+}
+
+fn add_multiaspect_retrieval(tx: &Transaction<'_>) -> Result<(), String> {
+    tx.execute_batch(
+        "CREATE TABLE IF NOT EXISTS vault_search_units (
+           unit_id TEXT PRIMARY KEY, document_id TEXT NOT NULL,
+           path TEXT NOT NULL REFERENCES vault_documents(path) ON DELETE CASCADE, title TEXT NOT NULL,
+           source_revision TEXT NOT NULL, declared_revision TEXT, section TEXT NOT NULL,
+           chunk_index INTEGER NOT NULL CHECK(chunk_index >= 0),
+           chunk_count INTEGER NOT NULL CHECK(chunk_count > 0),
+           aspect TEXT NOT NULL CHECK(aspect IN ('applicability','decision','content','exploration')),
+           information_type TEXT NOT NULL CHECK(information_type IN ('knowledge','idea')),
+           status TEXT CHECK(status IS NULL OR status IN ('current','historical','unverified','deferred','rejected')),
+           input_hash TEXT NOT NULL, text TEXT NOT NULL, unit_json TEXT NOT NULL,
+           indexed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+         );
+         CREATE INDEX IF NOT EXISTS vault_search_units_document ON vault_search_units(document_id,source_revision);
+         CREATE INDEX IF NOT EXISTS vault_search_units_path ON vault_search_units(path,source_revision);
+         CREATE INDEX IF NOT EXISTS vault_search_units_aspect ON vault_search_units(aspect,information_type,status);
+         CREATE VIRTUAL TABLE IF NOT EXISTS vault_search_units_fts USING fts5(
+           unit_id UNINDEXED,document_id UNINDEXED,path,title,section,text,
+           content='vault_search_units',content_rowid='rowid'
+         );
+         CREATE TRIGGER IF NOT EXISTS vault_search_units_ai AFTER INSERT ON vault_search_units BEGIN
+           INSERT INTO vault_search_units_fts(rowid,unit_id,document_id,path,title,section,text)
+           VALUES(new.rowid,new.unit_id,new.document_id,new.path,new.title,new.section,new.text);
+         END;
+         CREATE TRIGGER IF NOT EXISTS vault_search_units_ad AFTER DELETE ON vault_search_units BEGIN
+           INSERT INTO vault_search_units_fts(vault_search_units_fts,rowid,unit_id,document_id,path,title,section,text)
+           VALUES('delete',old.rowid,old.unit_id,old.document_id,old.path,old.title,old.section,old.text);
+         END;
+         CREATE TRIGGER IF NOT EXISTS vault_search_units_au AFTER UPDATE ON vault_search_units BEGIN
+           INSERT INTO vault_search_units_fts(vault_search_units_fts,rowid,unit_id,document_id,path,title,section,text)
+           VALUES('delete',old.rowid,old.unit_id,old.document_id,old.path,old.title,old.section,old.text);
+           INSERT INTO vault_search_units_fts(rowid,unit_id,document_id,path,title,section,text)
+           VALUES(new.rowid,new.unit_id,new.document_id,new.path,new.title,new.section,new.text);
+         END;
+         CREATE TABLE IF NOT EXISTS vault_search_unit_embeddings (
+           unit_id TEXT NOT NULL REFERENCES vault_search_units(unit_id) ON DELETE CASCADE,
+           source_revision TEXT NOT NULL,input_hash TEXT NOT NULL,model_id TEXT NOT NULL,
+           model_version TEXT NOT NULL,dimensions INTEGER NOT NULL CHECK(dimensions > 0),
+           vector BLOB NOT NULL,indexed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+           PRIMARY KEY(unit_id,model_id,model_version)
+         );
+         CREATE INDEX IF NOT EXISTS vault_search_unit_embedding_identity ON vault_search_unit_embeddings(
+           model_id,model_version,dimensions,source_revision,input_hash
+         );",
+    ).map_err(|error| error.to_string())?;
+    let unit_columns = columns(tx, "vault_search_units")?;
+    for required in ["unit_id","document_id","path","title","source_revision","input_hash","unit_json"] {
+        if !unit_columns.iter().any(|column| column == required) {
+            return Err(format!("vault_search_units is missing required column {required}"));
+        }
+    }
+    let embedding_columns = columns(tx, "vault_search_unit_embeddings")?;
+    for required in ["unit_id","source_revision","input_hash","model_id","model_version","dimensions","vector"] {
+        if !embedding_columns.iter().any(|column| column == required) {
+            return Err(format!("vault_search_unit_embeddings is missing required column {required}"));
+        }
+    }
+    Ok(())
+}
+
+fn add_task_distillation(tx: &Transaction<'_>) -> Result<(), String> {
+    tx.execute_batch(include_str!("task_distillation_schema.sql"))
+        .map_err(|error| error.to_string())
+}
+
+fn add_capture_distillation(tx: &Transaction<'_>) -> Result<(), String> {
+    tx.execute_batch(
+        "CREATE TABLE capture_source_heads (
+           capture_id TEXT PRIMARY KEY REFERENCES captures(id) ON DELETE CASCADE,
+           source_revision INTEGER NOT NULL DEFAULT 1 CHECK(source_revision > 0),
+           current_revision INTEGER NOT NULL DEFAULT 1 CHECK(current_revision > 0),
+           context_revision INTEGER NOT NULL DEFAULT 0 CHECK(context_revision >= 0),
+           source_hash TEXT NOT NULL,
+           initial_distillation_eligible INTEGER NOT NULL DEFAULT 0 CHECK(initial_distillation_eligible IN (0,1)),
+           logical_operation_id TEXT NOT NULL DEFAULT '',
+           last_user_activity_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+         );
+         CREATE TABLE capture_source_snapshots (
+           capture_id TEXT NOT NULL REFERENCES captures(id) ON DELETE CASCADE,
+           source_revision INTEGER NOT NULL CHECK(source_revision > 0),
+           authored_text TEXT NOT NULL,
+           source_hash TEXT NOT NULL,
+           created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+           PRIMARY KEY(capture_id,source_revision)
+         );
+         CREATE TABLE capture_source_images (
+           capture_id TEXT NOT NULL,
+           source_revision INTEGER NOT NULL,
+           image_index INTEGER NOT NULL CHECK(image_index >= 0),
+           name TEXT NOT NULL,
+           media_type TEXT NOT NULL,
+           content_hash TEXT NOT NULL,
+           data TEXT NOT NULL,
+           PRIMARY KEY(capture_id,source_revision,image_index),
+           FOREIGN KEY(capture_id,source_revision)
+             REFERENCES capture_source_snapshots(capture_id,source_revision) ON DELETE CASCADE
+         );
+         CREATE TABLE capture_distillations (
+           capture_id TEXT PRIMARY KEY REFERENCES captures(id) ON DELETE CASCADE,
+           result_revision INTEGER NOT NULL CHECK(result_revision > 0),
+           source_revision INTEGER NOT NULL,
+           bound_current_revision INTEGER NOT NULL,
+           source_hash TEXT NOT NULL,
+           title TEXT NOT NULL,
+           content TEXT NOT NULL,
+           context TEXT NOT NULL DEFAULT '',
+           explicit_requests_json TEXT NOT NULL DEFAULT '[]',
+           locale TEXT NOT NULL CHECK(locale IN ('en','ko')),
+           job_id TEXT NOT NULL UNIQUE REFERENCES ai_jobs_v2(id),
+           applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+           FOREIGN KEY(capture_id,source_revision)
+             REFERENCES capture_source_snapshots(capture_id,source_revision)
+         );
+         CREATE TABLE capture_distillation_proposals (
+           id TEXT PRIMARY KEY,
+           capture_id TEXT NOT NULL REFERENCES captures(id) ON DELETE CASCADE,
+           job_id TEXT NOT NULL UNIQUE REFERENCES ai_jobs_v2(id),
+           source_revision INTEGER NOT NULL,
+           bound_current_revision INTEGER NOT NULL,
+           source_hash TEXT NOT NULL,
+           title TEXT NOT NULL,
+           content TEXT NOT NULL,
+           context TEXT NOT NULL DEFAULT '',
+           explicit_requests_json TEXT NOT NULL DEFAULT '[]',
+           locale TEXT NOT NULL CHECK(locale IN ('en','ko')),
+           state TEXT NOT NULL DEFAULT 'available' CHECK(state IN ('available','accepted','rejected')),
+           created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+           FOREIGN KEY(capture_id,source_revision)
+             REFERENCES capture_source_snapshots(capture_id,source_revision)
+         );
+         CREATE INDEX capture_distillation_proposal_owner
+           ON capture_distillation_proposals(capture_id,created_at DESC);",
+    )
+    .map_err(|error| error.to_string())?;
+
+    let captures = {
+        let mut statement = tx
+            .prepare("SELECT id,text,created_at FROM captures ORDER BY id")
+            .map_err(|error| error.to_string())?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })
+            .map_err(|error| error.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| error.to_string())?;
+        rows
+    };
+    for (capture_id, text, created_at) in captures {
+        let images = {
+            let mut statement = tx
+                .prepare(
+                    "SELECT name,media_type,data FROM input_images
+                     WHERE capture_id=? ORDER BY rowid",
+                )
+                .map_err(|error| error.to_string())?;
+            let rows = statement
+                .query_map([&capture_id], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                })
+                .map_err(|error| error.to_string())?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|error| error.to_string())?;
+            rows
+        };
+        let mut source_hasher = Sha256::new();
+        source_hasher.update((text.len() as u64).to_be_bytes());
+        source_hasher.update(text.as_bytes());
+        let mut image_rows = Vec::with_capacity(images.len());
+        for (index, (name, media_type, data)) in images.into_iter().enumerate() {
+            let bytes = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &data)
+                .unwrap_or_else(|_| data.as_bytes().to_vec());
+            let content_hash = format!("sha256:{:x}", Sha256::digest(&bytes));
+            for value in [&name, &media_type, &content_hash] {
+                source_hasher.update((value.len() as u64).to_be_bytes());
+                source_hasher.update(value.as_bytes());
+            }
+            image_rows.push((index as i64, name, media_type, content_hash, data));
+        }
+        let source_hash = format!("sha256:{:x}", source_hasher.finalize());
+        tx.execute(
+            "INSERT INTO capture_source_heads(
+               capture_id,source_revision,current_revision,context_revision,source_hash,
+               initial_distillation_eligible,logical_operation_id,last_user_activity_at)
+             VALUES(?,1,1,0,?,0,'',?)",
+            params![capture_id, source_hash, created_at],
+        )
+        .map_err(|error| error.to_string())?;
+        tx.execute(
+            "INSERT INTO capture_source_snapshots(
+               capture_id,source_revision,authored_text,source_hash,created_at)
+             VALUES(?,1,?,?,?)",
+            params![capture_id, text, source_hash, created_at],
+        )
+        .map_err(|error| error.to_string())?;
+        for (index, name, media_type, content_hash, data) in image_rows {
+            tx.execute(
+                "INSERT INTO capture_source_images(
+                   capture_id,source_revision,image_index,name,media_type,content_hash,data)
+                 VALUES(?,1,?,?,?,?,?)",
+                params![capture_id, index, name, media_type, content_hash, data],
+            )
+            .map_err(|error| error.to_string())?;
+        }
+    }
+    Ok(())
+}
+
+fn add_workflow_foundation(tx: &Transaction<'_>) -> Result<(), String> {
+    if table_exists(tx, "ai_jobs_v2")? {
+        for (column, declaration) in [
+            ("prompt_id", "TEXT NOT NULL DEFAULT ''"),
+            ("prompt_version", "INTEGER NOT NULL DEFAULT 0"),
+            ("source_revision", "TEXT NOT NULL DEFAULT ''"),
+            ("execution_outcome", "TEXT NOT NULL DEFAULT 'pending'"),
+            ("application_disposition", "TEXT NOT NULL DEFAULT 'pending'"),
+        ] {
+            add_missing_column(tx, "ai_jobs_v2", column, declaration)?;
+        }
+    }
+    for table in ["task_assistance_jobs", "task_conflict_review_runs"] {
+        if table_exists(tx, table)? {
+            add_missing_column(tx, table, "prompt_id", "TEXT NOT NULL DEFAULT ''")?;
+            add_missing_column(tx, table, "prompt_version", "INTEGER NOT NULL DEFAULT 0")?;
+        }
+    }
+    tx.execute_batch(
+        "CREATE TABLE IF NOT EXISTS workflow_version_provenance (
+           owner_type TEXT NOT NULL, owner_id TEXT NOT NULL, owner_version TEXT NOT NULL,
+           source_owner_type TEXT, source_owner_id TEXT, source_owner_version TEXT,
+           prompt_id TEXT NOT NULL DEFAULT '', prompt_version INTEGER NOT NULL DEFAULT 0,
+           operation_id TEXT NOT NULL DEFAULT '', restored_from_version TEXT,
+           source_references_json TEXT NOT NULL DEFAULT '[]',
+           created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+           PRIMARY KEY(owner_type,owner_id,owner_version),
+           CHECK((source_owner_type IS NULL AND source_owner_id IS NULL AND source_owner_version IS NULL)
+              OR (source_owner_type IS NOT NULL AND source_owner_id IS NOT NULL AND source_owner_version IS NOT NULL))
+         );
+         CREATE INDEX IF NOT EXISTS workflow_provenance_operation
+           ON workflow_version_provenance(operation_id) WHERE operation_id<>'';
+         CREATE TABLE IF NOT EXISTS workflow_document_references (
+           id TEXT PRIMARY KEY, owner_type TEXT NOT NULL, owner_id TEXT NOT NULL,
+           owner_version TEXT NOT NULL, document_id TEXT NOT NULL, document_version TEXT NOT NULL,
+           section TEXT NOT NULL DEFAULT '', excerpt TEXT NOT NULL DEFAULT '', claim_id TEXT NOT NULL DEFAULT '',
+           created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+           UNIQUE(owner_type,owner_id,owner_version,document_id,document_version,section,claim_id)
+         );
+         CREATE INDEX IF NOT EXISTS workflow_reference_owner
+           ON workflow_document_references(owner_type,owner_id,owner_version);",
+    )
+    .map_err(|error| error.to_string())
+}
 
 fn add_task_journey_graphs(tx: &Transaction<'_>) -> Result<(), String> {
     tx.execute_batch("CREATE TABLE IF NOT EXISTS task_journey_graphs (
@@ -1227,6 +1525,55 @@ mod tests {
     use super::*;
 
     #[test]
+    fn v19_adds_rebuildable_unit_index_without_rewriting_documents() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        apply_plan(&mut connection, &MIGRATIONS[..18], 18).unwrap();
+        connection.execute("INSERT INTO vault_documents(path,title,body,source_hash,modified_at) VALUES('Knowledge/legacy.md','Legacy','# Legacy','legacy-hash',7)", []).unwrap();
+        connection.execute("INSERT INTO vault_document_embeddings(path,source_hash,dimensions,vector) VALUES('Knowledge/legacy.md','legacy-hash',1,x'00000000')", []).unwrap();
+        apply(&mut connection).unwrap();
+        assert_eq!(schema_version(&connection).unwrap(), CURRENT_SCHEMA_VERSION);
+        assert!(table_exists(&connection, "vault_search_units").unwrap());
+        assert!(table_exists(&connection, "vault_search_unit_embeddings").unwrap());
+        assert_eq!(connection.query_row("SELECT body FROM vault_documents WHERE path='Knowledge/legacy.md'", [], |row| row.get::<_,String>(0)).unwrap(), "# Legacy");
+        assert_eq!(connection.query_row("SELECT count(*) FROM vault_document_embeddings", [], |row| row.get::<_,i64>(0)).unwrap(), 1);
+        assert_eq!(connection.query_row("SELECT count(*) FROM vault_search_units", [], |row| row.get::<_,i64>(0)).unwrap(), 0);
+        assert_eq!(connection.query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |row| row.get::<_,i64>(0)).unwrap(), 0);
+    }
+
+    #[test]
+    fn v19_rejects_an_incompatible_preexisting_unit_table() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        apply_plan(&mut connection, &MIGRATIONS[..18], 18).unwrap();
+        connection.execute_batch(
+            "DROP TRIGGER vault_search_units_ai;
+             DROP TRIGGER vault_search_units_ad;
+             DROP TRIGGER vault_search_units_au;
+             DROP TABLE vault_search_unit_embeddings;
+             DROP TABLE vault_search_units_fts;
+             DROP TABLE vault_search_units;
+             CREATE TABLE vault_search_units(unit_id TEXT PRIMARY KEY);"
+        ).unwrap();
+        let error = apply(&mut connection).unwrap_err();
+        assert!(error.contains("document_id"), "{error}");
+        assert_eq!(schema_version(&connection).unwrap(), 18);
+        assert!(!table_exists(&connection, "vault_search_unit_embeddings").unwrap());
+    }
+
+    #[test]
+    fn v20_preserves_existing_sessions_and_reopens_idempotently() {
+        let mut connection=Connection::open_in_memory().unwrap();
+        apply_plan(&mut connection,&MIGRATIONS[..19],19).unwrap();
+        connection.execute("INSERT INTO captures(id,text) VALUES('c','source')",[]).unwrap();
+        connection.execute("INSERT INTO refinement_sessions(id,capture_id,input_draft) VALUES('s','c','draft')",[]).unwrap();
+        apply(&mut connection).unwrap();
+        apply(&mut connection).unwrap();
+        assert_eq!(schema_version(&connection).unwrap(), CURRENT_SCHEMA_VERSION);
+        assert_eq!(connection.query_row("SELECT input_draft FROM refinement_sessions WHERE id='s'",[],|row|row.get::<_,String>(0)).unwrap(),"draft");
+        assert!(table_exists(&connection,"work_preview_versions").unwrap());
+        assert_eq!(connection.query_row("SELECT count(*) FROM pragma_foreign_key_check",[],|row|row.get::<_,i64>(0)).unwrap(),0);
+    }
+
+    #[test]
     fn populated_main_v13_to_v15_preserves_journey_and_manual_data() {
         let root = tempfile::tempdir().unwrap();
         let db = root.path().join("main-v13.sqlite3");
@@ -1267,7 +1614,7 @@ mod tests {
         let mut connection = Connection::open(&db).unwrap();
         apply(&mut connection).unwrap();
 
-        assert_eq!(schema_version(&connection).unwrap(), 15);
+        assert_eq!(schema_version(&connection).unwrap(), CURRENT_SCHEMA_VERSION);
         assert_eq!(
             connection
                 .query_row(
@@ -1328,7 +1675,7 @@ mod tests {
         service.execute("work-log.comment.create", &json!({"operationId":"comment-v14","entryId":log_id,"body":"Manual comment"})).unwrap();
         let mut connection = Connection::open(&db).unwrap();
         apply(&mut connection).unwrap();
-        assert_eq!(schema_version(&connection).unwrap(), 15);
+        assert_eq!(schema_version(&connection).unwrap(), CURRENT_SCHEMA_VERSION);
         assert_eq!(connection.query_row("SELECT id,title FROM task_work_sessions WHERE id=?",[session_id],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?))).unwrap(),(session_id.to_owned(),"Stable session".into()));
         assert_eq!(connection.query_row("SELECT id,body,json_extract(attachment_json,'$.name') FROM task_work_session_entries WHERE id=?",[entry["id"].as_str().unwrap()],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?))).unwrap(),(entry["id"].as_str().unwrap().to_owned(),"Stable note".into(),"proof.txt".into()));
         assert_eq!(connection.query_row("SELECT body FROM task_work_log_entries WHERE id=?",[log_id],|r|r.get::<_,String>(0)).unwrap(),"Manual log body");
@@ -1356,7 +1703,7 @@ mod tests {
         assert_eq!(connection.query_row("SELECT title FROM task_work_sessions WHERE id=?",[session_id],|r|r.get::<_,String>(0)).unwrap(),"Preserved");
         connection.execute_batch("DROP TABLE task_execution_runtime;").unwrap();
         apply(&mut connection).unwrap();
-        assert_eq!(schema_version(&connection).unwrap(), 15);
+        assert_eq!(schema_version(&connection).unwrap(), CURRENT_SCHEMA_VERSION);
         assert_eq!(connection.query_row("SELECT title FROM task_work_sessions WHERE id=?",[session_id],|r|r.get::<_,String>(0)).unwrap(),"Preserved");
         assert_eq!(connection.query_row("SELECT count(*) FROM pragma_foreign_key_check",[],|r|r.get::<_,i64>(0)).unwrap(),0);
     }
@@ -1656,6 +2003,121 @@ mod tests {
     }
 
     #[test]
+    fn populated_v15_to_v16_preserves_jobs_and_adds_foundation_metadata() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        apply_plan(&mut connection, &MIGRATIONS[..15], 15).unwrap();
+        connection.execute(
+            "INSERT INTO ai_jobs_v2(id,task_kind,entity_type,entity_id,status,input_json,idempotency_key,result_json)
+             VALUES('v15-job','completion_report','tasks','task-1','completed','{}','v15-key','{\"report\":true}')",
+            [],
+        ).unwrap();
+        apply(&mut connection).unwrap();
+        assert_eq!(schema_version(&connection).unwrap(), CURRENT_SCHEMA_VERSION);
+        assert_eq!(
+            connection.query_row(
+                "SELECT status,result_json,prompt_id,prompt_version,source_revision,execution_outcome,application_disposition
+                 FROM ai_jobs_v2 WHERE id='v15-job'", [],
+                |row| Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?,row.get::<_,String>(2)?,row.get::<_,i64>(3)?,row.get::<_,String>(4)?,row.get::<_,String>(5)?,row.get::<_,String>(6)?)),
+            ).unwrap(),
+            ("completed".into(),"{\"report\":true}".into(),"".into(),0,"".into(),"pending".into(),"pending".into())
+        );
+        assert!(table_exists(&connection,"workflow_version_provenance").unwrap());
+        assert!(table_exists(&connection,"workflow_document_references").unwrap());
+        assert_eq!(connection.query_row("SELECT count(*) FROM pragma_foreign_key_check",[],|row|row.get::<_,i64>(0)).unwrap(),0);
+    }
+
+    #[test]
+    fn v17_baselines_existing_capture_source_without_enabling_backfill() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        apply_plan(&mut connection, &MIGRATIONS[..16], 16).unwrap();
+        connection.execute_batch(
+            "INSERT INTO captures(id,text,created_at) VALUES('legacy-capture','Original raw text','2026-09-01');
+             INSERT INTO input_images(capture_id,name,media_type,data)
+               VALUES('legacy-capture','one.png','image/png','first-bytes'),
+                     ('legacy-capture','two.jpg','image/jpeg','second-bytes');",
+        ).unwrap();
+
+        apply(&mut connection).unwrap();
+
+        assert_eq!(schema_version(&connection).unwrap(), CURRENT_SCHEMA_VERSION);
+        let head = connection.query_row(
+            "SELECT source_revision,current_revision,context_revision,source_hash,
+                    initial_distillation_eligible,logical_operation_id,last_user_activity_at
+             FROM capture_source_heads WHERE capture_id='legacy-capture'",
+            [],
+            |row| Ok((row.get::<_,i64>(0)?,row.get::<_,i64>(1)?,row.get::<_,i64>(2)?,
+                row.get::<_,String>(3)?,row.get::<_,i64>(4)?,row.get::<_,String>(5)?,row.get::<_,String>(6)?)),
+        ).unwrap();
+        assert_eq!((head.0,head.1,head.2,head.4,head.5.as_str(),head.6.as_str()),
+            (1,1,0,0,"","2026-09-01"));
+        assert!(head.3.starts_with("sha256:"));
+        assert_eq!(connection.query_row(
+            "SELECT authored_text FROM capture_source_snapshots WHERE capture_id='legacy-capture' AND source_revision=1",
+            [], |row| row.get::<_,String>(0)).unwrap(), "Original raw text");
+        let images = connection.prepare(
+            "SELECT image_index,name,media_type,data FROM capture_source_images
+             WHERE capture_id='legacy-capture' ORDER BY image_index"
+        ).unwrap().query_map([], |row| Ok((row.get::<_,i64>(0)?,row.get::<_,String>(1)?,row.get::<_,String>(2)?,row.get::<_,String>(3)?)))
+            .unwrap().collect::<Result<Vec<_>,_>>().unwrap();
+        assert_eq!(images, vec![
+            (0,"one.png".into(),"image/png".into(),"first-bytes".into()),
+            (1,"two.jpg".into(),"image/jpeg".into(),"second-bytes".into()),
+        ]);
+        assert_eq!(connection.query_row(
+            "SELECT count(*) FROM ai_jobs_v2 WHERE task_kind='capture_distillation'",
+            [], |row| row.get::<_,i64>(0)).unwrap(), 0);
+        assert_eq!(connection.query_row("SELECT count(*) FROM pragma_foreign_key_check",[],|row|row.get::<_,i64>(0)).unwrap(),0);
+    }
+
+    #[test]
+    fn v17_distillation_tables_require_owned_source_and_job_provenance() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        apply(&mut connection).unwrap();
+        connection.execute("INSERT INTO captures(id,text) VALUES('new-capture','raw')", []).unwrap();
+        connection.execute("INSERT INTO capture_source_heads(capture_id,source_hash,initial_distillation_eligible,logical_operation_id) VALUES('new-capture','sha256:source',1,'capture-distillation:new-capture')", []).unwrap();
+        connection.execute("INSERT INTO capture_source_snapshots(capture_id,source_revision,authored_text,source_hash) VALUES('new-capture',1,'raw','sha256:source')", []).unwrap();
+        connection.execute("INSERT INTO ai_jobs_v2(id,task_kind,entity_type,entity_id,status,prompt_id,prompt_version,source_revision) VALUES('job-1','capture_distillation','captures','new-capture','completed','capture_distillation',1,'new-capture:source:1:sha256:source')", []).unwrap();
+        connection.execute("INSERT INTO capture_distillations(capture_id,result_revision,source_revision,bound_current_revision,source_hash,title,content,locale,job_id) VALUES('new-capture',1,1,1,'sha256:source','Title','Content','en','job-1')", []).unwrap();
+        assert!(connection.execute("INSERT INTO capture_source_images(capture_id,source_revision,image_index,name,media_type,content_hash,data) VALUES('missing',1,0,'x.png','image/png','sha256:x','bytes')", []).is_err());
+        assert!(connection.execute("INSERT INTO capture_distillation_proposals(id,capture_id,job_id,source_revision,bound_current_revision,source_hash,title,content,locale) VALUES('proposal','new-capture','missing-job',1,2,'sha256:source','Title','Content','en')", []).is_err());
+        assert_eq!(connection.query_row("SELECT count(*) FROM pragma_foreign_key_check",[],|row|row.get::<_,i64>(0)).unwrap(),0);
+    }
+
+    #[test]
+    fn v18_adds_distillation_projection_tables_without_changing_source_records() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        apply_plan(&mut connection, &MIGRATIONS[..17], 17).unwrap();
+        connection.execute("INSERT INTO captures(id,text,created_at) VALUES('capture','raw','2026-09-01')", []).unwrap();
+        connection.execute("INSERT INTO tasks(id,origin_capture_id,created_at,last_user_activity_at) VALUES('task','capture','2026-09-01','2026-09-01')", []).unwrap();
+        connection.execute("INSERT INTO task_work_log_entries(id,task_id,body,created_at) VALUES('log','task','manual body','2026-09-02')", []).unwrap();
+        connection.execute("INSERT INTO task_decisions(id,task_id,task_revision,kind,payload_json,operation_id,created_at) VALUES('decision','task',1,'choice','{\"option\":\"A\"}','decision-op','2026-09-03')", []).unwrap();
+        connection.execute("INSERT INTO task_completions(id,task_id,task_revision,evidence,report,operation_id,created_at) VALUES('completion','task',1,'verified evidence','report','completion-op','2026-09-04')", []).unwrap();
+
+        apply(&mut connection).unwrap();
+
+        assert_eq!(schema_version(&connection).unwrap(), CURRENT_SCHEMA_VERSION);
+        for table in ["task_distillation_revisions","task_distillation_current","task_distillation_nodes","task_distillation_node_history","task_distillation_relationships","task_distillation_redirects","task_distillation_topics","task_distillation_completion_snapshots","task_distillation_dependencies"] {
+            assert!(table_exists(&connection, table).unwrap(), "missing {table}");
+        }
+        assert_eq!(connection.query_row("SELECT body FROM task_work_log_entries WHERE id='log'",[],|row|row.get::<_,String>(0)).unwrap(),"manual body");
+        assert_eq!(connection.query_row("SELECT payload_json FROM task_decisions WHERE id='decision'",[],|row|row.get::<_,String>(0)).unwrap(),"{\"option\":\"A\"}");
+        assert_eq!(connection.query_row("SELECT evidence FROM task_completions WHERE id='completion'",[],|row|row.get::<_,String>(0)).unwrap(),"verified evidence");
+        assert_eq!(connection.query_row("SELECT count(*) FROM pragma_foreign_key_check",[],|row|row.get::<_,i64>(0)).unwrap(),0);
+    }
+
+    #[test]
+    fn v18_projection_schema_enforces_current_revision_and_keeps_history() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        apply(&mut connection).unwrap();
+        connection.execute("INSERT INTO captures(id,text) VALUES('capture','raw')", []).unwrap();
+        connection.execute("INSERT INTO tasks(id,origin_capture_id,created_at,last_user_activity_at) VALUES('task','capture',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)", []).unwrap();
+        connection.execute("INSERT INTO task_distillation_revisions(owner_type,owner_id,revision,task_id,source_set_hash,prompt_id,prompt_version,rules_version,result_schema_version,locale,result_json,freshness,job_id) VALUES('task_journey','task',1,'task','sha256:a','task_journey_increment',1,'rules','schema','en','{}','current','job')", []).unwrap();
+        connection.execute("INSERT INTO task_distillation_current(owner_type,owner_id,revision,source_set_hash,freshness) VALUES('task_journey','task',1,'sha256:a','current')", []).unwrap();
+        assert!(connection.execute("UPDATE task_distillation_current SET revision=2 WHERE owner_type='task_journey' AND owner_id='task'", []).is_err());
+        assert_eq!(connection.query_row("SELECT count(*) FROM task_distillation_revisions",[],|row|row.get::<_,i64>(0)).unwrap(),1);
+    }
+
+    #[test]
     fn legacy_ai_job_schema_gains_safe_defaults_without_losing_history() {
         let mut connection = Connection::open_in_memory().unwrap();
         // Model a complete version-2 database before replacing its legacy job table.
@@ -1759,6 +2221,57 @@ mod tests {
         assert!(error.contains("migration 1"));
         assert!(!table_exists(&connection, "incomplete").unwrap());
         assert_eq!(schema_version(&connection).unwrap(), 0);
+    }
+    #[test]
+    fn knowledge_migration_preserves_legacy_draft_bytes_hash_and_publication() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        apply_plan(&mut connection, &MIGRATIONS[..20], 20).unwrap();
+        connection
+            .execute("INSERT INTO captures(id,text) VALUES('capture','raw')", [])
+            .unwrap();
+        connection.execute("INSERT INTO tasks(id,origin_capture_id,current_revision,state,created_at,last_user_activity_at) VALUES('task','capture',1,'completed','2026-01-01','2026-01-01')",[]).unwrap();
+        connection.execute("INSERT INTO task_revisions(task_id,revision,title,detail,outcome,scope,non_goals,validation_criteria,content_hash,created_at) VALUES('task',1,'Title','','','','','','task-hash','2026-01-01')",[]).unwrap();
+        connection.execute("INSERT INTO task_knowledge_drafts(task_id,revision,task_revision,completion_id,body_markdown,content_hash,lineage_json,state,path,published_hash,model_status,model_error,created_at,updated_at) VALUES('task',1,1,'completion','# Exact body','body-hash','{}','published','Knowledge/title.md','file-hash','enhanced','','2026-01-02','2026-01-02')",[]).unwrap();
+        apply(&mut connection).unwrap();
+        assert_eq!(connection.query_row("SELECT body_markdown||':'||content_hash FROM knowledge_draft_versions WHERE task_id='task' AND revision=1",[],|row|row.get::<_,String>(0)).unwrap(),"# Exact body:body-hash");
+        assert_eq!(connection.query_row("SELECT published_revision||':'||publication_path||':'||publication_content_hash FROM knowledge_pointers WHERE task_id='task'",[],|row|row.get::<_,String>(0)).unwrap(),"1:Knowledge/title.md:file-hash");
+        assert_eq!(schema_version(&connection).unwrap(), CURRENT_SCHEMA_VERSION);
+        assert!(
+            connection
+                .pragma_query_value(None, "foreign_keys", |row| row.get::<_, i64>(0))
+                .unwrap()
+                != 0
+        );
+    }
+
+    #[test]
+    fn archive_migration_preserves_v21_rows_and_rolls_back_atomically() {
+        let mut c=Connection::open_in_memory().unwrap();
+        apply_plan(&mut c,&MIGRATIONS[..21],21).unwrap();
+        c.execute("INSERT INTO tasks(id,current_revision,state,created_at,last_user_activity_at) VALUES('legacy',1,'completed','2026-01-01','2026-01-01')",[]).unwrap();
+        c.execute("INSERT INTO knowledge_pointers(task_id,publication_document_id,publication_path,publication_content_hash) VALUES('legacy','stable','Knowledge/Exact.md','exact-hash')",[]).unwrap();
+        apply(&mut c).unwrap();
+        apply(&mut c).unwrap();
+        assert_eq!(schema_version(&c).unwrap(),22);
+        assert_eq!(c.query_row("SELECT publication_path||':'||publication_content_hash FROM knowledge_pointers WHERE task_id='legacy'",[],|r|r.get::<_,String>(0)).unwrap(),"Knowledge/Exact.md:exact-hash");
+        assert_eq!(c.query_row("SELECT count(*) FROM knowledge_archive_current",[],|r|r.get::<_,i64>(0)).unwrap(),0);
+        assert_eq!(c.query_row("SELECT count(*) FROM pragma_foreign_key_check",[],|r|r.get::<_,i64>(0)).unwrap(),0);
+        let mut failed=Connection::open_in_memory().unwrap();
+        apply_plan(&mut failed,&MIGRATIONS[..21],21).unwrap();
+        failed.execute("CREATE TABLE knowledge_archive_steps(dummy INTEGER)",[]).unwrap();
+        assert!(apply(&mut failed).is_err());
+        assert_eq!(schema_version(&failed).unwrap(),21);
+        assert!(!table_exists(&failed,"knowledge_archive_proposals").unwrap());
+    }
+
+    #[test]
+    fn knowledge_migration_is_idempotent_through_apply() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        apply(&mut connection).unwrap();
+        apply(&mut connection).unwrap();
+        assert_eq!(schema_version(&connection).unwrap(), CURRENT_SCHEMA_VERSION);
+        assert!(table_exists(&connection, "knowledge_evidence_snapshots").unwrap());
+        assert!(table_exists(&connection, "knowledge_idea_revisions").unwrap());
     }
 }
 

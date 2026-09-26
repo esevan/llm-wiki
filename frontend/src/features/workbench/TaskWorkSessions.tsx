@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { taskClient } from "../../services/taskClient";
@@ -313,9 +313,12 @@ export function TaskWorkSessions({
   const [runSubmitting, setRunSubmitting] = useState(false);
   const [retrySubmittingRunId, setRetrySubmittingRunId] = useState("");
   const [execution, setExecution] = useState<TaskExecutionSnapshot>();
-  const receiveExecution = (snapshot: TaskExecutionSnapshot) => setExecution((current) =>
-    current?.revision !== undefined && snapshot.revision !== undefined && snapshot.revision < current.revision
-      ? current : snapshot);
+  const receiveExecution = useCallback(
+    (snapshot: TaskExecutionSnapshot) => setExecution((current) =>
+      current?.revision !== undefined && snapshot.revision !== undefined && snapshot.revision < current.revision
+        ? current : snapshot),
+    [],
+  );
   const [answers, setAnswers] = useState<Record<string, string[]>>({});
   const [requestBusy, setRequestBusy] = useState("");
   const [editingSettings, setEditingSettings] = useState(true);
@@ -334,6 +337,13 @@ export function TaskWorkSessions({
   const [loadingEarlierTurns, setLoadingEarlierTurns] = useState(false);
   const generation = useRef(0);
   const activeRef = useRef("");
+  const listedTaskIdRef = useRef("");
+  const busyRef = useRef(busy);
+  const draftsRef = useRef(drafts);
+  const focusExecutionRef = useRef(focusExecution);
+  busyRef.current = busy;
+  draftsRef.current = drafts;
+  focusExecutionRef.current = focusExecution;
   const draftRef = useRef(draft);
   const attachmentRef = useRef(attachment);
   const timelineRef = useRef<HTMLOListElement>(null);
@@ -353,10 +363,11 @@ export function TaskWorkSessions({
       });
     }
   }, [attachment, draft, drafts]);
-  const loadList = async (expected: number) => {
+  const loadList = useCallback(async (expected: number) => {
     try {
       const next = await taskClient.workSessions(task.id);
       if (generation.current === expected) {
+        listedTaskIdRef.current = task.id;
         setSessions(next.sessions);
         setError("");
       }
@@ -365,7 +376,7 @@ export function TaskWorkSessions({
       if (generation.current === expected) setError(String(cause));
       return undefined;
     }
-  };
+  }, [task.id]);
   const loadCodexSessions = async () => {
     setCodexSessions(undefined);
     setError("");
@@ -380,14 +391,14 @@ export function TaskWorkSessions({
       if (generation.current === expected) setError(String(cause));
     }
   };
-  const loadLinkedTranscript = async (sessionId: string, expected: number) => {
+  const loadLinkedTranscript = useCallback(async (sessionId: string, expected: number) => {
     try {
       const transcript = await taskExecutionClient.externalThread({ taskId: task.id, sessionId, limit: 10 });
       if (generation.current === expected && activeRef.current === sessionId) setExternalTranscript(transcript);
     } catch {
       // The local session remains usable if Codex is unavailable.
     }
-  };
+  }, [task.id]);
   const loadEarlierTurns = async () => {
     if (!record || !externalTranscript?.nextCursor || loadingEarlierTurns) return;
     setLoadingEarlierTurns(true);
@@ -420,6 +431,47 @@ export function TaskWorkSessions({
       setLoadingMoreCodex(false);
     }
   };
+  const open = useCallback(async (id: string) => {
+    if (busyRef.current) return;
+    if (activeRef.current) {
+      const existing = draftsRef.current.get(activeRef.current);
+      draftsRef.current.set(activeRef.current, {
+        ...existing,
+        body: draftRef.current,
+        attachment: attachmentRef.current,
+        operationId: existing?.operationId ?? operationId(),
+        attemptedPayload: existing?.attemptedPayload,
+      });
+    }
+    const expected = ++generation.current;
+    activeRef.current = id;
+    followLatestRef.current = true;
+    setActiveId(id);
+    setRecord(undefined);
+    setExecution(undefined);
+    setExternalTranscript(undefined);
+    setSelectedRunId("");
+    setRetryOfRunId(undefined);
+    setRequestBusy("");
+    setRunSubmitting(false);
+    setError("");
+    setStatus("");
+    const saved = draftsRef.current.get(id);
+    setDraft(saved?.body ?? "");
+    setAttachment(saved?.attachment);
+    setAnswers(saved?.formalAnswers ?? {});
+    setEditingSettings(true);
+    if (!id) return;
+    try {
+      const next = await taskClient.workSession(task.id, id);
+      if (generation.current === expected && activeRef.current === id) {
+        setRecord(next);
+        void loadLinkedTranscript(id, expected);
+      }
+    } catch (cause) {
+      if (generation.current === expected) setError(String(cause));
+    }
+  }, [loadLinkedTranscript, task.id]);
   const toggleCodexSessions = () => {
     if (showCodexSessions) setShowCodexSessions(false);
     else {
@@ -430,12 +482,14 @@ export function TaskWorkSessions({
   useEffect(() => {
     const expected = ++generation.current;
     activeRef.current = "";
+    listedTaskIdRef.current = "";
     setSessions(undefined);
     setActiveId("");
     setRecord(undefined);
     setDraft("");
     setAttachment(undefined);
     setBusy(false);
+    busyRef.current = false;
     setRunSubmitting(false);
     setStatus("");
     setError("");
@@ -462,67 +516,35 @@ export function TaskWorkSessions({
     setLoadingMoreCodex(false);
     setLoadingEarlierTurns(false);
     void loadList(expected).then((next) => {
-      if (generation.current === expected && !activeRef.current && !focusExecution?.sessionId && next?.[0]) void open(next[0].id);
+      const focusedSessionId = focusExecutionRef.current?.sessionId;
+      const hasFocusedSession = next?.some(({ id }) => id === focusedSessionId);
+      if (generation.current === expected && !activeRef.current && !hasFocusedSession && next?.[0]) void open(next[0].id);
     });
     return () => {
       generation.current += 1;
     };
-  }, [task.id]);
+  }, [loadList, open, task.id]);
   useEffect(() => {
-    if (sessions !== undefined && focusExecution?.sessionId && focusExecution.sessionId !== activeRef.current) void open(focusExecution.sessionId);
-  }, [focusExecution?.runId, focusExecution?.sessionId, sessions]);
-  const open = async (id: string) => {
-    if (busy) return;
-    if (activeRef.current) {
-      const existing = drafts.get(activeRef.current);
-      drafts.set(activeRef.current, {
-        ...existing,
-        body: draftRef.current,
-        attachment: attachmentRef.current,
-        operationId: existing?.operationId ?? operationId(),
-        attemptedPayload: existing?.attemptedPayload,
-      });
-    }
-    const expected = ++generation.current;
-    activeRef.current = id;
-    followLatestRef.current = true;
-    setActiveId(id);
-    setRecord(undefined);
-    setExecution(undefined);
-    setExternalTranscript(undefined);
-    setSelectedRunId("");
-    setRetryOfRunId(undefined);
-    setRequestBusy("");
-    setRunSubmitting(false);
-    setError("");
-    setStatus("");
-    const saved = drafts.get(id);
-    setDraft(saved?.body ?? "");
-    setAttachment(saved?.attachment);
-    setAnswers(saved?.formalAnswers ?? {});
-    setEditingSettings(true);
-    if (!id) return;
-    try {
-      const next = await taskClient.workSession(task.id, id);
-      if (generation.current === expected && activeRef.current === id) {
-        setRecord(next);
-        void loadLinkedTranscript(id, expected);
-      }
-    } catch (cause) {
-      if (generation.current === expected) setError(String(cause));
-    }
-  };
+    const focusedSessionId = focusExecution?.sessionId;
+    if (
+      listedTaskIdRef.current === task.id
+      && focusedSessionId
+      && sessions?.some(({ id }) => id === focusedSessionId)
+      && focusedSessionId !== activeRef.current
+    ) void open(focusedSessionId);
+  }, [focusExecution?.runId, focusExecution?.sessionId, open, sessions, task.id]);
+  const recordSessionId = record?.session.id;
   useEffect(() => {
-    if (!record || activeRef.current !== record.session.id) return;
+    if (!recordSessionId || activeRef.current !== recordSessionId) return;
     const expected = generation.current;
-    void taskExecutionClient.subscribe({ taskId: task.id, sessionId: record.session.id, runId: focusExecution?.sessionId === record.session.id ? focusExecution.runId : undefined }, (snapshot) => {
-      if (generation.current === expected && activeRef.current === record.session.id) receiveExecution(snapshot);
+    void taskExecutionClient.subscribe({ taskId: task.id, sessionId: recordSessionId, runId: focusExecution?.sessionId === recordSessionId ? focusExecution.runId : undefined }, (snapshot) => {
+      if (generation.current === expected && activeRef.current === recordSessionId) receiveExecution(snapshot);
     }).then((snapshot) => {
-      if (generation.current === expected && activeRef.current === record.session.id) receiveExecution(snapshot);
+      if (generation.current === expected && activeRef.current === recordSessionId) receiveExecution(snapshot);
     }).catch((cause) => {
       if (generation.current === expected) setError(String(cause));
     });
-  }, [focusExecution?.runId, focusExecution?.sessionId, record?.session.id, task.id]);
+  }, [focusExecution?.runId, focusExecution?.sessionId, receiveExecution, recordSessionId, task.id]);
   const create = async () => {
     if (busy) return;
     setBusy(true);

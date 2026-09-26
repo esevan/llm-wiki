@@ -9,7 +9,7 @@ export function taskOperation(
   body: Record<string, unknown>,
   locale: string,
 ): Operation | undefined {
-  const p = path.split("/").slice(1).map(decodeURIComponent);
+  const p = path.split("/").slice(1).map(segment => decodeURIComponent(segment.split("?", 1)[0]));
   const op = (name: string, ids: Record<string, unknown> = {}): Operation => ({
     name,
     input: { ...body, ...ids, locale },
@@ -17,6 +17,14 @@ export function taskOperation(
   if (path === "/workbench" && method === "GET") return op("workbench.get");
   if (path === "/tasks" && method === "POST") return op("task.create");
   if (path === "/problems" && method === "POST") return op("problem.create");
+  if (path === "/knowledge/archive/prepare" && method === "POST") return op("task-knowledge.archive-prepare");
+  if (path === "/knowledge/archive/organize" && method === "POST") return op("task-knowledge.archive-organize");
+  if (path === "/knowledge/archive/publish" && method === "POST") return op("task-knowledge.archive-publish");
+  if (p[0] === "knowledge" && p[1] === "archive" && p[2] === "operations" && p[3]) {
+    if (p.length === 4 && method === "GET") return op("task-knowledge.archive-status", { operationId: p[3] });
+    if (p.length === 5 && p[4] === "retry" && method === "POST") return op("task-knowledge.archive-retry", { operationId: p[3] });
+    if (p.length === 5 && p[4] === "recover" && method === "POST") return op("task-knowledge.archive-recover", { operationId: p[3] });
+  }
   if (p[0] === "problems" && p.length === 3 && method === "POST") {
     if (p[2] === "revisions")
       return op("problem.revision", {
@@ -50,6 +58,30 @@ export function taskOperation(
     const name = names[`${method} ${p[2]}`];
     if (name) return op(`task-refinement.${name}`, { sessionId: p[1] });
   }
+  if (p[0] === "refinement" && p[2] === "reference-workspace" && method === "GET")
+    return op("task-refinement.reference-workspace", { sessionId: p[1] });
+  if (p[0] === "refinement" && p[2] === "preview-generations" && method === "POST")
+    return op("task-refinement.reference-generate", { sessionId: p[1] });
+  if (p[0] === "refinement" && p[2] === "investigations" && method === "POST")
+    return op("task-refinement.reference-investigate", { sessionId: p[1] });
+  if (p[0] === "refinement" && p[2] === "references" && p.length === 3 && method === "GET")
+    return op("task-refinement.reference-list", { sessionId: p[1], query: new URL(path, "http://local").searchParams.get("query") ?? "" });
+  if (p[0] === "refinement" && p[2] === "references" && p.length === 4 && p[3] === "open" && method === "POST")
+    return op("task-refinement.reference-open", { sessionId: p[1] });
+  if (p[0] === "refinement" && p[2] === "mention-draft" && method === "PUT")
+    return op("task-refinement.mention-draft", { sessionId: p[1] });
+  if (p[0] === "refinement" && p[2] === "preview-versions" && p.length === 6 && p[4] === "compare" && method === "GET")
+    return op("task-refinement.reference-compare", { sessionId: p[1], left: Number(p[3]), right: Number(p[5]) });
+  if (p[0] === "refinement" && p[2] === "preview-versions" && p.length === 4 && method === "GET")
+    return op("task-refinement.reference-version", { sessionId: p[1], version: Number(p[3]) });
+  if (p[0] === "refinement" && p[2] === "preview-versions" && p.length === 5 && p[4] === "edits" && method === "POST")
+    return op("task-refinement.reference-edit", { sessionId: p[1], version: Number(p[3]) });
+  if (p[0] === "refinement" && p[2] === "preview-versions" && p.length === 5 && p[4] === "restore" && method === "POST")
+    return op("task-refinement.reference-restore", { sessionId: p[1], version: Number(p[3]) });
+  if (p[0] === "refinement" && p[2] === "preview-versions" && p.length === 5 && p[4] === "apply" && method === "POST")
+    return op("task-refinement.reference-apply", { sessionId: p[1], version: Number(p[3]) });
+  if (p[0] === "refinement" && p[2] === "references" && p.length === 5 && p[4] === "usage" && method === "POST")
+    return op("task-refinement.reference-usage", { sessionId: p[1], referenceId: p[3] });
   if (p[0] === "tasks" && p[1]) {
     const ids = { taskId: p[1] };
     if (p.length === 2 && method === "GET") return op("task.get", ids);
@@ -68,11 +100,26 @@ export function taskOperation(
         "POST decisions": "decision.create",
         "POST completions": "completion.create",
         "GET lineage": "lineage",
+        "POST distillation-repair": "distillation.repair",
         "GET work-sessions": "work-session.list",
         "POST work-sessions": "work-session.create",
       };
       const name = names[`${method} ${p[2]}`];
       if (name) return op(`task.${name}`, ids);
+      if (p[2] === "knowledge" && method === "GET")
+        return op("task-knowledge.get", ids);
+    }
+    if (
+      p.length === 6 &&
+      p[2] === "knowledge" &&
+      p[3] === "versions" &&
+      p[5] === "restore" &&
+      method === "POST"
+    ) {
+      return op("task-knowledge.restore", {
+        ...ids,
+        revision: Number(p[4]),
+      });
     }
     if (p.length === 4) {
       if (p[2] === "work-sessions" && method === "GET")

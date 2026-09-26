@@ -1,4 +1,7 @@
 use crate::adapters::sqlite::task_repository;
+use crate::application::task_distillation_service::{
+    bounded_manifest_excerpt, build_run_input, content_hash as distillation_hash, DistillationOwner, ExactSource,
+};
 use crate::domain::task::content_hash;
 use crate::native::database;
 use rusqlite::{params, OptionalExtension};
@@ -629,6 +632,149 @@ impl TaskExecutionApplicationService {
             .map_err(|e| e.to_string())?;
         }
         Ok(())
+    }
+
+    pub(crate) fn distillation_job_input(&self, run_id: &str, locale: &str,
+    ) -> Result<Value, String> {
+        let connection = database::open(&self.db_path)?;
+        let (task_id, task_revision, run_revision, work_log_entry_id, final_report, status): (String,i64,i64,String,Option<String>,String) = connection.query_row(
+            "SELECT r.task_id,t.current_revision,r.revision,r.work_log_entry_id,r.final_report,r.status FROM task_work_session_runs r JOIN tasks t ON t.id=r.task_id WHERE r.id=?",
+            [run_id], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?,row.get(5)?)),
+        ).map_err(|error|error.to_string())?;
+        if !matches!(status.as_str(),"succeeded"|"failed"|"cancelled"|"interrupted"|"needs_attention") {
+            return Err("run is not terminal".into());
+        }
+        let mut statement=connection.prepare("SELECT provider_item_id,kind,status,content_json FROM task_work_session_run_items WHERE run_id=? AND status='completed' ORDER BY provider_order,provider_item_id").map_err(|error|error.to_string())?;
+        let candidates=statement.query_map([run_id],|row| {
+                Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?,row.get::<_,String>(2)?,row.get::<_,String>(3)?,
+                ))
+            }).map_err(|error|error.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|error|error.to_string())?;
+        let mut sources=candidates.into_iter().filter_map(|(id,kind,_status,raw)| {
+            if matches!(kind.as_str(),"agentMessage"|"reasoning"|"retry"|"continue"|"approval") { return None; }
+            let value=serde_json::from_str::<Value>(&raw).unwrap_or(Value::Null);
+            let subject = value
+                    .get("command")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned);
+                let source_text =value.get("aggregatedOutput").or_else(||value.get("text")).or_else(||value.get("command")).and_then(Value::as_str).unwrap_or(&raw);
+                let material_to_report = subject
+                    .as_deref()
+                    .is_some_and(|command| final_report.as_deref().unwrap_or("").contains(command));
+                let limit = if value.get("exitCode").and_then(Value::as_i64).is_some_and(|code|code!=0) || kind == "fileChange"
+                    || material_to_report
+                {
+                    8000
+                } else {
+                    2000
+                };
+                let (excerpt, omission) = bounded_manifest_excerpt(source_text, limit);
+                let exit_code = value.get("exitCode").and_then(Value::as_i64);
+                let failed = exit_code.is_some_and(|code| code != 0);
+            let role=if failed {"contradicts"} else if kind == "commandExecution" && exit_code == Some(0) {
+                    "corroborates"
+                } else if kind == "fileChange" {
+                    "missing_material_fact"
+                } else {
+                    return None;
+                };
+                let evidence_state = if failed {
+                    "failed_check"
+                } else if kind == "commandExecution" && exit_code == Some(0) {
+                    "observed_exit"
+                } else if kind == "fileChange" {
+                    "performed_change"
+                } else {
+                    "reported"
+                };
+            Some(ExactSource{source_type:"run_completed_item".into(),id,revision:distillation_hash(&raw),locator:"content_json".into(),content_hash:distillation_hash(&raw),role:role.into(),
+                    evidence_state: evidence_state.into(),
+                    omission,
+                    subject,
+                    excerpt,
+                })
+        }).collect::<Vec<_>>();
+        for index in 0..sources.len() {
+            if sources[index].evidence_state == "failed_check"
+                && sources[index].subject.is_some()
+                && sources[index + 1..].iter().any(|later| {
+                    later.subject == sources[index].subject
+                        && later.evidence_state == "observed_exit"
+                })
+            {
+                sources[index].evidence_state = "failed_approach".into();
+                sources[index].role = "missing_material_fact".into();
+            }
+        }
+        let task_revision_json=connection.query_row("SELECT json_object('title',r.title,'detail',r.detail,'outcome',r.outcome,'scope',r.scope,'nonGoals',r.non_goals,'validationCriteria',r.validation_criteria,'author',r.author,'state',t.state) FROM task_revisions r JOIN tasks t ON t.id=r.task_id WHERE r.task_id=? AND r.revision=?",params![&task_id,task_revision],|row|row.get::<_,String>(0)).optional().map_err(|error|error.to_string())?;
+        if let Some(raw)=task_revision_json {
+            let (excerpt, omission) = (raw.clone(), None);
+            sources.push(ExactSource{source_type:"task_revision".into(),id:task_id.clone(),revision:task_revision.to_string(),locator:"definition".into(),content_hash:distillation_hash(&raw),role:"task_context".into(),
+                evidence_state: "task_definition".into(),
+                omission,
+                subject: None,
+                excerpt,
+            }); }
+        let mut decisions=connection.prepare("SELECT id,task_revision,kind,payload_json FROM task_decisions WHERE task_id=? ORDER BY created_at,id").map_err(|e|e.to_string())?;
+        sources.extend(decisions.query_map([&task_id],|row| {
+                    Ok((row.get::<_,String>(0)?,row.get::<_,Option<i64>>(1)?.unwrap_or(0),row.get::<_,String>(2)?,row.get::<_,String>(3)?,
+                    ))
+                }).map_err(|e|e.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|e|e.to_string())?.into_iter().map(|(id,revision,kind,payload)|{let raw=format!("{kind}: {payload}");
+                    let (excerpt, omission) = (raw.clone(), None);
+                    ExactSource{source_type:"task_decision".into(),id,revision:revision.to_string(),locator:"payload_json".into(),content_hash:distillation_hash(&raw),role:"task_context".into(),
+                        evidence_state: "explicit_decision".into(),
+                        omission,
+                        subject: None,
+                        excerpt,
+                    }
+                }),
+        );
+        drop(decisions);
+        let mut completions=connection.prepare("SELECT id,task_revision,evidence,report FROM task_completions WHERE task_id=? ORDER BY created_at,id").map_err(|e|e.to_string())?;
+        sources.extend(completions.query_map([&task_id],|row| {
+                    Ok((row.get::<_,String>(0)?,row.get::<_,i64>(1)?,row.get::<_,String>(2)?,row.get::<_,String>(3)?,
+                    ))
+                }).map_err(|e|e.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|e|e.to_string())?.into_iter().map(|(id,revision,evidence,report)|{let raw=format!("Evidence: {evidence}\nReport: {report}");
+                    let (excerpt, omission) = (raw.clone(), None);
+                    ExactSource{source_type:"task_completion".into(),id,revision:revision.to_string(),locator:"evidence".into(),content_hash:distillation_hash(&raw),role:"task_context".into(),
+                        evidence_state: "explicit_completion".into(),
+                        omission,
+                        subject: None,
+                        excerpt,
+                    }
+                }),
+        );
+        let expected_projection_revision=connection.query_row("SELECT revision FROM task_distillation_current WHERE owner_type='work_log' AND owner_id=?",[&work_log_entry_id],|row|row.get::<_,i64>(0)).optional().map_err(|error|error.to_string())?.unwrap_or(0);
+        let missing=final_report.is_none().then(||format!("Run ended with status {status} without a final report"));
+        let mut input=build_run_input(DistillationOwner{task_id,task_revision,run_id:Some(run_id.into()),run_revision:Some(run_revision),work_log_entry_id:Some(work_log_entry_id),
+            },final_report.as_deref(),missing.as_deref(),sources,expected_projection_revision,locale,
+        )?;
+        let source_revision=input.source_set_hash.clone();
+        let mut existing_semantic_graph =
+            crate::native::task_distillation::task_projection(&connection, &input.owner.task_id)?;
+        if let Some(graph) = existing_semantic_graph.as_mut() {
+            input.expected_journey_revision = graph["projectionRevision"].as_i64().unwrap_or(0);
+            for node in graph["nodes"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|node| node["active"] == true)
+            {
+                if let (Some(id), Some(revision)) = (node["id"].as_str(), node["revision"].as_i64())
+                {
+                    input
+                        .semantic_target_revisions
+                        .insert(id.to_owned(), revision);
+                }
+            }
+            input.affected_semantic_ids = input.semantic_target_revisions.keys().cloned().collect();
+            // The generation context must expose every eligible stable target.
+            // Raw revision payloads are unnecessary for matching prepared nodes.
+            if let Some(object) = graph.as_object_mut() {
+                object.remove("result");
+            }
+        }
+        Ok(json!({"taskKind":"run_report_distillation","entityType":"task_work_session_runs","entityId":run_id,"sourceRevision":source_revision,"distillationInput":input,"existingSemanticGraph":existing_semantic_graph,"runStatus":status,"automatic":true}),
+        )
     }
 
     pub(crate) fn save_formal_request(
@@ -1293,6 +1439,53 @@ mod tests {
     }
 
     #[test]
+    fn terminal_distillation_manifest_uses_report_first_and_exact_saved_task_sources() {
+        let f=fixture();let tasks=TaskApplicationService::new(&f.db);
+        tasks.execute("task.decision.create",&json!({"operationId":"decision","taskId":f.task,"expectedTaskRevision":1,"kind":"storage","payload":{"option":"SQLite","rationale":"offline"}})).unwrap();
+        let connection = database::open(&f.db).unwrap();
+        connection.execute("INSERT INTO task_distillation_revisions(owner_type,owner_id,revision,task_id,source_set_hash,prompt_id,prompt_version,rules_version,result_schema_version,locale,result_json,freshness,job_id) VALUES('task_journey',?,1,?,'old','task_journey_increment',3,'task-distillation-rules-v1','task-distillation-result-v1','en','{}','current','old-job')",params![&f.task,&f.task]).unwrap();
+        connection.execute("INSERT INTO task_distillation_current(owner_type,owner_id,revision,source_set_hash,freshness) VALUES('task_journey',?,1,'old','current')",[&f.task]).unwrap();
+        connection.execute("INSERT INTO task_distillation_nodes(task_id,node_id,revision,kind,topic_key,status,claim_ids_json,detail_json,source_set_hash,active) VALUES(?,'existing-storage',7,'decision','storage','current','[]','{}','old',1)",[&f.task]).unwrap();
+        let (snapshot,_)=f.service.create_run(&run_input(&f,"distill-run","Implement SQLite export")).unwrap();let run=snapshot["selectedRun"]["id"].as_str().unwrap();
+        f.service.mark_dispatch_recorded(run).unwrap();f.service.accept_turn(run,"thread-a","turn-distill").unwrap();
+        f.service.complete_item(run,&json!({"id":"retry","type":"retry","status":"completed","text":"continue"}),1,
+            ).unwrap();
+        f.service.complete_item(run,&json!({"id":"check","type":"commandExecution","status":"completed","command":"cargo test export","aggregatedOutput":"export tests passed","exitCode":0}),2).unwrap();
+        let final_report=format!("Implemented SQLite export. {} Final condition: only export after explicit approval; this is unverified.","saved detail. ".repeat(100));
+        f.service.complete_item(run,&json!({"id":"final","type":"agentMessage","phase":"final_answer","text":final_report}),3).unwrap();
+        f.service.finish_turn(run,&json!({"status":"completed"})).unwrap();
+        let job=f.service.distillation_job_input(run,"en").unwrap();let input=&job["distillationInput"];
+        assert_eq!(input["primarySource"]["type"],"run_final_report");
+        assert!(input["sources"].as_array().unwrap().iter().any(|source|source["type"]=="run_completed_item"&&source["id"]=="check"));
+        assert!(input["sources"].as_array().unwrap().iter().any(|source|source["type"]=="task_decision"));
+        assert!(!input["sources"].as_array().unwrap().iter().any(|source|source["id"]=="retry"));
+        assert_eq!(job["sourceRevision"],input["sourceSetHash"]);
+        assert_eq!(
+            job["existingSemanticGraph"]["nodes"][0]["id"],
+            "existing-storage"
+        );
+        assert_eq!(job["existingSemanticGraph"]["nodes"][0]["revision"], 7);
+        assert_eq!(input["primarySource"]["excerpt"], final_report);
+        assert_eq!(input["semanticTargetRevisions"]["existing-storage"], 7);
+        assert_eq!(input["expectedJourneyRevision"], 1);
+        let prompt = crate::workflow_foundation::build_prompt(
+            crate::workflow_foundation::PromptId::RunReportDistillation,
+            &json!({"context":job}),
+        )
+        .unwrap();
+        for expected in [
+            "Final condition: only export after explicit approval",
+            "existing-storage",
+            "expectedTargetRevisions",
+            "contradictedBy",
+            "verificationState",
+            "quote",
+        ] {
+            assert!(prompt.content.contains(expected), "{expected}");
+        }
+    }
+
+    #[test]
     fn file_change_evidence_projects_provider_objects_as_string_paths() {
         let f = fixture();
         let (snapshot, _) = f
@@ -1723,7 +1916,8 @@ mod tests {
     fn failed_and_cancelled_runs_project_without_fabricated_reports() {
         let f = fixture();
         for (key, provider_status, expected_status) in
-            [("failed", "failed", "failed"), ("cancelled", "cancelled", "cancelled")]
+            [("failed", "failed", "failed"), ("cancelled", "cancelled", "cancelled"),
+        ]
         {
             let (snapshot, _) = f
                 .service
@@ -1946,7 +2140,9 @@ mod tests {
         let tasks = TaskApplicationService::new(&f.db);
         let before: i64 = database::open(&f.db)
             .unwrap()
-            .query_row("SELECT count(*) FROM task_work_sessions", [], |row| row.get(0))
+            .query_row("SELECT count(*) FROM task_work_sessions", [], |row| {
+                row.get(0)
+            })
             .unwrap();
         let imported = f
             .service
@@ -2068,7 +2264,9 @@ mod tests {
 
         let count_before_failure: i64 = database::open(&f.db)
             .unwrap()
-            .query_row("SELECT count(*) FROM task_work_sessions", [], |row| row.get(0))
+            .query_row("SELECT count(*) FROM task_work_sessions", [], |row| {
+                row.get(0)
+            })
             .unwrap();
         assert!(f
             .service

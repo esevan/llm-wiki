@@ -14,6 +14,10 @@ const REQUIRED_FILES: [&str; 5] = [
     "tokenizer_config.json",
 ];
 
+pub const EMBEDDING_MODEL_ID: &str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2";
+pub const EMBEDDING_MODEL_VERSION: &str = "faf4aa4225822f3bc6376869cb1164e8e3feedd0";
+pub const EMBEDDING_DIMENSIONS: usize = 384;
+
 #[derive(Clone)]
 pub struct SemanticEngine {
     model_dir: Option<PathBuf>,
@@ -31,6 +35,14 @@ impl SemanticEngine {
 
     pub fn available(&self) -> bool {
         self.model_dir.is_some()
+    }
+
+    pub fn identity(&self) -> (&'static str, &'static str, usize) {
+        (
+            EMBEDDING_MODEL_ID,
+            EMBEDDING_MODEL_VERSION,
+            EMBEDDING_DIMENSIONS,
+        )
     }
 
     pub fn embed(&self, texts: Vec<String>) -> Result<Vec<Vec<f32>>, String> {
@@ -93,5 +105,16 @@ mod tests {
             engine.embed(vec!["offline".into()]).unwrap_err(),
             "The bundled embedding model is unavailable"
         );
+    }
+
+    #[test]
+    fn embedding_identity_matches_the_bundled_manifest() {
+        let manifest: serde_json::Value = serde_json::from_str(include_str!(
+            "../../resources/embedding-model/manifest.json"
+        ))
+        .unwrap();
+        assert_eq!(manifest["model"], EMBEDDING_MODEL_ID);
+        assert_eq!(manifest["revision"], EMBEDDING_MODEL_VERSION);
+        assert_eq!(manifest["dimensions"], EMBEDDING_DIMENSIONS);
     }
 }

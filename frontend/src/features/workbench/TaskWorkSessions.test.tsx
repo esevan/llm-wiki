@@ -876,6 +876,53 @@ describe("Task work sessions", () => {
     expect(screen.queryByText("Settings saved")).not.toBeInTheDocument();
   });
 
+  it("opens the new Task's first session while an old settings save is pending", async () => {
+    const savedA = session("one", "First");
+    const taskB = { ...task, id: "task-b", title: "Task B" };
+    const savedB = { ...session("two", "Second"), taskId: taskB.id };
+    let resolveSave!: (value: ReturnType<typeof response>) => void;
+    const pendingSave = new Promise<ReturnType<typeof response>>((resolve) => {
+      resolveSave = resolve;
+    });
+    window.llmWikiApplication = {
+      request: vi
+        .fn()
+        .mockImplementation(
+          ({ path, method }: { path: string; method?: string }) => {
+            if (method === "PUT") return pendingSave;
+            if (path === "/tasks/task-a/work-sessions")
+              return Promise.resolve(response({ sessions: [savedA] }));
+            if (path === "/tasks/task-b/work-sessions")
+              return Promise.resolve(response({ sessions: [savedB] }));
+            if (path === "/tasks/task-b/work-sessions/two")
+              return Promise.resolve(response({ session: savedB, entries: [] }));
+            return Promise.resolve(response({ session: savedA, entries: [] }));
+          },
+        ),
+    };
+    const focusExecution = { sessionId: "one", runId: "run-old" };
+    const view = render(
+      <TaskWorkSessions task={task} focusExecution={focusExecution} />,
+    );
+    await screen.findByLabelText("Model");
+    fireEvent.click(screen.getByRole("button", { name: "Save settings" }));
+    expect(screen.getAllByLabelText("Session")[0]).toBeDisabled();
+
+    view.rerender(
+      <TaskWorkSessions task={taskB} focusExecution={focusExecution} />,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByLabelText("Session")).toHaveValue("two"),
+    );
+    expect(await screen.findByLabelText("Session title")).toHaveValue("Second");
+    resolveSave(response(savedA));
+    await waitFor(() =>
+      expect(screen.getByLabelText("Session")).toHaveValue("two"),
+    );
+    expect(screen.queryByText("Settings saved")).not.toBeInTheDocument();
+  });
+
   it("projects a normal saved session within the 100 ms render budget after data arrives", async () => {
     const saved = session("one", "Profiled");
     const durations: number[] = [];

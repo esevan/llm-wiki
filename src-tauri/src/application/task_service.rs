@@ -29,7 +29,7 @@ impl TaskApplicationService {
             "capture.create" => self.capture(input),
             "task.get" => self.get(req(input, "taskId")?),
             "task.delete" => self.delete(req(input, "taskId")?),
-            "workbench.get" => self.workbench(),
+            "workbench.get" => self.workbench(input),
             "task.readiness.get" => self.readiness(req(input, "taskId")?),
             "task.work-log.get" => self.work_log(req(input, "taskId")?),
             "task.work-session.list" => self.work_sessions(req(input, "taskId")?),
@@ -637,7 +637,18 @@ impl TaskApplicationService {
             let at = task_repository::now();
             tx.execute("INSERT INTO captures(id,text,created_at,source_mode,last_user_activity_at) VALUES(?,?,?,'capture',?)", params![id,text,at,at]).map_err(|e|e.to_string())?;
             for image in &images { crate::adapters::sqlite::input_images::save(tx, true, &id, image)?; }
-            let result = json!({"id":id,"text":text,"createdAt":at});
+            let distillation = crate::native::capture_distillation::initialize_tx(
+                tx,
+                &id,
+                text,
+                &images,
+                input.get("locale").and_then(Value::as_str).unwrap_or("en"),
+                &at,
+            )?;
+            let mut result = json!({"id":id,"kind":"capture","text":text,"createdAt":at});
+            if let (Some(target), Some(source)) = (result.as_object_mut(),distillation.as_object()) {
+                target.extend(source.clone());
+            }
             self.finish(tx, input, "capture.create", &result)?;
             Ok(result)
         })
@@ -713,7 +724,11 @@ impl TaskApplicationService {
         let mut entries = statement.query_map([id], |row| Ok(json!({"id":row.get::<_, String>(0)?,"body":row.get::<_, String>(1)?,"imageData":row.get::<_, String>(2)?,"imageMediaType":row.get::<_, String>(3)?,"imageSummary":row.get::<_, String>(4)?,"createdAt":row.get::<_, String>(5)?}))).map_err(|e| e.to_string())?.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())?;
         drop(statement);
         for entry in &mut entries {
-            let entry_id = entry["id"].as_str().unwrap_or_default();
+            let entry_id = entry["id"].as_str().unwrap_or_default().to_owned();
+            if let Some(distillation)=crate::native::task_distillation::current(&c,"work_log",&entry_id)? {
+                entry["distillation"]=distillation;
+                entry["originalAvailable"]=json!(true);
+            }
             let execution=c.query_row("SELECT id,session_id,status,provider,model,final_report,work_log_sync_state,error_message FROM task_work_session_runs WHERE work_log_entry_id=? AND task_id=?",params![entry_id,id],|row|Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?,row.get::<_,String>(2)?,row.get::<_,String>(3)?,row.get::<_,String>(4)?,row.get::<_,Option<String>>(5)?,row.get::<_,String>(6)?,row.get::<_,Option<String>>(7)?))).optional().map_err(|e|e.to_string())?;
             if let Some(run) = execution {
                 let mut evidence_statement=c.prepare("SELECT provider_item_id,kind,status,content_json,created_at FROM task_work_session_run_items WHERE run_id=? ORDER BY provider_order,provider_item_id LIMIT 20").map_err(|e|e.to_string())?;
@@ -745,6 +760,11 @@ impl TaskApplicationService {
                 }
                 if let Some(error) = run.7 {
                     limitations.push(error.chars().take(1000).collect());
+                }
+                if entry.get("distillation").is_none() {
+                    let freshness=if matches!(run.2.as_str(),"succeeded"|"failed"|"cancelled"|"interrupted"|"needs_attention") {"pending"} else {"unavailable"};
+                    entry["distillation"]=json!({"freshness":freshness,"result":{"claims":[],"workLogView":{"sections":[]},"warnings":limitations},"projectionRevision":0});
+                    entry["originalAvailable"]=json!(report.is_some() || !evidence.is_empty());
                 }
                 entry["execution"] = json!({"runId":run.0,"sessionId":run.1,"status":run.2,"provider":run.3,"model":run.4,"reportExcerpt":report,"evidence":evidence,"artifacts":artifacts,"limitations":limitations,"syncState":run.6});
             }
@@ -988,7 +1008,7 @@ impl TaskApplicationService {
         Ok(Value::Null)
     }
 
-    fn workbench(&self) -> Result<Value, String> {
+    fn workbench(&self, input: &Value) -> Result<Value, String> {
         let c = crate::native::database::open(self.repo.path())?;
         let mut s=c.prepare("SELECT t.id,t.current_revision,t.state,r.title,t.category,t.last_user_activity_at,f.revision,h.parent_task_id,(SELECT c.text FROM captures c WHERE c.id=t.origin_capture_id),t.completed_at FROM tasks t JOIN task_revisions r ON r.task_id=t.id AND r.revision=t.current_revision LEFT JOIN task_refinements f ON f.task_id=t.id LEFT JOIN task_subtasks h ON h.child_task_id=t.id WHERE t.archived_at IS NULL AND NOT EXISTS(SELECT 1 FROM deleted_entities d WHERE d.entity_type='tasks' AND d.entity_id=t.id) ORDER BY t.last_user_activity_at DESC").map_err(|x|x.to_string())?;
         let mut rows=s.query_map([],|r|Ok(json!({"kind":"task","id":r.get::<_,String>(0)?,"taskRevision":r.get::<_,i64>(1)?,"state":r.get::<_,String>(2)?,"title":r.get::<_,String>(3)?,"category":r.get::<_,String>(4)?,"lastUserActivityAt":r.get::<_,String>(5)?,"refinedRevision":r.get::<_,Option<i64>>(6)?,"parentTaskId":r.get::<_,Option<String>>(7)?,"originCaptureText":r.get::<_,Option<String>>(8)?,"completedAt":r.get::<_,Option<String>>(9)?}))).map_err(|x|x.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|x|x.to_string())?;
@@ -998,8 +1018,18 @@ impl TaskApplicationService {
                 .remove(item["id"].as_str().unwrap_or_default())
                 .unwrap_or_else(|| json!({}));
         }
+        let locale = input.get("locale").and_then(Value::as_str).unwrap_or("en");
+        let mut distillations = crate::native::capture_distillation::workbench_projections(&c,locale)?;
         let mut captures=c.prepare("SELECT c.id,c.text,c.created_at,COALESCE(o.category,'General'),EXISTS(SELECT 1 FROM input_images i WHERE i.capture_id=c.id) FROM captures c LEFT JOIN workbench_category_overrides o ON o.entity_type='captures' AND o.entity_id=c.id WHERE c.source_mode='capture' AND c.id NOT IN (SELECT origin_capture_id FROM tasks WHERE origin_capture_id IS NOT NULL) AND NOT EXISTS(SELECT 1 FROM deleted_entities d WHERE d.entity_type='captures' AND d.entity_id=c.id) ORDER BY c.last_user_activity_at DESC").map_err(|x|x.to_string())?;
-        rows.extend(captures.query_map([],|r|Ok(json!({"kind":"capture","id":r.get::<_,String>(0)?,"text":r.get::<_,String>(1)?,"lastUserActivityAt":r.get::<_,String>(2)?,"category":r.get::<_,String>(3)?,"hasImage":r.get::<_,bool>(4)?}))).map_err(|x|x.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|x|x.to_string())?);
+        let capture_rows = captures.query_map([],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?,r.get::<_,bool>(4)?))).map_err(|x|x.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|x|x.to_string())?;
+        drop(captures);
+        for (id,text,activity,category,has_image) in capture_rows {
+            let mut item = json!({"kind":"capture","id":id,"text":text,"lastUserActivityAt":activity,"category":category,"hasImage":has_image});
+            if let Some(summary) = distillations.remove(&id) {
+                item["captureDistillation"] = summary;
+            }
+            rows.push(item);
+        }
         let mut legacy_refinements=c.prepare("SELECT i.id,i.problem_id,i.problem_revision,r.statement,i.source_kind,i.created_at,COALESCE(o.category,'General') FROM refinement_items i JOIN problem_revisions r ON r.problem_id=i.problem_id AND r.revision=i.problem_revision LEFT JOIN workbench_category_overrides o ON o.entity_type='problems' AND o.entity_id=i.problem_id WHERE NOT EXISTS(SELECT 1 FROM deleted_entities d WHERE d.entity_type='problems' AND d.entity_id=i.problem_id) ORDER BY i.created_at DESC").map_err(|x|x.to_string())?;
         rows.extend(legacy_refinements.query_map([],|r|Ok(json!({"kind":"refinement","id":r.get::<_,String>(0)?,"problemId":r.get::<_,String>(1)?,"problemRevision":r.get::<_,i64>(2)?,"title":r.get::<_,String>(3)?,"sourceKind":r.get::<_,String>(4)?,"lastUserActivityAt":r.get::<_,String>(5)?,"category":r.get::<_,String>(6)?}))).map_err(|x|x.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|x|x.to_string())?);
         rows.sort_by(|a, b| {
@@ -1067,7 +1097,7 @@ mod tests {
         let id = created["id"].as_str().unwrap();
 
         assert_eq!(service.get(id).unwrap()["originCapture"]["text"], initial);
-        let snapshot = service.workbench().unwrap();
+        let snapshot = service.workbench(&json!({})).unwrap();
         let has_initial = snapshot["categories"]
             .as_array()
             .unwrap()

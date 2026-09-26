@@ -46,6 +46,29 @@ describe("Task detail", () => {
     await waitFor(() => expect(request).toHaveBeenCalledWith(expect.objectContaining({ path: "/tasks/task-1/work-sessions" })));
   });
 
+  it("animates only an exact adopted title and keeps focus through later polling", async () => {
+    let current = { ...task, title: "Draft task", taskRevision: 2 };
+    window.llmWikiApplication = { request: vi.fn().mockImplementation(() => Promise.resolve(response(current))) };
+    const rendered = render(<TaskDetail taskId="task-1" onClose={vi.fn()} onChanged={vi.fn()} />);
+    const heading = await screen.findByRole("heading", { name: "Draft task" });
+    heading.focus();
+
+    current = { ...current, title: "Adopted task", taskRevision: 3 };
+    rendered.rerender(<TaskDetail taskId="task-1" onClose={vi.fn()} onChanged={vi.fn()} refreshKey={1} application={{ taskId: "task-1", revision: 3, cause: "preview_adopted" }} />);
+    await waitFor(() => expect(heading).toHaveTextContent("Adopted task"));
+    const transition = heading.querySelector<HTMLElement>('[data-transitioning="title"]');
+    expect(transition).toBeInTheDocument();
+    expect(heading).toHaveFocus();
+    const layer = transition?.querySelector("[data-content-layer='current']");
+    if (layer) fireEvent.animationEnd(layer);
+
+    current = { ...current, title: "Polled task", taskRevision: 4 };
+    rendered.rerender(<TaskDetail taskId="task-1" onClose={vi.fn()} onChanged={vi.fn()} refreshKey={2} />);
+    await waitFor(() => expect(heading).toHaveTextContent("Polled task"));
+    expect(heading.querySelector('[data-transitioning="title"]')).not.toBeInTheDocument();
+    expect(heading).toHaveFocus();
+  });
+
   it("opens queued lineage automatically and polls again while its status is unchanged", async () => {
     const lineage = vi.fn()
       .mockResolvedValueOnce(response({ journeyStatus: { status: "running", jobId: "journey" } }))
@@ -271,6 +294,7 @@ describe("Task detail", () => {
     const execution = { runId: "run-unverified", sessionId: "session-unverified", status: "needs_attention" as const, provider: "codex" as const, model: "gpt-5.6-sol", evidence: [{ id: "event-1", kind: "command", status: "completed", label: "Focused check", summary: "Exited with code 0" }], artifacts: ["reports/result.txt"], limitations: ["Final provider state was not recovered"], syncState: "synced" as const };
     window.llmWikiApplication = { request: vi.fn().mockResolvedValue(response({ ...task, workLog: [{ id: "execution-log", body: "Run requested", execution }] })) };
     render(<TaskDetail taskId="task-1" onClose={vi.fn()} onChanged={vi.fn()} />);
+    fireEvent.click(await screen.findByText("Original execution and evidence"));
     expect(await screen.findByText(/Needs attention/)).toBeVisible();
     expect(screen.getByText("Codex final report is unavailable for this terminal Run.")).toBeVisible();
     expect(screen.getByRole("heading", { name: "Observed provider evidence" })).toBeVisible();
@@ -286,6 +310,7 @@ describe("Task detail", () => {
     window.llmWikiApplication = { request: vi.fn().mockResolvedValue(response({ ...task, workLog: [{ id: "reported-log", body: "작업 요청", execution: { runId: "run-reported", sessionId: "session-reported", status: "succeeded", provider: "codex", model: "gpt-5.6-sol", reportExcerpt: "모델 보고", evidence: [], artifacts: [], limitations: [], syncState: "synced" } }] })) };
     try {
       render(<TaskDetail taskId="task-1" onClose={vi.fn()} onChanged={vi.fn()} />);
+      fireEvent.click(await screen.findByText("원본 실행 기록과 증거"));
       expect(await screen.findByText(/완료됨/)).toBeVisible();
       expect(screen.getByRole("heading", { name: "모델이 작성한 최종 보고서" })).toBeVisible();
       expect(screen.getByText("모델 보고")).toBeVisible();
@@ -727,188 +752,70 @@ it("rebases a disjoint refresh before save and lets the user discard overlapping
   expect(control("task-revision-save")).toBeDisabled();
 });
 
-  it("keeps Knowledge publication bound to the persisted source hash", async () => {
-    const knowledgeTask = {
-      ...task,
-      state: "completed" as const,
-      publication: {
-        state: "published",
-        draftRevision: 3,
-        contentHash: "body-3",
-        sourceHash: "source-2",
-      },
-    };
-    const request = vi.fn().mockResolvedValue(response(knowledgeTask));
-    window.llmWikiApplication = { request };
-    render(<TaskDetail taskId="task-1" onClose={vi.fn()} onChanged={vi.fn()} />);
+it("mounts the stored Knowledge review without generating while inspecting it", async () => {
+  const completedTask = { ...task, state: "completed" as const };
+  const projection = {
+    taskId: task.id,
+    pointers: { currentPrivateRevision: 1 },
+    versions: [{
+      revision: 1, derivationKind: "generated", articleType: "guide", title: "Mounted Knowledge",
+      bodyMarkdown: "# Mounted Knowledge\n\nStored article.", contentHash: "content-1",
+      generationSnapshotHash: "snapshot-1", freshness: "current", qualityState: "valid",
+      modelStatus: "enhanced", createdAt: "2026-09-26T12:00:00Z",
+      applicability: { summary: "Use for mounted review.", representativeQuestions: [], helpsWith: [], conditions: [], exclusions: [] },
+      result: { article: { type: "guide", title: "Mounted Knowledge", finalOutcomes: [], bodyMarkdown: "# Mounted Knowledge\n\nStored article.", applicability: { summary: "Use for mounted review.", representativeQuestions: [], helpsWith: [], conditions: [], exclusions: [] }, claimBindings: [], assumptionBindings: [] }, ideas: [], qualityFindings: [] },
+    }],
+    ideas: [],
+  };
+  const request = vi.fn(({ path }: { path: string }) => Promise.resolve(response(path.endsWith("/knowledge") ? projection : completedTask)));
+  window.llmWikiApplication = { request: request as never };
 
-    await screen.findByText("Publish approved draft");
-    fireEvent.click(document.querySelector('[data-control="task-knowledge-publish"]')!);
-    await waitFor(() => {
-      const publish = request.mock.calls
-        .map(([input]) => input)
-        .find((input) => input.path.endsWith("/publish"));
-      expect(JSON.parse(publish.body)).toMatchObject({
-        expectedContentHash: "body-3",
-        expectedSourceHash: "source-2",
-      });
-    });
+  render(<TaskDetail taskId={task.id} onClose={vi.fn()} onChanged={vi.fn()} />);
+
+  expect(await screen.findByRole("heading", { name: "Mounted Knowledge", level: 3 })).toBeVisible();
+  expect(screen.getByText("Stored article.")).toBeVisible();
+  expect(request).toHaveBeenCalledWith(expect.objectContaining({ path: "/tasks/task-1/knowledge", method: "GET" }));
+  expect(request.mock.calls.some(([input]) => input.path.endsWith("/knowledge/drafts"))).toBe(false);
+});
+
+it("saves an unsaved Knowledge edit as a new version before closing", async () => {
+  const completedTask = { ...task, state: "completed" as const };
+  const makeVersion = (revision: number, bodyMarkdown: string) => ({
+    revision, parentRevision: revision > 1 ? revision - 1 : undefined, derivationKind: revision > 1 ? "edited" : "generated",
+    articleType: "guide", title: "Guarded Knowledge", bodyMarkdown, contentHash: `content-${revision}`,
+    generationSnapshotHash: "snapshot-1", freshness: "current", qualityState: "valid", modelStatus: "enhanced",
+    createdAt: `2026-09-2${revision}T12:00:00Z`,
+    applicability: { summary: "Use for guarded review.", representativeQuestions: [], helpsWith: [], conditions: [], exclusions: [] },
+    result: { article: { type: "guide", title: "Guarded Knowledge", finalOutcomes: [], bodyMarkdown, applicability: { summary: "Use for guarded review.", representativeQuestions: [], helpsWith: [], conditions: [], exclusions: [] }, claimBindings: [], assumptionBindings: [] }, ideas: [], qualityFindings: [] },
   });
-
-  it("shows an existing saved Knowledge draft before the user edits or publishes it", async () => {
-    window.llmWikiApplication = {
-      request: vi.fn().mockResolvedValue(response({
-        ...task,
-        state: "completed",
-        publication: {
-          state: "draft",
-          draftRevision: 3,
-          contentHash: "body-3",
-          sourceHash: "source-2",
-          bodyMarkdown: "# Saved Knowledge\n\nReview this private draft.",
-        },
-      })),
-    };
-    render(<TaskDetail taskId={task.id} onClose={vi.fn()} onChanged={vi.fn()} />);
-
-    expect(await screen.findByLabelText("Draft preview (Markdown)")).toHaveTextContent("Review this private draft.");
-    expect(screen.getByLabelText("Knowledge draft body")).toHaveValue("# Saved Knowledge\n\nReview this private draft.");
+  let versions = [makeVersion(1, "# Original")];
+  const request = vi.fn(({ path, method, body }: { path: string; method?: string; body?: string }) => {
+    if (path.endsWith("/correction") && method === "POST") {
+      expect(JSON.parse(body ?? "{}")).toMatchObject({ expectedContentHash: "content-1", expectedSourceHash: "snapshot-1", bodyMarkdown: "# Retained edit" });
+      versions = [...versions, makeVersion(2, "# Retained edit")];
+      return Promise.resolve(response({ draftRevision: 2, contentHash: "content-2", bodyMarkdown: "# Retained edit", state: "draft" }));
+    }
+    if (path.endsWith("/knowledge")) return Promise.resolve(response({ taskId: task.id, pointers: { currentPrivateRevision: versions.length }, versions, ideas: [] }));
+    return Promise.resolve(response(completedTask));
   });
+  const close = vi.fn();
+  window.llmWikiApplication = { request: request as never };
+  render(<TaskDetail taskId={task.id} onClose={close} onChanged={vi.fn()} />);
 
-  it("keeps the published Markdown visible alongside a newer editable draft", async () => {
-    window.llmWikiApplication = { request: vi.fn().mockResolvedValue(response({
-      ...task, state: "completed",
-      publishedKnowledge: { draftRevision: 1, bodyMarkdown: "---\ninternal_id: secret-id\n---\n# Published article\n\n**Verified** result\n\n[Reference](https://example.com)" },
-      publication: { state: "draft", draftRevision: 2, contentHash: "draft", sourceHash: "source", bodyMarkdown: "# New draft" },
-    })) };
-    render(<TaskDetail taskId={task.id} onClose={vi.fn()} onChanged={vi.fn()} />);
-    const published = await screen.findByLabelText("Current published version");
-    expect(published.querySelector("h1")).toHaveTextContent("Published article");
-    expect(published.querySelector("strong")).toHaveTextContent("Verified");
-    expect(published).not.toHaveTextContent("secret-id");
-    expect(published.querySelector("a")).toHaveAttribute("href", "https://example.com");
-    fireEvent.change(screen.getByLabelText("Knowledge draft body"), { target: { value: "# My correction" } });
-    expect(published).toHaveTextContent("Published article");
-    expect(published).not.toHaveTextContent("My correction");
-    expect(screen.getByLabelText("Draft preview (Markdown)").querySelector("h1")).toHaveTextContent("My correction");
-  });
+  await screen.findByRole("heading", { name: "Guarded Knowledge", level: 3 });
+  fireEvent.click(screen.getByRole("button", { name: "Edit current draft" }));
+  fireEvent.change(screen.getByRole("textbox", { name: "Edit current draft" }), { target: { value: "# Retained edit" } });
+  fireEvent.click(screen.getByRole("button", { name: "Close Task detail" }));
+  expect(screen.getByRole("alertdialog", { name: "Unsaved Task changes" })).toBeVisible();
+  fireEvent.click(screen.getByRole("button", { name: "Keep editing" }));
+  await waitFor(() => expect(document.querySelector(".knowledge-review")).toHaveFocus());
+  expect(screen.getByRole("textbox", { name: "Edit current draft" })).toHaveValue("# Retained edit");
+  fireEvent.click(screen.getByRole("button", { name: "Close Task detail" }));
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
-  it("requires saving an edited Knowledge draft before publishing it", async () => {
-    const savedDraft = {
-      draftRevision: 3,
-      bodyMarkdown: "# Saved Knowledge\n\nReview this private draft.",
-      contentHash: "body-3",
-      sourceHash: "source-2",
-      state: "draft",
-    };
-    let publication = savedDraft;
-    window.llmWikiApplication = {
-      request: vi.fn().mockImplementation(({ path }: { path: string }) => {
-        if (path.endsWith("/correction")) {
-          publication = { ...savedDraft, bodyMarkdown: "# Saved Knowledge\n\nCorrected private draft.", contentHash: "body-4" };
-          return Promise.resolve(response(publication));
-        }
-        return Promise.resolve(response({ ...task, state: "completed", publication }));
-      }),
-    };
-    render(<TaskDetail taskId={task.id} onClose={vi.fn()} onChanged={vi.fn()} />);
-
-    const body = await screen.findByLabelText("Knowledge draft body");
-    fireEvent.change(body, { target: { value: "# Saved Knowledge\n\nUnsaved edit." } });
-    expect(screen.getByText("Save this correction before publishing.")).toBeVisible();
-    expect(screen.getAllByRole<HTMLButtonElement>("button", { name: "Publish approved draft" }).every((button) => button.disabled)).toBe(true);
-    fireEvent.click(screen.getByRole("button", { name: "Save draft correction" }));
-    await waitFor(() => expect(screen.getAllByRole<HTMLButtonElement>("button", { name: "Publish approved draft" }).every((button) => !button.disabled)).toBe(true));
-  });
-
-  it.each([
-    { draftRevision: 4, contentHash: "body-4", state: "draft" },
-    { draftRevision: 2, contentHash: "corrected-body-2", state: "draft" },
-    { draftRevision: 2, contentHash: "body-2", state: "published" },
-  ])("shows an immutable Queue result read-only when the saved draft changed: %o", async (publication) => {
-    const latest = { ...publication, bodyMarkdown: "# Latest", sourceHash: "source-4" };
-    const sessions = new Map<string, DetailSession>([[task.id, {
-      entry: "", check: "", decision: "", comments: {}, completionEvidence: "", relatedTaskId: "", relatedTaskSearch: "", relationshipKind: "related", readinessReasons: {}, tab: "review", editing: false, scrollTop: 0,
-      knowledgeDraft: { draftRevision: 2, bodyMarkdown: "# Exact older result", contentHash: "body-2", sourceHash: "source-2", state: "draft" },
-    }]]);
-    window.llmWikiApplication = { request: vi.fn().mockResolvedValue(response({ ...task, state: "completed", publication: latest })) };
-    render(<TaskDetail taskId={task.id} onClose={vi.fn()} onChanged={vi.fn()} sessions={sessions} />);
-
-    expect(await screen.findByLabelText("Knowledge draft body")).toHaveValue("# Exact older result");
-    expect(screen.getByLabelText("Knowledge draft body")).toHaveAttribute("readonly");
-    expect(screen.getByRole("button", { name: "Save draft correction" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Publish approved draft" })).toBeDisabled();
-  });
-
-  it("loads the new revision after regenerating so the draft can be reviewed and saved", async () => {
-    let publication = { draftRevision: 1, bodyMarkdown: "# Published", contentHash: "body-1", sourceHash: "source-1", state: "published" };
-    window.llmWikiApplication = { request: vi.fn().mockImplementation(({ path }: { path: string }) => {
-      if (path.endsWith("/regenerate")) {
-        publication = { draftRevision: 2, bodyMarkdown: "# Regenerated", contentHash: "body-2", sourceHash: "source-1", state: "draft" };
-        return Promise.resolve(response(publication));
-      }
-      return Promise.resolve(response({ ...task, state: "completed", publication }));
-    }) };
-    render(<TaskDetail taskId={task.id} onClose={vi.fn()} onChanged={vi.fn()} />);
-    fireEvent.click(await screen.findByRole("button", { name: "Regenerate draft" }));
-    expect(await screen.findByLabelText("Knowledge draft body")).toHaveValue("# Regenerated");
-    await waitFor(() => expect(screen.getByRole("button", { name: "Save draft correction" })).toBeEnabled());
-  });
-
-  it("focuses the exact Queue preview when the Task is already mounted", async () => {
-    const draft = { draftRevision: 2, bodyMarkdown: "# Queue result", contentHash: "body-2", sourceHash: "source-2", state: "draft" };
-    window.llmWikiApplication = { request: vi.fn().mockResolvedValue(response({ ...task, state: "completed", publication: draft })) };
-    const view = render(<TaskDetail taskId={task.id} onClose={vi.fn()} onChanged={vi.fn()} />);
-    await screen.findByLabelText("Knowledge draft body");
-    fireEvent.click(screen.getByRole("tab", { name: "Work" }));
-    view.rerender(<TaskDetail taskId={task.id} onClose={vi.fn()} onChanged={vi.fn()} queueKnowledgeDraft={draft} />);
-    await waitFor(() => expect(document.querySelector(".knowledge-draft-preview")).toHaveFocus());
-    expect(screen.getByLabelText("Knowledge draft body")).toHaveValue("# Queue result");
-  });
-
-  it("queues draft generation once and leaves the durable Queue to retain its result", async () => {
-    const completedTask = { ...task, state: "completed" as const };
-    const request = vi.fn().mockImplementation(({ path, method }: { path: string; method?: string }) =>
-      path.endsWith("/knowledge/drafts") && method === "POST"
-        ? Promise.resolve(response({ id: "knowledge-job-1", status: "queued" }))
-        : Promise.resolve(response(completedTask)),
-    );
-    const sessions = new Map<string, DetailSession>();
-    window.llmWikiApplication = { request };
-    const first = render(<TaskDetail taskId={task.id} onClose={vi.fn()} onChanged={vi.fn()} sessions={sessions} />);
-
-    const create = await screen.findByRole("button", { name: "Create draft" });
-    fireEvent.click(create);
-    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Private draft generation is queued"));
-    expect(create).toBeDisabled();
-    fireEvent.click(create);
-    expect(request.mock.calls.filter(([input]) => input.path.endsWith("/knowledge/drafts"))).toHaveLength(1);
-
-    first.unmount();
-  });
-
-  it("announces a draft generation failure and retries the same request", async () => {
-    let attempts = 0;
-    const completedTask = { ...task, state: "completed" as const };
-    window.llmWikiApplication = {
-      request: vi.fn().mockImplementation(({ path, method }: { path: string; method?: string }) => {
-        if (path.endsWith("/knowledge/drafts") && method === "POST") {
-          attempts += 1;
-          return attempts === 1
-            ? Promise.reject(new Error("Draft service unavailable"))
-            : Promise.resolve(response({ id: "knowledge-job-2", status: "queued" }));
-        }
-        return Promise.resolve(response(completedTask));
-      }),
-    };
-    render(<TaskDetail taskId={task.id} onClose={vi.fn()} onChanged={vi.fn()} />);
-
-    fireEvent.click(await screen.findByRole("button", { name: "Create draft" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("Draft service unavailable");
-    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
-    expect(await screen.findByRole("status")).toHaveTextContent("Private draft generation is queued");
-    expect(attempts).toBe(2);
-  });
+  await waitFor(() => expect(close).toHaveBeenCalledOnce());
+  expect(request.mock.calls.filter(([input]) => input.path.endsWith("/correction"))).toHaveLength(1);
+});
 
 describe("Task detail tabs and workbench sessions", () => {
   it.each([

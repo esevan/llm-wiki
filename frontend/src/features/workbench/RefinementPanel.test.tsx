@@ -3,6 +3,27 @@ import { describe, expect, it, vi } from "vitest";
 import { RefinementPanel } from "./RefinementPanel";
 
 describe("Refinement panel", () => {
+  it("keeps chat input usable while showing source-bound failure and retry", async () => {
+    let retried = false;
+    const summary = { captureId:"failed",sourceRevision:"r1",sourceNumber:1,currentRevision:1,contextRevision:0,eligible:true,
+      source:{text:"raw source",images:[]},display:{title:"raw source",content:"raw source",context:"",explicitRequests:[],locale:"en",revision:0,placeholder:true},
+      distillation:{jobId:"capture-job",logicalOperationId:"op",status:"failed",executionOutcome:"failed",applicationDisposition:"pending",safeError:{code:"provider_unavailable",message:"Organization did not finish."},retryAllowed:true,attempt:4,sourceRevision:"r1"} };
+    const request = vi.fn().mockImplementation(({path}:{path:string}) => Promise.resolve({ ok:true,status:200,text:async()=>"",body:null,json:async()=> {
+      if (path.endsWith("/proposals")) return [];
+      if (path.endsWith("/retry")) { retried = true; return {}; }
+      return {id:"failed-session",draftRevision:1,messages:[],captureDistillation:{...summary,distillation:{...summary.distillation,status:retried?"queued":"failed",executionOutcome:retried?"pending":"failed",retryAllowed:!retried}}};
+    }}));
+    window.llmWikiApplication = { request };
+    render(<RefinementPanel kind="capture" subjectId="failed" onClose={vi.fn()} />);
+    expect(await screen.findByText("Organization did not finish.")).toBeInTheDocument();
+    const input = screen.getByLabelText("Refinement message");
+    fireEvent.change(input,{target:{value:"Keep this draft while retrying"}});
+    fireEvent.click(document.querySelector('[data-control="capture-distillation-retry"]')!);
+    await waitFor(() => expect(retried).toBe(true));
+    expect(input).toHaveValue("Keep this draft while retrying");
+    expect(input).toBeEnabled();
+  });
+
   it("switches bilingual preview display but accepts the canonical Korean payload", async () => {
     document.documentElement.lang = "ko";
     const payload = { title: "한국어 태스크", detail: "원문 설명" };
@@ -168,6 +189,7 @@ describe("Refinement panel", () => {
       if (path.endsWith("/messages")) return result({});
       if (path.endsWith("/workspace")) return result({});
       if (path.endsWith("/proposals")) return result(completed ? [{ id: "recovered-proposal", type: "new_task", payload: { title: "Recovered proposal" }, draftRevision: 1 }] : []);
+      if (path.endsWith("/reference-workspace") || path.endsWith("/mention-draft")) return result({});
       refinementReads += 1;
       if (refinementReads === 2) return Promise.resolve({ ok: false, status: 503, json: async () => ({ error: "database is locked" }), text: async () => "database is locked", body: null });
       if (refinementReads === 4) completed = true;
@@ -202,6 +224,7 @@ describe("Refinement panel", () => {
     const request = vi.fn().mockImplementation(({ path }: { path: string }) => {
       const result = (json: unknown) => Promise.resolve({ ok: true, status: 200, json: async () => json, text: async () => "", body: null });
       if (path.endsWith("/messages") || path.endsWith("/proposals") || path.endsWith("/workspace")) return result([]);
+      if (path.endsWith("/reference-workspace") || path.endsWith("/mention-draft")) return result({});
       reads += 1;
       return result({ id: "failed-turn", draftRevision: 1, responseStatus: reads === 2 ? "failed" : undefined, messages: [] });
     });
@@ -227,6 +250,7 @@ describe("Refinement panel", () => {
         if (proposalReads === 2) return Promise.resolve({ ok: false, status: 503, json: async () => ({ error: "database is locked" }), text: async () => "database is locked", body: null });
         return result(proposalReads > 2 ? [{ id: "proposal-after-retry", type: "new_task", payload: { title: "Recovered terminal proposal" }, draftRevision: 1 }] : []);
       }
+      if (path.endsWith("/reference-workspace") || path.endsWith("/mention-draft")) return result({});
       refinementReads += 1;
       return result({ id: "terminal-proposal-lock", draftRevision: 1, responseStatus: refinementReads > 1 ? "completed" : undefined, messages: [] });
     });

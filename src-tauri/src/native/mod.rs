@@ -1,17 +1,24 @@
 mod completion;
+pub(crate) mod capture_distillation;
 pub(crate) mod conversation_context;
 pub(crate) mod database;
 mod job_results;
+pub(crate) mod knowledge_distillation;
 pub mod jobs;
 pub(crate) mod lineage;
 pub(crate) mod localization;
+pub(crate) mod knowledge_archive;
 mod migrations;
 mod patches;
 mod projection;
 mod refinement;
+pub(crate) mod retrieval_index;
+pub(crate) mod reference_aware_workbench;
+pub(crate) mod reference_provenance;
 pub(crate) mod semantic;
 pub mod settings;
 pub(crate) mod task_assistance;
+pub(crate) mod task_distillation;
 pub(crate) mod task_execution_runtime;
 pub(crate) mod task_hierarchy;
 pub(crate) mod task_journey;
@@ -20,7 +27,9 @@ pub(crate) mod work_tracking;
 pub(crate) mod work_tracking_projector;
 mod workbench;
 pub mod workflow;
+pub(crate) mod workflow_foundation;
 
+use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
@@ -119,6 +128,10 @@ impl NativeApplication {
             )
             .with_job_registry(jobs.clone());
         if !recovery_pending && !vault_setup_required { let _ = task_hierarchy::publish_pending(&db_path,&vault); }
+        if !recovery_pending && !vault_setup_required {
+            let _ = knowledge_archive::recover_pending(&db_path, &vault, &semantic);
+            jobs::recover_stored(&db_path, &settings_path, &vault, &jobs, &semantic)?;
+        }
         Ok(Self {
             db_path: db_path.clone(),
             settings_path,
@@ -394,24 +407,44 @@ impl NativeApplication {
         if name == "task.lineage" {
             let task_id = match input.get("taskId").and_then(Value::as_str) {
                 Some(value) if !value.is_empty() => value,
-                _ => return NativeResponse { status: 400, body: json!({"detail":"taskId is required"}) },
+                _ => {
+                    return NativeResponse { status: 400, body: json!({"detail":"taskId is required"}),
+                    }
+                }
             };
             let locale = input.get("locale").and_then(Value::as_str).unwrap_or("en");
             let snapshot = match task_assistance::task_lineage_for_locale(&self.db_path, task_id, locale) {
                 Ok(value) => value,
-                Err(error) => return NativeResponse { status: error_status(&error), body: json!({"detail":error}) },
+                Err(error) => {
+                        return NativeResponse { status: error_status(&error), body: json!({"detail":error}),
+                        }
+                    }
+                };
+            return NativeResponse {
+                status: 200,
+                body: snapshot,
             };
-            if snapshot["journey"].is_null() && snapshot["journeyStatus"].is_null() {
-                let queued = self.enqueue_job(json!({
-                    "taskKind":"lineage_inference", "entityType":"tasks", "entityId":task_id,
-                    "sourceHash":snapshot["journeySourceHash"], "locale":locale
-                })).await;
-                if !(200..300).contains(&queued.status) { return queued; }
-            }
-            return match task_assistance::task_lineage_for_locale(&self.db_path, task_id, locale) {
-                Ok(body) => NativeResponse { status: 200, body },
-                Err(error) => NativeResponse { status: error_status(&error), body: json!({"detail":error}) },
-            };
+        }
+        if name == "task.distillation.repair" {
+            let task_id=match input.get("taskId").and_then(Value::as_str){Some(value) if !value.is_empty()=>value,_=> {
+                    return NativeResponse{status:400,body:json!({"detail":"taskId is required"}),
+                    }
+                }};
+            let connection=match database::open(&self.db_path){Ok(value)=>value,Err(error)=> {
+                    return NativeResponse{status:500,body:json!({"detail":error}),
+                    }
+                }};
+            let requested_run=match input.get("runId") {None|Some(Value::Null)=>None,Some(Value::String(id))=>Some(id.as_str()),_=>return NativeResponse{status:400,body:json!({"detail":"runId must be a string"})}};
+            let run_id=match task_distillation::terminal_run_for_repair(&connection,task_id,requested_run){Ok(id)=>id,Err(error)=>return NativeResponse{status:409,body:json!({"detail":error})}};
+            let service=crate::application::task_execution_service::TaskExecutionApplicationService::new(&self.db_path,
+                );
+            let mut repair=match service.distillation_job_input(&run_id,input.get("locale").and_then(Value::as_str).unwrap_or("en"),
+            ){Ok(value)=>value,Err(error)=> {
+                    return NativeResponse{status:error_status(&error),body:json!({"detail":error}),
+                    }
+                }};
+            repair["distillationInput"]["repairReason"]=input.get("reason").cloned().unwrap_or(json!("explicit repair"));
+            return self.enqueue_job(repair).await;
         }
         if name.starts_with("task-refinement.")
             || name.starts_with("task-review.")
@@ -434,34 +467,23 @@ impl NativeApplication {
                     body: json!({"detail":error}),
                 },
             };
-            if name == "task-knowledge.publish" && result.status < 300 {
-                let path = result.body.get("path").and_then(Value::as_str).unwrap_or("");
-                let source_hash = result.body.get("publishedHash").and_then(Value::as_str).unwrap_or("");
-                if !path.is_empty() && !source_hash.is_empty() {
-                    let queued = self.enqueue_job(json!({
-                        "taskKind":"knowledge_translation",
-                        "entityType":"knowledge",
-                        "entityId":path,
-                        "path":path,
-                        "expectedSourceHash":source_hash,
-                        "automatic":true
-                    })).await;
+            if matches!(
+                name.as_str(),
+                "task-knowledge.archive-publish"
+                    | "task-knowledge.publish"
+                    | "task-knowledge.archive-retry"
+            ) && result.status < 300
+                && matches!(result.body["state"].as_str(), Some("approved" | "index_pending"))
+            {
+                if let Some(operation_id) = result.body["operationId"].as_str().map(str::to_owned) {
+                    let queued = self.enqueue_job(json!({"taskKind":"publication_index","entityType":"knowledge_archive","entityId":operation_id,"sourceRevision":operation_id,"archiveOperationId":operation_id,"retryNonce":if name=="task-knowledge.archive-retry"{Some(uuid::Uuid::new_v4().to_string())}else{None},"automatic":true})).await;
                     if queued.status < 300 {
-                        result.body["translationJob"] = queued.body;
+                        result.body["indexJob"] = queued.body;
                     } else {
-                        result.body["translationQueueError"] = queued.body["detail"].clone();
+                        let _ = knowledge_archive::index_queue_failed(&self.db_path, &operation_id);
+                        result.body["state"] = json!("index_failed");
+                        result.body["indexQueueError"] = queued.body["detail"].clone();
                     }
-                }
-                let queued = self.enqueue_job(json!({
-                    "taskKind":"embedding_refresh",
-                    "entityType":"vault",
-                    "entityId":"current",
-                    "automatic":true
-                })).await;
-                if queued.status < 300 {
-                    result.body["embeddingJob"] = queued.body;
-                } else {
-                    result.body["embeddingQueueError"] = queued.body["detail"].clone();
                 }
             }
             return result;
@@ -470,6 +492,53 @@ impl NativeApplication {
         if !(200..300).contains(&response.status) {
             return response;
         }
+        if matches!(name.as_str(),"task.revision"|"task.decision.create"|"task.completion.create"|"task.reopen"|"task.delete") {
+            if let Some(task_id)=input.get("taskId").and_then(Value::as_str) {
+                let mut affected_semantic_ids = Vec::new();
+                if let Ok(connection)=database::open(&self.db_path) {
+                    let source=match name.as_str(){
+                        "task.decision.create"=>Some(("task_decision",response.body.get("id").and_then(Value::as_str).unwrap_or(""),
+                        )),
+                        "task.completion.create"=>Some(("task_completion",response.body.get("id").and_then(Value::as_str).unwrap_or(""),
+                        )),
+                        "task.revision"|"task.reopen"=>Some(("task_revision",task_id)),
+                        _=>None,
+                    };
+                    if let Some((source_type,source_id))=source.filter(|(_,id)|!id.is_empty()){
+                        affected_semantic_ids = task_distillation::affected_subgraph(
+                            &connection,
+                            task_id,
+                            source_type,
+                            source_id,
+                        )
+                        .unwrap_or_default();
+                        let _=task_distillation::mark_source_changed(&connection,source_type,source_id,
+                        );
+                    }
+                    if name == "task.reopen" {
+                        let _ = task_distillation::mark_task_reopened(&connection, task_id);
+                    } else if name == "task.delete" {
+                        let _=task_distillation::mark_task_changed(&connection,task_id);
+                    } else {
+                        let _=connection.execute("UPDATE task_distillation_current SET freshness='stale' WHERE owner_type='task_journey' AND owner_id=?",[task_id]);
+                    }
+                }
+                if name!="task.delete" {
+                    let latest_run=database::open(&self.db_path).ok().and_then(|connection|connection.query_row("SELECT id FROM task_work_session_runs WHERE task_id=? AND status IN ('succeeded','failed','cancelled','interrupted','needs_attention') ORDER BY finished_at DESC,id DESC LIMIT 1",[task_id],|row|row.get::<_,String>(0)).optional().ok().flatten());
+                    if let Some(run_id)=latest_run {
+                        let service=crate::application::task_execution_service::TaskExecutionApplicationService::new(&self.db_path);
+                        if let Ok(mut refresh)=service.distillation_job_input(&run_id,input.get("locale").and_then(Value::as_str).unwrap_or("en"),
+                        ) {
+                            refresh["distillationInput"]["repairReason"]=json!(format!("targeted source change: {name}"));
+                            refresh["distillationInput"]["affectedSemanticIds"] =
+                                json!(affected_semantic_ids);
+                            let queued=self.enqueue_job(refresh).await;
+                            if queued.status<300 {response.body["distillationJob"]=queued.body;} else {response.body["distillationQueueError"]=queued.body;}
+                        }
+                    }
+                }
+            }
+        }
         if name == "task.work-log.create" && input["attachment"]["mediaType"].as_str().is_some_and(|media| media.starts_with("image/")) && input["attachment"]["data"].as_str().is_some_and(|data| !data.is_empty()) {
             let entry_id = response.body["id"].as_str().unwrap_or("");
             let queued = self.enqueue_job(json!({"taskKind":"image_summary","entityType":"task_work_log_entries","entityId":entry_id,"automatic":true,"locale":input.get("locale").and_then(Value::as_str).unwrap_or("en")})).await;
@@ -477,20 +546,28 @@ impl NativeApplication {
             else { response.body["imageSummaryQueueError"] = queued.body["detail"].clone(); }
         }
 
-        if name == "capture.create" && input["text"].as_str().unwrap_or("").trim().is_empty() && (input["image"].is_object() || input["images"].as_array().is_some_and(|images| !images.is_empty())) {
-            let capture_id = response.body["id"].as_str().unwrap_or("");
-            let prepared = task_assistance::execute_with_registry(
-                &self.db_path, &self.settings_path, &self.vault, self.semantic.clone(), self.jobs.clone(),
-                "task-refinement.open", &json!({"operationId":format!("image-capture-open:{capture_id}"),"captureId":capture_id,"locale":input.get("locale").cloned().unwrap_or(json!("en"))}),
-            ).await;
-            match prepared {
-                Ok(session) => response.body["refinementSession"] = session,
-                Err(error) => response.body["refinementQueueError"] = json!(error),
+        if name == "capture.create" {
+            if let Some(job_id) = response.body.pointer("/distillation/jobId").and_then(Value::as_str) {
+                if let Err(error) = jobs::start_stored(
+                    &self.db_path,&self.settings_path,&self.vault,&self.jobs,&self.semantic,job_id,
+                ) {
+                    let connection = database::open(&self.db_path);
+                    if let Ok(connection) = connection {
+                        let _ = connection.execute(
+                            "UPDATE ai_jobs_v2 SET status='failed',execution_outcome='failed',error_code='interrupted',error_message=? WHERE id=?",
+                            rusqlite::params![error,job_id],
+                        );
+                    }
+                    response.body["distillation"]["status"] = json!("failed");
+                    response.body["distillation"]["executionOutcome"] = json!("failed");
+                    response.body["distillation"]["safeError"] = json!({"code":"interrupted","message":"Organization will need to be retried."});
+                    response.body["distillation"]["retryAllowed"] = json!(true);
+                }
             }
         }
 
         let derived = match name.as_str() {
-            "capture.create" => Some(("captures", "text")),
+            "capture.create" => None,
             "task.work-log.create" => Some(("task_work_log_entries", "body")),
             "solution.progress.add" => Some(("solution_progress_entries", "body")),
             "solution.comment.add" => Some(("solution_progress_comments", "body")),
@@ -918,34 +995,37 @@ mod recovery_tests {
         assert_eq!(ready.body["state"], "task");
     }
     #[tokio::test]
-    async fn task_journey_expand_reuses_one_queued_and_persisted_fallback_graph() {
+    async fn distillation_task_journey_reads_never_enqueue_or_generate() {
         let root = tempdir().unwrap();
         let db = root.path().join("state.sqlite3");
         let app = NativeApplication::isolated(&root.path().join("vault"), &db).unwrap();
         let created = app.execute(NativeOperation { name:"task.create".into(), input:json!({"operationId":"journey-task","inputText":"Keep the complete initial idea","title":"Journey"}) });
-        assert_eq!(created.status,200);
         let task_id = created.body["id"].as_str().unwrap();
-        let read = || NativeOperation {name:"task.lineage".into(), input:json!({"taskId":task_id,"locale":"ko"})};
-        let first = app.execute_workflow(read()).await;
-        assert_eq!(first.status,200,"{}",first.body);
-        let job_id = first.body["journeyStatus"]["jobId"].as_str().unwrap().to_owned();
-        let mut latest = first.body;
         for _ in 0..100 {
-            let next = app.execute_workflow(read()).await;
-            assert_eq!(next.status,200,"{}",next.body);
-            assert_eq!(next.body["journeyStatus"]["jobId"],job_id);
-            latest = next.body;
-            if !latest["journey"].is_null() { break; }
-            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            let result = app
+                .execute_workflow(NativeOperation {name:"task.lineage".into(), input:json!({"taskId":task_id,"locale":"ko"}),
+                })
+                .await;
+            assert_eq!(result.status, 200, "{}", result.body);
+            assert!(result.body["journeyStatus"].is_null());
         }
-        assert_eq!(latest["modelStatus"],"fallback");
-        assert!(!latest["journey"]["events"].as_array().unwrap().is_empty());
-        let reopened = app.execute_workflow(read()).await;
-        assert_eq!(reopened.body["journey"],latest["journey"]);
         let connection = database::open(&db).unwrap();
-        let count:i64 = connection.query_row("SELECT count(*) FROM ai_jobs_v2 WHERE task_kind='lineage_inference' AND entity_id=?",[task_id],|row|row.get(0)).unwrap();
-        assert_eq!(count,1);
-        assert_eq!(jobs::result(&db,&job_id).unwrap()["result_interface"],"task_journey");
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT count(*) FROM ai_jobs_v2 WHERE entity_id=?",
+                    [task_id],
+                    |row| row.get::<_, i64>(0)
+                )
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            connection
+                .query_row("SELECT count(*) FROM task_journey_graphs", [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
     }
-
 }

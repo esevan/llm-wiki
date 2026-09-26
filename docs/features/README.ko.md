@@ -12,11 +12,13 @@
 
 ## 작업을 캡처하고 구체화하기
 
+- [Capture 자동 정리](capture-auto-distillation.ko.md)는 원본 텍스트와 이미지를 즉시 보존한 뒤,
+  workflow 상태를 바꾸지 않고 정확한 원본에 대해 백그라운드 정리 한 번을 적용합니다.
 - [Codex·ChatGPT 데스크톱 작업 추적](mcp-workbench-bridge.ko.md)은 Workbench 화면을 요구하지
   않으면서 인앱 Chat과 로컬 외부 Chat을 같은 workflow에 연결합니다.
 - [Task 중심 Workbench](conflict-gated-workflow.ko.md)는 Capture, 선택적 Refinement, Problem과
   독립적으로 추적하는 Task를 하나의 보이는 workflow로 구성합니다.
-- [Task 작업 세션](task-work-sessions.ko.md)은 Task 상태를 바꾸지 않고 각 Task 안에 비공개 기록과 명시적인 Codex 실행을 저장하고 이어가게 합니다.
+- [Task 작업 세션](task-work-sessions.ko.md)은 Task 상태를 바꾸지 않고 비공개 기록과 명시적인 Codex 실행을 저장하고 이어가며, 출처가 표시된 Work Log 정리와 현재 결정 변화를 제공합니다.
 - [Refinement Preview](refinement-preview-status.ko.md)는 AI 제안을 검토하는 동안 맥락을 보존합니다.
 - [Compass](direction-dashboard.ko.md)는 사람을 점수화하지 않고 방향을 기록합니다.
 
@@ -32,7 +34,14 @@
 
 - [완료와 Knowledge](completion-writeback-archive.ko.md)는 비공개 작업 기록을 보존하면서 완료 결과를
   게시합니다.
+- [근거에 묶인 Knowledge 초안](knowledge-distillation.ko.md)은 게시 전에 정확한 최종 결정, 분리된 idea와 변경 불가능한 비공개 리비전을 보존합니다.
 - [Lineage Knowledge Layer](lineage-knowledge-layer.ko.md)는 완료 Knowledge를 원 기록과 결정까지
   추적합니다.
 - [백그라운드 AI Queue](background-ai-queue.ko.md)는 지속 작업을 조회하고 복구하게 합니다.
+- [Workflow 기반 계약](workflow-foundation.ko.md)은 prompt 버전을 관리하고 실행과 적용을 분리하며,
+  생성 결과를 정확한 원본 리비전과 근거에 연결합니다.
 - [한국어·영어 전환](bilingual-localization.ko.md)은 workflow 맥락을 잃지 않고 언어를 바꿉니다.
+
+- [근거를 반영하는 작업 초안](reference-aware-workbench.ko.md)은 근거를 먼저 확인하는 자동 초안 생성, 정확한 참조 열람과 멘션, 변경 불가능한 초안 버전, 명시적인 Task 반영을 설명합니다.
+
+- [검토 후 지식 아카이빙](knowledge-archive.ko.md)

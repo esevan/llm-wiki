@@ -1,6 +1,9 @@
 import { useSyncExternalStore } from "react";
 
 const en = {
+  knowledgeReview: {
+    title: "Final Knowledge", privateDraft: "Current private draft", published: "Published", notPublished: "Not published", current: "Current", stale: "Sources changed", historical: "Historical version", loading: "Loading Knowledge…", empty: "No private Knowledge draft yet.", loadFailed: "Could not load Knowledge review.", invalidResponse: "The saved Knowledge response is invalid.", retry: "Try again", generate: "Generate private draft", regenerate: "Regenerate private draft", generating: "Generation queued…", finalOutcomes: "Final outcomes", applicability: "When this helps", questions: "Representative questions", helpsWith: "Helps with", conditions: "Conditions", exclusions: "Limits and exclusions", provenance: "Evidence and provenance", openSource: "Inspect source", noFinalOutcomes: "No final decision was recorded for this article.", quality: "Quality notes", ideas: "Ideas to revisit", ideasHint: "These ideas stay outside the final Knowledge article until separately selected for publication.", noIdeas: "No reusable ideas were retained for this version.", reconsiderWhen: "Revisit when", edit: "Edit current draft", save: "Save as new version", cancelEdit: "Cancel edit", unsaved: "Save or cancel your edit before changing versions.", saving: "Saving a new immutable version…", restored: "Restored as a new private version.", edited: "Saved as a new private version.", restoreFailed: "Could not restore this version.", saveFailed: "Could not save this version.", selectIdea: "Include in publication proposal", preparePublication: "Prepare publication review", preparingPublication: "Preparing exact files…", publicationReview: "Publication review", proposedFiles: "Proposed files", proposedChanges: "MOC and reference changes", publishExact: "Publish these exact files", publishing: "Writing and indexing…", publicationUnavailable: "Publication review will be available after archive integration.", publicationState: "Publication state", managePublication: "Manage published Knowledge", currentPublishedPath: "Current published path", noPath: "No current path", organizationAction: "Action", move: "Move", rename: "Rename", withdraw: "Withdraw", repair: "Repair", requestedPath: "Requested path", reviewOrganization: "Review organization change", withdrawnPath: "Withdrawn from the active archive", unresolvedRepairs: "Unresolved link repairs", indexPending: "Exact files are recorded. The published version stays unchanged until indexing completes.", retryIndex: "Retry indexing", finishRecovery: "Finish exact remaining steps", compensate: "Compensate unchanged files", bytes: "bytes", before: "Before", after: "After", emptyFile: "Empty file", sourceLinks: "Source links", proposalConflict: "This proposal has unresolved conflicts and cannot be published.", sourceSnapshot: "Exact source snapshot", closeSource: "Close source", selectedVersion: "Selected version", currentPrivate: "Current private", exactPublished: "Published version", compareHint: "Comparison reads stored versions only; it does not regenerate content.", unverified: "Unverified", deferred: "Deferred", rejected: "Rejected", out_of_scope: "Out of scope", blocking: "Blocking", warning: "Warning", info: "Information", operationFailed: "The action could not be completed. Your draft and selection are preserved.", articleBody: "Knowledge article", articleType: "Article type",
+  },
   attachImage: "Attach image",
   removeImage: "Remove image",
   imageHint: "Paste images or choose files · PNG, JPEG, GIF, WebP · up to 10 MB each",
@@ -8,6 +11,13 @@ const en = {
   imageReadError: "Could not read the image. Try selecting it again.",
   imageCapture: "Image capture",
   attachedImage: "Attached image",
+  captureOrganizing: "Organizing in the background…",
+  captureOrganized: "Organized from the saved source",
+  captureOrganizationFailed: "Organization needs attention",
+  captureSource: "Saved source",
+  captureContext: "Grounded context",
+  captureRequests: "Requests in the source",
+  captureProposal: "Earlier result available for review",
   workspace: "Local workspace",
   refined: "Refined - Revision",
   workStatus: "Work status",
@@ -262,6 +272,9 @@ const en = {
   deleteFailure: "The item could not be deleted.",
 };
 const ko: typeof en = {
+  knowledgeReview: {
+    title: "최종 Knowledge", privateDraft: "현재 비공개 초안", published: "발행됨", notPublished: "발행되지 않음", current: "현재", stale: "출처 변경됨", historical: "이전 버전", loading: "Knowledge 불러오는 중…", empty: "아직 비공개 Knowledge 초안이 없습니다.", loadFailed: "Knowledge 검토 내용을 불러오지 못했습니다.", invalidResponse: "저장된 Knowledge 응답이 올바르지 않습니다.", retry: "다시 시도", generate: "비공개 초안 생성", regenerate: "비공개 초안 다시 생성", generating: "생성 작업을 대기열에 추가했습니다…", finalOutcomes: "최종 결과", applicability: "활용하기 좋은 경우", questions: "대표 질문", helpsWith: "도움이 되는 작업", conditions: "조건", exclusions: "한계와 제외 범위", provenance: "근거와 출처", openSource: "출처 확인", noFinalOutcomes: "이 글에는 최종 결정으로 기록된 항목이 없습니다.", quality: "품질 확인 사항", ideas: "다시 살펴볼 아이디어", ideasHint: "이 아이디어는 별도로 선택해 발행하기 전까지 최종 Knowledge 글 밖에 유지됩니다.", noIdeas: "이 버전에는 재사용할 아이디어가 남지 않았습니다.", reconsiderWhen: "다시 살펴볼 조건", edit: "현재 초안 편집", save: "새 버전으로 저장", cancelEdit: "편집 취소", unsaved: "버전을 바꾸기 전에 편집을 저장하거나 취소하세요.", saving: "새 불변 버전으로 저장 중…", restored: "새 비공개 버전으로 복원했습니다.", edited: "새 비공개 버전으로 저장했습니다.", restoreFailed: "이 버전을 복원하지 못했습니다.", saveFailed: "이 버전을 저장하지 못했습니다.", selectIdea: "발행 제안에 포함", preparePublication: "발행 검토 준비", preparingPublication: "정확한 파일을 준비하는 중…", publicationReview: "발행 검토", proposedFiles: "제안된 파일", proposedChanges: "MOC 및 참조 변경", publishExact: "이 파일 그대로 발행", publishing: "파일 저장 및 색인 중…", publicationUnavailable: "보관 기능이 연결되면 발행 검토를 사용할 수 있습니다.", publicationState: "발행 상태", managePublication: "발행된 Knowledge 관리", currentPublishedPath: "현재 발행 경로", noPath: "현재 경로 없음", organizationAction: "작업", move: "이동", rename: "이름 변경", withdraw: "철회", repair: "복구", requestedPath: "요청 경로", reviewOrganization: "구성 변경 검토", withdrawnPath: "활성 아카이브에서 철회", unresolvedRepairs: "해결되지 않은 링크 복구", indexPending: "정확한 파일이 기록되었습니다. 색인이 끝날 때까지 발행 버전은 바뀌지 않습니다.", retryIndex: "색인 다시 시도", finishRecovery: "남은 정확한 단계 완료", compensate: "변경되지 않은 파일 보상", bytes: "바이트", before: "변경 전", after: "변경 후", emptyFile: "빈 파일", sourceLinks: "출처 링크", proposalConflict: "이 제안에는 해결되지 않은 충돌이 있어 발행할 수 없습니다.", sourceSnapshot: "정확한 출처 스냅샷", closeSource: "출처 닫기", selectedVersion: "선택한 버전", currentPrivate: "현재 비공개", exactPublished: "발행된 버전", compareHint: "비교는 저장된 버전만 읽으며 콘텐츠를 다시 생성하지 않습니다.", unverified: "미검증", deferred: "보류", rejected: "기각", out_of_scope: "범위 밖", blocking: "차단", warning: "경고", info: "정보", operationFailed: "작업을 완료하지 못했습니다. 초안과 선택 내용은 보존됩니다.", articleBody: "Knowledge 글", articleType: "글 유형",
+  },
   attachImage: "이미지 첨부",
   removeImage: "이미지 제거",
   imageHint: "여러 이미지 붙여넣기 또는 파일 선택 · PNG, JPEG, GIF, WebP · 장당 최대 10 MB",
@@ -269,6 +282,13 @@ const ko: typeof en = {
   imageReadError: "이미지를 읽지 못했습니다. 다시 선택해 주세요.",
   imageCapture: "이미지 캡처",
   attachedImage: "첨부 이미지",
+  captureOrganizing: "백그라운드에서 정리 중…",
+  captureOrganized: "저장된 원본을 바탕으로 정리됨",
+  captureOrganizationFailed: "정리에 확인이 필요합니다",
+  captureSource: "저장된 원본",
+  captureContext: "원본에 근거한 맥락",
+  captureRequests: "원본에 명시된 요청",
+  captureProposal: "이전 결과를 검토할 수 있습니다",
   refined: "Refined - Revision",
   workStatus: "작업 상태",
   previewTab: "프리뷰",

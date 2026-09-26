@@ -17,30 +17,6 @@ fn app_error(code: &str, message: impl Into<String>) -> AppError {
     AppError::new(code, message)
 }
 
-fn cosine(left: &[f32], bytes: &[u8]) -> f32 {
-    if bytes.len() != left.len() * 4 {
-        return -1.0;
-    }
-    let mut dot = 0.0;
-    let mut right_norm = 0.0;
-    let left_norm = left.iter().map(|value| value * value).sum::<f32>().sqrt();
-    let (chunks, remainder) = bytes.as_chunks::<4>();
-    if !remainder.is_empty() {
-        return -1.0;
-    }
-    for (left_value, chunk) in left.iter().zip(chunks) {
-        let right = f32::from_le_bytes(*chunk);
-        dot += left_value * right;
-        right_norm += right * right;
-    }
-    let denominator = left_norm * right_norm.sqrt();
-    if denominator == 0.0 {
-        -1.0
-    } else {
-        dot / denominator
-    }
-}
-
 impl MarkdownVaultAdapter {
     pub(crate) fn root_path(&self) -> &Path {
         &self.vault_path
@@ -165,7 +141,13 @@ impl MarkdownVaultAdapter {
                 "uri":format!("llm-wiki://evidence/{evidence_id}"),"snippet":item.get("snippet"),
                 "sourceIdentity":path,"passage":item.get("passage"),
                 "matchedTerms":if semantic{Value::Null}else{item["matchedTerms"].clone()},"rank":rank+1,
-                "revision":item.get("source_hash"),"modifiedAt":item.get("modified_at")
+                "revision":item.get("source_hash"),"modifiedAt":item.get("modified_at"),
+                "score":item.get("score"),"semanticScore":item.get("semantic_score"),
+                "documentId":item.get("documentId"),"section":item.get("section"),
+                "chunkIndex":item.get("chunkIndex"),"chunkCount":item.get("chunkCount"),
+                "aspect":item.get("aspect"),"informationType":item.get("informationType"),
+                "status":item.get("status"),"conditions":item.get("conditions"),
+                "historicalMatch":item.get("historicalMatch"),"warnings":item.get("warnings")
             }))
         }).collect::<Result<Vec<_>,AppError>>()?;
         Ok(
@@ -189,6 +171,39 @@ impl MarkdownVaultAdapter {
             _=>Ok(false),
         }
     }
+
+    fn ranked_search(
+        &self,
+        connection: &rusqlite::Connection,
+        scope_kind: &str,
+        scope_target: &str,
+        query: &str,
+        limit: usize,
+        semantic_requested: bool,
+    ) -> Result<(Value, i64, bool), AppError> {
+        let raw = crate::native::retrieval_index::search(
+            connection,
+            &self.semantic,
+            query,
+            limit,
+            0,
+            semantic_requested,
+            |path, title, body| {
+                self.path_visible(connection, scope_kind, scope_target, path, title, body)
+                    .map_err(|error| error.message)
+            },
+        )
+        .map_err(|_| app_error("storage_unavailable", "Vault search is unavailable"))?;
+        let source_revision = raw
+            .get("source_revision")
+            .and_then(Value::as_i64)
+            .unwrap_or_default();
+        let semantic_complete = raw
+            .get("semantic_complete")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        Ok((raw, source_revision, semantic_complete))
+    }
 }
 
 impl VaultRepository for MarkdownVaultAdapter {
@@ -205,54 +220,8 @@ impl VaultRepository for MarkdownVaultAdapter {
         }
         let connection = database::open(&self.db_path)
             .map_err(|_| app_error("storage_unavailable", "Vault scope is unavailable"))?;
-        let terms = query
-            .split_whitespace()
-            .map(|term| format!("\"{}\"", term.replace('"', "\"\"")))
-            .collect::<Vec<_>>()
-            .join(" AND ");
-        let mut statement = connection.prepare(
-            "SELECT d.path,d.title,d.body,d.source_hash,d.modified_at,snippet(vault_documents_fts,2,'<mark>','</mark>',' … ',24) FROM vault_documents_fts JOIN vault_documents d ON d.rowid=vault_documents_fts.rowid WHERE vault_documents_fts MATCH ? ORDER BY bm25(vault_documents_fts),d.path"
-        ).map_err(|_| app_error("storage_unavailable", "Vault search is unavailable"))?;
-        let mut rows = statement
-            .query([terms])
-            .map_err(|_| app_error("storage_unavailable", "Vault search is unavailable"))?;
-        let limit = limit.clamp(1, 20);
-        let mut visible = Vec::new();
-        while let Some(row) = rows
-            .next()
-            .map_err(|_| app_error("storage_unavailable", "Vault search is unavailable"))?
-        {
-            let get = |column| {
-                row.get::<_, String>(column)
-                    .map_err(|_| app_error("storage_unavailable", "Vault search is unavailable"))
-            };
-            let (path, title, body) = (get(0)?, get(1)?, get(2)?);
-            if self.path_visible(&connection, scope_kind, scope_target, &path, &title, &body)? {
-                let lower = body.to_lowercase();
-                let matched = query
-                    .split_whitespace()
-                    .filter(|term| {
-                        lower.contains(&term.to_lowercase())
-                            || title.to_lowercase().contains(&term.to_lowercase())
-                    })
-                    .collect::<Vec<_>>();
-                let line = body
-                    .lines()
-                    .position(|line| {
-                        matched
-                            .iter()
-                            .any(|term| line.to_lowercase().contains(&term.to_lowercase()))
-                    })
-                    .map(|line| line + 1);
-                visible.push(json!({"path":path,"title":title,"source_hash":get(3)?,"modified_at":row.get::<_,i64>(4).map_err(|_| app_error("storage_unavailable", "Vault search is unavailable"))?,"snippet":get(5)?,"matchedTerms":matched,"passage":{"kind":"document","firstMatchingLine":line}}));
-                if visible.len() > limit {
-                    break;
-                }
-            }
-        }
-        let has_more = visible.len() > limit;
-        visible.truncate(limit);
-        let raw = json!({"results":visible,"has_more":has_more});
+        let (raw, _, _) =
+            self.ranked_search(&connection, scope_kind, scope_target, query, limit, false)?;
         let mut result = self.public_hits(connection_id, scope_kind, scope_target, &raw, false)?;
         result["query"] = json!(query);
         result["searchRevision"] = json!(chrono::Utc::now().timestamp_millis());
@@ -270,73 +239,26 @@ impl VaultRepository for MarkdownVaultAdapter {
         if query.trim().is_empty() || query.len() > 512 {
             return Err(app_error("invalid_input", "Query must be 1–512 characters"));
         }
-        if !self.semantic.available() {
-            return Err(app_error(
-                "semantic_index_not_ready",
-                "Semantic index is unavailable; use lexical search",
-            ));
-        }
-        let query_vector = self
-            .semantic
-            .embed(vec![query.to_owned()])
-            .map_err(|_| {
-                app_error(
-                    "semantic_index_not_ready",
-                    "Semantic index is unavailable; use lexical search",
-                )
-            })?
-            .remove(0);
         let connection = database::open(&self.db_path)
             .map_err(|_| app_error("storage_unavailable", "Vault search is unavailable"))?;
-        let mut statement=connection.prepare("SELECT d.path,d.title,d.body,d.source_hash,d.modified_at,e.vector FROM vault_documents d LEFT JOIN vault_document_embeddings e ON e.path=d.path AND e.source_hash=d.source_hash").map_err(|_|app_error("storage_unavailable","Vault search is unavailable"))?;
-        let mut rows = statement
-            .query_map([], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, String>(3)?,
-                    row.get::<_, i64>(4)?,
-                    row.get::<_, Option<Vec<u8>>>(5)?,
-                ))
-            })
-            .map_err(|_| app_error("storage_unavailable", "Vault search is unavailable"))?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|_| app_error("storage_unavailable", "Vault search is unavailable"))?;
-        rows.retain(|row| {
-            self.path_visible(
-                &connection,
-                scope_kind,
-                scope_target,
-                &row.0,
-                &row.1,
-                &row.2,
-            )
-            .unwrap_or(false)
+        let (raw, source_revision, semantic_complete) = self.ranked_search(
+            &connection,
+            scope_kind,
+            scope_target,
+            query,
+            limit.clamp(1, 10),
+            true,
+        )?;
+        let mut result = self.public_hits(connection_id, scope_kind, scope_target, &raw, true)?;
+        result["query"] = json!(query);
+        result["sourceRevision"] = json!(source_revision);
+        result["indexRevision"] = json!(source_revision);
+        result["indexState"] = json!(if semantic_complete {
+            "current"
+        } else {
+            "partial"
         });
-        let source_revision = rows.iter().map(|row| row.4).max().unwrap_or(0);
-        if rows.iter().any(|row| row.5.is_none()) {
-            return Err(app_error(
-                "semantic_index_not_ready",
-                "Semantic index is behind in the requested scope; use lexical search",
-            ));
-        }
-        rows.sort_by(|a, b| {
-            cosine(&query_vector, b.5.as_deref().unwrap_or_default())
-                .partial_cmp(&cosine(&query_vector, a.5.as_deref().unwrap_or_default()))
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then_with(|| a.0.cmp(&b.0))
-        });
-        let now = chrono::Utc::now();
-        let truncated = rows.len() > limit.clamp(1, 10);
-        let hits=rows.into_iter().take(limit.clamp(1,10)).enumerate().map(|(rank,(path,title,body,hash,modified,embedding))|{
-            let evidence_id=format!("ev_{}",uuid::Uuid::new_v4());
-            connection.execute("INSERT INTO work_tracking_evidence_grants(evidence_id,connection_id,scope_kind,scope_target,path,revision,expires_at,created_at) VALUES (?,?,?,?,?,?,?,?)",params![evidence_id,connection_id,scope_kind,scope_target,path,hash,(now+chrono::Duration::minutes(10)).to_rfc3339(),now.to_rfc3339()]).map_err(|_|app_error("storage_unavailable","Evidence grants are unavailable"))?;
-            Ok(json!({"evidenceId":evidence_id,"title":title,"kind":"knowledge","uri":format!("llm-wiki://evidence/{evidence_id}"),"sourceIdentity":path,"passage":{"kind":"document","startLine":1},"score":cosine(&query_vector,embedding.as_deref().unwrap_or_default()),"snippet":body.chars().take(500).collect::<String>(),"rank":rank+1,"revision":hash,"modifiedAt":modified}))
-        }).collect::<Result<Vec<_>,AppError>>()?;
-        Ok(
-            json!({"query":query,"sourceRevision":source_revision,"indexRevision":source_revision,"indexState":"current","hits":hits,"truncated":truncated}),
-        )
+        Ok(result)
     }
 
     fn evidence_read(

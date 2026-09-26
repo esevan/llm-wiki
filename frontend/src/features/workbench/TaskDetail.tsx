@@ -1,13 +1,15 @@
 import { localizedTask } from "./taskContent";
-import { KnowledgeMarkdown } from "../../components/KnowledgeMarkdown";
 import { useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, type ReactNode, type Ref } from "react";
 import { createPortal } from "react-dom";
 import { taskClient } from "../../services/taskClient";
 import { formatSystemTime } from "../../services/systemTime";
-import type { LineageSnapshot, TaskAggregate, TaskCard } from "../../types/taskWorkbench";
+import type { LineageSnapshot, TaskAggregate, TaskApplicationEvent, TaskCard } from "../../types/taskWorkbench";
+import { ContentRevisionTransition } from "../../components/ContentRevisionTransition";
 import { ConflictReviewPanel } from "./ConflictReviewPanel";
+import { KnowledgeReviewPanel, type KnowledgeArchiveOperation, type KnowledgeArchiveOrganizeRequest, type KnowledgeArchivePrepareRequest, type KnowledgeArchivePublishRequest, type KnowledgeArchiveRecoverRequest, type KnowledgeReviewPanelHandle } from "./KnowledgeReviewPanel";
 import { RefinementPanel } from "./RefinementPanel";
 import { TaskJourneyGraph } from "./TaskJourneyGraph";
+import { WorkLogDistillation } from "./WorkLogDistillation";
 import { TaskWorkSessions, type WorkSessionDraft } from "./TaskWorkSessions";
 import { useTaskWorkbenchText } from "./taskWorkbenchText";
 import { useModalInteraction } from "./useModalInteraction";
@@ -68,6 +70,7 @@ export type DetailSession = {
   relationshipKind: "prerequisite" | "split_from" | "related";
   readinessReasons: Record<string, string>;
   knowledgeDraft?: KnowledgeDraft;
+  knowledgeReviewDirty?: boolean;
   tab: DetailTab;
   editing: boolean;
   scrollTop: number;
@@ -80,6 +83,7 @@ export function TaskDetail({
   onChanged,
   onRequestDelete,
   onRefine,
+  application,
   onOpenTask,
   refreshKey,
   suppressInitialFocus,
@@ -87,6 +91,12 @@ export function TaskDetail({
   queueKnowledgeDraft,
   queueImageSummary,
   openJourney,
+  onPrepareKnowledgeArchive,
+  onOrganizeKnowledgeArchive,
+  onPublishKnowledgeArchive,
+  onKnowledgeArchiveStatus,
+  onRetryKnowledgeArchive,
+  onRecoverKnowledgeArchive,
   ref,
 }: {
   taskId: string;
@@ -95,12 +105,19 @@ export function TaskDetail({
   onChanged: () => void;
   onRequestDelete?: (title: string) => void;
   onRefine?: () => void;
+  application?: TaskApplicationEvent;
   refreshKey?: number;
   suppressInitialFocus?: boolean;
   sessions?: Map<string, DetailSession>;
   queueKnowledgeDraft?: KnowledgeDraft;
   queueImageSummary?: { entryId: string };
   openJourney?: boolean;
+  onPrepareKnowledgeArchive?: (request: KnowledgeArchivePrepareRequest) => Promise<import("../../types/taskWorkbench").KnowledgeArchiveProposal>;
+  onOrganizeKnowledgeArchive?: (request: KnowledgeArchiveOrganizeRequest) => Promise<import("../../types/taskWorkbench").KnowledgeArchiveProposal>;
+  onPublishKnowledgeArchive?: (request: KnowledgeArchivePublishRequest) => Promise<KnowledgeArchiveOperation>;
+  onKnowledgeArchiveStatus?: (operationId: string) => Promise<KnowledgeArchiveOperation>;
+  onRetryKnowledgeArchive?: (operationId: string) => Promise<KnowledgeArchiveOperation>;
+  onRecoverKnowledgeArchive?: (request: KnowledgeArchiveRecoverRequest) => Promise<KnowledgeArchiveOperation>;
   ref?: Ref<TaskDetailHandle>;
 }) {
   const text = useTaskWorkbenchText();
@@ -138,16 +155,13 @@ export function TaskDetail({
       savedBodyMarkdown: session.knowledgeDraft.savedBodyMarkdown ?? session.knowledgeDraft.bodyMarkdown,
     },
   );
+  const [knowledgeReviewDirty, setKnowledgeReviewDirty] = useState(session?.knowledgeReviewDirty ?? false);
   const [tab, setTab] = useState<DetailTab>(session?.tab ?? "work");
+  const [knowledgeReviewMounted, setKnowledgeReviewMounted] = useState(session?.tab === "review");
   const [executionFocus, setExecutionFocus] = useState<{ sessionId: string; runId: string }>();
   const [editing, setEditing] = useState(session?.editing ?? false);
   const workSessionDrafts = useRef(session?.workSessionDrafts ?? new Map<string, WorkSessionDraft>()).current;
   const [showCompletedChecklist, setShowCompletedChecklist] = useState(false);
-  const [knowledgeAction, setKnowledgeAction] = useState<"create" | "correct" | "publish">();
-  const knowledgeBusy = Boolean(knowledgeAction);
-  const [knowledgeStatus, setKnowledgeStatus] = useState<keyof typeof text | "">("");
-  const [knowledgeError, setKnowledgeError] = useState("");
-  const [knowledgeRetry, setKnowledgeRetry] = useState<"create" | "correct" | "publish">();
   const [knowledgeQueued, setKnowledgeQueued] = useState(false);
   const [mutationBusy, setMutationBusy] = useState(false);
   const [lineage, setLineage] = useState<LineageSnapshot>();
@@ -157,6 +171,7 @@ export function TaskDetail({
   const [closePrompt, setClosePrompt] = useState(false);
   const pendingLeave = useRef<(() => void) | undefined>(undefined);
   const panelRef = useRef<HTMLElement>(null);
+  const knowledgeReviewRef = useRef<KnowledgeReviewPanelHandle>(null);
   const modalRef = useRef<HTMLDivElement>(null);
   const headingRef = useRef<HTMLHeadingElement>(null);
   const pendingTabFocus = useRef<string | undefined>(undefined);
@@ -169,12 +184,13 @@ export function TaskDetail({
     panelRef.current?.querySelector<HTMLElement>(pendingTabFocus.current)?.focus();
     pendingTabFocus.current = undefined;
   }, [tab]);
+  useEffect(() => { if (tab === "review") setKnowledgeReviewMounted(true); }, [tab]);
   const loadSequence = useRef(0);
   const mutationQueue = useRef<Promise<void>>(Promise.resolve());
   const mutationBusyRef = useRef(false);
   useEffect(() => {
-    detailSessions.set(taskId, { detailState, entry, check, decision, attachment, comments, completionEvidence, relatedTaskId, relatedTaskSearch, relationshipKind, readinessReasons, knowledgeDraft, tab, editing, workSessionDrafts, scrollTop: restoredScroll.current ? panelRef.current?.scrollTop ?? 0 : initialScrollTop.current });
-  }, [attachment, check, comments, completionEvidence, decision, detailSessions, detailState, editing, entry, knowledgeDraft, readinessReasons, relatedTaskId, relatedTaskSearch, relationshipKind, session?.scrollTop, tab, taskId]);
+    detailSessions.set(taskId, { detailState, entry, check, decision, attachment, comments, completionEvidence, relatedTaskId, relatedTaskSearch, relationshipKind, readinessReasons, knowledgeDraft, knowledgeReviewDirty, tab, editing, workSessionDrafts, scrollTop: restoredScroll.current ? panelRef.current?.scrollTop ?? 0 : initialScrollTop.current });
+  }, [attachment, check, comments, completionEvidence, decision, detailSessions, detailState, editing, entry, knowledgeDraft, knowledgeReviewDirty, readinessReasons, relatedTaskId, relatedTaskSearch, relationshipKind, session?.scrollTop, tab, taskId, workSessionDrafts]);
   useEffect(() => {
     const panel = panelRef.current;
     if (loaded && panel && !restoredScroll.current) {
@@ -278,7 +294,6 @@ export function TaskDetail({
   useEffect(() => {
     if (!queueKnowledgeDraft) return;
     setKnowledgeQueued(false);
-    setKnowledgeStatus("");
     setKnowledgeDraft((current) => current?.draftRevision === queueKnowledgeDraft.draftRevision && current.contentHash === queueKnowledgeDraft.contentHash
       ? current
       : { ...queueKnowledgeDraft, savedBodyMarkdown: queueKnowledgeDraft.bodyMarkdown });
@@ -319,11 +334,11 @@ export function TaskDetail({
   };
   const requestLeave = useCallback((proceed: () => void) => {
     if (mutationBusyRef.current) return;
-    if (detailState?.dirty.size) {
+    if (detailState?.dirty.size || knowledgeReviewDirty) {
       pendingLeave.current = proceed;
       setClosePrompt(true);
     } else proceed();
-  }, [detailState]);
+  }, [detailState, knowledgeReviewDirty]);
   useImperativeHandle(ref, () => ({ requestLeave }), [requestLeave]);
   useModalInteraction(modalRef, 10, () => {
     if (refining || mutationBusyRef.current) return;
@@ -370,7 +385,7 @@ export function TaskDetail({
         || focusedQueueResult.current === queueKnowledgeDraft) return;
     const frame = requestAnimationFrame(() => {
       const panel = panelRef.current;
-      const preview = panel?.querySelector<HTMLElement>(".knowledge-draft-preview");
+      const preview = panel?.querySelector<HTMLElement>(".knowledge-review");
       if (!panel || !preview) return;
       const headerHeight = panel.querySelector<HTMLElement>(".task-detail-header")?.offsetHeight ?? 0;
       panel.scrollTop += preview.getBoundingClientRect().top - panel.getBoundingClientRect().top - headerHeight - 12;
@@ -392,94 +407,13 @@ export function TaskDetail({
       data: btoa(binary),
     };
   };
-  const correctKnowledge = async () => {
-    if (!knowledgeDraft || knowledgeBusy) return;
-    if (!knowledgeDraft.sourceHash) {
-      setError("This Knowledge draft has no source hash. Refresh it before saving a correction.");
-      return;
-    }
-    setKnowledgeAction("correct");
-    setKnowledgeError("");
-    setKnowledgeRetry(undefined);
-    setKnowledgeStatus("savingDraft");
-    try {
-      const corrected = await taskClient.correctKnowledge(
-          taskId,
-          knowledgeDraft.draftRevision,
-          knowledgeDraft.contentHash,
-          knowledgeDraft.sourceHash,
-          knowledgeDraft.bodyMarkdown,
-        );
-      setKnowledgeDraft({ ...corrected, savedBodyMarkdown: corrected.bodyMarkdown });
-      await load();
-      setKnowledgeStatus("draftSaved");
-    } catch (e) {
-      setKnowledgeStatus("");
-      setKnowledgeError(String(e instanceof Error ? e.message : e));
-      setKnowledgeRetry("correct");
-    } finally {
-      setKnowledgeAction(undefined);
-    }
-  };
-  const publishKnowledge = async () => {
-    if (!knowledgeDraft || knowledgeBusy) return;
-    if (!knowledgeDraft.sourceHash) {
-      setError("This Knowledge draft has no source hash. Refresh it before publishing.");
-      return;
-    }
-    setKnowledgeAction("publish");
-    setKnowledgeError("");
-    setKnowledgeRetry(undefined);
-    setKnowledgeStatus("publishingDraft");
-    try {
-      await taskClient.publish(
-        taskId,
-        knowledgeDraft.draftRevision,
-        knowledgeDraft.contentHash,
-        knowledgeDraft.sourceHash,
-      );
-      setKnowledgeDraft(undefined);
-      await load();
-      setKnowledgeStatus("draftPublished");
-    } catch (e) {
-      setKnowledgeStatus("");
-      setKnowledgeError(String(e instanceof Error ? e.message : e));
-      setKnowledgeRetry("publish");
-    } finally {
-      setKnowledgeAction(undefined);
-    }
-  };
   const createKnowledgeDraft = async () => {
-    if (!task || task.state !== "completed" || knowledgeBusy) return;
-    setKnowledgeAction("create");
-    setKnowledgeError("");
-    setKnowledgeRetry(undefined);
-    setKnowledgeStatus("creatingDraft");
-    try {
-      await taskClient.knowledgeDraft(task.id, revision);
-      setKnowledgeQueued(true);
-      setKnowledgeStatus("draftQueued");
-    } catch (e) {
-      setKnowledgeStatus("");
-      setKnowledgeError(String(e instanceof Error ? e.message : e));
-      setKnowledgeRetry("create");
-    } finally {
-      setKnowledgeAction(undefined);
-    }
+    if (!task || task.state !== "completed" || knowledgeQueued) return;
+    await taskClient.knowledgeDraft(task.id, revision);
+    setKnowledgeQueued(true);
   };
-  const retryKnowledge = () => {
-    if (knowledgeRetry === "create") void createKnowledgeDraft();
-    if (knowledgeRetry === "correct") void correctKnowledge();
-    if (knowledgeRetry === "publish") void publishKnowledge();
-  };
-  const knowledgeEdited = Boolean(knowledgeDraft && knowledgeDraft.bodyMarkdown !== knowledgeDraft.savedBodyMarkdown);
   const canonicalTask = detailState && { ...detailState.persisted, ...detailState.draft };
   const task = canonicalTask && (editing || detailState!.dirty.size ? canonicalTask : localizedTask(canonicalTask));
-  const knowledgeDraftIsCurrent = Boolean(
-    knowledgeDraft && task?.publication?.draftRevision === knowledgeDraft.draftRevision
-      && task.publication.contentHash === knowledgeDraft.contentHash
-      && task.publication.state === "draft",
-  );
   const addWorkLog = () => {
     if (!task || (!entry.trim() && !attachment) || mutationBusyRef.current) return;
     void encodeAttachment()
@@ -565,8 +499,17 @@ export function TaskDetail({
   const visibleJourney = tab === "review" ? reviewJourney ?? lineage?.journey : lineage?.journey;
   const visibleModelStatus = tab === "review" && reviewJourney ? draftJourneySnapshot?.modelStatus : lineage?.modelStatus;
   const visibleModelError = tab === "review" && reviewJourney ? draftJourneySnapshot?.modelError : lineage?.modelError;
-  const lineageContent = visibleJourney ? <>
-    <TaskJourneyGraph journey={visibleJourney} />
+  const semanticProjection = tab === "review" ? undefined : lineage?.distillation;
+  const semanticJourney = semanticProjection ? {
+    events: semanticProjection.nodes.map((node) => ({ id: node.id, type: node.kind, detail: { title: node.detail.after || node.detail.result || node.topicKey || node.kind, summary: node.detail.reason, result: node.detail.result, changes: node.detail.before || node.detail.after ? [{ field: node.topicKey || node.kind, before: node.detail.before, after: node.detail.after }] : undefined, status: node.status, currentStatus: node.detail.currentStatus, sources: [...(node.detail.links ?? []), ...semanticProjection.result.claims.filter(claim => node.claimIds.includes(claim.id)).flatMap(claim => claim.sources)] } })),
+    relationships: semanticProjection.relationships.filter(relationship => relationship.active).map((relationship) => ({ from: relationship.from, to: relationship.to, kind: relationship.kind as import("./TaskJourneyGraph").TaskJourneyRelationship["kind"], provenance: "inferred" as const, rationale: relationship.reason, evidence: relationship.sources.map(source => ({ eventId: source.id, quote: source.quote || source.locator })) })),
+    titles: semanticProjection.nodes.map((node) => ({ id: node.id, title: node.detail.after || node.detail.result || node.topicKey || node.kind })),
+    topicStates: semanticProjection.topicStates,
+    freshness: semanticProjection.freshness,
+  } : undefined;
+  const lineageContent = semanticJourney || visibleJourney ? <>
+    <TaskJourneyGraph journey={semanticJourney ?? visibleJourney!} />
+    {semanticJourney && lineage?.recordedJourney && <details className="task-journey-recorded" data-control="task-journey-recorded"><summary>{displayLocale.startsWith("ko") ? "원본 이벤트 흐름" : "Recorded event trace"}</summary><TaskJourneyGraph journey={lineage.recordedJourney} /></details>}
     {visibleModelStatus === "fallback" && <p className="task-journey-empty" role="status">{text.journeyFallback}{visibleModelError ? ` ${visibleModelError}` : ""}</p>}
   </> : lineage?.journeyStatus && ["queued", "running", "retryable"].includes(lineage.journeyStatus.status ?? "")
     ? <p className="task-journey-empty" aria-live="polite">{text.lineagePreparing}</p>
@@ -595,7 +538,7 @@ export function TaskDetail({
                 ? text.inProgress
                 : text.ready}
           </small>
-          <h2 ref={headingRef} tabIndex={-1} title={task.title}>{task.title}</h2>
+          <h2 ref={headingRef} tabIndex={-1} title={task.title}><ContentRevisionTransition as="span" cause={application?.taskId === task.id && application.revision === revision ? application.cause : undefined} entityKey={`task-detail:${task.id}`} revision={revision} variant="title">{task.title}</ContentRevisionTransition></h2>
           <p className="task-goal" title={task.outcome}>{task.outcome || text.goalMissing}</p>
         </div>
         <button type="button" data-control="task-detail-close" aria-label={text.closeTaskDetail} onClick={() => requestLeave(onClose)}>
@@ -641,11 +584,14 @@ export function TaskDetail({
         <section className="task-draft-guard" role="alertdialog" aria-label={text.unsavedTaskChanges}>
           <p>{text.saveBeforeClosing}</p>
           <button type="button" data-control="task-draft-guard-save" disabled={mutationBusy || detailState.conflicts.length > 0} onClick={() => {
-            if (!detailState.dirty.size) finishLeave();
-            else void saveDraft().then((saved) => { if (saved) finishLeave(); });
+            void (async () => {
+              const taskSaved = detailState.dirty.size ? await saveDraft() : true;
+              const knowledgeSaved = knowledgeReviewDirty ? await knowledgeReviewRef.current?.save() ?? false : true;
+              if (taskSaved && knowledgeSaved) finishLeave();
+            })();
           }}>{text.guardSave}</button>
-          <button type="button" data-control="task-draft-guard-discard" disabled={mutationBusy} onClick={() => { setDetailState((current) => { if (!current) return current; const reset = baseline(current.persisted); const cached = detailSessions.get(taskId); if (cached) detailSessions.set(taskId, { ...cached, detailState: reset, editing: false }); return reset; }); setEditing(false); finishLeave(); }}>{text.discard}</button>
-          <button type="button" data-control="task-draft-guard-keep-editing" disabled={mutationBusy} onClick={() => { pendingLeave.current = undefined; setClosePrompt(false); headingRef.current?.focus(); }}>{text.keepEditing}</button>
+          <button type="button" data-control="task-draft-guard-discard" disabled={mutationBusy} onClick={() => { setDetailState((current) => { if (!current) return current; const reset = baseline(current.persisted); const cached = detailSessions.get(taskId); if (cached) detailSessions.set(taskId, { ...cached, detailState: reset, editing: false, knowledgeReviewDirty: false }); return reset; }); knowledgeReviewRef.current?.discard(); setKnowledgeReviewDirty(false); setEditing(false); finishLeave(); }}>{text.discard}</button>
+          <button type="button" data-control="task-draft-guard-keep-editing" disabled={mutationBusy} onClick={() => { pendingLeave.current = undefined; setClosePrompt(false); if (knowledgeReviewDirty) knowledgeReviewRef.current?.focus(); else headingRef.current?.focus(); }}>{text.keepEditing}</button>
         </section>
       )}
       <section className="task-actions">
@@ -827,8 +773,9 @@ export function TaskDetail({
         {orderedWorkLog(task.workLog).map((log) => (
           <article className="log-entry" id={`work-log-${log.id}`} key={log.id} data-work-log-entry={log.id} tabIndex={-1}>
             {log.createdAt && <time dateTime={log.createdAt}>{workLogTimestamp(log.createdAt)}</time>}
-            <p>{log.bodyVersions?.[document.documentElement.lang.startsWith("ko") ? "ko" : "en"]?.body || log.body}</p>
-            {log.execution && <section className="work-log-execution" aria-label="Codex execution">
+            {!log.distillation && <p>{log.bodyVersions?.[document.documentElement.lang.startsWith("ko") ? "ko" : "en"]?.body || log.body}</p>}
+            <WorkLogDistillation projection={log.distillation} execution={log.execution} busy={mutationBusy} onRetry={() => { void update(async () => { await taskClient.repairDistillation(task.id, "retry failed Distillation", log.execution?.runId); return task; }).catch(() => undefined); }} onRepair={() => { void update(async () => { await taskClient.repairDistillation(task.id, "repair requested by user", log.execution?.runId); return task; }).catch(() => undefined); }} onOpenOriginal={() => { if (log.execution) { setExecutionFocus({ sessionId: log.execution.sessionId, runId: log.execution.runId }); focusInTab("sessions", "[data-control=task-execution-heading]"); } }} />
+            {log.execution && <details data-control="task-worklog-original-details" className="work-log-execution" aria-label="Codex execution"><summary>{displayLocale.startsWith("ko") ? "원본 실행 기록과 증거" : "Original execution and evidence"}</summary>
               {(() => {
                 const status = { queued: text.executionQueued, running: text.executionRunning, awaiting_response: text.executionAwaitingResponse, succeeded: text.executionSucceeded, failed: text.executionFailed, cancelled: text.executionCancelled, interrupted: text.executionInterrupted, needs_attention: text.executionNeedsAttention }[log.execution.status];
                 return <>
@@ -844,7 +791,7 @@ export function TaskDetail({
               <button type="button" data-control="task-worklog-execution-open" onClick={() => { setExecutionFocus({ sessionId: log.execution!.sessionId, runId: log.execution!.runId }); focusInTab("sessions", "[data-control=task-execution-heading]"); }}>{text.openExecution}</button>
                 </>;
               })()}
-            </section>}
+            </details>}
             {log.attachment && (
               <small>{log.attachment.name ?? log.attachment.mediaType}</small>
             )}
@@ -1144,148 +1091,22 @@ export function TaskDetail({
           </>
         )}
       </section>
-      <section className="task-panel">
-        <h3>{text.knowledge}</h3>
-        <p>{task.hierarchy?.children.length ? text.subtaskHint : text.publishHint}</p>
-        {task.autoPublicationError && <p role="alert">{text.autoPublishFailure}: {task.autoPublicationError}</p>}
-        <button
-          type="button"
-          data-control="task-knowledge-draft"
-          disabled={task.state !== "completed" || knowledgeBusy || knowledgeQueued}
-          aria-busy={knowledgeBusy}
-          onClick={() => void createKnowledgeDraft()}
-        >
-          {knowledgeAction === "create" ? text.creatingDraft : text.createDraft}
-        </button>
-        {knowledgeStatus && <p className="knowledge-draft-status" role="status">{text[knowledgeStatus]}</p>}
-        {knowledgeError && (
-          <div className="knowledge-draft-error" role="alert">
-            <p>{knowledgeError}</p>
-            <button type="button" data-control="task-knowledge-draft-retry" disabled={knowledgeBusy || !knowledgeRetry} onClick={retryKnowledge}>
-              {text.retry}
-            </button>
-          </div>
-        )}
-        {task.publishedKnowledge && (
-          <section className="knowledge-published" aria-label={text.publishedVersion}>
-            <h4>{text.publishedVersion}</h4>
-            <KnowledgeMarkdown>{task.publishedKnowledge.bodyMarkdown}</KnowledgeMarkdown>
-          </section>
-        )}
-        {knowledgeDraft && (
-          <article
-            className="knowledge-draft"
-            data-content-hash={knowledgeDraft.contentHash}
-          >
-            <h4>
-              {text.draft} · r{knowledgeDraft.draftRevision}
-            </h4>
-            <section className="knowledge-draft-preview" aria-label={text.draftPreview} tabIndex={-1}>
-              <header><h5>{text.draftPreview}</h5><p>{text.draftPreviewHint}</p></header>
-              <KnowledgeMarkdown>{knowledgeDraft.bodyMarkdown}</KnowledgeMarkdown>
-            </section>
-            <label className="knowledge-draft-editor">
-              <span>{text.editDraft}</span>
-            <textarea
-              data-control="task-knowledge-draft-body"
-              aria-label={text.knowledgeDraftBody}
-              value={knowledgeDraft.bodyMarkdown}
-              readOnly={!knowledgeDraftIsCurrent}
-              onChange={(event) =>
-                setKnowledgeDraft({
-                  ...knowledgeDraft,
-                  bodyMarkdown: event.target.value,
-                })
-              }
-            />
-            </label>
-            {knowledgeEdited && <p className="knowledge-draft-status">{text.saveDraftBeforePublish}</p>}
-            <button
-              type="button"
-              data-control="task-knowledge-correct"
-              disabled={knowledgeBusy || !knowledgeDraft.sourceHash || !knowledgeDraftIsCurrent}
-              aria-busy={knowledgeBusy}
-              onClick={() => void correctKnowledge()}
-            >
-              {text.saveDraftCorrection}
-            </button>
-            <button
-              type="button"
-              data-control="task-knowledge-publish"
-              disabled={knowledgeBusy || !knowledgeDraft.sourceHash || knowledgeEdited || !knowledgeDraftIsCurrent}
-              onClick={() => void publishKnowledge()}
-            >
-              {text.publish}
-            </button>
-          </article>
-        )}
-        {!knowledgeDraft && task.publication?.draftRevision && task.publication.contentHash && (
-          <div
-            className="inline-form publication-controls"
-            data-publication-revision={task.publication.draftRevision}
-            data-publication-state={task.publication.state}
-          >
-            <button
-              type="button"
-              data-control="task-knowledge-publish"
-              disabled={knowledgeBusy || !task.publication.sourceHash || knowledgeEdited}
-              onClick={() =>
-                void taskClient
-                  .publish(
-                    task.id,
-                    task.publication!.draftRevision!,
-                    task.publication!.contentHash!,
-                    task.publication!.sourceHash!,
-                  )
-                  .then(() => load())
-                  .catch((e) => setError(String(e.message ?? e)))
-              }
-            >
-              {text.publish}
-            </button>
-            <button
-              type="button"
-              data-control="task-knowledge-regenerate"
-              onClick={() =>
-                void taskClient
-                  .regenerateKnowledge(
-                    task.id,
-                    task.publication!.draftRevision!,
-                    task.taskRevision,
-                  )
-                  .then(async (draft) => {
-                    const regenerated = draft as KnowledgeDraft;
-                    setKnowledgeDraft({ ...regenerated, savedBodyMarkdown: regenerated.bodyMarkdown });
-                    await load();
-                  })
-                  .catch((e) => setError(String(e.message ?? e)))
-              }
-            >
-              {text.regenerateDraft}
-            </button>
-            {task.publication.state === "published" && (
-              <button
-                type="button"
-                data-control="task-knowledge-withdraw"
-                disabled={knowledgeBusy || !task.publication.sourceHash}
-                onClick={() =>
-                  void taskClient
-                    .withdrawKnowledge(
-                      task.id,
-                      task.publication!.draftRevision!,
-                      task.publication!.contentHash!,
-                      task.publication!.sourceHash!,
-                    )
-                    .then(() => load())
-                    .catch((e) => setError(String(e.message ?? e)))
-                }
-              >
-                {text.withdrawKnowledge}
-              </button>
-            )}
-          </div>
-        )}
-      </section>
+      {knowledgeReviewMounted && <KnowledgeReviewPanel
+        ref={knowledgeReviewRef}
+        taskId={task.id}
+        completed={task.state === "completed"}
+        generationQueued={knowledgeQueued}
+        refreshKey={`${refreshKey ?? 0}:${queueKnowledgeDraft?.draftRevision ?? 0}`}
+        preferredRevision={queueKnowledgeDraft?.draftRevision}
+        onGenerate={createKnowledgeDraft}
+        onDirtyChange={setKnowledgeReviewDirty}
+        onPrepareArchive={onPrepareKnowledgeArchive}
+        onOrganizeArchive={onOrganizeKnowledgeArchive}
+        onPublishArchive={onPublishKnowledgeArchive}
+        onArchiveStatus={onKnowledgeArchiveStatus}
+        onRetryArchive={onRetryKnowledgeArchive}
+        onRecoverArchive={onRecoverKnowledgeArchive}
+      />}
       </div>
       <div className="task-tab-panel" data-task-tab="details" hidden={tab !== "details"}>
       {task.originCapture && <details className="task-panel" data-control="task-origin-capture">

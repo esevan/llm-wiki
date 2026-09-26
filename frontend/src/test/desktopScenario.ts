@@ -1,3 +1,4 @@
+import type { KnowledgeReviewProjection } from "../types/taskWorkbench";
 import {
   completeDesktopE2e,
   desktopE2eMode,
@@ -342,10 +343,20 @@ async function clickAfter(label: string, description: string) {
 }
 
 async function capture(step: Step) {
+  await api("/provider/config", "PUT", { base_url: e2eProviderUrl, model: "deterministic", api_key: "desktop-e2e-key" });
   const c = `capture ${Date.now()}`,
     t = `direct task ${Date.now()}`;
   await create(c, "capture");
   await create(t);
+  const snapshot = await api<{ categories: Array<{items: Array<{id:string;kind:string;text?:string}>}> }>("/workbench");
+  const captured = snapshot.categories.flatMap(group => group.items).find(item => item.kind === "capture" && item.text === c);
+  if (!captured) throw new Error("Immediate Capture is missing");
+  await waitForAsync(async () => {
+    const { jobs } = await api<{jobs:Array<{entity_id:string;task_kind:string;status:string;application_disposition?:string}>}>("/jobs");
+    const cleanup = jobs.filter(job => job.entity_id === captured.id && job.task_kind === "capture_distillation");
+    if (cleanup.length > 1) throw new Error("Initial Capture cleanup was duplicated");
+    return cleanup[0]?.status === "completed" && cleanup[0]?.application_disposition === "applied";
+  }, "once-only initial Capture cleanup applied");
   const saved = await task(t);
   if (saved.state !== "task")
     throw new Error("Direct Task state was not persisted");
@@ -465,8 +476,10 @@ async function refinement(step: Step) {
   await api("/provider/config", "PUT", { base_url: e2eProviderUrl, model: "deterministic", api_key: "desktop-e2e-key" });
   const a = `refine A ${Date.now()}`,
     b = `refine B ${Date.now()}`;
+  await step("Refinement diagnostic: provider ready; creating Task A and Task B.");
   await create(a);
   await create(b);
+  const originalTask = await task(a);
   await detail(a);
   click('[data-control="task-detail-refine"]', "Refine A");
   await waitFor(
@@ -510,6 +523,7 @@ async function refinement(step: Step) {
       )?.value === "A unsent note",
     "A workspace restore",
   );
+  await step("Refinement diagnostic: A → B → A restored the saved note; attaching two images.");
   const png = Uint8Array.from(atob("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII="), char => char.charCodeAt(0));
   const files = new DataTransfer();
   for (const name of ["first.png", "second.png"]) files.items.add(new File([png], name, { type: "image/png" }));
@@ -520,17 +534,46 @@ async function refinement(step: Step) {
   await waitFor(() => document.querySelectorAll(".refinement-composer .input-image-preview").length === 2, "two unsent image previews");
   const chat = document.querySelector<HTMLTextAreaElement>('[data-control="refinement-message"]')!;
   enter(chat, Array.from({ length: 35 }, (_, index) => `Image context line ${index}`).join("\n"));
+  await step("Refinement diagnostic: both unsent image previews rendered; sending their context.");
   click('[data-control="refinement-send"]', "Send multiple images");
+  await step("Refinement diagnostic: send click returned; waiting for saved images and terminal polling.");
   await waitFor(() => document.querySelectorAll(".refinement-messages .input-image-preview").length === 2
     && document.querySelector(".refinement-panel")?.getAttribute("data-refinement-polling") === "false", "saved multiple images and completed response");
+  const sentConversation = document.querySelector<HTMLElement>(".refinement-messages")!;
+  await step(`Refinement diagnostic: saved images and terminal polling rendered; waiting for bottom scroll (height=${sentConversation.scrollHeight}, client=${sentConversation.clientHeight}, top=${sentConversation.scrollTop}).`);
   await waitFor(() => {
     const conversation = document.querySelector<HTMLElement>(".refinement-messages")!;
     return conversation.scrollHeight > conversation.clientHeight && conversation.scrollHeight - conversation.scrollTop - conversation.clientHeight < 5;
   }, "new messages scroll overflowing conversation to bottom");
+  await step("Refinement diagnostic: overflowing conversation reached bottom; closing the saved conversation.");
   click(".refinement-panel header button", "Close multi-image conversation");
   await waitFor(() => !document.querySelector(".refinement-panel"), "closed multi-image conversation");
+  await step("Refinement diagnostic: saved conversation closed; reopening exact session.");
   click('[data-control="task-detail-refine"]', "Reopen multi-image conversation");
   await waitFor(() => document.querySelectorAll(".refinement-messages .input-image-preview").length === 2, "both saved images restored after reopening");
+  await step("Refinement diagnostic: both saved images restored; waiting for editable structured preview.");
+  await waitFor(() => {
+    const edit = document.querySelector<HTMLButtonElement>('[data-control="reference-preview-edit"]');
+    return Boolean(edit && !edit.disabled);
+  }, "automatic structured preview ready");
+  await step("Refinement diagnostic: structured preview is editable; editing its description.");
+  click('[data-control="reference-preview-edit"]', "Edit automatic structured preview");
+  await waitFor(() => Boolean(document.querySelector('[data-control="reference-preview-field"]')), "structured preview editor rendered");
+  const description = document.querySelector<HTMLTextAreaElement>('[data-control="reference-preview-field"]');
+  if (!description) throw new Error("Structured preview description is missing");
+  const reviewedDescription = "Review the two supplied screenshots and record the agreed scope.";
+  enter(description, reviewedDescription);
+  await pause(0);
+  click('[data-control="reference-preview-save"]', "Save exact preview version");
+  await step("Refinement diagnostic: preview save click returned; waiting for explicit adoption.");
+  await waitFor(() => {
+    const apply = document.querySelector<HTMLButtonElement>('[data-control="reference-preview-apply"]');
+    return Boolean(apply && !apply.disabled && !document.querySelector('[data-control="reference-preview-field"]'));
+  }, "saved preview available for adoption");
+  click('[data-control="reference-preview-apply"]', "Adopt saved structured preview");
+  await step("Refinement diagnostic: adoption click returned; reading canonical Task content.");
+  await waitForAsync(async () => (await api<Task>(`/tasks/${originalTask.id}`)).detail === reviewedDescription, "canonical Task reflects exact adopted preview");
+  await step("An automatically prepared structured preview was edited, saved as an immutable version and explicitly adopted into the same Task.");
   await step("Multiple image attachments persisted through send and reopen, and new overflowing messages scrolled to the bottom.");
   await step(
     "A→B→A refinement restored the unsent note, active tab, and scroll workspace after UI close/reopen.",
@@ -757,6 +800,7 @@ async function taskMcpContinuation(step: Step) {
   await step("Revoked connection failed closed in the packaged stdio/GUI IPC boundary.");
 }
 async function publication(step: Step) {
+  await api("/provider/config", "PUT", { base_url: e2eProviderUrl, model: "deterministic", api_key: "desktop-e2e-key" });
   const activate = async (selector: string, label: string) => {
     await waitFor(() => {
       const button = document.querySelector<HTMLElement>(selector);
@@ -835,25 +879,6 @@ async function publication(step: Step) {
   enter(field("Decision"), "Publish only the reviewed revision");
   await clickAfter("Decision", "Add publication decision");
   await waitForAsync(async () => (await task(title)).decisions?.some((item) => item.body === "Publish only the reviewed revision") ?? false, "publication decision readback");
-  await taskDetailIdle("opening publication connections");
-  await selectTaskTab("Details", "Open Task Details for publication connections");
-  clickElement(
-    document.querySelector<HTMLDetailsElement>(".connection-details > summary")!,
-    "Open publication connection details",
-  );
-  await revealTaskField("New Problem statement");
-  enter(
-    field("New Problem statement"),
-    "Release evidence must remain traceable",
-  );
-  await clickAfter("New Problem statement", "Create publication Problem");
-  await waitFor(
-    () =>
-      document
-        .querySelector(".task-detail")
-        ?.textContent?.includes("revision 1") ?? false,
-    "publication Problem revision",
-  );
   await activate('[data-control="task-transition-start"]', "Start Task");
   await waitFor(
     () =>
@@ -874,13 +899,6 @@ async function publication(step: Step) {
         ?.getAttribute("data-task-state") === "completed",
     "completion",
   );
-  const buttons = [
-    ...document.querySelectorAll<HTMLButtonElement>(".task-detail button"),
-  ];
-  const draft = buttons.find((button) =>
-    /create draft/i.test(button.textContent ?? ""),
-  );
-  if (!draft) throw new Error("Missing Knowledge draft action");
   await activate('[data-control="task-knowledge-draft"]', "Create Knowledge draft");
   const completedTask = await task(title);
   let knowledgeJobId = "";
@@ -896,123 +914,53 @@ async function publication(step: Step) {
   const resultSelector = `#queue-list [data-job-id="${knowledgeJobId}"] [data-job-action="result"]`;
   await waitFor(() => { const button = document.querySelector<HTMLButtonElement>(resultSelector); return Boolean(button && !button.disabled); }, "enabled exact Knowledge Queue result");
   await activate(resultSelector, "Open exact Knowledge Queue result");
-  await waitFor(
-    () => !!document.querySelector(".knowledge-draft"),
-    "Knowledge preview",
-  );
-  await waitFor(() => {
-    const body = document.querySelector<HTMLTextAreaElement>('[data-control="task-knowledge-draft-body"]');
-    const save = document.querySelector<HTMLButtonElement>('[data-control="task-knowledge-correct"]');
-    return Boolean(body && !body.readOnly && save && !save.disabled);
-  }, "editable current Knowledge draft");
-  await revealTaskField("Knowledge draft body");
-  const correction = field("Knowledge draft body") as HTMLTextAreaElement;
-  for (const expected of [
-    "Validated the signed desktop release",
-    "Verify packaged acceptance scenarios",
-    "Publish only the reviewed revision",
-    "Release evidence must remain traceable",
-  ]) {
-    if (!correction.value.includes(expected))
-      throw new Error(`Knowledge draft omitted rich evidence: ${expected}`);
-  }
-  if (/Not recorded|None recorded| — source `|## Provenance/.test(correction.value))
-    throw new Error("Knowledge draft exposed internal metadata or empty placeholders");
-  if (getComputedStyle(correction).fontWeight !== "400")
-    throw new Error("Knowledge editor must use normal-weight text");
-  if (!document.querySelector(".knowledge-draft-preview .knowledge-markdown h1"))
-    throw new Error("Knowledge preview did not render Markdown headings");
-  const initialHash = document
-    .querySelector(".knowledge-draft")
-    ?.getAttribute("data-content-hash");
-  if (!initialHash) throw new Error("Knowledge draft omitted its exact hash");
-  const correctedBody = `${correction.value}\n\nCorrected by packaged desktop E2E.`;
-  enter(correction, correctedBody);
-  const correctionButton = document.querySelector<HTMLButtonElement>(
-    ".knowledge-draft button",
-  )!;
-  await waitFor(() => !correctionButton.disabled, "committed Knowledge draft correction");
-  await activate('[data-control="task-knowledge-correct"]', "Save Knowledge draft correction");
-  await waitFor(
-    () =>
-      document.querySelector<HTMLButtonElement>('[data-control="task-knowledge-correct"]')?.disabled === false &&
-      Boolean(document.querySelector(".knowledge-draft")?.getAttribute("data-content-hash")) &&
-      document
-        .querySelector(".knowledge-draft")
-        ?.getAttribute("data-content-hash") !== initialHash &&
-      document.querySelector<HTMLTextAreaElement>(
-        "[aria-label='Knowledge draft body']",
-      )?.value === correctedBody,
-    "persisted Knowledge correction",
-  );
-  const publishDraft = [
-    ...document.querySelectorAll<HTMLButtonElement>(".knowledge-draft button"),
-  ].find((button) => /publish/i.test(button.textContent ?? ""));
-  if (!publishDraft)
-    throw new Error("Missing corrected Knowledge publish action");
-  await activate('.knowledge-draft [data-control="task-knowledge-publish"]', "Publish corrected Knowledge draft");
-  await waitFor(
-    () =>
-      document
-        .querySelector(".publication-controls")
-        ?.getAttribute("data-publication-state") === "published",
-    "published Knowledge controls",
-  );
-  await waitFor(() => document.querySelector(".knowledge-published .knowledge-markdown")?.textContent?.includes("Corrected by packaged desktop E2E.") ?? false, "current published article");
-  const regenerate = [
-    ...document.querySelectorAll<HTMLButtonElement>(".task-detail button"),
-  ].find((button) => /regenerate draft/i.test(button.textContent ?? ""));
-  if (!regenerate) throw new Error("Missing regenerate action");
-  await activate('[data-control="task-knowledge-regenerate"]', "Regenerate Knowledge draft");
-  await waitFor(
-    () => !!document.querySelector(".knowledge-draft"),
-    "regenerated Knowledge preview",
-  );
-  if (!document.querySelector(".knowledge-published")?.textContent?.includes("Corrected by packaged desktop E2E."))
-    throw new Error("Regeneration hid or replaced the current published version");
-  const regeneratedRevision = document
-    .querySelector(".knowledge-draft h4")
-    ?.textContent?.match(/r(\d+)/)?.[1];
-  if (!regeneratedRevision)
-    throw new Error("Regenerated Knowledge omitted its draft revision");
-  const publish = [
-    ...document.querySelectorAll<HTMLButtonElement>(".knowledge-draft button"),
-  ].find((button) => /publish/i.test(button.textContent ?? ""));
-  if (!publish) throw new Error("Missing regenerated publish action");
-  await activate('.knowledge-draft [data-control="task-knowledge-publish"]', "Publish regenerated Knowledge draft");
-  await waitFor(
-    () =>
-      !document.querySelector(".knowledge-draft") &&
-      document
-        .querySelector(".publication-controls")
-        ?.getAttribute("data-publication-revision") === regeneratedRevision &&
-      document
-        .querySelector(".publication-controls")
-        ?.getAttribute("data-publication-state") === "published",
-    "republished Knowledge",
-  );
-  const withdraw = [
-    ...document.querySelectorAll<HTMLButtonElement>(".task-detail button"),
-  ].find((button) => /withdraw knowledge/i.test(button.textContent ?? ""));
-  if (!withdraw) throw new Error("Missing withdraw action");
-  await activate('[data-control="task-knowledge-withdraw"]', "Withdraw Knowledge");
-  await waitFor(
-    () =>
-      document
-        .querySelector(".publication-controls")
-        ?.getAttribute("data-publication-state") === "withdrawn",
-    "withdrawn Knowledge",
-  );
-  if (document.querySelector(".knowledge-published"))
-    throw new Error("Withdrawn Knowledge still appears as published");
-  const saved = await task(title);
-  if (!saved.completion || saved.publication?.state !== "withdrawn" || saved.publication.draftRevision !== Number(regeneratedRevision))
-    throw new Error(
-      "Completion, regenerate, publish, and withdraw did not persist separately",
-    );
-  await step(
-    "Rendered completion, exact draft correction, explicit publish, regenerate, and withdraw actions persisted as separate decisions.",
-  );
+  await waitFor(() => Boolean(document.querySelector(".knowledge-review[data-content-hash]")), "immutable Knowledge review");
+  const knowledge = () => api<KnowledgeReviewProjection>(`/tasks/${completedTask.id}/knowledge`);
+  const initial = await knowledge();
+  const firstRevision = initial.pointers.currentPrivateRevision;
+  const first = initial.versions.find(item => item.revision === firstRevision);
+  if (!first?.bodyMarkdown.trim()) throw new Error("Knowledge generation returned no reviewable body");
+  await activate('[data-control="knowledge-version-edit"]', "Edit the current immutable Knowledge draft");
+  await waitFor(() => Boolean(document.querySelector('[data-control="task-knowledge-draft-body"]')), "Knowledge editor rendered");
+  const editor = document.querySelector<HTMLTextAreaElement>('[data-control="task-knowledge-draft-body"]');
+  if (!editor) throw new Error("Knowledge editor is unavailable");
+  const correctedBody = `${first.bodyMarkdown}\n\nCorrected by packaged desktop E2E.`;
+  enter(editor, correctedBody);
+  await activate('[data-control="knowledge-version-save"]', "Save correction as a new revision");
+  await waitForAsync(async () => {
+    const saved = await knowledge();
+    return saved.pointers.currentPrivateRevision !== firstRevision && saved.versions.some(item => item.bodyMarkdown === correctedBody);
+  }, "immutable Knowledge correction persisted");
+  await activate('[data-control="knowledge-archive-prepare"]', "Prepare exact archive artifacts");
+  await waitFor(() => Boolean(document.querySelector('[data-control="knowledge-archive-publish"]')), "reviewable archive proposal");
+  const proposed = await knowledge();
+  const proposal = proposed.archive?.proposals.find(item => item.state === "review_needed");
+  if (!proposal || !proposal.artifacts.some(item => typeof item.bytes === "string" && item.bytes.includes("Corrected by packaged desktop E2E."))) throw new Error("Archive proposal omitted reviewed Knowledge bytes");
+  const correctedRevision = proposed.pointers.currentPrivateRevision;
+  await activate('[data-control="knowledge-archive-publish"]', "Publish the exact reviewed archive");
+  await waitForAsync(async () => (await knowledge()).pointers.publishedRevision === correctedRevision, "exact index receipt and published pointer");
+  const published = await knowledge();
+  const target = proposal.artifacts.find(item => item.documentId === published.pointers.publicationDocumentId);
+  if (!target || target.sha256 !== published.pointers.publicationContentHash) throw new Error("Publication pointer does not match the reviewed artifact hash");
+  await step("A correction created a new immutable version; exact reviewed artifacts and index receipt advanced the publication pointer.");
+
+  // Exercise the shared explicit organization/recovery boundary through rendered controls.
+  await activate('[data-control="knowledge-archive-organize"] > summary', "Review an existing publication change");
+  const intent = document.querySelector<HTMLSelectElement>('[data-control="knowledge-archive-intent"]');
+  if (!intent) throw new Error("Publication organization is unavailable");
+  intent.value = "withdraw"; intent.dispatchEvent(new Event("change", { bubbles: true }));
+  await activate('[data-control="knowledge-archive-review-organization"]', "Prepare withdrawal proposal");
+  await waitForAsync(async () => (await knowledge()).archive?.proposals.some(item => item.outcome === "withdraw") ?? false, "exact withdrawal proposal");
+  await activate('[data-control="knowledge-archive-publish"]', "Apply reviewed withdrawal");
+  await waitForAsync(async () => (await knowledge()).pointers.publishedRevision == null, "withdrawn publication pointer");
+  const withdrawn = await knowledge();
+  if (withdrawn.pointers.currentPrivateRevision !== correctedRevision || !withdrawn.versions.some(item => item.bodyMarkdown === correctedBody)) throw new Error("Withdrawal changed private Knowledge history");
+  click('[aria-label="Close Task detail"]', "Close completed archive review");
+  await waitFor(() => !document.querySelector(".task-detail"), "closed archive review");
+  await detail(title);
+  await selectTaskTab("Review", "Reopen Knowledge review after withdrawal");
+  await waitFor(() => Boolean(document.querySelector(".knowledge-review[data-content-hash]")), "restored Knowledge review");
+  await step("Reviewed withdrawal removed the published pointer while preserving private versions and reloadable archive history.");
 }
 async function problemResolution(step: Step) {
   const title = `problem resolution ${Date.now()}`;

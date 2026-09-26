@@ -32,6 +32,7 @@ struct Inner {
     active_threads: Mutex<HashMap<String, ActiveThread>>,
     live_status: StdMutex<HashMap<String, Value>>,
     live_revision: AtomicU64,
+    distillation_scheduler: Option<crate::native::NativeApplication>,
 }
 
 #[derive(Clone)]
@@ -50,12 +51,24 @@ struct ExecutionSignal {
 
 impl TaskExecutionRuntime {
     pub(crate) fn new(service: TaskExecutionApplicationService, codex_home: Option<std::path::PathBuf>) -> Self {
-        Self::with_app_server(service, CodexAppServer::with_codex_home(codex_home))
+        Self::with_app_server_and_scheduler(service, CodexAppServer::with_codex_home(codex_home), None)
+    }
+
+    pub(crate) fn with_distillation_scheduler(service: TaskExecutionApplicationService, codex_home: Option<std::path::PathBuf>, application: crate::native::NativeApplication) -> Self {
+        Self::with_app_server_and_scheduler(service, CodexAppServer::with_codex_home(codex_home), Some(application))
     }
 
     fn with_app_server(
         service: TaskExecutionApplicationService,
         server: CodexAppServer,
+    ) -> Self {
+        Self::with_app_server_and_scheduler(service, server, None)
+    }
+
+    fn with_app_server_and_scheduler(
+        service: TaskExecutionApplicationService,
+        server: CodexAppServer,
+        distillation_scheduler: Option<crate::native::NativeApplication>,
     ) -> Self {
         let (signals, _) = broadcast::channel(128);
         Self {
@@ -70,6 +83,7 @@ impl TaskExecutionRuntime {
                 active_threads: Mutex::new(HashMap::new()),
                 live_status: StdMutex::new(HashMap::new()),
                 live_revision: AtomicU64::new(0),
+                distillation_scheduler,
             }),
         }
     }
@@ -779,6 +793,11 @@ impl TaskExecutionRuntime {
                 .and_then(|turn| self.inner.service.finish_turn(&run, turn))
         };
         if result.is_ok() {
+            if method != "item/completed" {
+                if let (Some(application),Ok(input))=(&self.inner.distillation_scheduler,self.inner.service.distillation_job_input(&run,"en")) {
+                    let _=application.enqueue_job(input).await;
+                }
+            }
             let _ = self.inner.signals.send(ExecutionSignal {
                 task_id: task,
                 session_id: session,

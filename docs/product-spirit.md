@@ -15,6 +15,9 @@ Refining a Capture promotes the same work item, preserving its ID and original t
 Capture accepts natural thought. AI conversation and Refinement discover structure, preserve the
 speaker's intent, and produce editable proposals. The user reviews the organization instead of
 performing it up front.
+New Capture text and images are saved before one background organization operation begins. A
+grounded current result improves how the same Inbox item reads while its raw source remains
+inspectable; it does not create or advance workflow records.
 
 ## 2. Reduce cognitive load.
 

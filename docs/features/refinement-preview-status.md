@@ -61,6 +61,9 @@ After Apply, **Work status** opens beside **Preview** and shows **Refined - Revi
 is separate from execution state: **Start work** moves the Task to **In progress**. Applied sessions
 leave the Refining shortcuts. Workbench places all in-progress Tasks immediately below Capture, with **Focus
 active work** to hide the other sections without losing selection or drafts.
+When an accepted preview replaces the canonical Task title, the mounted Workbench card and Task
+detail use the same brief content transition for that exact applied revision. Background polling,
+reopening the app, browsing history, and ordinary navigation render titles without replaying it.
 
 ## Explicit Subtasks
 

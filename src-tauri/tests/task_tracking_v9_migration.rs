@@ -3,7 +3,26 @@ use rusqlite::{params, Connection};
 use sha2::{Digest, Sha256};
 use tempfile::tempdir;
 
-const MIGRATED_SCHEMA_VERSION: i64 = 15;
+const MIGRATED_SCHEMA_VERSION: i64 = 22;
+
+fn drop_column_if_present(connection: &Connection, table: &str, column: &str) {
+    let present = connection
+        .query_row(
+            "SELECT count(*) FROM pragma_table_info(?) WHERE name=?",
+            params![table, column],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap();
+    if present == 1 {
+        connection
+            .execute_batch(&format!(
+                "ALTER TABLE \"{}\" DROP COLUMN \"{}\"",
+                table.replace('"', "\"\""),
+                column.replace('"', "\"\"")
+            ))
+            .unwrap();
+    }
+}
 
 fn make_v8_session_fixture(db: &std::path::Path, vault: &std::path::Path) {
     let app = NativeApplication::isolated(vault, db).unwrap();
@@ -51,7 +70,46 @@ fn make_v8_session_fixture(db: &std::path::Path, vault: &std::path::Path) {
     // Remove post-v8 additions before replaying migrations from the historical fixture.
     db_conn
         .execute_batch(
-            "DROP TRIGGER task_execution_request_update_revision;
+            "DROP TABLE knowledge_archive_links;
+        DROP TABLE knowledge_archive_current;
+        DROP TABLE knowledge_archive_revisions;
+        DROP TABLE knowledge_archive_steps;
+        DROP TABLE knowledge_archive_operations;
+        DROP TABLE knowledge_archive_proposals;
+        DROP TABLE knowledge_quality_findings;
+        DROP TABLE knowledge_idea_revisions;
+        DROP TABLE knowledge_pointers;
+        DROP TABLE knowledge_draft_versions;
+        DROP TABLE knowledge_applicability;
+        DROP TABLE knowledge_evidence_snapshots;
+        DROP TABLE reference_interactions;
+        DROP TABLE refinement_document_mentions;
+        DROP TABLE work_preview_findings;
+        DROP TABLE work_preview_investigations;
+        DROP TABLE work_preview_references;
+        DROP TABLE work_preview_assumptions;
+        DROP TABLE work_preview_versions;
+        DROP TABLE work_previews;
+        DROP TABLE vault_search_unit_embeddings;
+        DROP TABLE vault_search_units;
+        DROP TABLE vault_search_units_fts;
+        DROP TABLE task_distillation_dependencies;
+        DROP TABLE task_distillation_completion_snapshots;
+        DROP TABLE task_distillation_topics;
+        DROP TABLE task_distillation_redirects;
+        DROP TABLE task_distillation_relationships;
+        DROP TABLE task_distillation_node_history;
+        DROP TABLE task_distillation_nodes;
+        DROP TABLE task_distillation_current;
+        DROP TABLE task_distillation_revisions;
+        DROP TABLE capture_distillation_proposals;
+        DROP TABLE capture_distillations;
+        DROP TABLE capture_source_images;
+        DROP TABLE capture_source_snapshots;
+        DROP TABLE capture_source_heads;
+        DROP TABLE workflow_document_references;
+        DROP TABLE workflow_version_provenance;
+        DROP TRIGGER task_execution_request_update_revision;
         DROP TRIGGER task_execution_request_insert_revision;
         DROP TRIGGER task_execution_item_insert_revision;
         DROP TRIGGER task_execution_run_update_revision;
@@ -65,9 +123,24 @@ fn make_v8_session_fixture(db: &std::path::Path, vault: &std::path::Path) {
         DROP TABLE task_work_sessions;
         DROP TABLE task_journey_graphs;
         DROP TABLE input_images; DROP TABLE task_auto_publications;
-        DROP TABLE task_refinements; DROP TABLE task_subtasks; PRAGMA user_version=8;",
+        DROP TABLE task_refinements; DROP TABLE task_subtasks;",
         )
         .unwrap();
+    for column in [
+        "application_disposition",
+        "execution_outcome",
+        "source_revision",
+        "prompt_version",
+        "prompt_id",
+    ] {
+        drop_column_if_present(&db_conn, "ai_jobs_v2", column);
+    }
+    for table in ["task_assistance_jobs", "task_conflict_review_runs"] {
+        for column in ["prompt_version", "prompt_id"] {
+            drop_column_if_present(&db_conn, table, column);
+        }
+    }
+    db_conn.pragma_update(None, "user_version", 8).unwrap();
     let parent = session["sessionId"].as_str().unwrap();
     let child = "v9-child";
     db_conn

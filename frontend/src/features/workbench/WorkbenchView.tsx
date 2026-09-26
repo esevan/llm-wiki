@@ -8,17 +8,31 @@ import { taskClient } from "../../services/taskClient";
 import type {
   CaptureCard,
   TaskCard,
+  TaskApplicationEvent,
   WorkbenchItem,
   WorkbenchSnapshot,
 } from "../../types/taskWorkbench";
 import { DeleteItemDialog } from "./DeleteItemDialog";
 import { RefinementPanel, type RefinementPanelHandle } from "./RefinementPanel";
 import { TaskDetail, type DetailSession, type TaskDetailHandle } from "./TaskDetail";
+import type { KnowledgeArchiveOperation, KnowledgeArchiveOrganizeRequest, KnowledgeArchivePrepareRequest, KnowledgeArchivePublishRequest, KnowledgeArchiveRecoverRequest } from "./KnowledgeReviewPanel";
 import { useTaskWorkbenchText } from "./taskWorkbenchText";
+import { ContentRevisionTransition } from "../../components/ContentRevisionTransition";
 import "./task-workbench.css";
-const itemTitle = (item: WorkbenchItem) =>
-  item.kind === "capture" ? item.text : item.title;
-export function WorkbenchView({ active }: { active: boolean }) {
+const itemTitle = (item: WorkbenchItem) => item.kind === "capture"
+  ? item.captureDistillation?.display.title || item.text
+  : item.title;
+export function WorkbenchView({ active, taskApplication, onTaskApplication, onPrepareKnowledgeArchive, onOrganizeKnowledgeArchive, onPublishKnowledgeArchive, onKnowledgeArchiveStatus, onRetryKnowledgeArchive, onRecoverKnowledgeArchive }: {
+  active: boolean;
+  taskApplication?: TaskApplicationEvent;
+  onTaskApplication?: (application: TaskApplicationEvent) => void;
+  onPrepareKnowledgeArchive?: (request: KnowledgeArchivePrepareRequest) => Promise<import("../../types/taskWorkbench").KnowledgeArchiveProposal>;
+  onOrganizeKnowledgeArchive?: (request: KnowledgeArchiveOrganizeRequest) => Promise<import("../../types/taskWorkbench").KnowledgeArchiveProposal>;
+  onPublishKnowledgeArchive?: (request: KnowledgeArchivePublishRequest) => Promise<KnowledgeArchiveOperation>;
+  onKnowledgeArchiveStatus?: (operationId: string) => Promise<KnowledgeArchiveOperation>;
+  onRetryKnowledgeArchive?: (operationId: string) => Promise<KnowledgeArchiveOperation>;
+  onRecoverKnowledgeArchive?: (request: KnowledgeArchiveRecoverRequest) => Promise<KnowledgeArchiveOperation>;
+}) {
   const text = useTaskWorkbenchText(),
     [storedSnapshot, setSnapshot] = useState<WorkbenchSnapshot>(),
     [input, setInput] = useState(""),
@@ -33,6 +47,8 @@ export function WorkbenchView({ active }: { active: boolean }) {
     [deleteTarget, setDeleteTarget] = useState<{ entityType: "captures" | "problems" | "tasks"; id: string; title: string }>(),
     [deleteBusy, setDeleteBusy] = useState(false),
     [deleteError, setDeleteError] = useState("");
+  const [localTaskApplication, setLocalTaskApplication] = useState<TaskApplicationEvent>();
+  const appliedTask = taskApplication ?? localTaskApplication;
   const snapshot = storedSnapshot && { ...storedSnapshot, categories: storedSnapshot.categories.map(category => ({
     ...category, items: category.items.map(item => item.kind === "task" ? localizedTask(item) : item),
   })) };
@@ -111,14 +127,17 @@ export function WorkbenchView({ active }: { active: boolean }) {
   useEffect(() => {
     const refresh = () => active && void load();
     window.addEventListener("llm-wiki:task-workbench-refresh", refresh);
-    return () =>
+    window.addEventListener("llm-wiki:queue-changed", refresh);
+    return () => {
       window.removeEventListener("llm-wiki:task-workbench-refresh", refresh);
+      window.removeEventListener("llm-wiki:queue-changed", refresh);
+    };
   }, [active, load]);
   useEffect(() => {
     window.llmWikiOpenKnowledgeDraft = (draft) => {
       const current = detailSessions.current.get(draft.taskId);
-      if (current?.knowledgeDraft && current.knowledgeDraft.savedBodyMarkdown !== undefined
-          && current.knowledgeDraft.bodyMarkdown !== current.knowledgeDraft.savedBodyMarkdown) {
+      if (current?.knowledgeReviewDirty || (current?.knowledgeDraft && current.knowledgeDraft.savedBodyMarkdown !== undefined
+          && current.knowledgeDraft.bodyMarkdown !== current.knowledgeDraft.savedBodyMarkdown)) {
         setError(text.saveDraftBeforeQueueResult);
         return;
       }
@@ -246,9 +265,28 @@ export function WorkbenchView({ active }: { active: boolean }) {
             ? text.capture
             : text.refining}
       </small>
-      <h3>{item.kind === "task" && item.state === "in_progress" ? (
-        <button className="active-task-title" data-control="task-shortcut-open" data-entity-id={item.id} onClick={(event) => selectDetail(item.id, event.currentTarget)}>{itemTitle(item)}</button>
-      ) : itemTitle(item) || text.imageCapture}</h3>
+      {item.kind === "capture" ? <ContentRevisionTransition
+        as="h3"
+        cause={item.captureDistillation?.display.revision ? "automatic_apply" : undefined}
+        entityKey={`capture:${item.id}`}
+        revision={item.captureDistillation?.display.revision ?? 0}
+        variant="title"
+      >{itemTitle(item) || text.imageCapture}</ContentRevisionTransition> : <h3>{item.kind === "task" && item.state === "in_progress" ? (
+        <button className="active-task-title" data-control="task-shortcut-open" data-entity-id={item.id} onClick={(event) => selectDetail(item.id, event.currentTarget)}><ContentRevisionTransition as="span" cause={appliedTask?.taskId === item.id && appliedTask.revision === item.taskRevision ? appliedTask.cause : undefined} entityKey={`task:${item.id}`} revision={item.taskRevision} variant="title">{itemTitle(item)}</ContentRevisionTransition></button>
+      ) : item.kind === "task" ? <ContentRevisionTransition as="span" cause={appliedTask?.taskId === item.id && appliedTask.revision === item.taskRevision ? appliedTask.cause : undefined} entityKey={`task:${item.id}`} revision={item.taskRevision} variant="title">{itemTitle(item) || text.imageCapture}</ContentRevisionTransition> : itemTitle(item) || text.imageCapture}</h3>}
+      {item.kind === "capture" && item.captureDistillation?.display.content && item.captureDistillation.display.content !== item.captureDistillation.display.title &&
+        <ContentRevisionTransition as="p" className="capture-distillation-body"
+          cause={item.captureDistillation.display.revision ? "automatic_apply" : undefined}
+          entityKey={`capture:${item.id}`} revision={item.captureDistillation.display.revision} variant="body"
+        >{item.captureDistillation.display.content}</ContentRevisionTransition>}
+      {item.kind === "capture" && item.captureDistillation?.distillation && <small className={`capture-distillation-status status-${item.captureDistillation.distillation.status}`} role="status">
+        {item.captureDistillation.distillation.status === "queued" || item.captureDistillation.distillation.status === "running"
+          ? text.captureOrganizing
+          : item.captureDistillation.distillation.executionOutcome === "failed"
+            ? text.captureOrganizationFailed
+            : item.captureDistillation.distillation.applicationDisposition === "applied"
+              ? text.captureOrganized : ""}
+      </small>}
       {item.kind === "task" && item.originCaptureText && <p className="workbench-card-category">{text.originalCapture}: {item.originCaptureText}</p>}
       {item.kind === "capture" && item.hasImage && <small>{text.attachedImage}</small>}
       {item.kind === "task" && item.parentTaskId && <small>{text.subtask}</small>}
@@ -468,6 +506,7 @@ export function WorkbenchView({ active }: { active: boolean }) {
           }}
           onOpenTask={(id) => selectDetail(id)}
           onRefine={() => openRefinement({ kind: "task", id: detail })}
+          application={appliedTask?.taskId === detail ? appliedTask : undefined}
           refreshKey={detailRefresh}
           queueImageSummary={queueImageSummary?.taskId === detail ? queueImageSummary : undefined}
           openJourney={queueJourneyTaskId === detail}
@@ -476,6 +515,12 @@ export function WorkbenchView({ active }: { active: boolean }) {
           onChanged={() => void load()}
           sessions={detailSessions.current}
           onRequestDelete={(title) => requestDelete("tasks", detail, title)}
+          onPrepareKnowledgeArchive={onPrepareKnowledgeArchive}
+          onOrganizeKnowledgeArchive={onOrganizeKnowledgeArchive}
+          onPublishKnowledgeArchive={onPublishKnowledgeArchive}
+          onKnowledgeArchiveStatus={onKnowledgeArchiveStatus}
+          onRetryKnowledgeArchive={onRetryKnowledgeArchive}
+          onRecoverKnowledgeArchive={onRecoverKnowledgeArchive}
         />
       )}
       {deleteTarget && (
@@ -493,8 +538,15 @@ export function WorkbenchView({ active }: { active: boolean }) {
           ref={refinementRef}
           messageDrafts={refinementMessages.current}
           imageDrafts={refinementImages.current}
-          subjectTitle={refining.kind === "task" ? taskFor(refining.id)?.title : captureFor(refining.id)?.text || text.imageCapture}
-          onApplied={() => { setDetailRefresh(value => value + 1); void load(); }}
+          subjectTitle={refining.kind === "task" ? taskFor(refining.id)?.title : itemTitle(captureFor(refining.id) ?? { kind:"capture",id:refining.id,text:"" }) || text.imageCapture}
+          onApplied={(application) => {
+            if (application) {
+              setLocalTaskApplication(application);
+              onTaskApplication?.(application);
+            }
+            setDetailRefresh(value => value + 1);
+            void load();
+          }}
           kind={refining.kind}
           subjectId={refining.id}
           onClose={() => {

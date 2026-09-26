@@ -1,9 +1,88 @@
 export interface InputImage { name: string; mediaType: string; data: string }
 
+export interface ExactReferenceBinding {
+  documentId: string; documentVersion: string; section?: string;
+  chunkIndex?: number; title: string; status?: string; informationType?: string;
+  path?: string; excerpt?: string; aspect?: string; role?: string; claimIds?: string[];
+}
+export interface DocumentMention extends ExactReferenceBinding {
+  mentionId: string; displayLabel: string; start?: number; end?: number;
+}
+export interface WorkPreviewFields {
+  description: string; background: string; goal: string; scope: string;
+  nonGoals: string; constraints: string[]; completionCriteria: string[];
+  initialApproach: string[];
+  assumptions: DraftAssumption[];
+}
+export interface DraftAssumption {
+  id: string; text: string; status?: "open" | "confirmed" | "rejected" | "superseded";
+  basis: "user_context" | "source" | "model_inference"; sourceClaimIds: string[];
+}
+export interface WorkPreviewVersion {
+  previewId: string; version: number; current?: boolean;
+  taskRevision?: number; contextRevision?: number;
+  derivationKind: "generated" | "edited" | "restored" | "reconciled";
+  derivedFromVersion?: number; locale?: "en" | "ko"; fields: WorkPreviewFields;
+  assumptions?: DraftAssumption[]; references: ExactReferenceBinding[]; createdAt?: string; contentHash: string;
+}
+export type WorkPreviewSummary = Pick<WorkPreviewVersion, "version" | "derivationKind" | "createdAt" | "derivedFromVersion" | "current"> & { contentHash?: string };
+export interface PreviewComparison {
+  left: WorkPreviewVersion; right: WorkPreviewVersion;
+  fields: Array<{ key: keyof WorkPreviewFields; state: "added" | "removed" | "changed" | "unchanged" }>;
+}
+export interface ReferenceViewState {
+  query: string; filters: string[]; sort: string; orderEpoch: number;
+  orderedReferenceIds: string[]; selectedReferenceId?: string;
+  viewerHistory: ExactReferenceBinding[]; historyIndex: number;
+}
+
+export interface ReferenceUsageFact {
+  documentId: string; documentVersion: string; section?: string;
+  kind: "viewed" | "mentioned" | "used" | "adopted" | "excluded";
+  contextRevision: number;
+}
+export interface ReferenceWorkspace {
+  interactions?: ReferenceUsageFact[];
+  generation?: { id?: string; status?: string; executionOutcome?: string; applicationDisposition?: string; safeError?: string };
+  retrievalOutcome?: string;
+  stageTimings?: Record<string, number>;
+  preview?: { id: string; currentVersion: number; contextRevision: number; current?: WorkPreviewVersion; versions: WorkPreviewSummary[] } | null;
+  references?: ExactReferenceBinding[];
+  mentionDraft?: { text: string; mentions: DocumentMention[] };
+  investigations?: Array<{ id: string; state: string; contextRevision: number; safeError?: string }>;
+  findings?: Array<{ id: string; priority: "critical" | "supporting" | "ancillary"; summary: string; references: ExactReferenceBinding[] }>;
+}
+
+export interface CaptureDistillationSummary {
+  captureId: string;
+  sourceRevision: string;
+  sourceNumber: number;
+  currentRevision: number;
+  contextRevision: number;
+  eligible: boolean;
+  source: { text: string; images: Array<{ index: number; name: string; mediaType: string; contentHash: string }> };
+  display: {
+    title: string; content: string; context: string; explicitRequests: string[];
+    locale: "en" | "ko"; revision: number; placeholder: boolean; jobId?: string;
+  };
+  distillation?: {
+    jobId: string; logicalOperationId: string; status: string;
+    executionOutcome: string; applicationDisposition: string;
+    safeError?: { code: string; message: string } | null;
+    retryAllowed: boolean; attempt: number;
+    prompt?: { id: string; version: number }; sourceRevision: string;
+  } | null;
+  proposal?: {
+    id: string; title: string; content: string; context: string;
+    explicitRequests: string[]; state: string; jobId: string;
+  } | null;
+}
+
 export type TaskState = "task" | "in_progress" | "completed";
 export type WorkbenchItem = CaptureCard | TaskCard | LegacyRefinementCard;
 
 export interface CaptureCard {
+  captureDistillation?: CaptureDistillationSummary;
   kind: "capture";
   hasImage?: boolean;
   id: string;
@@ -71,7 +150,13 @@ export interface WorkLogEntry {
   };
   comments?: Array<{ id: string; body: string; createdAt?: string }>;
   execution?: TaskExecutionWorkLogLink;
+  distillation?: DistillationProjection;
+  originalAvailable?: boolean;
 }
+export type DistillationFreshness = "current" | "pending" | "stale" | "retryable_failure" | "repair_required" | "unavailable";
+export type DistillationSource = { type: string; id: string; revision: string; locator: string; quote?: string };
+export type DistillationClaim = { id: string; kind: string; statement: string; actor: "user" | "ai" | "tool" | "system" | "unknown"; epistemicState: "suggested" | "decided" | "attempted" | "performed" | "observed" | "verified" | "unresolved"; status: "current" | "historical" | "contradicted" | "unknown"; topicKey?: string; sources: DistillationSource[]; contradictedBy?: DistillationSource[] };
+export type DistillationProjection = { projectionRevision: number; sourceSetHash?: string; freshness: DistillationFreshness; jobId?: string; prompt?: { id: string; version: number }; rulesVersion?: string; resultSchemaVersion?: string; locale?: string; createdAt?: string; result: { claims: DistillationClaim[]; workLogView: { sections: Array<{ kind: string; claimIds: string[] }> }; warnings: string[] } };
 export interface ChecklistItem {
   id: string;
   body: string;
@@ -134,6 +219,7 @@ export interface TaskAggregate extends TaskCard {
   };
 }
 export interface RefinementSession {
+  captureDistillation?: CaptureDistillationSummary;
   state?: "active" | "completed";
   id: string;
   taskId?: string;
@@ -190,6 +276,139 @@ export interface LineageSnapshot {
   journeyStatus?: { jobId?: string; status?: string; error?: string } | null;
   modelStatus?: string;
   modelError?: string;
+  distillation?: (DistillationProjection & {
+    nodes: Array<{ id: string; revision: number; kind: string; topicKey?: string; status: string; claimIds: string[]; detail: { before?: string; after?: string; reason?: string; evidenceClaimIds?: string[]; result?: string; currentStatus: string; links?: DistillationSource[] }; active: boolean }>;
+    relationships: Array<{ id: string; kind: string; from: string; to: string; reason?: string; sources: DistillationSource[]; active: boolean }>;
+    topicStates: Array<{ topicKey: string; status: string; currentNodeId?: string; replacementNodeId?: string; sources: DistillationSource[] }>;
+    completionSnapshots: Array<{ id: string; status: string; claimIds: string[] }>;
+  }) | null;
+}
+export interface KnowledgeSourceRef {
+  type: string;
+  id: string;
+  revision: string;
+  locator: string;
+  quote: string;
+}
+export interface KnowledgeClaimBinding {
+  claimId: string;
+  statement: string;
+  epistemicState: string;
+  sourceRefs: KnowledgeSourceRef[];
+}
+export interface KnowledgeApplicability {
+  summary: string;
+  representativeQuestions: string[];
+  helpsWith: string[];
+  conditions: string[];
+  exclusions: string[];
+  sourceRefs?: KnowledgeSourceRef[];
+}
+export interface KnowledgeVersion {
+  revision: number;
+  parentRevision?: number;
+  derivedFromRevision?: number;
+  derivationKind: "generated" | "edited" | "restored";
+  articleType: string;
+  title: string;
+  bodyMarkdown: string;
+  contentHash: string;
+  generationSnapshotHash?: string;
+  freshness: "current" | "stale";
+  storedFreshness?: string;
+  qualityState: string;
+  modelStatus: string;
+  modelError?: string;
+  createdAt: string;
+  selected?: boolean;
+  applicability: KnowledgeApplicability;
+  result: {
+    article?: {
+      type: string;
+      title: string;
+      finalOutcomes: Array<{ topicKey: string; statement: string; claimIds: string[] }>;
+      bodyMarkdown: string;
+      applicability: KnowledgeApplicability;
+      claimBindings: KnowledgeClaimBinding[];
+      assumptionBindings: Array<{ assumptionId: string; bodyLocator: string; sourceRefs: KnowledgeSourceRef[] }>;
+    };
+    ideas?: KnowledgeIdea[];
+    qualityFindings?: KnowledgeQualityFinding[];
+  };
+}
+export interface KnowledgeIdea {
+  id: string;
+  revision: number;
+  knowledgeRevision: number;
+  title: string;
+  bodyMarkdown: string;
+  disposition: "unverified" | "deferred" | "rejected" | "out_of_scope";
+  reconsiderationConditions: string[];
+  sourceRefs: KnowledgeSourceRef[];
+  relatedTopicKeys: string[];
+  contentHash: string;
+  publicationState: string;
+}
+export interface KnowledgeQualityFinding {
+  kind: string;
+  severity: string;
+  locator: string;
+  message: string;
+  sourceRefs: KnowledgeSourceRef[];
+}
+export interface KnowledgeReviewProjection {
+  taskId: string;
+  pointers: {
+    currentPrivateRevision?: number;
+    publishedRevision?: number;
+    publicationDocumentId?: string;
+    publicationPath?: string;
+    publicationContentHash?: string;
+  };
+  versions: KnowledgeVersion[];
+  ideas: KnowledgeIdea[];
+  archive?: {
+    proposals: KnowledgeArchiveProposal[];
+    operations: Array<{
+      operationId: string;
+      state: "writing" | "index_pending" | "index_failed" | "complete" | "conflict" | "repair_required" | "compensated";
+      error?: string;
+      proposalId?: string;
+      proposalVersion?: number;
+    }>;
+  };
+}
+export interface KnowledgeArchiveArtifact {
+  documentId: string;
+  path: string | null;
+  bytes: string | null;
+  sha256: string | null;
+  expectedHash: string | null;
+  kind: string;
+}
+export interface KnowledgeArchiveMocPatch { path: string; before: string; after: string }
+export interface KnowledgeArchiveReferenceLink {
+  documentId: string;
+  documentVersion: string;
+  section?: string;
+  path: string;
+  role: string;
+  rationale: string;
+}
+export interface KnowledgeArchiveProposal {
+  operationId?: string;
+  proposalId: string;
+  proposalVersion: number;
+  proposalHash: string;
+  state: string;
+  outcome: string;
+  rationale: string;
+  artifacts: KnowledgeArchiveArtifact[];
+  mocPatches: KnowledgeArchiveMocPatch[];
+  referenceLinks: KnowledgeArchiveReferenceLink[];
+  input?: unknown;
+  target?: { documentId: string; path: string | null };
+  unresolvedConflicts?: Array<{ path: string; reason: string }>;
 }
 export type TaskWorkSessionAttachment = { name: string; mediaType: string; data: string };
 export type TaskWorkSessionEntry = {
@@ -248,3 +467,10 @@ export type CodexThreadTurn = {
 export type CodexThreadTranscript = { thread: CodexThreadSummary; turns: CodexThreadTurn[]; nextCursor?: string | null };
 export type CodexThreadList = { threads: CodexThreadSummary[]; nextCursor?: string | null };
 export type CodexThreadLinkResult = CodexThreadTranscript & { taskId: string; sessionId: string; threadId: string; linked: boolean };
+
+
+export type TaskApplicationEvent = {
+  taskId: string;
+  revision: number;
+  cause: "preview_adopted";
+};

@@ -995,6 +995,9 @@ pub fn update_item(
             "head_conflict: Item changed; refresh before saving (revision {revision})"
         ));
     }
+    if entity_type == "captures" {
+        crate::native::capture_distillation::advance_source_tx(&transaction,entity_id,title)?;
+    }
     let connection = &transaction;
     let changed = match entity_type {
         "captures" => connection.execute(

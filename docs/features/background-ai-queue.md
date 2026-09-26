@@ -39,6 +39,11 @@ Summary attaches to the exact
 Work Log entry without changing scroll position. Completion Review also creates a temporary toast
 and a persisted unread bell alert because it requires a user decision.
 
+Each structured job also keeps its prompt ID and version, exact source revision, execution outcome,
+and application disposition. Successful execution can still leave a result awaiting review or mark it
+superseded when its source changed. Important durable work resumes after restart and receives bounded
+automatic retries for transient failures; explicit retry remains available after a terminal failure.
+
 Saving an image attachment in a Task Work Log automatically submits an **Image Summary** job.
 Existing images offer **Summarize image · Korean + English**. Each request generates and stores both
 languages together; the current interface language selects the displayed summary without another
