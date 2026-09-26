@@ -2,52 +2,100 @@
 
 **English** | [한국어](visual-guide.ko.md)
 
-This guide shows nine actual captures from signed macOS apps in English light mode. The Workbench capture was refreshed from the latest build with the mode options and Save action below the text input. The other eight captures are retained because their screens did not change. See the capture records below for each source. All examples use isolated disposable data. Refinement and conflict review used a deterministic local provider; these captures do not establish external AI quality. Queue shows a real missing-key failure, and completion shows an unpublished private draft.
+Verified against repository baseline `75ebe57` on 2026-09-26. This guide follows the current
+application interface and the decisions a user makes from Capture through published Knowledge. It
+is text-first because the repository does not yet contain a verified capture set for this version.
 
-The [earlier English capture manifest](../testing/evidence/docs-language-consistency.json) records the original nine English captures from the previously verified package. Its Workbench image has since been replaced; the entry layout evidence below records the current image. The capture source below identifies that package, rather than this documentation branch: base `de01ff47398871902a765d43b5a4060161316f92`, branch `fix/ui-ux-improvements`, dirty source build signed at 11:44:31 AM with CDHash `9b2b81082a43de0637bedd33a8cc670709ff2b21` by `LLM Wiki Local Signing`. The same package passed all 32 desktop scenarios and all 175 registered controls. See [release verification](../../specs/012-task-centered-workbench/acceptance-verification.md) for evidence and limits.
+The primary navigation opens **Workbench**, **Search vault**, **Compass**, and **AI setup**.
+Workbench is where an idea becomes tracked work; the other views find evidence, record direction,
+and configure AI connections and model routing.
 
-The refreshed Korean and English Workbench captures and build checks are recorded in the [entry layout evidence](../testing/evidence/capture-entry-layout.json). The earlier build provenance and release verification above apply to the other retained screens.
+## 1. Capture an idea or register a Task
 
-## Workbench and Task detail
+Workbench starts with a compact entry that saves the same input as a **Capture** or registers it
+directly as a **Task**. Active Tasks and recently completed Tasks appear next. Below them, **Inbox**,
+**Refining**, and **Refined Tasks** organize the remaining work. **Focus active work** hides the entry
+and lower sections when current Tasks need the full view.
 
-The Workbench places Capture first and in-progress Tasks immediately below it. Category swim lanes follow, with General always first and Inbox, Refining, and Refined Tasks columns inside each category. Each category body scrolls vertically within a maximum height of 480px or 65% of the viewport, whichever is smaller. Save text as a Capture or create a Task directly; completed Tasks can be expanded in the right lane. A Problem is optional context that may be linked to a Task; it is not a required stage.
+Saving a Capture preserves its text and images immediately. The card stays in Inbox while one
+background job prepares a readable title and body from that exact saved source. Its state shows
+whether organization is running, complete, or needs attention. Generated text does not replace the
+source, create a Task, or move the Capture. Refinement exposes the source separately, and a failed
+cleanup can be retried without losing it.
 
-In-progress Task cards share the same width and height in one horizontally scrolling row, whether or not they include the original Capture text. Long card content scrolls above the bottom-aligned action buttons. The active panel and recent completed list share the same height when displayed side by side; the completed list scrolls independently.
+See [Automatic Capture organization](capture-auto-distillation.md) and
+[Task-centered Workbench](conflict-gated-workflow.md).
 
-![Workbench with Capture and Task entry plus saved work](images/workbench-tasks.en.png)
+## 2. Refine with conversation and exact references
 
-Open a Task to edit its definition, keep Work Log evidence, comments, checklists, decisions, relationships, completion evidence, and Knowledge actions together. Completing the Task, resolving a linked Problem, and publishing Knowledge are separate explicit decisions.
+Choose **Refine** when the work needs more context. Chat remains usable while the first structured
+preview and optional reference investigation run in the background. The preview records proposed
+background, goal, scope, non-goals, constraints, completion criteria, approach, and assumptions.
+Missing evidence remains visible as an assumption.
 
-![Task detail with work evidence and decisions](images/task-detail.en.png)
+Type `@` in Chat to find local documents and sections. A sent mention retains its exact document
+version and section. The reference list distinguishes discovery, viewing, mentioning, actual use,
+adoption, and exclusion. Finding a source alone never makes it adopted evidence. The exact-source
+viewer can revisit viewed sources and open previous or next versions without changing the Task.
 
-## Refinement and completion
+Preview edits and restores append immutable versions. A newer background result cannot overwrite
+an unsaved edit. **Apply to Task** separately checks the current preview, Task, conversation,
+hierarchy, and sources before changing the Task. Closing the workspace or continuing Chat does not
+apply the proposal.
 
-Refinement keeps original context, conversation, notes, and reviewable proposals together. A saved workspace supports returning to unfinished refinement; a provider or save error remains visible for retry rather than representing a completed result.
+See [Reference-aware work previews](reference-aware-workbench.md) and
+[Refinement Preview](refinement-preview-status.md).
 
-![Refinement workspace with context and conversation](images/refinement.en.png)
+## 3. Work in the four Task tabs
 
-Conflict review is advisory and retains attempt history. The example below shows findings cited to
-`onboarding-evidence.md` and a Retry review action; citations remain evidence for the user's judgment,
-not permission to complete or publish.
+Opening a Task shows four tabs in this order:
 
-![Task conflict review with cited findings, a Retry review action, and attempt history](images/task-review.en.png)
+- **Work** holds the checklist, recorded Work Log evidence, comments, attachments, and explicit
+  decisions. A completed Codex Run can add a readable **Distilled Run result** while preserving the
+  original evidence. Suggestions, decisions, attempts, observations, performed work, and verification
+  remain distinct.
+- **Sessions** contains saved work conversations. A note is local; **Run with Codex** separately
+  creates a Run and linked Work Log record. Execution never completes the Task or
+  publishes Knowledge.
+- **Details** shows and edits the canonical Task definition, original Capture, and Task connections.
+  Unsaved definition changes are protected when leaving the Task.
+- **Review** brings together the evidence-backed Task journey, **Current decisions and evidence**,
+  readiness, conflict review, completion evidence, and Knowledge review. AI findings remain advisory;
+  completion is an explicit user action.
 
-After a Task has completion evidence, create and review a private Knowledge draft. Publication is a separate human action that writes the reviewed Markdown to the Vault.
+The Task journey updates incrementally from recorded evidence. An explicit saved decision can become
+current, superseded, withdrawn, or unresolved. Ordinary assistant prose does not become an adopted
+decision. If a source changes, the last good distilled view remains readable with a stale label while
+its update runs.
 
-![Completion evidence and separate Knowledge publication](images/completion-knowledge.en.png)
+See [Task work sessions](task-work-sessions.md), [Task conflict review](conflict-resolution-workflow.md),
+and [Task lineage and Knowledge](lineage-knowledge-layer.md).
 
-## Queue, search, Compass, and AI setup
+## 4. Review Knowledge before publication
 
-The background Queue identifies durable jobs and their recovery actions. It does not turn a failed or pending AI request into a completed Task decision.
+After completion, **Review** can generate a private Knowledge draft from the exact current Task,
+completion record, distilled work, evidence, and references that were actually used. **Final
+outcomes** appear separately from the article. **Ideas to revisit** stays collapsed outside the final
+article, retaining whether each idea is unverified, deferred, out of scope, or rejected.
 
-![Queue failure with a recovery path](images/queue-recovery.en.png)
+Each generation, edit, or restore appends an immutable private version. The version picker reads,
+compares, and restores saved versions without regenerating them. Source changes mark a version stale
+but do not erase it.
 
-Search reads the selected Vault, while Compass records direction without scoring people. AI setup shows connection and model-routing settings while keeping credential values masked.
+Publication starts with a separate archive proposal. Review the exact files, paths, source links,
+selected idea files, and managed index changes before choosing **Publish these exact files**.
+Publication completes only after the reviewed files are written and indexed. A pending index,
+conflict, or repair state remains visible and recoverable.
 
-![Vault search results with path and matching context](images/vault-search.en.png)
+See [Evidence-bound Knowledge drafts](knowledge-distillation.md),
+[Reviewed Knowledge archive](knowledge-archive.md), and
+[Completion and Knowledge](completion-writeback-archive.md).
 
-![Compass records direction and evidence](images/compass.en.png)
+## Historical capture evidence
 
-![AI setup shows connection and routing configuration](images/ai-settings.en.png)
-
-See the [Task-centered Workbench](conflict-gated-workflow.md), [Completion and Knowledge](completion-writeback-archive.md), and [Background AI Queue](background-ai-queue.md) for behavior and verification boundaries.
+The images in `docs/features/images/` document an earlier interface and are not embedded as the
+current workflow. The original nine-screen set came from base commit
+`de01ff47398871902a765d43b5a4060161316f92`; its provenance and limits remain in the
+[English capture manifest](../testing/evidence/docs-language-consistency.json) and later
+[entry-layout record](../testing/evidence/capture-entry-layout.json). These records are useful for
+history, not for verifying the interface described above.

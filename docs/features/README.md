@@ -3,7 +3,7 @@
 **English** | [한국어](README.ko.md)
 
 Start with [Product Spirit](../product-spirit.md), or use the
-[visual feature tour](visual-guide.md) for a screenshot-led overview of the running application.
+[current interface guide](visual-guide.md) to follow the application's main workflow and controls.
 
 - [First-run Vault setup](first-run-vault-setup.md) keeps the Markdown folder under explicit user
   control before indexing starts.

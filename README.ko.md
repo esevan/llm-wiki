@@ -111,7 +111,7 @@ Markdown으로 유지하고, 한국어 열람본은 휴대 가능한 원본을 �
 ## 기능 안내
 
 - [Product Spirit과 제품 결정](docs/product-spirit.ko.md)
-- [실행 화면으로 보는 기능 둘러보기](docs/features/visual-guide.ko.md)
+- [현재 인터페이스 안내](docs/features/visual-guide.ko.md)
 - [빠른 Vault 검색](docs/features/fast-vault-search.ko.md)
 - [Codex·ChatGPT 데스크톱 작업 추적](docs/features/mcp-workbench-bridge.ko.md)
 - [Task 중심 Workbench](docs/features/conflict-gated-workflow.ko.md)

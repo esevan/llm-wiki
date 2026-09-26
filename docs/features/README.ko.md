@@ -2,8 +2,8 @@
 
 [English](README.md) | **한국어**
 
-[Product Spirit](../product-spirit.ko.md)에서 시작하거나, 실제 실행 화면 중심의
-[기능 둘러보기](visual-guide.ko.md)로 전체 흐름을 먼저 확인하세요.
+[Product Spirit](../product-spirit.ko.md)에서 시작하거나,
+[현재 인터페이스 안내](visual-guide.ko.md)에서 주요 workflow와 조작 방법을 확인하세요.
 
 - [최초 실행 Vault 설정](first-run-vault-setup.ko.md)은 색인 시작 전에 Markdown 폴더를 사용자가
   명시적으로 선택하게 합니다.
