@@ -1,0 +1,74 @@
+{
+  "captureDate": "2026-09-26",
+  "applicationSourceRevision": "db4ada7",
+  "documentationBaseline": "51cc1e2",
+  "application": {
+    "kind": "signed native release application",
+    "cdHash": "e5cb2b5d549b9277f5f9cf1d02d2917bf80d3162",
+    "authority": "LLM Wiki Local Signing",
+    "signedTime": "2026-09-26 13:27:45 EDT"
+  },
+  "captureEnvironment": {
+    "dataRoot": ".tmp/ui-review-N3RXBT",
+    "data": "isolated disposable example data",
+    "provider": "deterministic local fake provider at http://127.0.0.1:53919",
+    "format": "raw native application screenshots including the title bar",
+    "theme": "light"
+  },
+  "context": "The captures show the Workbench, a manually edited saved Refinement preview, a manually recorded Work Log entry, and a current private unpublished Knowledge draft with no recorded final decision. The English UI retains Korean user-entered example content; no automatic translation is represented.",
+  "captures": {
+    "current-workbench.en.jpg": {
+      "sha256": "9e7c036adf65ef5e4f6e455074be0951f310e09c553ace8ad722db5e2ec81ddd",
+      "imageSizeIncludingNativeTitleBar": [1356, 768],
+      "mediaType": "image/jpeg",
+      "locale": "en"
+    },
+    "current-workbench.ko.jpg": {
+      "sha256": "b6faeee13a9e214229dd7cd167a36bc9636f929ffee73a23d79a2b78e8dc91d7",
+      "imageSizeIncludingNativeTitleBar": [1356, 768],
+      "mediaType": "image/jpeg",
+      "locale": "ko"
+    },
+    "current-refinement.en.jpg": {
+      "sha256": "09ea30fdbb995403b8422dc46e8b02fed63dcbedd113cf95e0ce9deefceef42d",
+      "imageSizeIncludingNativeTitleBar": [1356, 768],
+      "mediaType": "image/jpeg",
+      "locale": "en"
+    },
+    "current-refinement.ko.jpg": {
+      "sha256": "0bd95dbb12d9204b41ec78caddcb7d404a9c82504c25f1ed19b3ea834df9a505",
+      "imageSizeIncludingNativeTitleBar": [1198, 768],
+      "mediaType": "image/jpeg",
+      "locale": "ko"
+    },
+    "current-task.en.jpg": {
+      "sha256": "eea8d0a0766a32cd4f6c3932065f80bf4a66a9e0e920894577918446c99aec98",
+      "imageSizeIncludingNativeTitleBar": [1356, 768],
+      "mediaType": "image/jpeg",
+      "locale": "en"
+    },
+    "current-task.ko.jpg": {
+      "sha256": "94ab49f6501985bdcf9cb92f887e3706c925b850e964d93512923311603150b3",
+      "imageSizeIncludingNativeTitleBar": [1198, 768],
+      "mediaType": "image/jpeg",
+      "locale": "ko"
+    },
+    "current-knowledge.en.jpg": {
+      "sha256": "88317853593959a7793df8b62280b0dbfa16a9b2c12859d48e05b61fe5d9398a",
+      "imageSizeIncludingNativeTitleBar": [1356, 768],
+      "mediaType": "image/jpeg",
+      "locale": "en"
+    },
+    "current-knowledge.ko.jpg": {
+      "sha256": "699a3e2d138e4b6ae4793ef340f4b75ed6e898788bac40f2a6637170f057f155",
+      "imageSizeIncludingNativeTitleBar": [1356, 768],
+      "mediaType": "image/jpeg",
+      "locale": "ko"
+    }
+  },
+  "validation": [
+    "All eight JPEGs were visually inspected against their paired guide placement.",
+    "Recorded SHA-256 hashes, JPEG media types, and image dimensions were computed from the committed files.",
+    "The captures do not validate real model quality, external provider behavior, automatic translation, or publication."
+  ]
+}
