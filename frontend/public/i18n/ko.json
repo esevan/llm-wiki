@@ -719,6 +719,8 @@
   "search.empty_title": "일치하는 노트가 아직 없습니다.",
   "search.start_body": "검색은 로컬 Vault 안에서 이루어지며, 사용자가 결과를 선택하면 원문을 엽니다.",
   "search.loading_title": "Vault를 검색하는 중…",
+  "ai_setup.timeout_label": "AI 요청 Timeout (초)",
+  "ai_setup.timeout_help": "각 AI 요청의 전체 응답 또는 스트림을 수신하는 최대 시간입니다. 모든 AI 제공자 작업과 연결 테스트에 적용됩니다. 1–3600초, 기본값 180초입니다. 저장하면 재시작 없이 새 요청부터 적용됩니다.",
   "ai_setup.connection_group": "연결",
   "ai_setup.models_group": "모델 설정",
   "ai_setup.credential_group": "인증 정보",

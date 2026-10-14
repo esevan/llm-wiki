@@ -2,6 +2,8 @@
 
 **English** | [한국어](background-ai-queue.ko.md)
 
+AI setup includes **AI request timeout (seconds)**, shared by every provider request: conversation streams, previews, reports, image analysis, relationship inference, background generation and connection tests. It defaults to 180 seconds and accepts whole seconds from 1 to 3600. Existing settings receive the default automatically; unrelated configuration updates preserve the saved value. Saving applies to new requests without restarting. The deadline spans connection, generation and the complete response or stream; it excludes queue waiting and local processing. Sequential calls and retries each get their own deadline. Codex execution sessions, local embeddings and IPC control messages retain their own lifecycle rules.
+
 Queue and notification FAB popups close when you click outside their panel and trigger.
 Clicks inside remain usable; clicking the other FAB dismisses the previous popup.
 

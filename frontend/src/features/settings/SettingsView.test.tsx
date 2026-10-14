@@ -12,6 +12,25 @@ describe('Chat connection scopes',()=>{
     document.documentElement.lang = 'en';
   });
 
+  it('shows a localized required timeout with whole-second bounds', async () => {
+    window.llmWikiApplication = { request: vi.fn().mockResolvedValue({ ok: true, json: async () => ({ connections: [] }) }) };
+    document.documentElement.lang = 'ko';
+    render(<SettingsView active />);
+    const timeout = screen.getByLabelText('AI 요청 Timeout (초)');
+    expect(timeout).toHaveValue(180);
+    expect(timeout).toBeRequired();
+    expect(timeout).toHaveAttribute('min', '1');
+    expect(timeout).toHaveAttribute('max', '3600');
+    expect(timeout).toHaveAttribute('step', '1');
+    fireEvent.change(timeout, { target: { value: '0' } });
+    expect((timeout as HTMLInputElement).checkValidity()).toBe(false);
+    fireEvent.change(timeout, { target: { value: '600' } });
+    expect((timeout as HTMLInputElement).checkValidity()).toBe(true);
+    document.documentElement.lang = 'en';
+    await screen.findByLabelText('AI request timeout (seconds)');
+    expect(timeout).toHaveValue(600);
+  });
+
   it('uses the shared Codex home by default and saves an explicit alternate only on request', async () => {
     const request = vi.fn().mockImplementation((input: { path: string; method?: string }) => {
       if (input.path === '/settings/vault') return Promise.resolve({ ok: true, status: 200, json: async () => ({ path: '/vault' }) });

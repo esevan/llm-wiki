@@ -1,5 +1,40 @@
 # LLM Wiki — Continuation handoff
 
+## Shared AI timeout and settings singleton (2026-10-13)
+
+Local work is in `.worktrees/generation-timeout` on `codex/generation-timeout`.
+AI setup now saves a shared 1–3600-second timeout (default 180). All provider
+HTTP requests, including streams and connection tests, use one client factory.
+The settings singleton caches isolated homes and publishes changes only after
+atomic persistence. Manual JSON edits require restarting the process.
+
+`npm test`, typecheck, lint and whitespace checks passed. Rustup installed
+Cargo/Rust 1.99.0; all 12 native settings tests passed, including concurrency,
+failed writes and whole-response timeout behavior. Wide English and narrow
+Korean previews passed visual, focus and overflow review.
+
+The release executable built successfully. The selected native in-app scenarios
+`task-refinement` and `task-publication` passed in isolated homes using the local
+fake provider. They cover preview creation/edit/adoption and completion Knowledge
+generation/review. No full E2E was needed. These tests do not measure live-model
+latency or validate signed packaging; no real provider is configured here.
+
+The implementation was fast-forwarded into main as `8cf6013`. The user then
+authorized creating a new local signing identity and requested no old-app backup.
+The new `LLM Wiki Local Signing` fingerprint is
+`797FF6B7B6C50CCDBFDE1C5B7D80DCFEA6A31290`, registered in the local signing
+configuration; its private key remains in the login keychain. Temporary PEM and
+PKCS12 exports were deleted. User trust is scoped to the code-signing policy.
+
+The signed release bundle passed strict/deep signature verification and the same
+two selected in-app scenarios. The guarded installer replaced
+`/Applications/LLM Wiki.app` with an explicitly accepted designated-requirement
+change. The new app launched normally and its AI settings show Timeout 180.
+The replacement backup was deleted after launch verification as requested.
+App data, provider settings and Vault contents were preserved. The installed
+CDHash is `1409075b94318a17a07ffe64f9bb4e7a5efa3fb8`. The user authorized pushing the merged changes after installation.
+
+
 ## Authorized push and local installation (2026-09-26)
 
 The user authorized pushing the integrated workflow and installing the tested

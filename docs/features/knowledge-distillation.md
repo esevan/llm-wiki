@@ -2,6 +2,8 @@
 
 **English** | [한국어](knowledge-distillation.ko.md)
 
+AI generation and regeneration of a completion Knowledge draft use the shared **AI request timeout (seconds)** in AI setup (default 180; range 1–3600), including receipt of the complete response body. Queue waiting and local snapshot preparation are outside this deadline. Saving applies to new requests without restarting. A timeout preserves existing drafts and allows an explicit retry. The completion-report queue route uses the same setting.
+
 Completed Tasks can generate a private Knowledge draft from the current Task revision, canonical completion, current Distillation journey, full Run reports and completed evidence, and references that were actually used. For Tasks with a Run, generation waits for current Distillation data. All generation saves only when the same source manifest is still current.
 
 A completed Task with no session Run uses a `recorded_only` snapshot of its definition, completion, ordered manual Work Logs, and decisions. These exact records may support reported facts, but do not establish verified results or final decision authority. Any Task with a Run still requires current Distillation; missing or failed Run Distillation never falls back to manual authority. Editing a recorded log invalidates the generation snapshot.

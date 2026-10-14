@@ -138,6 +138,9 @@ export function SettingsView({ active }: { active: boolean }) {
           <fieldset className="settings-group">
             <legend data-i18n="ai_setup.connection_group">Connection</legend>
             <label htmlFor="provider-url">OpenAI-compatible endpoint</label><input id="provider-url" data-control="provider-url" required />
+            <label htmlFor="provider-timeout" data-i18n="ai_setup.timeout_label">{t('timeout_label')}</label>
+            <input id="provider-timeout" data-control="provider-timeout" type="number" min="1" max="3600" step="1" defaultValue="180" required aria-describedby="provider-timeout-help" />
+            <p id="provider-timeout-help" className="meta" data-i18n="ai_setup.timeout_help">{t('timeout_help')}</p>
           </fieldset>
           <fieldset className="settings-group">
             <legend data-i18n="ai_setup.models_group">Model routing</legend>

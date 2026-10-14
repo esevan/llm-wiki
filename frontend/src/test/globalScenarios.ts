@@ -118,6 +118,9 @@ export async function runProviderSettingsScenario(harness: GlobalScenarioHarness
   };
   set('provider-url', fixture.url); set('provider-model', fixture.model); set('provider-advanced-model', fixture.advancedModel);
   set('provider-key', fixture.key);
+  const timeout = required<HTMLInputElement>('[data-control="provider-timeout"]', 'AI request timeout');
+  harness.coverage.interact('provider-timeout', () => harness.enter(timeout, '240'));
+  harness.coverage.assertEffect('provider-timeout', () => timeout.value === '240');
   const workerCount = required<HTMLInputElement>('[data-control="provider-worker-count"]', 'background worker count');
   harness.coverage.interact('provider-worker-count', () => harness.enter(workerCount, '3'));
   harness.coverage.assertEffect('provider-worker-count', () => workerCount.value === '3');
@@ -138,9 +141,10 @@ export async function runProviderSettingsScenario(harness: GlobalScenarioHarness
   const save = required<HTMLButtonElement>('#provider-form button[type="submit"], #provider-form button:not([type])', 'Save configuration');
   harness.coverage.interact('provider-save', () => harness.click(save, 'Save fixture provider configuration'));
   await harness.waitFor(() => document.getElementById('provider-status')?.textContent?.includes('Saved') ?? false, 'provider save status');
-  const stored = await harness.request<{ base_url: string; model: string; advanced_model?: string; advanced_tasks: Record<string, boolean>; async_worker_count: number }>('/provider/config');
+  const stored = await harness.request<{ base_url: string; model: string; advanced_model?: string; advanced_tasks: Record<string, boolean>; async_worker_count: number; request_timeout_seconds: number }>('/provider/config');
   harness.coverage.assertEffect('provider-save', () => stored.base_url === fixture.url && stored.model === fixture.model && stored.advanced_model === fixture.advancedModel && stored.async_worker_count === 3 && toggles.every(toggle => stored.advanced_tasks[toggle.dataset.advancedTask ?? ''] === toggle.checked) && required<HTMLInputElement>('#provider-key', 'provider key').value === '');
   harness.coverage.assertEffect('provider-worker-count', () => stored.async_worker_count === 3);
+  harness.coverage.assertEffect('provider-timeout', () => stored.request_timeout_seconds === 240);
   const test = required<HTMLButtonElement>('#provider-test', 'Test connection');
   harness.coverage.interact('provider-test', () => harness.click(test, 'Test fixture provider'));
   await harness.waitFor(() => document.getElementById('provider-status')?.textContent?.includes(fixture.model) ?? false, 'provider model list');

@@ -719,6 +719,8 @@
   "search.empty_title": "No matching notes yet.",
   "search.start_body": "Search stays in your local Vault and opens the source when you choose a result.",
   "search.loading_title": "Searching your Vault…",
+  "ai_setup.timeout_label": "AI request timeout (seconds)",
+  "ai_setup.timeout_help": "Maximum time for each AI request, including the full response or stream. Applies to all AI provider tasks and connection tests. 1–3600 seconds; default 180. Saved changes apply to new requests without restarting.",
   "ai_setup.connection_group": "Connection",
   "ai_setup.models_group": "Model routing",
   "ai_setup.credential_group": "Credential",

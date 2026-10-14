@@ -143,10 +143,7 @@ pub(crate) async fn provider_json_with_images(
     }
     let prompt = build_prompt(prompt_id, &json!({"context":context}))
         .map_err(|error| error.to_string())?.content;
-    let request = reqwest::Client::builder()
-        .timeout(Duration::from_secs(30))
-        .build()
-        .map_err(|error| error.to_string())?
+    let request = settings::provider_client(settings_path)?
         .post(format!(
             "{}/chat/completions",
             base_url.trim_end_matches('/')

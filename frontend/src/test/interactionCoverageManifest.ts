@@ -46,6 +46,7 @@ const manifest: readonly ControlSpec[] = [
   task('compass-goal-save', 'F38', 'frontend/src/features/compass/CompassView.tsx', 'goal persists and dashboard refreshes'),
   ...['url', 'model', 'advanced-model', 'advanced-options', 'key', 'save'].map(name => task(`provider-${name}`, 'F39', 'frontend/src/features/settings/SettingsView.tsx', 'configuration field and selected routing persist')),
   ...['capture_assistance', 'problem_drafting', 'problem_assistance', 'workbench_organization', 'solution_drafting', 'solution_assistance', 'completed_solution_chat', 'conflict_review', 'image_summary', 'completion_review', 'completion_report', 'lineage_inference', 'problem_enrichment'].map(name => existing(`provider-advanced-${name}`, 'F39', `[data-control="provider-advanced-${name}"]`, 'frontend/src/features/settings/SettingsView.tsx', name, 'individual advanced-model route persists')),
+  existing('provider-timeout', 'F39', '[data-control="provider-timeout"]', 'frontend/src/features/settings/SettingsView.tsx', 'data-control="provider-timeout"', 'shared AI request timeout persists'),
   existing('provider-worker-count', 'F39', '[data-control="provider-worker-count"]', 'frontend/public/runtime/search-settings.js', 'data-control="provider-worker-count"', 'background worker count persists'),
   task('provider-test', 'F40', 'frontend/src/features/settings/SettingsView.tsx', 'models or readable error appears'),
   task('vault-change', 'F39', 'frontend/src/features/settings/SettingsView.tsx', 'native Vault picker starts and the app restarts with the selected location'),

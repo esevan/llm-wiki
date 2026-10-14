@@ -98,6 +98,7 @@ pub(crate) async fn conversation_stream(
     if model.trim().is_empty() {
         return Err("Provider model is required".into());
     }
+    let client = native::settings::provider_client(&application.settings_path())?;
     let token = registry.register(&request_id).await?;
     let source_revision = request.source_revision.clone();
     let context_scope = request.context_scope.clone();
@@ -106,7 +107,7 @@ pub(crate) async fn conversation_stream(
     let db_path = application.db_path();
     tauri::async_runtime::spawn(async move {
         let task = async {
-            let response = reqwest::Client::new()
+            let response = client
                 .post(format!(
                     "{}/chat/completions",
                     base_url.trim_end_matches('/')

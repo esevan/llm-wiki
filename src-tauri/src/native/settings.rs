@@ -1,6 +1,7 @@
 use rusqlite::{Connection, OpenFlags, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
@@ -38,6 +39,7 @@ struct SavedProvider {
     advanced_tasks: Value,
     report_language: String,
     async_worker_count: i64,
+    request_timeout_seconds: u64,
     api_key: Option<String>,
 }
 
@@ -50,12 +52,53 @@ impl Default for SavedProvider {
             advanced_tasks: json!({}),
             report_language: "ko".into(),
             async_worker_count: 2,
+            request_timeout_seconds: DEFAULT_AI_TIMEOUT_SECONDS,
             api_key: None,
         }
     }
 }
 
-static SETTINGS_WRITE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+const DEFAULT_AI_TIMEOUT_SECONDS: u64 = 180;
+
+/// One process-wide settings owner. Paths keep isolated application/test homes separate.
+/// Readers receive snapshots; only this store can publish a persisted update.
+#[derive(Default)]
+struct SettingsStore {
+    snapshots: Mutex<HashMap<PathBuf, AppSettings>>,
+}
+
+impl SettingsStore {
+    fn shared() -> &'static Self {
+        static INSTANCE: OnceLock<SettingsStore> = OnceLock::new();
+        INSTANCE.get_or_init(Self::default)
+    }
+
+    fn read(&self, path: &Path) -> Result<AppSettings, String> {
+        let mut snapshots = self.snapshots.lock()
+            .map_err(|_| "Application settings lock is unavailable")?;
+        if let Some(settings) = snapshots.get(path) {
+            return Ok(settings.clone());
+        }
+        let settings = read_disk(path)?;
+        snapshots.insert(path.to_owned(), settings.clone());
+        Ok(settings)
+    }
+
+    fn update(&self, path: &Path, change: impl FnOnce(&mut AppSettings)) -> Result<AppSettings, String> {
+        let mut snapshots = self.snapshots.lock()
+            .map_err(|_| "Application settings lock is unavailable")?;
+        let mut settings = match snapshots.get(path) {
+            Some(settings) => settings.clone(),
+            None => read_disk(path)?,
+        };
+        settings.version = 2;
+        change(&mut settings);
+        write_disk(path, &settings)?;
+        // Failed writes never expose unpersisted values to another reader.
+        snapshots.insert(path.to_owned(), settings.clone());
+        Ok(settings)
+    }
+}
 
 const TASKS: &[(&str, bool)] = &[
     ("capture_assistance", true),
@@ -74,7 +117,7 @@ const TASKS: &[(&str, bool)] = &[
     ("knowledge_translation", false),
 ];
 
-fn read(path: &Path) -> Result<AppSettings, String> {
+fn read_disk(path: &Path) -> Result<AppSettings, String> {
     if !path.is_file() {
         return Ok(AppSettings::default());
     }
@@ -87,7 +130,7 @@ fn read(path: &Path) -> Result<AppSettings, String> {
     })
 }
 
-fn write(path: &Path, settings: &AppSettings) -> Result<(), String> {
+fn write_disk(path: &Path, settings: &AppSettings) -> Result<(), String> {
     let parent = path
         .parent()
         .ok_or("Application settings path has no parent")?;
@@ -126,16 +169,12 @@ fn write(path: &Path, settings: &AppSettings) -> Result<(), String> {
     Ok(())
 }
 
+fn read(path: &Path) -> Result<AppSettings, String> {
+    SettingsStore::shared().read(path)
+}
+
 fn update(path: &Path, change: impl FnOnce(&mut AppSettings)) -> Result<AppSettings, String> {
-    let _guard = SETTINGS_WRITE_LOCK
-        .get_or_init(|| Mutex::new(()))
-        .lock()
-        .map_err(|_| "Application settings lock is unavailable")?;
-    let mut settings = read(path)?;
-    settings.version = 2;
-    change(&mut settings);
-    write(path, &settings)?;
-    Ok(settings)
+    SettingsStore::shared().update(path, change)
 }
 
 fn table_exists(connection: &Connection, table: &str) -> Result<bool, String> {
@@ -212,6 +251,7 @@ pub fn migrate_legacy(db_path: &Path, settings_path: &Path) -> Result<(), String
                         advanced_tasks: serde_json::from_str(&advanced_tasks).unwrap_or_else(|_| json!({})),
                         report_language: row.get(4)?,
                         async_worker_count: row.get(5)?,
+                        request_timeout_seconds: DEFAULT_AI_TIMEOUT_SECONDS,
                         api_key: None,
                     })
                 },
@@ -221,7 +261,7 @@ pub fn migrate_legacy(db_path: &Path, settings_path: &Path) -> Result<(), String
         found |= settings.provider.is_some();
     }
     if found {
-        write(settings_path, &settings)?;
+        update(settings_path, |saved| *saved = settings)?;
     }
     Ok(())
 }
@@ -361,7 +401,7 @@ pub fn provider(settings_path: &Path) -> Result<Value, String> {
         );
     }
     Ok(
-        json!({"base_url":provider.base_url,"model":provider.model,"advanced_model":provider.advanced_model,"advanced_tasks":tasks,"report_language":provider.report_language,"async_worker_count":provider.async_worker_count,"api_key_configured":provider.api_key.as_ref().is_some_and(|key| !key.is_empty())}),
+        json!({"base_url":provider.base_url,"model":provider.model,"advanced_model":provider.advanced_model,"advanced_tasks":tasks,"report_language":provider.report_language,"async_worker_count":provider.async_worker_count,"request_timeout_seconds":provider.request_timeout_seconds,"api_key_configured":provider.api_key.as_ref().is_some_and(|key| !key.is_empty())}),
     )
 }
 
@@ -394,6 +434,10 @@ pub fn save_provider(settings_path: &Path, input: &Value) -> Result<Value, Strin
     if !(1..=32).contains(&workers) {
         return Err("Async worker count must be between 1 and 32".into());
     }
+    let timeout = input.get("request_timeout_seconds").map(|value| {
+        value.as_u64().filter(|seconds| (1..=3600).contains(seconds))
+            .ok_or("AI request timeout must be a whole number between 1 and 3600 seconds")
+    }).transpose()?;
     let api_key = input
         .get("api_key")
         .and_then(Value::as_str)
@@ -411,10 +455,26 @@ pub fn save_provider(settings_path: &Path, input: &Value) -> Result<Value, Strin
             advanced_tasks,
             report_language: report_language.into(),
             async_worker_count: workers,
+            request_timeout_seconds: timeout.unwrap_or_else(|| settings.provider.as_ref()
+                .map(|provider| provider.request_timeout_seconds)
+                .unwrap_or(DEFAULT_AI_TIMEOUT_SECONDS)),
             api_key: api_key.or(existing_api_key),
         });
     })?;
     provider(settings_path)
+}
+
+/// All provider HTTP requests use the latest persisted application setting.
+/// Existing requests retain their deadline; saving applies to the next request.
+pub(crate) fn provider_client(settings_path: &Path) -> Result<reqwest::Client, String> {
+    let seconds = read(settings_path)?.provider.unwrap_or_default().request_timeout_seconds;
+    if !(1..=3600).contains(&seconds) {
+        return Err("AI request timeout must be between 1 and 3600 seconds".into());
+    }
+    reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(seconds))
+        .build()
+        .map_err(|error| error.to_string())
 }
 
 pub fn provider_credentials_for(
@@ -449,6 +509,117 @@ pub fn provider_credentials_for(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn singleton_reuses_snapshots_and_keeps_settings_homes_isolated() {
+        assert!(std::ptr::eq(SettingsStore::shared(), SettingsStore::shared()));
+        let state = tempfile::tempdir().unwrap();
+        let first = state.path().join("first.json");
+        let second = state.path().join("second.json");
+        save_locale(&first, &json!({"locale":"ko"})).unwrap();
+        save_locale(&second, &json!({"locale":"en"})).unwrap();
+        // A second read comes from the shared object, not another disk read.
+        fs::remove_file(&first).unwrap();
+        assert_eq!(read(&first).unwrap().locale.unwrap().value, "ko");
+        assert_eq!(read(&second).unwrap().locale.unwrap().value, "en");
+        save_locale(&first, &json!({"locale":"en"})).unwrap();
+        assert_eq!(read(&first).unwrap().locale.unwrap().value, "en");
+        assert!(fs::read_to_string(&first).unwrap().contains("en"));
+    }
+
+    #[test]
+    fn singleton_does_not_publish_failed_writes() {
+        let state = tempfile::tempdir().unwrap();
+        let blocked = state.path().join("blocked");
+        fs::write(&blocked, "not a directory").unwrap();
+        let path = blocked.join("settings.json");
+        assert!(read(&path).unwrap().locale.is_none());
+        assert!(save_locale(&path, &json!({"locale":"ko"})).is_err());
+        assert!(read(&path).unwrap().locale.is_none());
+    }
+
+    #[test]
+    fn singleton_serializes_concurrent_changes_without_losing_other_fields() {
+        let state = tempfile::tempdir().unwrap();
+        let path = state.path().join("settings.json");
+        let locale_path = path.clone();
+        let provider_path = path.clone();
+        let locale = std::thread::spawn(move || {
+            save_locale(&locale_path, &json!({"locale":"ko"})).unwrap();
+        });
+        let provider = std::thread::spawn(move || {
+            save_provider(&provider_path, &json!({"base_url":"https://example.test/v1","request_timeout_seconds":600})).unwrap();
+        });
+        locale.join().unwrap();
+        provider.join().unwrap();
+        let settings = read(&path).unwrap();
+        assert_eq!(settings.locale.unwrap().value, "ko");
+        assert_eq!(settings.provider.unwrap().request_timeout_seconds, 600);
+        let persisted: AppSettings = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(persisted.locale.unwrap().value, "ko");
+        assert_eq!(persisted.provider.unwrap().request_timeout_seconds, 600);
+    }
+
+    #[test]
+    fn provider_timeout_defaults_persists_and_survives_unrelated_updates() {
+        let state = tempfile::tempdir().unwrap();
+        let settings_path = state.path().join("settings.json");
+        assert_eq!(provider(&settings_path).unwrap()["request_timeout_seconds"], 180);
+        let legacy_path = state.path().join("legacy-settings.json");
+        fs::write(&legacy_path, r#"{"provider":{"baseUrl":"https://example.test/v1"}}"#).unwrap();
+        assert_eq!(provider(&legacy_path).unwrap()["request_timeout_seconds"], 180);
+        assert_eq!(provider(&settings_path).unwrap()["request_timeout_seconds"], 180);
+        let input = json!({"base_url":"https://example.test/v1","request_timeout_seconds":600});
+        assert_eq!(save_provider(&settings_path, &input).unwrap()["request_timeout_seconds"], 600);
+        assert_eq!(read(&settings_path).unwrap().provider.unwrap().request_timeout_seconds, 600);
+        save_provider(&settings_path, &json!({"base_url":"https://example.test/v1","model":"updated"})).unwrap();
+        assert_eq!(provider(&settings_path).unwrap()["request_timeout_seconds"], 600);
+    }
+
+    #[test]
+    fn invalid_provider_timeouts_do_not_change_saved_configuration() {
+        let state = tempfile::tempdir().unwrap();
+        let settings_path = state.path().join("settings.json");
+        save_provider(&settings_path, &json!({"base_url":"https://example.test/v1","request_timeout_seconds":240})).unwrap();
+        let before = fs::read_to_string(&settings_path).unwrap();
+        for timeout in [json!(0), json!(-1), json!(3601), json!(1.5), json!("180"), Value::Null] {
+            assert!(save_provider(&settings_path, &json!({"base_url":"https://example.test/v1","request_timeout_seconds":timeout})).is_err());
+            assert_eq!(fs::read_to_string(&settings_path).unwrap(), before);
+        }
+    }
+
+    #[tokio::test]
+    async fn provider_timeout_covers_body_and_changes_apply_to_new_requests() {
+        use std::io::Write;
+        use std::net::TcpListener;
+        use std::time::Duration;
+
+        let state = tempfile::tempdir().unwrap();
+        let settings_path = state.path().join("settings.json");
+        save_provider(&settings_path, &json!({"base_url":"https://example.test/v1","request_timeout_seconds":1})).unwrap();
+        let short_client = provider_client(&settings_path).unwrap();
+        save_provider(&settings_path, &json!({"base_url":"https://example.test/v1","request_timeout_seconds":3})).unwrap();
+        let long_client = provider_client(&settings_path).unwrap();
+        for (client, should_timeout) in [(short_client, true), (long_client, false)] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = std::thread::spawn(move || {
+                use std::io::Read;
+                let (mut stream, _) = listener.accept().unwrap();
+                stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+                let mut request = [0; 4096];
+                stream.read(&mut request).unwrap();
+                stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\na").unwrap();
+                std::thread::sleep(Duration::from_millis(1500));
+                let _ = stream.write_all(b"b");
+            });
+            let response = client.get(format!("http://{address}")).send().await.unwrap();
+            let body = response.text().await;
+            if should_timeout { assert!(body.unwrap_err().is_timeout()); }
+            else { assert_eq!(body.unwrap(), "ab"); }
+            server.join().unwrap();
+        }
+    }
 
     #[test]
     fn provider_key_is_stored_locally_but_never_returned() {

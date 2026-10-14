@@ -15,6 +15,8 @@ background worker count, and API key. The API key is never returned through the 
 is never written to the Vault or application database. A blank API-key field preserves the stored
 key while other provider settings are updated.
 
+AI setup exposes a shared **AI request timeout (seconds)** for all provider HTTP requests, including streaming conversations and connection tests. It accepts whole seconds from 1 to 3600 and defaults to 180 when the field is absent. The JSON provider field is `requestTimeoutSeconds` (`request_timeout_seconds` in the configuration API). Saving changes the deadline for new requests without restarting; requests already running retain their deadline.
+
 AI setup also shows the active Vault path. Change Vault location opens the native folder picker and
 restarts the app with the selected folder. Regenerate embeddings scans the current Vault and rebuilds
 semantic embeddings for its Markdown documents using the bundled model; it does not delete Vault files
@@ -25,7 +27,7 @@ genuine new installation and becomes `true` when the introduction is skipped or 
 missing field means an installation predates the introduction, so upgrades do not unexpectedly
 show first-install motion.
 
-Settings writes use a process-wide lock and temporary-file replacement. On Unix, the directory is
+A process-wide `SettingsStore` singleton owns all settings reads and writes. It loads each settings file once and serves immutable snapshots to the system. Updates serialize through its lock, replace the file atomically, and publish the new snapshot only after a successful write. Failed writes preserve the previous in-memory values. Isolated application homes keep separate snapshots. Manual edits to the JSON file require restarting the app. On Unix, the directory is
 restricted to mode `0700` and the file to `0600`. Workflow records, indexes, jobs, notifications,
 and generated application state remain in the platform application-data SQLite database.
 

@@ -3,7 +3,6 @@ use crate::workflow_foundation::{
     build_prompt, operation_policy, prompt_definition, validate_prompt_output,
     ApplicationDisposition, PromptId,
 };
-use reqwest::Client;
 use rusqlite::{params, OptionalExtension};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -808,10 +807,7 @@ async fn run_inner(
     } else {
         Value::String(prompt)
     };
-    let request = Client::builder()
-        .timeout(Duration::from_secs(120))
-        .build()
-        .map_err(|e| e.to_string())?
+    let request = crate::native::settings::provider_client(settings_path)?
         .post(format!(
             "{}/chat/completions",
             base_url.trim_end_matches('/')
@@ -1103,8 +1099,7 @@ async fn prepare_task_journey(
             let prompt = build_prompt(PromptId::TaskJourney, &json!({"context":{"locale":locale,"events":recorded}}),
             )
                 .map_err(|error| error.to_string())?.content;
-            let request = Client::builder().timeout(Duration::from_secs(30)).build()
-                .map_err(|error|error.to_string())?
+            let request = crate::native::settings::provider_client(settings_path)?
                 .post(format!("{}/chat/completions",base_url.trim_end_matches('/')))
                 .bearer_auth(api_key)
                 .json(&json!({"model":model,"messages":[{"role":"user","content":prompt}],"stream":false}))

@@ -1,6 +1,5 @@
 use crate::{native, NativeApplication, NativeOperation, NativeResponse};
 use serde_json::{json, Value};
-use std::time::Duration;
 use crate::workflow_foundation::{build_prompt, validate_prompt_output, PromptId};
 
 #[tauri::command]
@@ -19,10 +18,7 @@ pub(crate) async fn provider_request(
             &application.settings_path(),
             "problem_enrichment",
         )?;
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(10))
-            .build()
-            .map_err(|error| error.to_string())?;
+        let client = native::settings::provider_client(&application.settings_path())?;
         if operation.name == "problem.enrich" {
             let statement = operation.input.get("statement").and_then(Value::as_str).filter(|value| !value.trim().is_empty()).ok_or("statement is required")?;
             let citations = operation.input.get("citations").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).take(8).collect::<Vec<_>>().join(", ");

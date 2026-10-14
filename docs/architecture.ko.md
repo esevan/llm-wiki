@@ -69,6 +69,8 @@ migration을 transaction 안에서 실행합니다. 더 새로운 앱이 만든 
 다국어 MiniLM model을 로드합니다. Release 앱은 runtime에 model이나 font를 내려받지 않습니다. Build
 준비 단계가 model 파일 5개와 Nunito, DM Mono, Noto Sans KR WOFF2 subset 148개를 검증합니다.
 
+애플리케이션 설정은 `native/settings.rs`의 프로세스 공통 `SettingsStore` Singleton이 관리합니다. 모든 설정 사용처는 캐시된 스냅샷을 읽고 저장도 같은 객체를 통합니다. 디스크 파일의 원자적 교체가 성공한 뒤에만 새 스냅샷을 공유하며, 설정 경로가 다른 개발·테스트 home은 격리합니다. 공통 provider-client 생성 함수가 응답 스트리밍을 포함한 모든 외부 AI 제공자 HTTP 요청에 공유 Timeout을 적용합니다. 저장, 기본값, 갱신 동작은 [애플리케이션 설정](features/application-settings.ko.md)을 참고하세요.
+
 ## 검증 경계
 
 - Vitest가 React 조립과 Tauri application adapter를 보호합니다.

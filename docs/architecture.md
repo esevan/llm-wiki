@@ -73,6 +73,8 @@ MiniLM model only when semantic work needs it. The release application never dow
 font at runtime. Build preparation verifies five model files and copies 148 WOFF2 subsets for
 Nunito, DM Mono, and Noto Sans KR.
 
+Application configuration is owned by the process-wide `SettingsStore` singleton in `native/settings.rs`. All settings consumers read its cached snapshots and route writes through it; atomic disk replacement succeeds before the new snapshot is published. Separate settings paths isolate development and test homes. A single provider-client factory reads the shared AI timeout for every outbound provider HTTP request, including response streams. See [application settings](features/application-settings.md) for persistence, defaults and update behavior.
+
 ## Verification boundaries
 
 - Vitest protects React composition and the Tauri application adapter.

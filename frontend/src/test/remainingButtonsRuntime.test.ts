@@ -197,12 +197,12 @@ describe('production manual, search, and provider controls', () => {
       <form id="search-form"><input id="query" value="wiki"><input id="semantic" type="checkbox"><button>Search</button></form><div id="results"></div>
       <div id="item-detail-notes"><button data-retry-knowledge="retry.md"></button></div>
       <form id="goal-form"><input id="goal-title" value="Ship audit"><button>Save goal</button></form><div id="dashboard"></div>
-      <form id="provider-form"><details></details><input id="provider-url" value="http://local"><input id="provider-model"><input id="provider-advanced-model"><input id="provider-key" value="secret"><input data-advanced-task="review" type="checkbox"><button>Save</button></form>
+      <form id="provider-form"><details></details><input id="provider-url" value="http://local"><input id="provider-model"><input id="provider-advanced-model"><input id="provider-timeout" type="number" min="1" max="3600" required><input id="provider-key" value="secret"><input data-advanced-task="review" type="checkbox"><button>Save</button></form>
       <button id="provider-test"></button><div id="provider-status"></div>
     `;
     const twenty = Array.from({ length: 20 }, (_, index) => ({ path: `p${index}.md`, title: `T${index}`, snippet: '' }));
-    const api = vi.fn(async (path: string) => {
-      if (path === '/provider/config') return { base_url: '', model: '', advanced_tasks: {} };
+    const api = vi.fn(async (path: string, _options?: { method?: string; body?: string }) => {
+      if (path === '/provider/config') return { base_url: '', model: '', advanced_tasks: {}, request_timeout_seconds: _options?.method === 'PUT' ? 240 : 600 };
       if (path.startsWith('/search')) return { results: twenty };
       if (path === '/provider/test') return { models: ['model-a'] };
       if (path === '/dashboard') return { goals: [], events: [] };
@@ -224,8 +224,13 @@ describe('production manual, search, and provider controls', () => {
     ($('#goal-form button') as HTMLButtonElement).click();
     await flush();
     expect(api).toHaveBeenCalledWith('/goals', expect.objectContaining({ method: 'POST' }));
+    expect(($('[data-control="provider-worker-count"]') as HTMLInputElement).value).toBe('2');
+    expect(($('#provider-timeout') as HTMLInputElement).value).toBe('600');
+    ($('#provider-timeout') as HTMLInputElement).value = '240';
     ($('#provider-form button') as HTMLButtonElement).click();
     await flush();
+    const saveCall = api.mock.calls.find(([path, options]) => path === '/provider/config' && options?.method === 'PUT');
+    expect(JSON.parse(saveCall![1]!.body!).request_timeout_seconds).toBe(240);
     $('#provider-test').click();
     await flush();
     expect(api).toHaveBeenCalledWith('/provider/config', expect.objectContaining({ method: 'PUT' }));
