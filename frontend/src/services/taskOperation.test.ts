@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { taskOperation } from './taskOperation';
 
 describe('Task contract routing', () => {
+  it('binds review note task identity to the URL', () => {
+    expect(taskOperation('POST', '/tasks/actual/knowledge/review-notes', { taskId: 'forged', knowledgeRevision: 2, expectedContentHash: 'hash', body: 'Review', operationId: 'note-op' }, 'en')).toEqual({ name: 'task-knowledge.review-note', input: { taskId: 'actual', knowledgeRevision: 2, expectedContentHash: 'hash', body: 'Review', operationId: 'note-op', locale: 'en' } });
+  });
   it('binds the URL identity instead of accepting a forged body identity', () => {
     expect(taskOperation('POST', '/tasks/actual/completions', { taskId: 'other', operationId: 'op', expectedTaskRevision: 3 }, 'ko'))
       .toEqual({ name: 'task.completion.create', input: { taskId: 'actual', operationId: 'op', expectedTaskRevision: 3, locale: 'ko' } });

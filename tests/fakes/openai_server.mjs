@@ -25,7 +25,7 @@ function deterministicResult(prompt) {
   if (instructions.includes("Return JSON only {message:string,usedFindingIds:string[]}")) return { message: "I will use the recorded context to prepare the preview.", usedFindingIds: [] };
   if (instructions.includes("exactly retrieval and preliminaryAssumptions")) return { retrieval: noSearch, preliminaryAssumptions: [] };
   if (instructions.includes("Write a useful, complete, reviewable WORK preview now")) {
-    const original = context.context?.taskSnapshot ?? context.taskSnapshot ?? context.session?.taskSnapshot ?? {};
+    const original = context.context?.session?.taskSnapshot ?? context.context?.taskSnapshot ?? context.taskSnapshot ?? context.session?.taskSnapshot ?? {};
     return { preview: { description: original.detail || "Review the supplied request.", background: "", goal: original.outcome || "Prepare the requested work.", scope: original.scope || "", nonGoals: original.nonGoals || "", constraints: [], completionCriteria: [], initialApproach: [], assumptions: [] }, claimSources: [], optionalInvestigation: noSearch };
   }
   if (instructions.includes("Review the supplied current preview and exact references")) return { findings: [] };

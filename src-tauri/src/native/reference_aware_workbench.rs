@@ -31,15 +31,6 @@ fn required_fields(value: &Value) -> Result<(), String> {
             return Err(format!("invalid_preview: missing {key}"));
         }
     }
-    if value["description"]
-        .as_str()
-        .unwrap_or("")
-        .trim()
-        .is_empty()
-        || value["goal"].as_str().unwrap_or("").trim().is_empty()
-    {
-        return Err("invalid_preview: description and goal are required".into());
-    }
     if !value["constraints"].is_array() || !value["completionCriteria"].is_array() {
         return Err("invalid_preview: list fields must be arrays".into());
     }

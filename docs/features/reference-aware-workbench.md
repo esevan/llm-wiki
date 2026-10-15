@@ -5,8 +5,7 @@
 Preview planning and final writing each use the shared **AI request timeout (seconds)** in AI setup (default 180; range 1–3600). The deadline includes the complete response body. These stages run sequentially with local retrieval between them, so the whole preview can exceed one request deadline. Queue waiting is outside that deadline. Saving a timeout applies to new requests without restarting. A timeout leaves the job failed and available for an explicit retry; preview generation does not automatically retry.
 
 Refinement now prepares its work proposal through a retrieval plan, relevant local
-Vault evidence, and a structured final preview. Necessary search finishes before a
-useful preview is saved. Missing evidence is represented through assumptions; an
+Vault evidence, and a structured final preview. When a complete retrieval plan requests necessary search, it finishes before the preview is saved. Missing evidence is represented through assumptions; an
 unnecessary search, an empty search and a failed operation remain distinct states.
 The canonical Task changes only after an explicit apply.
 
@@ -63,3 +62,9 @@ retains exact document versions and sections, combining use and counterevidence 
 the stored statements they grounded. Viewing, mentioning and discovery alone do not
 create publication links. An explicit exclusion remains effective until the user marks
 that source used again; automatic generation or adoption does not undo it.
+
+## Partial generated previews
+
+Absent optional strings and lists are completed locally. An omitted Task field keeps its saved canonical value on apply, including after restoring a preview; omission never means clearing an existing title, detail, scope, non-goals, or completion criteria. A missing description or goal can reuse the exact saved Task context. Capture text can supply an unrefined description; an unavailable goal remains incomplete.
+
+An incomplete retrieval decision skips the lookup and marks reference coverage unchecked, rather than claiming no search was necessary. Missing optional investigation is skipped. Partial previews expose their diagnostics for user review. Explicit wrong types, invalid supplied references and unsupported source-backed assumption bindings remain errors. These repairs do not add a model request or retry: planning and finalization still use one request each.

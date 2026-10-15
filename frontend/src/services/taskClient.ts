@@ -298,6 +298,8 @@ export const taskClient = {
     request<ConflictReviewHistory>("/conflict-reviews", "GET", { subject }),
   cancelReview: (id: string) =>
     request(`/conflict-reviews/${encodeURIComponent(id)}/cancel`, "POST"),
+  addKnowledgeReviewNote: (id: string, input: { knowledgeRevision: number; expectedContentHash: string; body: string; operationId: string }) =>
+    request<KnowledgeReviewProjection>(`/tasks/${encodeURIComponent(id)}/knowledge/review-notes`, "POST", input),
   knowledge: (id: string) =>
     request<KnowledgeReviewProjection>(`/tasks/${encodeURIComponent(id)}/knowledge`),
   knowledgeDraft: (id: string, expectedTaskRevision: number) =>

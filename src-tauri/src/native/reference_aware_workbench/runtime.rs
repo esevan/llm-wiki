@@ -3,6 +3,55 @@ use super::*;
 use crate::workflow_foundation::PromptId;
 use rusqlite::{Connection, Transaction};
 
+// Local, bounded normalization never invents a source or adds a provider request.
+pub(crate) fn normalize_response(id: PromptId, value: &mut Value, context: &Value) {
+    if !matches!(id, PromptId::WorkPreviewPlanner | PromptId::WorkPreviewFinalizer) || !value.is_object() { return; }
+    let mut diagnostics = Vec::<String>::new();
+    let mut omitted = Vec::<String>::new();
+    value.as_object_mut().unwrap().remove("generationStatus");
+    value.as_object_mut().unwrap().remove("generationDiagnostics");
+    value.as_object_mut().unwrap().remove("omittedPreviewFields");
+    fn fill(v: &mut Value, key: &str, default: Value) -> bool {
+        if let Some(o)=v.as_object_mut() { if !o.contains_key(key) { o.insert(key.into(),default); return true; } } false
+    }
+    fn normalize_intent(v: &mut Value, diagnostics: &mut Vec<String>, label: &str) {
+        if !v.is_object() { return; }
+        let missing_control=v.get("needed").is_none() || (v["needed"]==true && v.get("queries").is_none());
+        if missing_control {
+            diagnostics.push(format!("{label}: retrieval decision incomplete; lookup skipped, evidence unchecked"));
+            // Validate supplied values before replacing the incomplete decision.
+            if v.get("needed").is_some_and(|x|!x.is_boolean()) || v.get("queries").is_some_and(|x|x.as_array().is_none_or(|a|a.iter().any(|q|!q.is_string()))) { return; }
+            v["needed"]=json!(false);
+            v["queries"]=json!([]);
+        }
+        if fill(v,"reason",json!("Reason not supplied")) {diagnostics.push(format!("{label}.reason omitted"));}
+        for (k,d) in [("queries",json!([])),("aspects",json!([])),("filters",json!({})),("requery",Value::Null)] {fill(v,k,d);}
+    }
+    if id==PromptId::WorkPreviewPlanner {
+        fill(value,"preliminaryAssumptions",json!([]));
+        if value.get("retrieval").is_none() {value["retrieval"]=json!({});}
+        normalize_intent(&mut value["retrieval"],&mut diagnostics,"retrieval");
+    } else {
+        let session=&context["context"]["session"];
+        let task=&session["taskSnapshot"];
+        fill(value,"claimSources",json!([]));
+        if let Some(p)=value.get_mut("preview").filter(|p|p.is_object()) {
+            for (k,default) in [("description",task["detail"].as_str().or(task["title"].as_str()).or(session["originalCapture"]["text"].as_str()).unwrap_or("").to_string()),("goal",task["outcome"].as_str().unwrap_or("").to_string()),("background",String::new()),("scope",task["scope"].as_str().unwrap_or("").to_string()),("nonGoals",task["nonGoals"].as_str().unwrap_or("").to_string())] {
+                if fill(p,k,json!(default)) {omitted.push(k.into());}
+            }
+            for k in ["constraints","completionCriteria","initialApproach","assumptions"] {if fill(p,k,json!([])) {omitted.push(k.into());}}
+            if let Some(a)=p["assumptions"].as_array_mut() {for a in a {if a["basis"]!="source" {fill(a,"sourceClaimIds",json!([]));}}}
+        }
+        if fill(value,"optionalInvestigation",json!({"needed":false,"reason":"Optional investigation not supplied; skipped","queries":[],"aspects":[],"filters":{},"requery":null})) {diagnostics.push("optionalInvestigation omitted; skipped".into());}
+        normalize_intent(&mut value["optionalInvestigation"],&mut diagnostics,"optionalInvestigation");
+        if !omitted.is_empty() {diagnostics.push(format!("Preview fields omitted: {}; existing Task values preserved",omitted.join(", ")));}
+        if context["planner"]["generationStatus"]=="partial" {diagnostics.push("Planner incomplete; reference coverage unchecked".into());}
+    }
+    value["generationStatus"]=json!(if diagnostics.is_empty(){"complete"}else{"partial"});
+    value["generationDiagnostics"]=json!(diagnostics);
+    value["omittedPreviewFields"]=json!(omitted);
+}
+
 fn string<'a>(v: &'a Value, key: &str) -> Result<&'a str, String> {
     v[key]
         .as_str()
@@ -29,7 +78,7 @@ fn keys(v: &Value, allowed: &[&str]) -> Result<(), String> {
     }
 }
 pub(crate) fn validate_planner_output(v: &Value) -> Result<(), String> {
-    keys(v, &["retrieval", "preliminaryAssumptions"])?;
+    keys(v, &["retrieval", "preliminaryAssumptions", "generationStatus", "generationDiagnostics", "omittedPreviewFields"])?;
     validate_planner(v)?;
     let mut ids = std::collections::HashSet::new();
     for assumption in list(&v["preliminaryAssumptions"])? {
@@ -47,7 +96,7 @@ pub(crate) fn validate_planner_output(v: &Value) -> Result<(), String> {
     Ok(())
 }
 pub(crate) fn validate_output(v: &Value) -> Result<(), String> {
-    keys(v, &["preview", "claimSources", "optionalInvestigation"])?;
+    keys(v, &["preview", "claimSources", "optionalInvestigation", "generationStatus", "generationDiagnostics", "omittedPreviewFields"])?;
     let p = &v["preview"];
     keys(
         p,
@@ -64,6 +113,11 @@ pub(crate) fn validate_output(v: &Value) -> Result<(), String> {
         ],
     )?;
     required_fields(p)?;
+    for key in ["description","goal"] {
+        if p[key].as_str().is_some_and(|s|s.trim().is_empty()) && !v["omittedPreviewFields"].as_array().is_some_and(|a|a.iter().any(|k|k==key)) {
+            return Err(format!("invalid_preview: empty {key}"));
+        }
+    }
     for k in ["description", "background", "goal", "scope", "nonGoals"] {
         if p[k].as_str().is_none_or(|s| s.len() > 12000) {
             return Err("invalid_preview: text".into());
@@ -88,7 +142,10 @@ pub(crate) fn validate_output(v: &Value) -> Result<(), String> {
         {
             return Err("invalid_preview: assumption".into());
         }
-        list(&a["sourceClaimIds"])?;
+        let sources = list(&a["sourceClaimIds"])?;
+        if a["basis"] == "source" && sources.is_empty() {
+            return Err("invalid_reference_binding: source assumption requires sourceClaimIds".into());
+        }
     }
     let claims = list(&v["claimSources"])?;
     for c in claims {
@@ -266,6 +323,7 @@ pub(crate) async fn prepare(
     let planner_ms = started.elapsed().as_millis();
     let intent = validate_planner(&planner)?;
     let (mut outcome, mut refs) = retrieve(db, vault_root, semantic, &intent)?;
+    if planner["generationStatus"]=="partial" {outcome="unverified".into();}
     for reference in input["promptContext"]["documentMentions"].as_array().into_iter().flatten(){
         if refs.iter().any(|r|r["documentId"]==reference["documentId"]&&r["documentVersion"]==reference["documentVersion"]&&r["section"]==reference["section"]){continue}
         let exact=vault::read(vault_root,string(reference,"path")?,"en")?;
@@ -286,17 +344,29 @@ pub(crate) async fn prepare(
     let finalizer_ms = started.elapsed().as_millis() - planner_ms - retrieval_ms;
     let fields = finalize(&output, &refs)?;
     // Preserve existing Task/Capture proposal consumers while exposing structured fields.
-    let patch = task_fields(&fields);
+    let mut patch = task_fields(&fields);
+    if input["taskBinding"]["id"].is_string() {
+        preserve_omitted_task_fields(&mut patch, &output["omittedPreviewFields"]);
+    }
     let proposal = if input["taskBinding"]["id"].is_string() {
         json!({"id":"work-preview","type":"task_patch","payload":{"patch":patch,"expectedTaskRevision":input["taskBinding"]["taskRevision"],"hierarchyContextHash":input["hierarchyContextHash"]}})
     } else {
         json!({"id":"work-preview","type":"new_task","payload":patch})
     };
     Ok(
-        json!({"stageTimings":{"plannerMs":planner_ms,"retrievalMs":retrieval_ms,"finalizerMs":finalizer_ms},"sourceRoot":vault_root,"proposals":[proposal],"structuredPreview":fields,"claimSources":output["claimSources"],"references":refs,"retrievalOutcome":outcome,"optionalInvestigation":output["optionalInvestigation"]}),
+        json!({"generationStatus":output["generationStatus"],"generationDiagnostics":output["generationDiagnostics"],"omittedPreviewFields":output["omittedPreviewFields"],"stageTimings":{"plannerMs":planner_ms,"retrievalMs":retrieval_ms,"finalizerMs":finalizer_ms},"sourceRoot":vault_root,"proposals":[proposal],"structuredPreview":fields,"claimSources":output["claimSources"],"references":refs,"retrievalOutcome":outcome,"optionalInvestigation":output["optionalInvestigation"]}),
     )
 }
-fn task_fields(f: &Value) -> Value {
+pub(super) fn preserve_omitted_task_fields(patch: &mut Value, omitted: &Value) {
+    let absent=|k:&str|omitted.as_array().is_some_and(|a|a.iter().any(|v|v.as_str()==Some(k)));
+    let Some(patch)=patch.as_object_mut() else{return};
+    for (source,target) in [("description","title"),("goal","outcome"),("scope","scope"),("nonGoals","nonGoals"),("completionCriteria","validationCriteria")] {
+        if absent(source) {patch.remove(target);}
+    }
+    // Detail combines these fields; absence cannot safely erase the prior prose.
+    if ["description","background","constraints","initialApproach"].iter().any(|k|absent(k)) {patch.remove("detail");}
+}
+pub(super) fn task_fields(f: &Value) -> Value {
     let lines = |k: &str| {
         f[k].as_array()
             .into_iter()
@@ -326,8 +396,10 @@ pub(crate) fn save_generated_tx(
         .unwrap_or_else(id);
     let next = head(tx, session)? + 1;
     let fields = &p["structuredPreview"];
+    let mut stored_fields=fields.clone();
+    stored_fields["_generation"]=json!({"omittedPreviewFields":p["omittedPreviewFields"],"generationStatus":p["generationStatus"],"generationDiagnostics":p["generationDiagnostics"]});
     tx.execute("INSERT OR IGNORE INTO work_previews(id,session_id,subject_type,subject_id) SELECT ?,id,CASE WHEN task_id IS NULL THEN 'capture' ELSE 'task' END,COALESCE(task_id,capture_id) FROM refinement_sessions WHERE id=?",params![preview,session]).map_err(|e|e.to_string())?;
-    tx.execute("INSERT INTO work_preview_versions(preview_id,version,derivation_kind,generation_job_id,task_revision,context_revision,locale,fields_json,content_hash,prompt_id,prompt_version) VALUES(?,?,'generated',?,?,?,?,?,?,'work_preview_finalizer',1)",params![preview,next,job,input["taskBinding"]["taskRevision"].as_i64(),context,input["locale"].as_str().unwrap_or("en"),fields.to_string(),hash(fields)]).map_err(|e|e.to_string())?;
+    tx.execute("INSERT INTO work_preview_versions(preview_id,version,derivation_kind,generation_job_id,task_revision,context_revision,locale,fields_json,content_hash,prompt_id,prompt_version) VALUES(?,?,'generated',?,?,?,?,?,?,'work_preview_finalizer',1)",params![preview,next,job,input["taskBinding"]["taskRevision"].as_i64(),context,input["locale"].as_str().unwrap_or("en"),stored_fields.to_string(),hash(fields)]).map_err(|e|e.to_string())?;
     for a in list(&fields["assumptions"])? {
         tx.execute("INSERT INTO work_preview_assumptions(preview_id,version,id,text,status,basis,source_claim_ids_json) VALUES(?,?,?,?,'open',?,?)",params![preview,next,string(a,"id")?,string(a,"text")?,string(a,"basis")?,a["sourceClaimIds"].to_string()]).map_err(|e|e.to_string())?;
     }
@@ -361,7 +433,7 @@ pub(crate) fn save_generated_tx(
     }
     tx.execute("UPDATE work_previews SET current_version=?,context_revision=?,task_revision=?,updated_at=CURRENT_TIMESTAMP WHERE id=?",params![next,context,input["taskBinding"]["taskRevision"].as_i64(),preview]).map_err(|e|e.to_string())?;
     Ok(
-        json!({"previewId":preview,"version":next,"contentHash":hash(fields),"fields":fields,"references":p["references"],"retrievalOutcome":p["retrievalOutcome"]}),
+        json!({"previewId":preview,"version":next,"contentHash":hash(fields),"fields":fields,"references":p["references"],"retrievalOutcome":p["retrievalOutcome"],"generationStatus":p["generationStatus"],"generationDiagnostics":p["generationDiagnostics"]}),
     )
 }
 fn rows(c: &Connection, sql: &str, args: impl rusqlite::Params) -> Result<Vec<Value>, String> {
@@ -510,6 +582,9 @@ async fn investigate(
 }
 fn version(c: &Connection, preview: &str, v: i64) -> Result<Value, String> {
     let mut result=c.query_row("SELECT fields_json,content_hash,derivation_kind,derived_from_version,task_revision,context_revision FROM work_preview_versions WHERE preview_id=? AND version=?",params![preview,v],|r|Ok(json!({"previewId":preview,"version":v,"fields":serde_json::from_str::<Value>(&r.get::<_,String>(0)?).unwrap_or(Value::Null),"contentHash":r.get::<_,String>(1)?,"derivationKind":r.get::<_,String>(2)?,"derivedFromVersion":r.get::<_,Option<i64>>(3)?,"taskRevision":r.get::<_,Option<i64>>(4)?,"contextRevision":r.get::<_,i64>(5)?}))).map_err(|e|e.to_string())?;
+    if let Some(metadata)=result["fields"].as_object_mut().and_then(|f|f.remove("_generation")) {
+        for key in ["omittedPreviewFields","generationStatus","generationDiagnostics"] {result[key]=metadata[key].clone();}
+    }
     result["assumptions"] = json!(rows(c, "SELECT json_object('id',id,'text',text,'status',status,'basis',basis,'sourceClaimIds',json(source_claim_ids_json)) FROM work_preview_assumptions WHERE preview_id=? AND version=? ORDER BY rowid", params![preview,v])?);
     result["references"]=json!(rows(c,"SELECT json_set(metadata_json,'$.documentId',document_id,'$.documentVersion',document_version,'$.section',section,'$.role',role,'$.claimIds',json(claim_ids_json)) FROM work_preview_references WHERE preview_id=? AND version=? ORDER BY rowid",params![preview,v])?);
     Ok(result)
@@ -565,7 +640,7 @@ pub(crate) fn execute(
         let interactions = rows(&c, "SELECT DISTINCT json_object('documentId',document_id,'documentVersion',document_version,'section',section,'kind',kind,'contextRevision',context_revision) FROM reference_interactions WHERE preview_id=? ORDER BY rowid", [&preview])?;
         let last_run=rows(&c,"SELECT payload_json FROM refinement_drafts WHERE session_id=? ORDER BY revision DESC LIMIT 1",[session])?.into_iter().next().unwrap_or(Value::Null);
         return Ok(
-            json!({"mentionDraft":mention_draft,"generation":generation,"retrievalOutcome":last_run["retrievalOutcome"],"stageTimings":last_run["stageTimings"],"preview":{"id":preview,"currentVersion":current,"contextRevision":context,"versions":versions,"current":version(&c,&preview,current)?},"interactions":interactions,"investigations":investigations,"findings":current_findings(&c,session)?}),
+            json!({"mentionDraft":mention_draft,"generation":generation,"retrievalOutcome":last_run["retrievalOutcome"],"generationStatus":last_run["generationStatus"],"generationDiagnostics":last_run["generationDiagnostics"],"stageTimings":last_run["stageTimings"],"preview":{"id":preview,"currentVersion":current,"contextRevision":context,"versions":versions,"current":version(&c,&preview,current)?},"interactions":interactions,"investigations":investigations,"findings":current_findings(&c,session)?}),
         );
     }
     if name == "task-refinement.reference-list" && owner.is_none(){return Ok(json!({"items":[]}))}
@@ -648,18 +723,26 @@ pub(crate) fn execute(
             } else {
                 stored["fields"].clone()
             };
+            let remaining_omissions=stored["omittedPreviewFields"].as_array().map(|keys|keys.iter().filter(|key| {
+                !edit || key.as_str().is_some_and(|key| fields[key]==stored["fields"][key])
+            }).cloned().collect::<Vec<_>>()).unwrap_or_default();
             if edit {
                 let mut check = fields.clone();
                 check["assumptions"] = json!([]);
                 validate_output(
-                    &json!({"preview":check,"claimSources":[],"optionalInvestigation":{"needed":false,"reason":"User edit","queries":[],"aspects":[],"filters":{},"requery":null}}),
+                    &json!({"preview":check,"claimSources":[],"omittedPreviewFields":remaining_omissions,"optionalInvestigation":{"needed":false,"reason":"User edit","queries":[],"aspects":[],"filters":{},"requery":null}}),
                 )?;
                 if fields["assumptions"] != stored["fields"]["assumptions"] {
                     return Err("invalid_input: assumption bindings must be preserved".into());
                 }
             }
             let next = actual + 1;
-            tx.execute("INSERT INTO work_preview_versions(preview_id,version,derivation_kind,derived_from_version,generation_job_id,task_revision,context_revision,locale,fields_json,content_hash,prompt_id,prompt_version) SELECT preview_id,?,?,version,generation_job_id,task_revision,context_revision,locale,?,?,prompt_id,prompt_version FROM work_preview_versions WHERE preview_id=? AND version=?",params![next,if edit{"edited"}else{"restored"},fields.to_string(),hash(&fields),preview,selected]).map_err(|e|e.to_string())?;
+            let mut persisted_fields=fields.clone();
+            if stored["generationStatus"].is_string() {
+                // Editing one field does not acknowledge defaults in unrelated fields.
+                persisted_fields["_generation"]=json!({"omittedPreviewFields":remaining_omissions,"generationStatus":stored["generationStatus"],"generationDiagnostics":stored["generationDiagnostics"]});
+            }
+            tx.execute("INSERT INTO work_preview_versions(preview_id,version,derivation_kind,derived_from_version,generation_job_id,task_revision,context_revision,locale,fields_json,content_hash,prompt_id,prompt_version) SELECT preview_id,?,?,version,generation_job_id,task_revision,context_revision,locale,?,?,prompt_id,prompt_version FROM work_preview_versions WHERE preview_id=? AND version=?",params![next,if edit{"edited"}else{"restored"},persisted_fields.to_string(),hash(&fields),preview,selected]).map_err(|e|e.to_string())?;
             copy_bindings(&tx, &preview, selected, next)?;
             tx.execute("UPDATE work_previews SET current_version=?,updated_at=CURRENT_TIMESTAMP WHERE id=?",params![next,preview]).map_err(|e|e.to_string())?;
             json!({"previewId":preview,"version":next,"derivedFromVersion":selected,"contentHash":hash(&fields),"transitionCause":if edit{Value::Null}else{json!("version_restore")}})
@@ -723,7 +806,8 @@ pub(crate) fn execute(
                     return Err("reference_version_unavailable".into());
                 }
             }
-            let patch = task_fields(&stored["fields"]);
+            let mut patch = task_fields(&stored["fields"]);
+            if task.is_some() {preserve_omitted_task_fields(&mut patch,&stored["omittedPreviewFields"]);}
             let payload = if task.is_some() {
                 json!({"patch":patch,"expectedTaskRevision":expected})
             } else {

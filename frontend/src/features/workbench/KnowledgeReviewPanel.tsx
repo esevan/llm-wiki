@@ -147,6 +147,8 @@ export function KnowledgeReviewPanel({ taskId, completed, generationQueued, refr
   const [body, setBody] = useState("");
   const [savedBody, setSavedBody] = useState("");
   const [editing, setEditing] = useState(false);
+  const [noteDrafts, setNoteDrafts] = useState<Record<string, string>>({});
+  const [savingNote, setSavingNote] = useState(false);
   const [selectedIdeas, setSelectedIdeas] = useState<Set<string>>(new Set());
   const [source, setSource] = useState<ExactReferenceBinding>();
   const [loading, setLoading] = useState(true);
@@ -164,7 +166,9 @@ export function KnowledgeReviewPanel({ taskId, completed, generationQueued, refr
   const observedGenerationQueue = useRef(false);
   const loadSequence = useRef(0);
   const root = useRef<HTMLElement>(null);
-  const dirty = editing && body !== savedBody;
+  const bodyDirty = editing && body !== savedBody;
+  const noteDirty = Object.entries(noteDrafts).some(([key, value]) => key.startsWith(`${taskId}:`) && Boolean(value.trim()));
+  const dirty = bodyDirty || noteDirty;
   const dirtyRef = useRef(dirty);
   dirtyRef.current = dirty;
   useEffect(() => { onDirtyChange?.(dirty); return () => onDirtyChange?.(false); }, [dirty, onDirtyChange]);
@@ -302,6 +306,7 @@ export function KnowledgeReviewPanel({ taskId, completed, generationQueued, refr
     finally { setBusy(undefined); }
   };
   const save = useCallback(async () => {
+    if (noteDirty) { setStatus(text.unsavedReviewNote); return false; }
     if (!version || version.revision !== currentRevision || !version.generationSnapshotHash || busy || !dirty) return !dirty;
     setBusy("edit"); setError(""); setStatus(text.saving);
     pendingGenerationRevision.current = undefined;
@@ -316,10 +321,10 @@ export function KnowledgeReviewPanel({ taskId, completed, generationQueued, refr
     } catch (cause) { setError(`${text.saveFailed} ${String(cause instanceof Error ? cause.message : cause)}`); }
     finally { setBusy(undefined); }
     return false;
-  }, [body, busy, currentRevision, dirty, load, taskId, text.edited, text.saveFailed, text.saving, version]);
+  }, [body, busy, currentRevision, dirty, load, noteDirty, taskId, text.edited, text.saveFailed, text.saving, text.unsavedReviewNote, version]);
   useImperativeHandle(ref, () => ({
     save,
-    discard: () => { setBody(savedBody); setEditing(false); setStatus(""); setError(""); },
+    discard: () => { setNoteDrafts({}); setBody(savedBody); setEditing(false); setStatus(""); setError(""); },
     focus: () => root.current?.focus({ preventScroll: true }),
   }), [savedBody, save]);
   const generate = async () => {
@@ -331,8 +336,22 @@ export function KnowledgeReviewPanel({ taskId, completed, generationQueued, refr
     catch (cause) { pendingGenerationRevision.current = undefined; setError(String(cause instanceof Error ? cause.message : cause)); setStatus(""); }
     finally { setBusy(undefined); }
   };
+  const saveReviewNote = async () => {
+    if (!version || savingNote) return;
+    const key = `${taskId}:${version.revision}:${version.contentHash}`;
+    const note = (noteDrafts[key] ?? "").trim();
+    if (!note) return;
+    setSavingNote(true); setError("");
+    try {
+      await taskClient.addKnowledgeReviewNote(taskId, { knowledgeRevision: version.revision, expectedContentHash: version.contentHash, body: note, operationId: operationId() });
+      setNoteDrafts(current => ({ ...current, [key]: "" }));
+      await load(version.revision);
+      setStatus(text.reviewNoteSaved);
+    } catch (cause) { setError(`${text.operationFailed} ${String(cause instanceof Error ? cause.message : cause)}`); }
+    finally { setSavingNote(false); }
+  };
   const preparePublication = async () => {
-    if (!version?.generationSnapshotHash || !onPrepareArchive || busy || dirty) return;
+    if (!version?.generationSnapshotHash || version.qualityState !== "valid" || !onPrepareArchive || busy || dirty) return;
     setBusy("prepare"); setError(""); setStatus(text.preparingPublication);
     try {
       const nextOperationId = operationId();
@@ -402,6 +421,8 @@ export function KnowledgeReviewPanel({ taskId, completed, generationQueued, refr
   if (!projection) return <section ref={root} className="knowledge-review" aria-label={text.title} tabIndex={-1}><p role="alert">{text.loadFailed} {error}</p><button type="button" data-control="knowledge-review-retry" onClick={() => void load()}>{text.retry}</button></section>;
   if (!version) return <section ref={root} className="knowledge-review knowledge-review-empty" aria-label={text.title} tabIndex={-1}><header><div><p className="knowledge-review-kicker">{text.privateDraft}</p><h3>{text.title}</h3></div><span className="knowledge-state">{text.notPublished}</span></header><p>{text.empty}</p><button type="button" data-control="task-knowledge-draft" disabled={!completed || generationQueued || busy === "generate"} onClick={() => void generate()}>{busy === "generate" || generationQueued ? text.generating : text.generate}</button>{error && <p role="alert">{error}</p>}</section>;
 
+  const noteKey = `${taskId}:${version.revision}:${version.contentHash}`;
+  const reviewNotes = (projection.reviewNotes ?? []).filter(note => note.knowledgeRevision === version.revision && note.contentHash === version.contentHash);
   const article = version.result.article;
   const outcomes = article?.finalOutcomes ?? [];
   const findings = version.result.qualityFindings ?? [];
@@ -409,9 +430,10 @@ export function KnowledgeReviewPanel({ taskId, completed, generationQueued, refr
   const proposalConflict = proposal?.outcome === "conflict";
   return <section ref={root} className="knowledge-review" aria-label={text.title} data-content-hash={version.contentHash} tabIndex={-1}>
     <header className="knowledge-review-header">
-      <div><p className="knowledge-review-kicker">{text.privateDraft}</p><ContentRevisionTransition as="h3" entityKey={`knowledge:${taskId}`} revision={version.revision} cause={appliedTransition?.revision === version.revision ? appliedTransition.cause : undefined} historical={version.revision !== currentRevision} variant="title">{article?.title ?? version.title}</ContentRevisionTransition><p>{text.articleType}: {article?.type ?? version.articleType}</p></div>
+      <div><p className="knowledge-review-kicker">{text.privateDraft}</p><ContentRevisionTransition as="h3" entityKey={`knowledge:${taskId}`} revision={version.revision} cause={appliedTransition?.revision === version.revision ? appliedTransition.cause : undefined} historical={version.revision !== currentRevision} variant="title">{article?.title ?? version.title}</ContentRevisionTransition><p>{text.articleType}: {(article?.type ?? version.articleType) || text.unclassified}</p></div>
       <div className="knowledge-review-states"><span className={`knowledge-state is-${version.freshness}`}>{version.freshness === "current" ? text.current : text.stale}</span><span className="knowledge-state">{version.revision === currentRevision ? text.currentPrivate : text.historical}</span><span className="knowledge-state">{version.revision === publishedRevision ? text.exactPublished : text.notPublished}</span></div>
     </header>
+    {version.qualityState !== "valid" && <section className="knowledge-quality" data-control="knowledge-unverified"><h4>{text.unverifiedDraft}</h4>{version.modelError && <p>{version.modelError}</p>}</section>}
     <DraftVersionControls versions={previews.map(item => ({ version: item.version, derivationKind: item.derivationKind, createdAt: item.createdAt, derivedFromVersion: item.derivedFromVersion, current: item.current, contentHash: item.contentHash }))} selected={version.revision} currentVersion={currentRevision} comparison={comparison} disabled={Boolean(busy) || dirty} restoreDisabled={version.revision === currentRevision} onSelect={selectVersion} onCompare={(left: number, right: number) => { const a = previews.find(item => item.version === left); const b = previews.find(item => item.version === right); if (a && b) setComparison(compare(a, b)); }} onRestore={(revision: number) => void restore(revision)} />
     <p className="knowledge-compare-hint">{text.compareHint}</p>
     <div className="knowledge-regenerate"><button type="button" data-control="knowledge-version-regenerate" disabled={!completed || generationQueued || Boolean(busy) || dirty} onClick={() => void generate()}>{busy === "generate" || generationQueued ? text.generating : text.regenerate}</button></div>
@@ -421,7 +443,7 @@ export function KnowledgeReviewPanel({ taskId, completed, generationQueued, refr
     <section className="knowledge-outcomes" aria-labelledby="knowledge-outcomes-title"><h4 id="knowledge-outcomes-title">{text.finalOutcomes}</h4>{outcomes.length ? <ol>{outcomes.map(outcome => <li key={outcome.topicKey}><strong>{outcome.topicKey}</strong><p>{outcome.statement}</p></li>)}</ol> : <p>{text.noFinalOutcomes}</p>}</section>
     <section className="knowledge-article" aria-label={text.articleBody}>
       {editing ? <label className="knowledge-draft-editor"><span>{text.edit}</span><textarea data-control="task-knowledge-draft-body" value={body} onChange={event => setBody(event.target.value)} /></label> : <ContentRevisionTransition as="div" entityKey={`knowledge:${taskId}:body`} revision={version.revision} cause={appliedTransition?.revision === version.revision ? appliedTransition.cause : undefined} historical={version.revision !== currentRevision} variant="body" renderContent={content => <KnowledgeMarkdown>{content}</KnowledgeMarkdown>}>{version.bodyMarkdown}</ContentRevisionTransition>}
-      {(version.revision === currentRevision || editing) && <div className="knowledge-review-actions">{editing ? <><button type="button" data-control="knowledge-version-save" disabled={Boolean(busy) || !dirty || version.revision !== currentRevision || !version.generationSnapshotHash} onClick={() => void save()}>{text.save}</button><button type="button" data-control="knowledge-version-cancel" disabled={Boolean(busy)} onClick={() => { setBody(savedBody); setEditing(false); setStatus(""); }}>{text.cancelEdit}</button></> : <button type="button" data-control="knowledge-version-edit" disabled={Boolean(busy)} onClick={() => setEditing(true)}>{text.edit}</button>}</div>}
+      {(version.revision === currentRevision || editing) && <div className="knowledge-review-actions">{editing ? <><button type="button" data-control="knowledge-version-save" disabled={Boolean(busy) || !bodyDirty || version.revision !== currentRevision || !version.generationSnapshotHash} onClick={() => void save()}>{text.save}</button><button type="button" data-control="knowledge-version-cancel" disabled={Boolean(busy)} onClick={() => { setBody(savedBody); setEditing(false); setStatus(""); }}>{text.cancelEdit}</button></> : <button type="button" data-control="knowledge-version-edit" disabled={Boolean(busy)} onClick={() => setEditing(true)}>{text.edit}</button>}</div>}
     </section>
 
     <section className="knowledge-applicability"><h4>{text.applicability}</h4><p className="knowledge-applicability-summary">{version.applicability.summary}</p><ApplicabilityList title={text.questions} values={version.applicability.representativeQuestions} /><ApplicabilityList title={text.helpsWith} values={version.applicability.helpsWith} /><ApplicabilityList title={text.conditions} values={version.applicability.conditions} /><ApplicabilityList title={text.exclusions} values={version.applicability.exclusions} /></section>
@@ -431,8 +453,15 @@ export function KnowledgeReviewPanel({ taskId, completed, generationQueued, refr
 
     <details className="knowledge-ideas" data-control="knowledge-ideas"><summary>{text.ideas} · {ideas.length}</summary><p>{text.ideasHint}</p>{ideas.length ? <div>{ideas.map(idea => <IdeaCard key={`${idea.id}:${idea.revision}`} idea={idea} selected={selectedIdeas.has(`${idea.id}:${idea.revision}`)} disabled={Boolean(proposal)} onToggle={() => setSelectedIdeas(current => { const next = new Set(current); const key = `${idea.id}:${idea.revision}`; if (next.has(key)) next.delete(key); else next.add(key); return next; })} onSource={item => setSource(toBinding(item))} text={text} />)}</div> : <p>{text.noIdeas}</p>}</details>
 
+    <section className="knowledge-review-notes" aria-label={text.reviewNotes}>
+      <h4>{text.reviewNotes}</h4><p>{text.reviewNotesHint}</p>
+      {reviewNotes.length ? <ol>{reviewNotes.map(note => <li key={note.id}><time dateTime={note.createdAt}>{note.createdAt}</time><p>{note.body}</p></li>)}</ol> : <p>{text.noReviewNotes}</p>}
+      <label className="knowledge-draft-editor"><span>{text.reviewNoteBody}</span><textarea data-control="knowledge-review-note-body" value={noteDrafts[noteKey] ?? ""} disabled={savingNote} onChange={event => setNoteDrafts(current => ({ ...current, [noteKey]: event.target.value }))} /></label>
+      <button type="button" data-control="knowledge-review-note-cancel" disabled={savingNote || !(noteDrafts[noteKey] ?? "")} onClick={() => setNoteDrafts(current => ({ ...current, [noteKey]: "" }))}>{text.cancelEdit}</button>
+      <button type="button" data-control="knowledge-review-note-save" disabled={savingNote || Boolean(busy) || !(noteDrafts[noteKey] ?? "").trim()} onClick={() => void saveReviewNote()}>{savingNote ? text.savingReviewNote : text.saveReviewNote}</button>
+    </section>
     <section className="knowledge-publication">
-      <header><div><h4>{text.publicationReview}</h4><p>{onPrepareArchive ? text.preparePublication : text.publicationUnavailable}</p></div><button type="button" data-control="knowledge-archive-prepare" disabled={!onPrepareArchive || Boolean(busy) || dirty || version.freshness !== "current"} onClick={() => void preparePublication()}>{busy === "prepare" ? text.preparingPublication : text.preparePublication}</button></header>
+      <header><div><h4>{text.publicationReview}</h4><p>{onPrepareArchive ? text.preparePublication : text.publicationUnavailable}</p></div><button type="button" data-control="knowledge-archive-prepare" disabled={!onPrepareArchive || Boolean(busy) || dirty || version.freshness !== "current" || version.qualityState !== "valid"} onClick={() => void preparePublication()}>{busy === "prepare" ? text.preparingPublication : text.preparePublication}</button></header>
       {projection.pointers.publicationDocumentId && projection.pointers.publicationContentHash && <details className="knowledge-organization" data-control="knowledge-archive-organize">
         <summary>{text.managePublication}</summary>
         <p>{text.currentPublishedPath}: <code>{projection.pointers.publicationPath ?? text.noPath}</code></p>
@@ -455,7 +484,7 @@ export function KnowledgeReviewPanel({ taskId, completed, generationQueued, refr
           {proposal.referenceLinks.length > 0 && <section className="knowledge-reference-links"><h6>{text.sourceLinks}</h6>{proposal.referenceLinks.map(link => { const binding = [...linkDocuments.values()].find(document => viewerKey(document) === viewerKey({ documentId: link.documentId, documentVersion: link.documentVersion, section: link.section, title: link.path })); return <button type="button" data-control="knowledge-archive-reference-open" data-record-id={`${link.documentId}:${link.documentVersion}:${link.section ?? ""}`} key={`${link.documentId}:${link.documentVersion}:${link.section ?? ""}`} onClick={() => binding && setSource(binding)}><strong>{link.path}{link.section ? `#${link.section}` : ""}</strong><span>{link.rationale}</span><small>{link.role} · {link.documentVersion}</small></button>; })}</section>}
         </details>
         {proposalConflict && <p role="alert">{text.proposalConflict}</p>}
-        <button type="button" data-control="knowledge-archive-publish" disabled={!onPublishArchive || Boolean(busy) || dirty || version.freshness !== "current" || proposalConflict || publicationLocked} onClick={() => void publish()}>{busy === "publish" ? text.publishing : text.publishExact}</button>
+        <button type="button" data-control="knowledge-archive-publish" disabled={!onPublishArchive || Boolean(busy) || dirty || version.freshness !== "current" || version.qualityState !== "valid" || proposalConflict || publicationLocked} onClick={() => void publish()}>{busy === "publish" ? text.publishing : text.publishExact}</button>
       </div>}
       {publicationOperation && <div className={`knowledge-publication-state is-${publicationOperation.state}`} role={publicationOperation.state === "conflict" || publicationOperation.state === "repair_required" || publicationOperation.state === "index_failed" ? "alert" : "status"}>
         <strong>{text.publicationState}: {publicationOperation.state}</strong>{publicationOperation.error && <p>{publicationOperation.error}</p>}

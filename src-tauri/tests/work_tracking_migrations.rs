@@ -1,7 +1,7 @@
 use llm_wiki_desktop::NativeApplication;
 use tempfile::tempdir;
 
-const CURRENT_SCHEMA_VERSION: i64 = 22;
+const CURRENT_SCHEMA_VERSION: i64 = 23;
 
 #[test]
 fn work_tracking_schema_is_complete_and_idempotent() {

@@ -126,3 +126,9 @@
 @media (prefers-reduced-motion: reduce) {
   .knowledge-review * { scroll-behavior: auto; }
 }
+
+.knowledge-review-notes { display: grid; gap: var(--space-3); min-width: 0; }
+.knowledge-review-notes > p { color: var(--color-text-secondary); }
+.knowledge-review-notes li p { white-space: pre-wrap; overflow-wrap: anywhere; }
+.knowledge-review-notes time { color: var(--color-text-secondary); font-size: var(--font-size-sm); }
+.knowledge-review-notes textarea { min-height: 6rem; }

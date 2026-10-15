@@ -162,6 +162,9 @@ fn snapshot(tx: &Transaction<'_>, input: &Value) -> Result<Value> {
         .as_array()
         .and_then(|vs| vs.iter().find(|v| v["revision"] == revision))
         .ok_or("knowledge_revision_not_found")?;
+    if version["qualityState"] != "valid" {
+        return Err("knowledge_unverified: review and resolve draft validation issues before publication".into());
+    }
     if projection["pointers"]["currentPrivateRevision"] != revision
         || version["contentHash"] != input["expectedKnowledgeContentHash"]
         || version["generationSnapshotHash"] != input["expectedGenerationSnapshotHash"]

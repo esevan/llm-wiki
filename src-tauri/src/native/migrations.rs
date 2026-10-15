@@ -5,7 +5,7 @@ use sha2::{Digest, Sha256};
 use serde_json::{json, Map, Value};
 use std::collections::BTreeMap;
 
-pub const CURRENT_SCHEMA_VERSION: i64 = 22;
+pub const CURRENT_SCHEMA_VERSION: i64 = 23;
 
 type MigrationFunction = for<'connection> fn(&Transaction<'connection>) -> Result<(), String>;
 type LegacyLocalizationRow = (String, String, String, String, String, String, String);
@@ -115,7 +115,18 @@ const MIGRATIONS: &[Migration] = &[
     Migration { version:20, name:"add reference-aware work previews", run:add_reference_aware_workbench },
     Migration { version:21, name:"add immutable Knowledge generation", run:add_knowledge_distillation },
     Migration { version:22, name:"add Knowledge archive proposals and journal", run:add_knowledge_archive },
+    Migration { version:23, name:"add version-bound Knowledge review notes", run:add_knowledge_review_notes },
 ];
+
+fn add_knowledge_review_notes(tx: &Transaction<'_>) -> Result<(),String> {
+    tx.execute_batch("CREATE TABLE knowledge_review_notes (
+        id TEXT PRIMARY KEY, task_id TEXT NOT NULL, knowledge_revision INTEGER NOT NULL,
+        content_hash TEXT NOT NULL, body TEXT NOT NULL CHECK(length(trim(body))>0),
+        request_hash TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(task_id,knowledge_revision) REFERENCES knowledge_draft_versions(task_id,revision)
+    ); CREATE INDEX knowledge_review_notes_version ON knowledge_review_notes(task_id,knowledge_revision);")
+        .map_err(|e|e.to_string())
+}
 
 fn add_knowledge_archive(tx:&Transaction<'_>)->Result<(),String>{
     tx.execute_batch(include_str!("knowledge_archive_schema.sql")).map_err(|error|error.to_string())
@@ -2252,7 +2263,7 @@ mod tests {
         c.execute("INSERT INTO knowledge_pointers(task_id,publication_document_id,publication_path,publication_content_hash) VALUES('legacy','stable','Knowledge/Exact.md','exact-hash')",[]).unwrap();
         apply(&mut c).unwrap();
         apply(&mut c).unwrap();
-        assert_eq!(schema_version(&c).unwrap(),22);
+        assert_eq!(schema_version(&c).unwrap(),CURRENT_SCHEMA_VERSION);
         assert_eq!(c.query_row("SELECT publication_path||':'||publication_content_hash FROM knowledge_pointers WHERE task_id='legacy'",[],|r|r.get::<_,String>(0)).unwrap(),"Knowledge/Exact.md:exact-hash");
         assert_eq!(c.query_row("SELECT count(*) FROM knowledge_archive_current",[],|r|r.get::<_,i64>(0)).unwrap(),0);
         assert_eq!(c.query_row("SELECT count(*) FROM pragma_foreign_key_check",[],|r|r.get::<_,i64>(0)).unwrap(),0);
@@ -2262,6 +2273,24 @@ mod tests {
         assert!(apply(&mut failed).is_err());
         assert_eq!(schema_version(&failed).unwrap(),21);
         assert!(!table_exists(&failed,"knowledge_archive_proposals").unwrap());
+    }
+
+    #[test]
+    fn review_notes_upgrade_preserves_v22_bytes_and_is_atomic() {
+        let mut c=Connection::open_in_memory().unwrap();apply_plan(&mut c,&MIGRATIONS[..22],22).unwrap();
+        c.execute("INSERT INTO tasks(id,current_revision,state,created_at,last_user_activity_at) VALUES('task',1,'completed','before','before')",[]).unwrap();
+        c.execute("INSERT INTO knowledge_applicability(id,summary,representative_questions_json,helps_with_json,conditions_json,exclusions_json) VALUES('a','','[]','[]','[]','[]')",[]).unwrap();
+        c.execute("INSERT INTO knowledge_draft_versions(task_id,revision,derivation_kind,article_type,title,body_markdown,content_hash,applicability_id,result_json,quality_state,model_status) VALUES('task',1,'legacy','concept','Exact title','# Exact bytes','exact-hash','a','{}','blocked_unsupported','legacy')",[]).unwrap();
+        apply(&mut c).unwrap();apply(&mut c).unwrap();
+        assert_eq!(c.query_row("SELECT title||':'||body_markdown||':'||content_hash||':'||quality_state FROM knowledge_draft_versions",[],|r|r.get::<_,String>(0)).unwrap(),"Exact title:# Exact bytes:exact-hash:blocked_unsupported");
+        assert_eq!(schema_version(&c).unwrap(),23);
+        c.execute("INSERT INTO knowledge_review_notes(id,task_id,knowledge_revision,content_hash,body,request_hash) VALUES('note','task',1,'exact-hash','User reviewed source','request')",[]).unwrap();
+        assert!(c.execute("INSERT INTO knowledge_review_notes(id,task_id,knowledge_revision,content_hash,body,request_hash) VALUES('bad','task',2,'hash','Unknown version','request')",[]).is_err());
+        assert_eq!(c.query_row("SELECT count(*) FROM pragma_foreign_key_check",[],|r|r.get::<_,i64>(0)).unwrap(),0);
+        let mut failed=Connection::open_in_memory().unwrap();apply_plan(&mut failed,&MIGRATIONS[..22],22).unwrap();
+        failed.execute("CREATE TABLE knowledge_review_notes(dummy INTEGER)",[]).unwrap();
+        assert!(apply(&mut failed).is_err());assert_eq!(schema_version(&failed).unwrap(),22);
+        assert_eq!(failed.query_row("SELECT count(*) FROM sqlite_master WHERE type='index' AND name='knowledge_review_notes_version'",[],|r|r.get::<_,i64>(0)).unwrap(),0);
     }
 
     #[test]

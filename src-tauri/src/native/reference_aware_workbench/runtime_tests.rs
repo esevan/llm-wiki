@@ -102,6 +102,9 @@ fn provider(
     provider_mode(f,turns,delay_last,optional,false)
 }
 fn provider_mode(f:&Fixture,turns:usize,delay_last:bool,optional:bool,standalone:bool)->(Arc<Mutex<Vec<Value>>>,mpsc::Receiver<()>,mpsc::Sender<()>,std::thread::JoinHandle<()>) {
+    provider_variant(f,turns,delay_last,optional,standalone,false)
+}
+fn provider_variant(f:&Fixture,turns:usize,delay_last:bool,optional:bool,standalone:bool,sparse:bool)->(Arc<Mutex<Vec<Value>>>,mpsc::Receiver<()>,mpsc::Sender<()>,std::thread::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
     settings::save_provider(
@@ -157,7 +160,16 @@ fn provider_mode(f:&Fixture,turns:usize,delay_last:bool,optional:bool,standalone
             )
             .unwrap();
             log.lock().unwrap().push(context.clone());
-            let output = if i == turns * 3 {
+            let output = if sparse {
+                if i%3==1 {
+                    assert_eq!(context["session"]["taskSnapshot"]["title"],"Original contract");
+                    json!({"retrieval":{"needed":true}})
+                } else {
+                    assert_eq!(context["context"]["session"]["taskSnapshot"]["title"],"Original contract");
+                    assert_eq!(context["retrievalOutcome"],"unverified");
+                    json!({"preview":{"goal":"New goal"}})
+                }
+            } else if i == turns * 3 {
                 if delay_last {
                     ready_tx.send(()).unwrap();
                     go_rx.recv_timeout(Duration::from_secs(10)).unwrap();
@@ -601,4 +613,59 @@ async fn workspace_returns_exact_usage_metadata_and_persisted_assumption_status(
     assert_eq!(saved["assumptions"][0]["basis"], "source");
     let refreshed = f.op("task-refinement.reference-workspace", json!({})).unwrap();
     assert_eq!(refreshed["preview"]["current"]["assumptions"], saved["assumptions"]);
+}
+
+#[test]
+fn missing_preview_fields_preserve_task_patch_and_never_invent_evidence() {
+    let context=json!({"context":{"session":{"taskSnapshot":{"title":"Original title","detail":"Exact existing detail","outcome":"Existing goal","scope":"Existing scope","nonGoals":"Keep out"}}},"planner":{"generationStatus":"partial"}});
+    let mut output=json!({"preview":{"goal":"New goal"}});
+    normalize_response(crate::workflow_foundation::PromptId::WorkPreviewFinalizer,&mut output,&context);
+    validate_output(&output).unwrap();
+    assert_eq!(output["preview"]["description"],"Exact existing detail");
+    assert_eq!(output["generationStatus"],"partial");
+    let mut patch=task_fields(&output["preview"]);
+    preserve_omitted_task_fields(&mut patch,&output["omittedPreviewFields"]);
+    assert_eq!(patch,json!({"outcome":"New goal"}));
+    assert_eq!(output["claimSources"],json!([]));
+    assert_eq!(output["optionalInvestigation"]["needed"],false);
+}
+#[test]
+fn incomplete_planner_skips_lookup_without_claiming_adequate_evidence() {
+    for mut output in [json!({}),json!({"retrieval":{"needed":true}})] {
+        normalize_response(crate::workflow_foundation::PromptId::WorkPreviewPlanner,&mut output,&Value::Null);
+        validate_planner_output(&output).unwrap();
+        assert!(!validate_planner(&output).unwrap().needed);
+        assert_eq!(output["generationStatus"],"partial");
+    }
+    for mut output in [json!({"retrieval":{"needed":"yes"}}),json!({"retrieval":{"needed":true,"queries":"wrong"}})] {
+        normalize_response(crate::workflow_foundation::PromptId::WorkPreviewPlanner,&mut output,&Value::Null);
+        assert!(validate_planner_output(&output).is_err());
+    }
+}
+
+#[tokio::test]
+async fn sparse_no_run_generation_keeps_two_calls_and_persists_partial_preview() {
+    let f=Fixture::new().await;
+    database::open(&f.db).unwrap().execute("UPDATE task_revisions SET validation_criteria='Original acceptance criterion' WHERE task_id=? AND revision=1",[&f.task]).unwrap();
+    let(seen,_,_,server)=provider_variant(&f,1,false,false,true,true);
+    task_assistance::execute(&f.db,&f.settings,&f.vault,SemanticEngine::new(None),"task-refinement.reference-generate",&json!({"operationId":"sparse","sessionId":f.session,"expectedContextRevision":"refinement:0","expectedTaskRevision":1,"locale":"en"})).await.unwrap();
+    f.wait_jobs(1).await;server.join().unwrap();
+    assert_eq!(seen.lock().unwrap().len(),2);
+    let workspace=f.op("task-refinement.reference-workspace",json!({})).unwrap();
+    assert_eq!(workspace["preview"]["currentVersion"],1,"{workspace}");
+    assert_eq!(workspace["generationStatus"],"partial");
+    let current=&workspace["preview"]["current"];
+    let mut edited=current["fields"].clone();
+    edited["goal"]=json!("User edited goal");
+    let edit=f.op("task-refinement.reference-edit",json!({"operationId":"edit-sparse-goal","version":1,"expectedCurrentPreviewVersion":1,"expectedContentHash":current["contentHash"],"fields":edited})).unwrap();
+    let workspace=f.op("task-refinement.reference-workspace",json!({})).unwrap();
+    assert!(workspace["preview"]["current"]["omittedPreviewFields"].as_array().unwrap().contains(&json!("completionCriteria")));
+    let result=f.op("task-refinement.reference-apply",json!({"operationId":"apply-sparse","version":2,"expectedCurrentPreviewVersion":2,"expectedContentHash":edit["contentHash"],"expectedTaskRevision":1})).unwrap();
+    assert_eq!(result["task"]["taskRevision"],2);
+    let c=database::open(&f.db).unwrap();
+    let saved:(String,String,String)=c.query_row("SELECT title,detail,outcome FROM task_revisions WHERE task_id=? AND revision=2",[&f.task],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).unwrap();
+    assert_eq!(saved,("Original contract".into(),"User text".into(),"User edited goal".into()));
+    assert_eq!(c.query_row("SELECT validation_criteria FROM task_revisions WHERE task_id=? AND revision=2",[&f.task],|r|r.get::<_,String>(0)).unwrap(),"Original acceptance criterion");
+    assert_eq!(c.query_row("SELECT count(*) FROM task_work_session_runs",[],|r|r.get::<_,i64>(0)).unwrap(),0);
+    assert_eq!(c.query_row("SELECT detail FROM task_revisions WHERE task_id=? AND revision=1",[&f.task],|r|r.get::<_,String>(0)).unwrap(),"User text");
 }

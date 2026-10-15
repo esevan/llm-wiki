@@ -169,9 +169,12 @@ export function ReferenceAwarePreview(props: ReferenceAwarePreviewProps) {
       {workspace?.generation?.status === "failed" && (
         <p role="alert">{text.failed}</p>
       )}
+      {workspace?.generationStatus === "partial" && <section className="reference-status" data-control="reference-preview-partial"><p>{text.partial}</p>{Boolean(workspace.generationDiagnostics?.length) && <ul>{workspace.generationDiagnostics!.map((diagnostic, index) => <li key={index}>{diagnostic}</li>)}</ul>}</section>}
       {workspace?.retrievalOutcome && (
         <p className="reference-status">
-          {workspace.retrievalOutcome === "not_needed"
+          {workspace.retrievalOutcome === "unverified"
+            ? text.unverifiedRetrieval
+            : workspace.retrievalOutcome === "not_needed"
             ? text.notNeeded
             : workspace.retrievalOutcome === "no_suitable_result"
               ? text.noResults

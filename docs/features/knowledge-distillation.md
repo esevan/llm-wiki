@@ -31,3 +31,11 @@ A candidate, viewed, mentioned or excluded source is not exported on that basis.
 legacy usage record has no recoverable statement, generation reports unresolved
 provenance instead of inventing a reason. Normalizing older reference records or
 changing usage can make a saved draft stale; regenerate it before preparing publication.
+
+## Incomplete drafts and human review
+
+A generation with a nonempty article body is retained as a private unverified draft when classification, applicability, or supporting citations are incomplete. A missing title uses the saved Task title provisionally; missing classification remains visibly unclassified. Missing optional lists are filled locally. This does not add a model call or an automatic retry. Invalid JSON/types, an empty body, or a supplied citation that contradicts the exact source identity or quote still fails clearly.
+
+Unverified versions show the validation issue and cannot prepare or publish an archive proposal. Editing or restoring a version does not silently grant verification. A user can add review notes to an exact immutable version and content hash; notes remain separate, append-only history and never upgrade claims or publication eligibility. Unsaved notes remain protected when switching versions or leaving the review. Saving a note performs only a local database write.
+
+Database schema 23 adds the review-note table without rewriting previous drafts, hashes, sources, or publications.

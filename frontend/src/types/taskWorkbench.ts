@@ -44,6 +44,9 @@ export interface ReferenceUsageFact {
 export interface ReferenceWorkspace {
   interactions?: ReferenceUsageFact[];
   generation?: { id?: string; status?: string; executionOutcome?: string; applicationDisposition?: string; safeError?: string };
+  generationStatus?: "partial" | "complete";
+  generationDiagnostics?: string[];
+  omittedPreviewFields?: string[];
   retrievalOutcome?: string;
   stageTimings?: Record<string, number>;
   preview?: { id: string; currentVersion: number; contextRevision: number; current?: WorkPreviewVersion; versions: WorkPreviewSummary[] } | null;
@@ -356,7 +359,15 @@ export interface KnowledgeQualityFinding {
   message: string;
   sourceRefs: KnowledgeSourceRef[];
 }
+export interface KnowledgeReviewNote {
+  id: string;
+  knowledgeRevision: number;
+  contentHash: string;
+  body: string;
+  createdAt: string;
+}
 export interface KnowledgeReviewProjection {
+  reviewNotes?: KnowledgeReviewNote[];
   taskId: string;
   pointers: {
     currentPrivateRevision?: number;

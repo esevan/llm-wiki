@@ -768,16 +768,60 @@ pub(crate) fn validate_result(snapshot: &Value, result: &GenerationResult) -> Re
     Ok(())
 }
 
+// Integrity failures cannot be softened by a missing applicability field masking them.
+fn assess_candidate(snapshot: &Value, result: &GenerationResult) -> Result<(String, String), String> {
+    if result.article.body_markdown.trim().is_empty() {
+        return Err("invalid_knowledge: article.bodyMarkdown is required".into());
+    }
+    if !result.article.article_type.is_empty() && !matches!(result.article.article_type.as_str(), "concept"|"guide"|"comparison_decision"|"research_result") {
+        return Err("invalid_knowledge: article.type is invalid".into());
+    }
+    let sources = result.article.applicability.source_refs.iter()
+        .chain(result.article.claim_bindings.iter().flat_map(|v| &v.source_refs))
+        .chain(result.article.assumption_bindings.iter().flat_map(|v| &v.source_refs))
+        .chain(result.ideas.iter().flat_map(|v| &v.source_refs))
+        .chain(result.quality_findings.iter().flat_map(|v| &v.source_refs));
+    let manifest = snapshot["sourceManifest"].as_array().ok_or("source snapshot manifest is missing")?;
+    let manifest_by_key = manifest.iter().map(|v|(manifest_key(v),v)).collect::<BTreeMap<_,_>>();
+    for source in sources {
+        let actual = manifest_by_key.get(&source_key(source))
+            .ok_or("invalid_reference_binding: source identity is outside the exact snapshot")?;
+        if !value_contains_quote(&actual["content"], &source.quote) {
+            return Err("invalid_reference_binding: quote is absent from its exact source".into());
+        }
+    }
+    for finding in &result.quality_findings {
+        if !matches!(finding.severity.as_str(),"blocking"|"warning") {
+            return Err("invalid_knowledge: quality finding severity is invalid".into());
+        }
+    }
+    for idea in &result.ideas {
+        if !matches!(idea.disposition.as_str(),"unverified"|"deferred"|"out_of_scope"|"rejected") {
+            return Err("invalid_knowledge: idea disposition is invalid".into());
+        }
+    }
+    match validate_result(snapshot,result) {
+        Ok(()) => Ok(("valid".into(),String::new())),
+        Err(issue) => Ok((if issue.contains("omission") {"blocked_omission"} else {"blocked_unsupported"}.into(),issue)),
+    }
+}
+
 pub(crate) fn prepared(
     snapshot: Value,
-    result: GenerationResult,
+    mut result: GenerationResult,
     model_status: &str,
     model_error: &str,
 ) -> Result<Value, String> {
-    validate_result(&snapshot, &result)?;
+    let title_missing = result.article.title.trim().is_empty();
+    if title_missing {
+        result.article.title = snapshot["task"]["title"].as_str().unwrap_or("Untitled draft").to_owned();
+    }
+    let (quality_state, issue) = assess_candidate(&snapshot, &result)?;
+    let issues = [model_error, issue.as_str(), if title_missing {"article.title was missing; temporary Task title retained"} else {""}]
+        .into_iter().filter(|v| !v.is_empty()).collect::<Vec<_>>().join("; ");
     let body_markdown = result.article.body_markdown.clone();
     Ok(
-        json!({"taskId":snapshot["task"]["id"],"taskRevision":snapshot["task"]["revision"],"completionId":snapshot["completion"]["id"],"sourceHash":snapshot["generationSnapshotHash"],"generationSnapshot":snapshot,"generationResult":result,"bodyMarkdown":body_markdown,"modelStatus":model_status,"modelError":model_error}),
+        json!({"taskId":snapshot["task"]["id"],"taskRevision":snapshot["task"]["revision"],"completionId":snapshot["completion"]["id"],"sourceHash":snapshot["generationSnapshotHash"],"generationSnapshot":snapshot,"generationResult":result,"bodyMarkdown":body_markdown,"modelStatus":model_status,"modelError":issues,"qualityState":quality_state}),
     )
 }
 
@@ -796,7 +840,7 @@ pub(crate) fn append_generated_tx(tx: &Transaction<'_>, prepared: &Value) -> Res
     }
     let mut result: GenerationResult = serde_json::from_value(prepared["generationResult"].clone())
         .map_err(|e| format!("invalid Knowledge result: {e}"))?;
-    validate_result(snapshot, &result)?;
+    let (quality_state, quality_issue) = assess_candidate(snapshot, &result)?;
     for idea in &mut result.ideas {
         idea.id = stored_idea_id(task_id, &idea.id);
     }
@@ -834,7 +878,7 @@ pub(crate) fn append_generated_tx(tx: &Transaction<'_>, prepared: &Value) -> Res
         &json!({"article":&result.article,"snapshot":snapshot["generationSnapshotHash"]}),
     );
     let body_hash = hash_bytes(result.article.body_markdown.as_bytes());
-    tx.execute("INSERT INTO knowledge_draft_versions(task_id,revision,parent_revision,derivation_kind,article_type,title,body_markdown,content_hash,generation_snapshot_id,applicability_id,result_json,quality_state,model_status,model_error) VALUES(?,?,?,'generated',?,?,?,?,?,?,?,'valid',?,?)",params![task_id,revision,parent,result.article.article_type,result.article.title,result.article.body_markdown,content_hash,snapshot_id,applicability_id,serde_json::to_string(&result).unwrap(),prepared["modelStatus"].as_str().unwrap_or("enhanced"),prepared["modelError"].as_str().unwrap_or("")]).map_err(|e|e.to_string())?;
+    tx.execute("INSERT INTO knowledge_draft_versions(task_id,revision,parent_revision,derivation_kind,article_type,title,body_markdown,content_hash,generation_snapshot_id,applicability_id,result_json,quality_state,model_status,model_error) VALUES(?,?,?,'generated',?,?,?,?,?,?,?,?,?,?)",params![task_id,revision,parent,if result.article.article_type.is_empty() {"concept"} else {result.article.article_type.as_str()},result.article.title,result.article.body_markdown,content_hash,snapshot_id,applicability_id,serde_json::to_string(&result).unwrap(),quality_state,prepared["modelStatus"].as_str().unwrap_or("enhanced"),if quality_issue.is_empty() {prepared["modelError"].as_str().unwrap_or("")} else {quality_issue.as_str()}]).map_err(|e|e.to_string())?;
     for idea in &result.ideas {
         let idea_hash = hash_value(&serde_json::to_value(idea).unwrap_or(Value::Null));
         let idea_revision: i64 = tx
@@ -855,6 +899,31 @@ pub(crate) fn append_generated_tx(tx: &Transaction<'_>, prepared: &Value) -> Res
     Ok(
         json!({"taskId":task_id,"draftRevision":revision,"taskRevision":task_revision,"completionId":snapshot["completion"]["id"],"bodyMarkdown":result.article.body_markdown,"contentHash":content_hash,"bodyHash":body_hash,"sourceHash":snapshot["generationSnapshotHash"],"state":"draft","modelStatus":prepared["modelStatus"],"modelError":prepared["modelError"],"generationSnapshotId":snapshot_id,"ideas":result.ideas,"article":result.article}),
     )
+}
+
+/// Append-only human feedback is bound to immutable bytes, never a verification upgrade.
+pub(crate) fn add_review_note(db: &std::path::Path, input: &Value) -> Result<Value,String> {
+    let required = |key: &str| input[key].as_str().filter(|v|!v.trim().is_empty()).ok_or_else(||format!("invalid_input: {key} is required"));
+    let task = required("taskId")?;
+    let note_id = required("operationId")?;
+    let expected = required("expectedContentHash")?;
+    let body = required("body")?;
+    if body.chars().count()>20000 { return Err("invalid_input: review note exceeds 20000 characters".into()); }
+    let revision = input["knowledgeRevision"].as_i64().ok_or("invalid_input: knowledgeRevision is required")?;
+    let request_hash = hash_value(&json!({"taskId":task,"revision":revision,"hash":expected,"body":body}));
+    let mut connection = super::database::open(db)?;
+    let tx=super::database::immediate_transaction(&mut connection)?;
+    let current_hash: String = tx.query_row("SELECT content_hash FROM knowledge_draft_versions WHERE task_id=? AND revision=?",params![task,revision],|r|r.get(0))
+        .optional().map_err(|e|e.to_string())?.ok_or("version_not_found")?;
+    if current_hash!=expected { return Err("content_hash_conflict".into()); }
+    let prior: Option<String> = tx.query_row("SELECT request_hash FROM knowledge_review_notes WHERE id=?",[note_id],|r|r.get(0)).optional().map_err(|e|e.to_string())?;
+    if let Some(prior)=prior {
+        if prior!=request_hash { return Err("operation_conflict".into()); }
+    } else {
+        tx.execute("INSERT INTO knowledge_review_notes(id,task_id,knowledge_revision,content_hash,body,request_hash) VALUES(?,?,?,?,?,?)",params![note_id,task,revision,expected,body,request_hash]).map_err(|e|e.to_string())?;
+    }
+    tx.commit().map_err(|e|e.to_string())?;
+    Ok(json!({"id":note_id,"taskId":task,"knowledgeRevision":revision,"contentHash":expected,"body":body}))
 }
 
 pub(crate) fn review_projection(
@@ -893,10 +962,13 @@ pub(crate) fn review_projection(
         let revision=row.get::<_,i64>(0)?;
         let generation_hash=row.get::<_,Option<String>>(13)?;
         let freshness=if generation_hash.as_ref()==current_snapshot_hash.as_ref() && generation_hash.is_some(){"current"}else{"stale"};
-        Ok(json!({"revision":revision,"parentRevision":row.get::<_,Option<i64>>(1)?,"derivedFromRevision":row.get::<_,Option<i64>>(2)?,"derivationKind":row.get::<_,String>(3)?,"articleType":row.get::<_,String>(4)?,"title":row.get::<_,String>(5)?,"bodyMarkdown":row.get::<_,String>(6)?,"contentHash":row.get::<_,String>(7)?,"result":serde_json::from_str::<Value>(&row.get::<_,String>(8)?).unwrap_or(json!({})),"qualityState":row.get::<_,String>(9)?,"modelStatus":row.get::<_,String>(10)?,"modelError":row.get::<_,String>(11)?,"createdAt":row.get::<_,String>(12)?,"generationSnapshotHash":generation_hash,"freshness":freshness,"storedFreshness":row.get::<_,Option<String>>(14)?.unwrap_or_else(||"historical".into()),"applicability":{"summary":row.get::<_,String>(15)?,"representativeQuestions":serde_json::from_str::<Value>(&row.get::<_,String>(16)?).unwrap_or(json!([])),"helpsWith":serde_json::from_str::<Value>(&row.get::<_,String>(17)?).unwrap_or(json!([])),"conditions":serde_json::from_str::<Value>(&row.get::<_,String>(18)?).unwrap_or(json!([])),"exclusions":serde_json::from_str::<Value>(&row.get::<_,String>(19)?).unwrap_or(json!([]))},"selected":selected==Some(revision)}))
+        Ok(json!({"revision":revision,"parentRevision":row.get::<_,Option<i64>>(1)?,"derivedFromRevision":row.get::<_,Option<i64>>(2)?,"derivationKind":row.get::<_,String>(3)?,"articleType":serde_json::from_str::<Value>(&row.get::<_,String>(8)?).ok().and_then(|v|v["article"]["type"].as_str().map(str::to_owned)).unwrap_or(row.get::<_,String>(4)?),"title":row.get::<_,String>(5)?,"bodyMarkdown":row.get::<_,String>(6)?,"contentHash":row.get::<_,String>(7)?,"result":serde_json::from_str::<Value>(&row.get::<_,String>(8)?).unwrap_or(json!({})),"qualityState":row.get::<_,String>(9)?,"modelStatus":row.get::<_,String>(10)?,"modelError":row.get::<_,String>(11)?,"createdAt":row.get::<_,String>(12)?,"generationSnapshotHash":generation_hash,"freshness":freshness,"storedFreshness":row.get::<_,Option<String>>(14)?.unwrap_or_else(||"historical".into()),"applicability":{"summary":row.get::<_,String>(15)?,"representativeQuestions":serde_json::from_str::<Value>(&row.get::<_,String>(16)?).unwrap_or(json!([])),"helpsWith":serde_json::from_str::<Value>(&row.get::<_,String>(17)?).unwrap_or(json!([])),"conditions":serde_json::from_str::<Value>(&row.get::<_,String>(18)?).unwrap_or(json!([])),"exclusions":serde_json::from_str::<Value>(&row.get::<_,String>(19)?).unwrap_or(json!([]))},"selected":selected==Some(revision)}))
     }).map_err(|e|e.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|e|e.to_string())?;
     let ideas = connection.prepare("SELECT id,revision,knowledge_revision,title,body_markdown,disposition,reconsideration_conditions_json,source_refs_json,related_topic_keys_json,content_hash,publication_state FROM knowledge_idea_revisions WHERE task_id=? ORDER BY knowledge_revision,id,revision").map_err(|e|e.to_string())?.query_map([task_id],|row|Ok(json!({"id":row.get::<_,String>(0)?,"revision":row.get::<_,i64>(1)?,"knowledgeRevision":row.get::<_,i64>(2)?,"title":row.get::<_,String>(3)?,"bodyMarkdown":row.get::<_,String>(4)?,"disposition":row.get::<_,String>(5)?,"reconsiderationConditions":serde_json::from_str::<Value>(&row.get::<_,String>(6)?).unwrap_or(json!([])),"sourceRefs":serde_json::from_str::<Value>(&row.get::<_,String>(7)?).unwrap_or(json!([])),"relatedTopicKeys":serde_json::from_str::<Value>(&row.get::<_,String>(8)?).unwrap_or(json!([])),"contentHash":row.get::<_,String>(9)?,"publicationState":row.get::<_,String>(10)?}))).map_err(|e|e.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|e|e.to_string())?;
-    Ok(json!({"taskId":task_id,"pointers":pointers,"versions":versions,"ideas":ideas}))
+    let review_notes = connection.prepare("SELECT id,knowledge_revision,content_hash,body,created_at FROM knowledge_review_notes WHERE task_id=? ORDER BY rowid")
+        .map_err(|e|e.to_string())?.query_map([task_id],|r|Ok(json!({"id":r.get::<_,String>(0)?,"knowledgeRevision":r.get::<_,i64>(1)?,"contentHash":r.get::<_,String>(2)?,"body":r.get::<_,String>(3)?,"createdAt":r.get::<_,String>(4)?})))
+        .map_err(|e|e.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|e|e.to_string())?;
+    Ok(json!({"taskId":task_id,"pointers":pointers,"versions":versions,"ideas":ideas,"reviewNotes":review_notes}))
 }
 
 pub(crate) fn restore_as_new_tx(
@@ -1026,7 +1098,7 @@ pub(crate) fn edit_as_new_tx(
     let mut result: GenerationResult =
         serde_json::from_str(&source.5).map_err(|e| e.to_string())?;
     result.article.body_markdown = body_markdown.to_owned();
-    validate_result(&snapshot, &result)?;
+    let (quality_state, quality_issue) = assess_candidate(&snapshot, &result)?;
     let revision: i64 = tx
         .query_row(
             "SELECT COALESCE(MAX(revision),0)+1 FROM knowledge_draft_versions WHERE task_id=?",
@@ -1036,7 +1108,7 @@ pub(crate) fn edit_as_new_tx(
         .map_err(|e| e.to_string())?;
     let content_hash = hash_value(&json!({"article":&result.article,"snapshot":source.8}));
     let body_hash = hash_bytes(body_markdown.as_bytes());
-    tx.execute("INSERT INTO knowledge_draft_versions(task_id,revision,parent_revision,derived_from_revision,derivation_kind,article_type,title,body_markdown,content_hash,generation_snapshot_id,applicability_id,result_json,quality_state,model_status,model_error) VALUES(?,?,?,?,'edited',?,?,?,?,?,?,?,'valid',?,?)",params![task_id,revision,current,source_revision,source.0,source.1,body_markdown,content_hash,source.3,source.4,serde_json::to_string(&result).map_err(|e|e.to_string())?,source.6,source.7]).map_err(|e|e.to_string())?;
+    tx.execute("INSERT INTO knowledge_draft_versions(task_id,revision,parent_revision,derived_from_revision,derivation_kind,article_type,title,body_markdown,content_hash,generation_snapshot_id,applicability_id,result_json,quality_state,model_status,model_error) VALUES(?,?,?,?,'edited',?,?,?,?,?,?,?,?,?,?)",params![task_id,revision,current,source_revision,source.0,source.1,body_markdown,content_hash,source.3,source.4,serde_json::to_string(&result).map_err(|e|e.to_string())?,quality_state,source.6,quality_issue]).map_err(|e|e.to_string())?;
     tx.execute("UPDATE knowledge_pointers SET current_private_revision=?,updated_at=CURRENT_TIMESTAMP WHERE task_id=? AND current_private_revision=?",params![revision,task_id,current]).map_err(|e|e.to_string())?;
     let task_revision = snapshot["task"]["revision"].as_i64().unwrap_or(0);
     let completion_id = snapshot["completion"]["id"].as_str().unwrap_or("");
@@ -1551,7 +1623,7 @@ mod tests {
     }
 
     #[test]
-    fn edit_appends_and_rejects_removing_grounded_content() {
+    fn edit_appends_and_marks_removed_grounding_unverified() {
         let (_root, db, snapshot) = fixture();
         let reference = SourceRef {
             source_type: "task_revision".into(),
@@ -1584,7 +1656,7 @@ mod tests {
         assert_ne!(edited["contentHash"], first["contentHash"]);
         assert_eq!(c.query_row("SELECT body_markdown FROM knowledge_draft_versions WHERE task_id='task' AND revision=1",[],|row|row.get::<_,String>(0)).unwrap(),first["bodyMarkdown"]);
         let tx = c.transaction().unwrap();
-        let error = edit_as_new_tx(
+        let unverified = edit_as_new_tx(
             &tx,
             "task",
             2,
@@ -1592,18 +1664,105 @@ mod tests {
             edited["sourceHash"].as_str().unwrap(),
             "# Removed evidence",
         )
-        .unwrap_err();
-        assert!(
-            error.contains("applicability_overreach") || error.contains("bound claim"),
-            "{error}"
-        );
-        drop(tx);
+        .unwrap();
+        tx.commit().unwrap();
+        assert_eq!(unverified["draftRevision"],3);
+        assert_ne!(c.query_row("SELECT quality_state FROM knowledge_draft_versions WHERE revision=3",[],|r|r.get::<_,String>(0)).unwrap(),"valid");
         assert_eq!(
             c.query_row("SELECT count(*) FROM knowledge_draft_versions", [], |row| {
                 row.get::<_, i64>(0)
             })
             .unwrap(),
-            2
+            3
         );
     }
+    #[test]
+    fn optional_knowledge_fields_preserve_no_run_evidence_boundary() {
+        use crate::workflow_foundation::{normalize_prompt_output,validate_prompt_output,PromptId};
+        let (_root,db,_)=fixture();remove_semantic_projections(&db);
+        let mut c=database::open(&db).unwrap();c.execute("DELETE FROM task_work_log_entries",[]).unwrap();
+        assert_eq!(c.query_row("SELECT count(*) FROM task_work_session_runs",[],|r|r.get::<_,i64>(0)).unwrap(),0);
+        let tx=c.transaction().unwrap();let snapshot=capture_snapshot_tx(&tx,"task",1,"en").unwrap();tx.commit().unwrap();
+        assert_eq!(snapshot["basis"],"recorded_only");
+        let reference=SourceRef{source_type:"task_revision".into(),id:"task".into(),revision:"1".into(),locator:"definition".into(),quote:"Approval flow".into()};
+        let complete=serde_json::to_value(article(reference)).unwrap();
+        let mut sparse=complete.clone();
+        for key in ["ideas","qualityFindings"] { sparse.as_object_mut().unwrap().remove(key); }
+        for key in ["finalOutcomes","claimBindings","assumptionBindings"] { sparse["article"].as_object_mut().unwrap().remove(key); }
+        for key in ["conditions","exclusions"] { sparse["article"]["applicability"].as_object_mut().unwrap().remove(key); }
+        normalize_prompt_output(PromptId::KnowledgeDraft,&mut sparse);
+        validate_prompt_output(PromptId::KnowledgeDraft,&sparse).unwrap();
+        prepared(snapshot.clone(),serde_json::from_value(sparse.clone()).unwrap(),"enhanced","").unwrap();
+        for wrong in [None,Some(json!([])),Some(json!([{"type":"task_revision","id":"invented","revision":"1","locator":"definition","quote":"Approval flow"}]))] {
+            let mut value=sparse.clone();
+            if let Some(wrong)=wrong {value["article"]["applicability"]["sourceRefs"]=wrong;}
+            else {value["article"]["applicability"].as_object_mut().unwrap().remove("sourceRefs");}
+            normalize_prompt_output(PromptId::KnowledgeDraft,&mut value);
+            let candidate=prepared(snapshot.clone(),serde_json::from_value(value).unwrap(),"enhanced","");
+            if let Ok(candidate)=candidate { assert_eq!(candidate["qualityState"],"blocked_unsupported");assert!(candidate["modelError"].as_str().unwrap().contains("missing_reference")); }
+            else { assert!(candidate.unwrap_err().contains("invalid_reference_binding")); }
+        }
+        let mut wrong=sparse.clone();wrong["ideas"]=Value::Null;
+        normalize_prompt_output(PromptId::KnowledgeDraft,&mut wrong);
+        assert!(validate_prompt_output(PromptId::KnowledgeDraft,&wrong).is_err());
+        let before=complete.clone();let mut after=complete;normalize_prompt_output(PromptId::KnowledgeDraft,&mut after);
+        assert_eq!(before,after);
+        assert_eq!(c.query_row("SELECT count(*) FROM knowledge_draft_versions",[],|r|r.get::<_,i64>(0)).unwrap(),0);
+    }
+
+    #[tokio::test]
+    async fn manual_incomplete_body_is_saved_with_version_bound_feedback_without_more_model_calls() {
+        use tokio::io::{AsyncReadExt,AsyncWriteExt};
+        let (root,db,_)=fixture();remove_semantic_projections(&db);
+        let c=database::open(&db).unwrap();c.execute("DELETE FROM task_work_log_entries",[]).unwrap();
+        assert_eq!(c.query_row("SELECT count(*) FROM task_work_session_runs",[],|r|r.get::<_,i64>(0)).unwrap(),0);
+        let settings=root.path().join("settings.json");let vault=root.path().join("vault");std::fs::create_dir_all(&vault).unwrap();
+        let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        crate::native::settings::save_provider(&settings,&json!({"base_url":format!("http://{}",listener.local_addr().unwrap()),"model":"synthetic","api_key":"test-only"})).unwrap();
+        let server=tokio::spawn(async move {
+            let (mut socket,_)=listener.accept().await.unwrap();let mut bytes=Vec::new();let mut buffer=[0u8;4096];
+            loop {let n=socket.read(&mut buffer).await.unwrap();assert!(n>0);bytes.extend_from_slice(&buffer[..n]);
+                if let Some(end)=bytes.windows(4).position(|b|b==b"\r\n\r\n") {
+                    let len=String::from_utf8_lossy(&bytes[..end]).lines().find_map(|line|line.to_ascii_lowercase().strip_prefix("content-length:").map(|v|v.trim().parse::<usize>().unwrap())).unwrap();
+                    if bytes.len()>=end+4+len {break;}
+                }
+            }
+            let body=json!({"choices":[{"message":{"content":json!({"article":{"bodyMarkdown":"# Manual notes\n\nApproval flow"}}).to_string()},"finish_reason":"stop"}]}).to_string();
+            socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",body.len(),body).as_bytes()).await.unwrap();
+            assert!(tokio::time::timeout(std::time::Duration::from_millis(100),listener.accept()).await.is_err(),"unexpected second model call");
+        });
+        let prepared=crate::native::task_assistance::prepare_knowledge_draft(&db,&settings,&json!({"taskId":"task","expectedTaskRevision":1,"locale":"en"})).await.unwrap();
+        assert_eq!(prepared["qualityState"],"blocked_unsupported");
+        let mut c=database::open(&db).unwrap();let tx=c.transaction().unwrap();let saved=append_generated_tx(&tx,&prepared).unwrap();tx.commit().unwrap();
+        let tx=c.transaction().unwrap();let before=review_projection(&tx,"task",None).unwrap();tx.commit().unwrap();
+        assert_eq!(before["versions"][0]["articleType"],"");assert_eq!(before["versions"][0]["title"],"Approval flow");
+        let note=json!({"taskId":"task","knowledgeRevision":1,"expectedContentHash":saved["contentHash"],"operationId":"review-one","body":"Checked the manual record; approval still needs separate evidence."});
+        add_review_note(&db,&note).unwrap();add_review_note(&db,&note).unwrap();
+        let mut conflict=note.clone();conflict["body"]=json!("Different feedback");assert_eq!(add_review_note(&db,&conflict).unwrap_err(),"operation_conflict");
+        let mut wrong=note.clone();wrong["expectedContentHash"]=json!("wrong");assert_eq!(add_review_note(&db,&wrong).unwrap_err(),"content_hash_conflict");
+        let tx=c.transaction().unwrap();let after=review_projection(&tx,"task",None).unwrap();tx.commit().unwrap();
+        assert_eq!(before["versions"],after["versions"]);assert_eq!(after["reviewNotes"].as_array().unwrap().len(),1);
+        let error=crate::native::knowledge_archive::prepare(&db,&settings,&vault,&crate::native::semantic::SemanticEngine::new(None),&json!({"taskId":"task","knowledgeRevision":1,"expectedKnowledgeContentHash":saved["contentHash"],"expectedGenerationSnapshotHash":saved["sourceHash"],"operationId":"archive-unverified","selectedIdeaRevisionIds":[],"locale":"en"})).await.unwrap_err();
+        assert!(error.contains("knowledge_unverified"));
+        server.await.unwrap();
+        let mut bad=prepared.clone();bad["generationResult"]["article"]["bodyMarkdown"]=json!("");
+        let tx=c.transaction().unwrap();assert!(append_generated_tx(&tx,&bad).unwrap_err().contains("bodyMarkdown"));
+        assert_eq!(tx.query_row("SELECT count(*) FROM knowledge_draft_versions",[],|r|r.get::<_,i64>(0)).unwrap(),1);
+    }
+
+    #[test]
+    #[ignore = "Synthetic local validation timing; no provider calls"]
+    fn measure_candidate_validation_cost() {
+        let (_root,_db,snapshot)=fixture();
+        let result=article(SourceRef{source_type:"task_revision".into(),id:"task".into(),revision:"1".into(),locator:"definition".into(),quote:"Approval flow".into()});
+        for mode in ["previous_validation","integrity_and_validation"] {
+            let started=std::time::Instant::now();
+            for _ in 0..10000 {
+                if mode=="previous_validation" {validate_result(std::hint::black_box(&snapshot),std::hint::black_box(&result)).unwrap();}
+                else {std::hint::black_box(assess_candidate(std::hint::black_box(&snapshot),std::hint::black_box(&result)).unwrap());}
+            }
+            eprintln!("candidate {mode}: mean {:.3} us (10000 iterations, debug)",started.elapsed().as_secs_f64()*1000000.0/10000.0);
+        }
+    }
+
 }

@@ -121,6 +121,8 @@ export function taskOperation(
         revision: Number(p[4]),
       });
     }
+    if (p.length === 4 && p[2] === "knowledge" && p[3] === "review-notes" && method === "POST")
+      return op("task-knowledge.review-note", ids);
     if (p.length === 4) {
       if (p[2] === "work-sessions" && method === "GET")
         return op("task.work-session.get", { ...ids, sessionId: p[3] });

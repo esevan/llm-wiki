@@ -26,6 +26,15 @@ const callbacks = (): ReferenceAwarePreviewProps => ({
   })),
 });
 describe("Reference-aware preview", () => {
+  it("labels partial results and unverified retrieval without claiming reference success", () => {
+    const props = callbacks();
+    props.workspace = { ...props.workspace, generationStatus: "partial", generationDiagnostics: ["retrieval.needed missing"], retrievalOutcome: "unverified" };
+    render(<ReferenceAwarePreview {...props} />);
+    expect(screen.getByText("Partial preview — review missing fields before applying.")).toBeVisible();
+    expect(screen.getByText("Reference search is unverified.")).toBeVisible();
+    expect(screen.getByText("retrieval.needed missing")).toBeVisible();
+    expect(props.onGenerate).not.toHaveBeenCalled();
+  });
   it("keeps zero-result filtering mounted and opens the exact version", async () => {
     const props = callbacks();
     render(<ReferenceAwarePreview {...props} />);

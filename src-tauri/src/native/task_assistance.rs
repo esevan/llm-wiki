@@ -174,8 +174,13 @@ pub(crate) async fn provider_json_with_images(
         .pointer("/choices/0/message/content")
         .and_then(Value::as_str)
         .ok_or("Provider response did not include content")?;
-    let result = serde_json::from_str(raw)
+    let mut result = serde_json::from_str(raw)
         .map_err(|error| format!("Provider response was not valid JSON: {error}"))?;
+    if matches!(prompt_id, PromptId::WorkPreviewPlanner | PromptId::WorkPreviewFinalizer) {
+        crate::native::reference_aware_workbench::normalize_response(prompt_id, &mut result, &context);
+    } else {
+        crate::workflow_foundation::normalize_prompt_output(prompt_id, &mut result);
+    }
     validate_prompt_output(prompt_id, &result).map_err(|error| error.to_string())?;
     Ok(result)
 }
@@ -266,6 +271,7 @@ pub(crate) async fn execute_with_registry(
             projection["archive"]=crate::native::knowledge_archive::review_state(db_path,required(input,"taskId")?)?;
             Ok(projection)
         },
+        "task-knowledge.review-note" => crate::native::knowledge_distillation::add_review_note(db_path, input),
         "task-knowledge.restore" => knowledge_restore(db_path, input),
         "task-knowledge.archive-prepare" => {
             crate::native::knowledge_archive::prepare(
@@ -4127,4 +4133,47 @@ mod tests {
         });
         assert!(duplicate.is_err());
     }
+    /// A single local response per generation: normalization never retries the provider.
+    #[tokio::test]
+    async fn optional_output_fields_use_one_provider_call_and_keep_invalid_types() {
+        use tokio::io::{AsyncReadExt,AsyncWriteExt};
+        let root=tempfile::tempdir().unwrap();let settings_path=root.path().join("settings.json");
+        let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        settings::save_provider(&settings_path,&json!({"base_url":format!("http://{}",listener.local_addr().unwrap()),"model":"synthetic","api_key":"test-only"})).unwrap();
+        let cases=vec![
+            (PromptId::WorkPreviewPlanner,json!({"retrieval":{"needed":false,"reason":"Manual context is sufficient"}}),true),
+            (PromptId::WorkPreviewFinalizer,json!({"preview":{"description":"Review CSV offline","goal":"Preserve approval"},"optionalInvestigation":{"needed":false,"reason":"No remaining question"}}),true),
+            (PromptId::WorkPreviewPlanner,json!({"retrieval":{"needed":true,"reason":"Need sources","queries":"invalid"}}),false),
+            (PromptId::WorkPreviewFinalizer,json!({"preview":{"description":"Review","goal":"Preserve approval","constraints":"invalid"},"optionalInvestigation":{"needed":false,"reason":"None"}}),false),
+        ];
+        let responses=cases.iter().map(|(_,value,_)|value.clone()).collect::<Vec<_>>();
+        let server=tokio::spawn(async move {
+            let mut calls=0;
+            for response in responses {
+                let (mut socket,_)=listener.accept().await.unwrap();let mut bytes=Vec::new();let mut buffer=[0u8;4096];
+                loop {
+                    let n=socket.read(&mut buffer).await.unwrap();assert!(n>0);bytes.extend_from_slice(&buffer[..n]);
+                    if let Some(end)=bytes.windows(4).position(|b|b==b"\r\n\r\n") {
+                        let len=String::from_utf8_lossy(&bytes[..end]).lines().find_map(|line|line.to_ascii_lowercase().strip_prefix("content-length:").map(|v|v.trim().parse::<usize>().unwrap())).unwrap();
+                        if bytes.len()>=end+4+len { break; }
+                    }
+                }
+                calls+=1;
+                let body=json!({"choices":[{"message":{"content":response.to_string()},"finish_reason":"stop"}]}).to_string();
+                socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",body.len(),body).as_bytes()).await.unwrap();
+            }
+            assert!(tokio::time::timeout(std::time::Duration::from_millis(30),listener.accept()).await.is_err(),"unexpected provider retry");
+            calls
+        });
+        for (id,_,expected) in &cases {
+            let result=provider_json(&settings_path,"solution_assistance",*id,json!({"session":{"capture":{"text":"Manual CSV task"}}}),None).await;
+            assert_eq!(result.is_ok(),*expected,"{result:?}");
+            if let Ok(value)=result {
+                if *id==PromptId::WorkPreviewPlanner { assert_eq!(value["preliminaryAssumptions"],json!([])); }
+                else { assert_eq!(value["preview"]["constraints"],json!([])); }
+            }
+        }
+        assert_eq!(server.await.unwrap(),cases.len());
+    }
+
 }

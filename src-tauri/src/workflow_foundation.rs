@@ -4,6 +4,8 @@ use std::fmt;
 use std::str::FromStr;
 
 mod prompts;
+mod output_defaults;
+pub(crate) use output_defaults::normalize_prompt_output;
 pub use prompts::prompt_definition;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -441,6 +443,15 @@ pub fn validate_prompt_output(id: PromptId, output: &Value) -> Result<(), Contra
                 format!("{} output is missing {field}", id.as_str()),
             ));
         }
+    }
+    let nested = match id {
+        PromptId::WorkPreviewPlanner => Some(crate::native::reference_aware_workbench::validate_planner_output(output)),
+        PromptId::WorkPreviewFinalizer => Some(crate::native::reference_aware_workbench::validate_output(output)),
+        PromptId::KnowledgeDraft => Some(serde_json::from_value::<crate::native::knowledge_distillation::GenerationResult>(output.clone()).map(|_| ()).map_err(|error| error.to_string())),
+        _ => None,
+    };
+    if let Some(result) = nested {
+        return result.map_err(|reason| ContractError::new("invalid_prompt_output", format!("{}: {reason}", id.as_str())));
     }
     let valid = match id {
         PromptId::ImageSummary => ["ko.summary", "en.summary"]

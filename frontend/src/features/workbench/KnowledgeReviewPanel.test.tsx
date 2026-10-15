@@ -53,6 +53,71 @@ const projection = (versions = [version(1), version(2)]) => ({
 });
 
 describe("Knowledge review", () => {
+  it("preserves an unverified body and saves version-bound notes without enabling publication", async () => {
+    const draft = { ...version(2), articleType: "", qualityState: "blocked_unsupported", modelError: "missing_reference: applicability" };
+    draft.result.article.type = "";
+    const stored = { ...projection([draft]), reviewNotes: [] as Array<{ id: string; knowledgeRevision: number; contentHash: string; body: string; createdAt: string }> };
+    const request = vi.fn(async ({ path, body }: { path: string; body?: string }) => {
+      if (path.endsWith("/review-notes")) {
+        const input = JSON.parse(body ?? "{}");
+        expect(input).toMatchObject({ knowledgeRevision: 2, expectedContentHash: "content-2", body: "Check the original manual record." });
+        expect(input.operationId).toEqual(expect.any(String));
+        stored.reviewNotes.push({ id: "note-1", knowledgeRevision: 2, contentHash: "content-2", body: input.body, createdAt: "2026-10-15T12:00:00Z" });
+      }
+      return response(stored);
+    });
+    window.llmWikiApplication = { request };
+    const generate = vi.fn(); const prepare = vi.fn();
+    render(<KnowledgeReviewPanel taskId="task-1" completed onGenerate={generate} onPrepareArchive={prepare} />);
+    expect(await screen.findByText("Unverified draft")).toBeVisible();
+    expect(screen.getByText("Classification unconfirmed", { exact: false })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Offline use", level: 1 })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Prepare publication review" })).toBeDisabled();
+    fireEvent.change(screen.getByRole("textbox", { name: "Your verification note" }), { target: { value: "Check the original manual record." } });
+    fireEvent.click(screen.getByRole("button", { name: "Save note" }));
+    expect(await screen.findByText("Check the original manual record.")).toBeVisible();
+    expect(screen.getByText("Unverified draft")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Prepare publication review" })).toBeDisabled();
+    expect(generate).not.toHaveBeenCalled(); expect(prepare).not.toHaveBeenCalled();
+    expect(request.mock.calls.filter(([input]) => input.path.endsWith("/review-notes"))).toHaveLength(1);
+  });
+
+  it("keeps verification input on save failure and allows a local retry", async () => {
+    let fail = true;
+    const request = vi.fn(async ({ path }: { path: string }) => {
+      if (path.endsWith("/review-notes") && fail) throw new Error("Content version changed");
+      return response(projection());
+    });
+    window.llmWikiApplication = { request };
+    render(<KnowledgeReviewPanel taskId="task-1" completed onGenerate={vi.fn()} />);
+    const input = await screen.findByRole("textbox", { name: "Your verification note" });
+    fireEvent.change(input, { target: { value: "Preserve this review" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save note" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Content version changed");
+    expect(input).toHaveValue("Preserve this review");
+    fail = false;
+    fireEvent.click(screen.getByRole("button", { name: "Save note" }));
+    await waitFor(() => expect(input).toHaveValue(""));
+    expect(request.mock.calls.filter(([input]) => input.path.endsWith("/review-notes"))).toHaveLength(2);
+  });
+
+  it("shows only notes bound to the exact selected version and preserves unsaved review input", async () => {
+    const stored = { ...projection(), reviewNotes: [
+      { id: "historical", knowledgeRevision: 1, contentHash: "content-1", body: "Historical note", createdAt: "2026-10-15" },
+      { id: "wrong-hash", knowledgeRevision: 2, contentHash: "other", body: "Unrelated note", createdAt: "2026-10-15" },
+    ] };
+    window.llmWikiApplication = { request: vi.fn().mockResolvedValue(response(stored)) };
+    const dirty = vi.fn();
+    render(<KnowledgeReviewPanel taskId="task-1" completed onGenerate={vi.fn()} onDirtyChange={dirty} />);
+    await screen.findByRole("textbox", { name: "Your verification note" });
+    expect(screen.queryByText("Historical note")).not.toBeInTheDocument();
+    expect(screen.queryByText("Unrelated note")).not.toBeInTheDocument();
+    fireEvent.change(screen.getByRole("textbox", { name: "Your verification note" }), { target: { value: "Unsaved note" } });
+    expect(dirty).toHaveBeenLastCalledWith(true);
+    expect(screen.getByRole("combobox", { name: /Version/ })).toBeDisabled();
+    expect(screen.getByRole("textbox", { name: "Your verification note" })).toHaveValue("Unsaved note");
+  });
+
   it("reports independent projection and historical version selection timings", async () => {
     const revisions = Array.from({ length: 40 }, (_, index) =>
       version(index + 1, `# Revision ${index + 1}\n\n${"A recorded outcome retains its conditions and evidence.\n\n".repeat(40)}`));
