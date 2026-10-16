@@ -174,7 +174,11 @@ pub(crate) async fn provider_json_with_images(
     } else {
         crate::workflow_foundation::normalize_prompt_output(prompt_id, &mut result);
     }
-    validate_prompt_output(prompt_id, &result).map_err(|error| error.to_string())?;
+    validate_prompt_output(prompt_id, &result).map_err(|error| {
+        if prompt_id == PromptId::WorkPreviewFinalizer {
+            format!("preview_claim_validation: {error}")
+        } else { error.to_string() }
+    })?;
     Ok(result)
 }
 
@@ -321,7 +325,7 @@ async fn queue_reference_preview(
     let response_id=id();let job_id=id();
     let job_input=json!({"referenceAware":true,"sessionId":session_id,"responseJobId":response_id,"expectedPreviewVersion":super::reference_aware_workbench::head(&tx,session_id)?,"taskBinding":context["taskSnapshot"],"hierarchyContextHash":digest(&context["hierarchyContext"].to_string()),"promptContext":image_context(&context).0,"modelTask":task_kind,"locale":input["locale"].as_str().unwrap_or("en"),"images":image_context(&context).1});
     tx.execute("INSERT INTO task_assistance_jobs(id,kind,subject_id,status,input_json,created_at,prompt_id,prompt_version) VALUES(?,'refinement_response',?,'completed',?,?,?,1)",params![response_id,session_id,input.to_string(),now(),PromptId::WorkPreviewPlanner.as_str()]).map_err(|e|e.to_string())?;
-    tx.execute("INSERT INTO ai_jobs_v2(id,task_kind,entity_type,entity_id,status,input_json,execution_mode,idempotency_key,result_interface,progress_total,available_at,created_at,prompt_id,prompt_version,execution_outcome,application_disposition) VALUES(?,'refinement_preview','refinement_sessions',?,'queued',?,'native',?,'inline_preview',1,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,?,1,'pending','pending')",params![job_id,session_id,job_input.to_string(),format!("reference-preview:{}",required(input,"operationId")?),PromptId::WorkPreviewFinalizer.as_str()]).map_err(|e|e.to_string())?;
+    tx.execute("INSERT INTO ai_jobs_v2(id,task_kind,entity_type,entity_id,status,input_json,execution_mode,idempotency_key,result_interface,progress_total,available_at,created_at,prompt_id,prompt_version,execution_outcome,application_disposition) VALUES(?,'refinement_preview','refinement_sessions',?,'queued',?,'native',?,'inline_preview',1,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,?,?,'pending','pending')",params![job_id,session_id,job_input.to_string(),format!("reference-preview:{}",required(input,"operationId")?),PromptId::WorkPreviewFinalizer.as_str(),crate::workflow_foundation::prompt_definition(PromptId::WorkPreviewFinalizer).version]).map_err(|e|e.to_string())?;
     let result=json!({"jobId":job_id,"status":"queued","contextRevision":context_revision});record_operation(&tx,input,&result)?;
     tx.commit().map_err(|e|e.to_string())?;
     crate::native::jobs::start_stored(db_path,settings_path,vault_root,&registry,&semantic,&job_id)?;
@@ -893,7 +897,7 @@ async fn run_refinement_response(
         let task_binding = preview_context["taskSnapshot"].clone();
         let family_hash = digest(&preview_context["hierarchyContext"].to_string());
         let preview_input = json!({"referenceAware":true,"expectedPreviewVersion":super::reference_aware_workbench::head(&tx,session_id)?,"images":image_context(&preview_context).1,"promptContext":image_context(&preview_context).0,"taskBinding":task_binding,"hierarchyContextHash":family_hash,"sessionId":session_id,"responseJobId":job_id,"autoReview":auto_review,"locale":locale,"modelTask":task_kind});
-        tx.execute("INSERT INTO ai_jobs_v2(id,task_kind,entity_type,entity_id,status,input_json,execution_mode,idempotency_key,result_interface,progress_total,available_at,created_at,prompt_id,prompt_version,execution_outcome,application_disposition) VALUES(?,'refinement_preview','refinement_sessions',?,'queued',?,'native',?,'inline_preview',1,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,?,1,'pending','pending')", params![preview_id,session_id,preview_input.to_string(),format!("refinement-preview:{job_id}"),PromptId::WorkPreviewFinalizer.as_str()]).map_err(|error| error.to_string())?;
+        tx.execute("INSERT INTO ai_jobs_v2(id,task_kind,entity_type,entity_id,status,input_json,execution_mode,idempotency_key,result_interface,progress_total,available_at,created_at,prompt_id,prompt_version,execution_outcome,application_disposition) VALUES(?,'refinement_preview','refinement_sessions',?,'queued',?,'native',?,'inline_preview',1,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,?,?,'pending','pending')", params![preview_id,session_id,preview_input.to_string(),format!("refinement-preview:{job_id}"),PromptId::WorkPreviewFinalizer.as_str(),crate::workflow_foundation::prompt_definition(PromptId::WorkPreviewFinalizer).version]).map_err(|error| error.to_string())?;
         tx.execute("UPDATE task_assistance_jobs SET status='completed',result_json=?,finished_at=? WHERE id=?", params![json!({"message":assistant,"previewJobId":preview_id}).to_string(),now(),job_id]).map_err(|error| error.to_string())?;
         tx.commit().map_err(|error| error.to_string())?;
     }

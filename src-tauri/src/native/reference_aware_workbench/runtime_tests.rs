@@ -183,12 +183,16 @@ fn provider_variant(f:&Fixture,turns:usize,delay_last:bool,optional:bool,standal
                     _ => {
                         assert_eq!(context["retrievalOutcome"], "results");
                         let r = &context["references"][0];
+                        let wire = &request["response_format"]["json_schema"]["schema"]["properties"]["claimSources"]["items"]["properties"];
+                        assert_eq!(wire["referenceId"]["enum"], json!([r["referenceId"]]));
+                        assert!(wire.get("documentId").is_none());
+                        assert!(r["referenceId"].as_str().unwrap().starts_with("ref_"));
                         assert!(r["excerpt"].as_str().unwrap().contains("approval"));
                         if delay_last && !optional && i == turns * 3 - 1 {
                             ready_tx.send(()).unwrap();
                             go_rx.recv_timeout(Duration::from_secs(10)).unwrap();
                         }
-                        json!({"preview":fields(),"claimSources":[{"claimId":"constraints:approval","documentId":r["documentId"],"documentVersion":r["documentVersion"],"section":r["section"],"role":"constraint"}],"optionalInvestigation":intent(optional)})
+                        json!({"preview":fields(),"claimSources":[{"claimId":"constraints:approval","referenceId":r["referenceId"],"role":"constraint"}],"optionalInvestigation":intent(optional)})
                     }
                 }
             };
@@ -219,7 +223,14 @@ async fn command_job_provider_retrieves_before_preview_and_explicit_apply_is_ato
     let current = &workspace["preview"]["current"];
     assert_eq!(current["fields"]["goal"], "A reviewed contract");
     assert_eq!(current["references"][0]["role"], "constraint");
+    let sent = seen.lock().unwrap()[2]["references"][0].clone();
+    for key in ["documentId", "documentVersion", "section"] {
+        assert_eq!(current["references"][0][key], sent[key]);
+    }
+
     let c = database::open(&f.db).unwrap();
+    assert_eq!(c.query_row("SELECT prompt_version FROM ai_jobs_v2 WHERE task_kind='refinement_preview' LIMIT 1", [], |r| r.get::<_,i64>(0)).unwrap(),2);
+    assert_eq!(c.query_row("SELECT prompt_version FROM work_preview_versions WHERE derivation_kind='generated' LIMIT 1", [], |r| r.get::<_,i64>(0)).unwrap(),2);
     assert_eq!(
         c.query_row(
             "SELECT current_revision FROM tasks WHERE id=?",

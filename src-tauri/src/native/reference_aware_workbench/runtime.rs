@@ -338,6 +338,7 @@ pub(crate) async fn prepare(
         if exact["source_hash"]!=reference["documentVersion"]{return Err("reference_version_unavailable".into())}
         refs.push(reference.clone());
     }
+    crate::workflow_foundation::preview_references::assign(&mut refs)?;
     if !refs.is_empty(){outcome="results".into();}
     let retrieval_ms = started.elapsed().as_millis() - planner_ms;
     let output = assistance::provider_json_with_images(
@@ -350,7 +351,7 @@ pub(crate) async fn prepare(
     )
     .await?;
     let finalizer_ms = started.elapsed().as_millis() - planner_ms - retrieval_ms;
-    let fields = finalize(&output, &refs)?;
+    let fields = finalize(&output, &refs).map_err(|error| format!("preview_reference_membership: {error}"))?;
     // Preserve existing Task/Capture proposal consumers while exposing structured fields.
     let mut patch = task_fields(&fields);
     if input["taskBinding"]["id"].is_string() {
@@ -407,7 +408,7 @@ pub(crate) fn save_generated_tx(
     let mut stored_fields=fields.clone();
     stored_fields["_generation"]=json!({"omittedPreviewFields":p["omittedPreviewFields"],"generationStatus":p["generationStatus"],"generationDiagnostics":p["generationDiagnostics"]});
     tx.execute("INSERT OR IGNORE INTO work_previews(id,session_id,subject_type,subject_id) SELECT ?,id,CASE WHEN task_id IS NULL THEN 'capture' ELSE 'task' END,COALESCE(task_id,capture_id) FROM refinement_sessions WHERE id=?",params![preview,session]).map_err(|e|e.to_string())?;
-    tx.execute("INSERT INTO work_preview_versions(preview_id,version,derivation_kind,generation_job_id,task_revision,context_revision,locale,fields_json,content_hash,prompt_id,prompt_version) VALUES(?,?,'generated',?,?,?,?,?,?,'work_preview_finalizer',1)",params![preview,next,job,input["taskBinding"]["taskRevision"].as_i64(),context,input["locale"].as_str().unwrap_or("en"),stored_fields.to_string(),hash(fields)]).map_err(|e|e.to_string())?;
+    tx.execute("INSERT INTO work_preview_versions(preview_id,version,derivation_kind,generation_job_id,task_revision,context_revision,locale,fields_json,content_hash,prompt_id,prompt_version) VALUES(?,?,'generated',?,?,?,?,?,?,'work_preview_finalizer',?)",params![preview,next,job,input["taskBinding"]["taskRevision"].as_i64(),context,input["locale"].as_str().unwrap_or("en"),stored_fields.to_string(),hash(fields),crate::workflow_foundation::prompt_definition(PromptId::WorkPreviewFinalizer).version]).map_err(|e|e.to_string())?;
     for a in list(&fields["assumptions"])? {
         tx.execute("INSERT INTO work_preview_assumptions(preview_id,version,id,text,status,basis,source_claim_ids_json) VALUES(?,?,?,?,'open',?,?)",params![preview,next,string(a,"id")?,string(a,"text")?,string(a,"basis")?,a["sourceClaimIds"].to_string()]).map_err(|e|e.to_string())?;
     }
@@ -430,12 +431,12 @@ pub(crate) fn save_generated_tx(
             .unwrap_or("discovered");
         let mut metadata = r.clone();
         metadata["claimUses"] = json!(claims.iter().map(|claim| {
-            let statement = super::super::reference_provenance::claim_statement(fields, claim["claimId"].as_str().unwrap_or("")).ok_or("invalid_reference_binding: empty grounded statement")?;
+            let statement = super::super::reference_provenance::claim_statement(fields, claim["claimId"].as_str().unwrap_or("")).ok_or("invalid_reference_binding: persistence: empty grounded statement")?;
             Ok(json!({"claimId":claim["claimId"],"role":claim["role"],"statement":statement}))
         }).collect::<Result<Vec<Value>, &str>>()?);
         tx.execute("INSERT INTO work_preview_references(id,preview_id,version,retrieval_request_hash,source_bundle_hash,document_id,document_version,section,metadata_json,role,claim_ids_json) VALUES(?,?,?,?,?,?,?,?,?,?,?)",params![id(),preview,next,string(r,"retrievalRequestHash")?,hash(&p["references"]),string(r,"documentId")?,string(r,"documentVersion")?,r["section"].as_str().unwrap_or(""),metadata.to_string(),role,json!(ids).to_string()]).map_err(|e|e.to_string())?;
         for claim in claims {
-            let statement = super::super::reference_provenance::claim_statement(fields, string(claim,"claimId")?).ok_or("invalid_reference_binding: empty grounded statement")?;
+            let statement = super::super::reference_provenance::claim_statement(fields, string(claim,"claimId")?).ok_or("invalid_reference_binding: persistence: empty grounded statement")?;
             tx.execute("INSERT INTO reference_interactions(id,preview_id,context_revision,document_id,document_version,section,kind,use_scope,reason,preview_version) VALUES(?,?,?,?,?,?,'used',?,?,?)",params![id(),preview,context,string(r,"documentId")?,string(r,"documentVersion")?,r["section"].as_str().unwrap_or(""),string(claim,"claimId")?,statement,next]).map_err(|e|e.to_string())?;
         }
     }

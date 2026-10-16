@@ -210,13 +210,7 @@ pub(crate) fn schema(id: PromptId, context: &Value) -> Result<Value, String> {
                 ("preview", object(&fields)),
                 (
                     "claimSources",
-                    list(object(&[
-                        ("claimId", text()),
-                        ("documentId", text()),
-                        ("documentVersion", text()),
-                        ("section", text()),
-                        ("role", text()),
-                    ])),
+                    super::preview_references::claim_schema(context)?,
                 ),
                 ("optionalInvestigation", intent()),
             ])
@@ -570,8 +564,18 @@ pub(crate) fn parse_completion(
     let parsed: Value = serde_json::from_str(raw)
         .map_err(|e| format!("Provider response was not valid JSON: {e}"))?;
     let schema = schema(id, context)?;
-    validate_shape(&schema, &schema, &parsed, "", true)?;
-    decode(id, parsed)
+    validate_shape(&schema, &schema, &parsed, "", true).map_err(|error| {
+        if id == PromptId::WorkPreviewFinalizer {
+            format!("preview_response_schema: {error}")
+        } else {
+            error
+        }
+    })?;
+    let mut decoded = decode(id, parsed)?;
+    if id == PromptId::WorkPreviewFinalizer {
+        super::preview_references::restore(context, &mut decoded)?;
+    }
+    Ok(decoded)
 }
 // Validate the exact schema subset emitted above. Missing fields remain compatible
 // with established local defaults; supplied wrong types/unknown fields never pass.
