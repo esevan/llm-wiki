@@ -39,3 +39,9 @@ databases do not create the old settings tables.
 `LLM_WORKBENCH_HOME` may redirect the settings directory for isolated development and automated
 tests. Production packages always use the current user's home directory unless that explicit
 process-level override is supplied.
+
+## Structured output compatibility
+
+Structured AI operations require an OpenAI-compatible Chat Completions endpoint and model supporting strict `response_format` JSON Schema. Every structured request sends its actual schema; the model-list connection test alone does not prove this capability. A provider rejection is reported explicitly and never retried without the schema. There is no new model call or schema-free fallback. Other vendors' native API formats are not adapters supported by this application. Free-form streamed chat and Codex Task execution keep their existing text contracts.
+
+The protocol follows the [official Structured Outputs guide](https://developers.openai.com/api/docs/guides/structured-outputs). Custom compatible endpoints must honor the same contract; local tests do not establish compatibility with every provider or model.

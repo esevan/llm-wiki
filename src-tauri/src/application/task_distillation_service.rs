@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 pub const RULES_VERSION: &str = "task-distillation-rules-v2";
 pub const RESULT_SCHEMA_VERSION: &str = "task-distillation-result-v2";
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ExactSource {
     #[serde(rename = "type")]
@@ -26,14 +26,14 @@ pub struct ExactSource {
     pub excerpt: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct SourceOmission {
     pub omitted_chars: usize,
     pub strategy: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct DistillationOwner {
     pub task_id: String,
@@ -43,7 +43,7 @@ pub struct DistillationOwner {
     pub work_log_entry_id: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct DistillationInput {
     pub projection_kind: String,
@@ -65,7 +65,7 @@ pub struct DistillationInput {
     pub repair_reason: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct SourceCitation {
     #[serde(rename = "type")]
@@ -77,7 +77,7 @@ pub struct SourceCitation {
     pub quote: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct DistilledClaim {
     pub id: String,
@@ -93,7 +93,7 @@ pub struct DistilledClaim {
     pub contradicted_by: Vec<SourceCitation>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct PreparedDetail {
     pub before: Option<String>,
@@ -107,7 +107,7 @@ pub struct PreparedDetail {
     pub links: Vec<SourceCitation>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct NodeChange {
     pub action: String,
@@ -123,7 +123,7 @@ pub struct NodeChange {
     pub sources: Vec<SourceCitation>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct RelationshipChange {
     pub id: String,
@@ -135,7 +135,7 @@ pub struct RelationshipChange {
     pub sources: Vec<SourceCitation>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct TopicState {
     pub topic_key: String,
@@ -146,7 +146,7 @@ pub struct TopicState {
     pub sources: Vec<SourceCitation>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct CompletionSnapshot {
     pub id: String,
@@ -162,7 +162,7 @@ pub struct CompletionSnapshot {
     pub sources: Vec<SourceCitation>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkLogSection {
     pub kind: String,
@@ -170,14 +170,14 @@ pub struct WorkLogSection {
     pub claim_ids: Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkLogView {
     #[serde(default)]
     pub sections: Vec<WorkLogSection>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct SourceDependency {
     pub source: SourceCitation,
@@ -187,7 +187,7 @@ pub struct SourceDependency {
     pub relationship_ids: Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct DistillationResult {
     #[serde(default)]

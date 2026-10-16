@@ -5,6 +5,7 @@ use std::str::FromStr;
 
 mod prompts;
 mod output_defaults;
+pub(crate) mod structured_output;
 pub(crate) use output_defaults::normalize_prompt_output;
 pub use prompts::prompt_definition;
 

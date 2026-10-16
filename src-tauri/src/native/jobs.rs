@@ -785,7 +785,7 @@ async fn run_inner(
     };
     let prompt_id = PromptId::for_job(&task, &entity_type);
     let prompt = if let Some(prompt_id) = prompt_id {
-        build_prompt(prompt_id, &json!({"context":context}))
+        build_prompt(prompt_id, &json!({"context":context.clone()}))
             .map_err(|error| error.to_string())?
             .content
     } else {
@@ -813,7 +813,7 @@ async fn run_inner(
             base_url.trim_end_matches('/')
         ))
         .bearer_auth(api_key)
-        .json(&json!({"model":model,"messages":[{"role":"user","content":message_content}],"stream":false}))
+        .json(&crate::workflow_foundation::structured_output::request_body(prompt_id.ok_or("No registered structured prompt")?, &context, &model, message_content)?)
         .send();
     let response = tokio::select! {
         _ = token.cancelled() => return Ok(()),
@@ -826,12 +826,9 @@ async fn run_inner(
         }
         .map_err(|e| e.to_string())
         .and_then(|body| {
-            body.pointer("/choices/0/message/content")
-                .and_then(Value::as_str)
-                .ok_or_else(|| "Provider response did not include content".into())
-                .and_then(|raw| serde_json::from_str::<Value>(raw).map_err(|e| e.to_string()))
+            crate::workflow_foundation::structured_output::parse_completion(prompt_id.ok_or("No registered structured prompt")?, &context, &body)
         }),
-        Ok(value) => Err(format!("Provider request failed ({})", value.status())),
+        Ok(value) => Err(crate::workflow_foundation::structured_output::http_error(value.status())),
         Err(error) => Err(error.to_string()),
     };
     if task == "run_report_distillation" {
@@ -1096,13 +1093,14 @@ async fn prepare_task_journey(
     let mut suggested: Option<Value> = None;
     match crate::native::settings::provider_credentials_for(settings_path, "lineage_inference") {
         Ok((base_url, model, api_key)) => {
-            let prompt = build_prompt(PromptId::TaskJourney, &json!({"context":{"locale":locale,"events":recorded}}),
+            let context = json!({"locale":locale,"events":recorded});
+            let prompt = build_prompt(PromptId::TaskJourney, &json!({"context":context.clone()}),
             )
                 .map_err(|error| error.to_string())?.content;
             let request = crate::native::settings::provider_client(settings_path)?
                 .post(format!("{}/chat/completions",base_url.trim_end_matches('/')))
                 .bearer_auth(api_key)
-                .json(&json!({"model":model,"messages":[{"role":"user","content":prompt}],"stream":false}))
+                .json(&crate::workflow_foundation::structured_output::request_body(PromptId::TaskJourney,&context,&model,json!(prompt))?)
                 .send();
             let response = if let Some(token) = token {
                 tokio::select! { _ = token.cancelled() => return Ok(None), response = request => response }
@@ -1116,21 +1114,20 @@ async fn prepare_task_journey(
                     } else {
                         response.json::<Value>().await.ok()
                     };
-                    match body.and_then(|body| {
-                        body.pointer("/choices/0/message/content")
-                            .and_then(Value::as_str)
-                            .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
+                    match body.ok_or_else(|| "Provider response body was invalid".to_string()).and_then(|body| {
+                        crate::workflow_foundation::structured_output::parse_completion(PromptId::TaskJourney,&context,&body)
                     }) {
-                        Some(value) if validate_prompt_output(PromptId::TaskJourney, &value).is_ok()
+                        Ok(value) if validate_prompt_output(PromptId::TaskJourney, &value).is_ok()
                             && value["titles"].is_object() && value["relationships"].is_array() => {
                             suggested = Some(value);
                             model_status = "ai";
                         }
+                        Err(error) => model_error = error,
                         _ => model_error = "Provider returned no usable journey inference".into(),
                     }
                 }
                 Ok(response) => {
-                    model_error = format!("Provider request failed ({})", response.status())
+                    model_error = crate::workflow_foundation::structured_output::http_error(response.status())
                 }
                 Err(error) => model_error = error.to_string(),
             }
@@ -1424,6 +1421,28 @@ fn finalize_image_summary(db_path: &Path, vault: &Path, job_id: &str, generation
 #[cfg(test)]
 mod image_summary_tests {
     use super::*;
+
+    #[tokio::test]
+    async fn structured_jobs_and_journey_http_requests_are_strict_and_parse_real_responses(){
+        let (root,db,_task,entry)=fixture();
+        let settings=root.path().join("settings.json");
+        let (base,server)=crate::workflow_foundation::structured_output::test_server::serve(versions(),200).await;
+        crate::native::settings::save_provider(&settings,&json!({"base_url":base,"model":"fixture","api_key":"fixture-key"})).unwrap();
+        database::open(&db).unwrap().execute("UPDATE ai_jobs_v2 SET status='queued',prompt_id='image_summary',prompt_version=1,input_json=? WHERE id='image-job'",[json!({"entityType":"task_work_log_entries","locale":"ko"}).to_string()]).unwrap();
+        run_inner(&db,&settings,root.path(),&crate::native::semantic::SemanticEngine::new(None),&CancellationToken::new(),"image-worker","image-job").await.unwrap();
+        let sent=server.await.unwrap();
+        assert_eq!(sent["response_format"]["json_schema"]["name"],"image_summary");
+        assert_eq!(sent["response_format"]["json_schema"]["strict"],true);
+        assert_eq!(database::open(&db).unwrap().query_row("SELECT image_summary FROM task_work_log_entries WHERE id=?",[entry],|r|r.get::<_,String>(0)).unwrap(),"Evidence in the screenshot");
+        let recorded=json!({"events":[{"id":"recorded","type":"work_recorded","detail":{"summary":"Kept"}}],"edges":[]});
+        let (base,server)=crate::workflow_foundation::structured_output::test_server::serve(json!({"titles":{"recorded":{"en":"Kept","ko":"유지"}},"relationships":[]}),200).await;
+        crate::native::settings::save_provider(&settings,&json!({"base_url":base,"model":"fixture"})).unwrap();
+        let graph=prepare_task_journey(&settings,&recorded,"en",None).await.unwrap().unwrap();
+        assert_eq!(graph["modelStatus"],"ai");
+        let sent=server.await.unwrap();
+        assert_eq!(sent["response_format"]["json_schema"]["name"],"task_journey");
+        assert!(sent["response_format"]["json_schema"]["schema"]["properties"]["titles"]["properties"].get("recorded").is_some());
+    }
 
     #[test]
     fn finishing_an_old_attempt_keeps_the_retry_cancellable() {

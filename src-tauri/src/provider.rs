@@ -1,6 +1,6 @@
+use crate::workflow_foundation::{build_prompt, validate_prompt_output, PromptId};
 use crate::{native, NativeApplication, NativeOperation, NativeResponse};
 use serde_json::{json, Value};
-use crate::workflow_foundation::{build_prompt, validate_prompt_output, PromptId};
 
 #[tauri::command]
 pub(crate) async fn provider_request(
@@ -20,24 +20,10 @@ pub(crate) async fn provider_request(
         )?;
         let client = native::settings::provider_client(&application.settings_path())?;
         if operation.name == "problem.enrich" {
-            let statement = operation.input.get("statement").and_then(Value::as_str).filter(|value| !value.trim().is_empty()).ok_or("statement is required")?;
-            let citations = operation.input.get("citations").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).take(8).collect::<Vec<_>>().join(", ");
-            let prompt = build_prompt(
-                PromptId::ProblemEnrichment,
-                &json!({"context":{"statement":statement,"citations":citations}}),
-            ).map_err(|error| error.to_string())?;
-            let response = client.post(format!("{}/chat/completions", base_url.trim_end_matches('/')))
-                .bearer_auth(api_key).json(&json!({"model":model,"messages":[{"role":"user","content":prompt.content}],"stream":false})).send().await.map_err(|error| error.to_string())?;
-            if !response.status().is_success() { return Err(format!("Problem enrichment failed ({})", response.status())); }
-            let payload = response.json::<Value>().await.map_err(|error| error.to_string())?;
-            let raw = payload.pointer("/choices/0/message/content").and_then(Value::as_str).ok_or("Problem enrichment response did not include content")?;
-            let mut result = serde_json::from_str::<Value>(raw).map_err(|error| error.to_string())?;
-            validate_prompt_output(PromptId::ProblemEnrichment, &result)
-                .map_err(|error| error.to_string())?;
-            result["_prompt"] = json!({"id":prompt.id.as_str(),"version":prompt.version});
-            return Ok(result);
+            return enrich(&client, &base_url, &model, &api_key, &operation.input).await;
         }
-        let response = client.get(format!("{}/models", base_url.trim_end_matches('/')))
+        let response = client
+            .get(format!("{}/models", base_url.trim_end_matches('/')))
             .bearer_auth(api_key)
             .send()
             .await
@@ -70,4 +56,93 @@ pub(crate) async fn provider_request(
             body: json!({"detail":error}),
         },
     })
+}
+
+async fn enrich(
+    client: &reqwest::Client,
+    base_url: &str,
+    model: &str,
+    api_key: &str,
+    input: &Value,
+) -> Result<Value, String> {
+    let statement = input
+        .get("statement")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .ok_or("statement is required")?;
+    let citations = input
+        .get("citations")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .take(8)
+        .collect::<Vec<_>>()
+        .join(", ");
+    let context = json!({"statement":statement,"citations":citations});
+    let prompt = build_prompt(PromptId::ProblemEnrichment, &json!({"context":context}))
+        .map_err(|error| error.to_string())?;
+    let response = client
+        .post(format!(
+            "{}/chat/completions",
+            base_url.trim_end_matches('/')
+        ))
+        .bearer_auth(api_key)
+        .json(
+            &crate::workflow_foundation::structured_output::request_body(
+                PromptId::ProblemEnrichment,
+                &context,
+                &model,
+                json!(prompt.content),
+            )?,
+        )
+        .send()
+        .await
+        .map_err(|error| error.to_string())?;
+    if !response.status().is_success() {
+        return Err(crate::workflow_foundation::structured_output::http_error(
+            response.status(),
+        ));
+    }
+    let payload = response
+        .json::<Value>()
+        .await
+        .map_err(|error| error.to_string())?;
+    let mut result = crate::workflow_foundation::structured_output::parse_completion(
+        PromptId::ProblemEnrichment,
+        &context,
+        &payload,
+    )?;
+    validate_prompt_output(PromptId::ProblemEnrichment, &result)
+        .map_err(|error| error.to_string())?;
+    result["_prompt"] = json!({"id":prompt.id.as_str(),"version":prompt.version});
+    Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[tokio::test]
+    async fn structured_problem_http_request_and_response_use_the_same_schema() {
+        let result = json!({"normalized_problem":"Manual export","pain":"Slow","non_goals":[],"categories":[],"importance_rationale":"Recorded delay"});
+        let (base, server) =
+            crate::workflow_foundation::structured_output::test_server::serve(result.clone(), 200)
+                .await;
+        let parsed = enrich(
+            &reqwest::Client::new(),
+            &base,
+            "fixture",
+            "fixture-key",
+            &json!({"statement":"Export"}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(parsed["normalized_problem"], result["normalized_problem"]);
+        let sent = server.await.unwrap();
+        assert_eq!(
+            sent["response_format"]["json_schema"]["name"],
+            "problem_enrichment"
+        );
+        assert_eq!(sent["response_format"]["json_schema"]["strict"], true);
+    }
 }

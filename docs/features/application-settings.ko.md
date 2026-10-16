@@ -35,3 +35,9 @@ Markdown 문서를 다시 읽어 번들 모델로 semantic embedding을 재생�
 
 격리된 개발과 자동화 test에서는 `LLM_WORKBENCH_HOME`으로 설정 디렉터리를 바꿀 수 있습니다.
 명시적인 process-level override가 없다면 production package는 항상 현재 사용자의 home을 사용합니다.
+
+## 구조화 출력 호환성
+
+구조화 AI 작업은 strict `response_format` JSON Schema를 지원하는 OpenAI 호환 Chat Completions 엔드포인트와 모델이 필요합니다. 모든 구조화 요청에 실제 스키마를 전달하며, 모델 목록 연결 테스트만으로 이 기능을 확인할 수는 없습니다. provider가 요청을 거부하면 명확한 오류를 표시하고 스키마를 뺀 재시도는 하지 않습니다. 새 모델 호출이나 스키마 없는 fallback은 추가하지 않습니다. 다른 업체의 고유 API 형식은 이 앱에서 지원하는 어댑터가 아닙니다. 자유 형식 스트리밍 대화와 Codex Task 실행은 기존 텍스트 계약을 유지합니다.
+
+프로토콜은 [공식 Structured Outputs 가이드](https://developers.openai.com/api/docs/guides/structured-outputs)를 따릅니다. 사용자 지정 호환 엔드포인트도 같은 계약을 지켜야 하며, 로컬 테스트가 모든 provider와 모델의 호환성을 보장하지는 않습니다.

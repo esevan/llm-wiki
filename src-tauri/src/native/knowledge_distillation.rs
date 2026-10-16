@@ -24,7 +24,7 @@ fn canonical_hash(values: &mut Vec<Value>) -> String {
     hash_value(&json!(values))
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct SourceRef {
     #[serde(rename = "type")]
@@ -35,7 +35,7 @@ pub struct SourceRef {
     pub quote: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct FinalOutcome {
     pub topic_key: String,
@@ -43,7 +43,7 @@ pub struct FinalOutcome {
     #[serde(default)]
     pub claim_ids: Vec<String>,
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ClaimBinding {
     pub claim_id: String,
@@ -52,7 +52,7 @@ pub struct ClaimBinding {
     #[serde(default)]
     pub source_refs: Vec<SourceRef>,
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct AssumptionBinding {
     pub assumption_id: String,
@@ -60,7 +60,7 @@ pub struct AssumptionBinding {
     #[serde(default)]
     pub source_refs: Vec<SourceRef>,
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Applicability {
     pub summary: String,
@@ -73,7 +73,7 @@ pub struct Applicability {
     #[serde(default)]
     pub source_refs: Vec<SourceRef>,
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Article {
     #[serde(rename = "type")]
@@ -88,7 +88,7 @@ pub struct Article {
     #[serde(default)]
     pub assumption_bindings: Vec<AssumptionBinding>,
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Idea {
     pub id: String,
@@ -100,7 +100,7 @@ pub struct Idea {
     #[serde(default)]
     pub related_topic_keys: Vec<String>,
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct QualityFinding {
     pub kind: String,
@@ -111,7 +111,7 @@ pub struct QualityFinding {
     #[serde(default)]
     pub message: String,
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct GenerationResult {
     pub article: Article,

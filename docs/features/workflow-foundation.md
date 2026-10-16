@@ -13,3 +13,13 @@ Every generated version can attach provenance and exact document references with
 These contracts do not give AI authority over Task state, Problem resolution, decisions, or Knowledge publication. The owning feature performs its domain write and source-version check in one transaction, then records whether the result was applied or superseded.
 
 See the [feature specification](../../specs/015-workflow-foundation/spec.md) and [consumer API contract](../../specs/015-workflow-foundation/contracts/workflow-foundation-api.md).
+
+## Provider JSON Schema contracts
+
+All 28 registered structured prompt contracts have a common request-schema and response type-check path. Typed Knowledge, archive organization, and Distillation schemas derive from the same Rust structures used for parsing. Schema checks supplement the existing provenance, exact-quote, revision, and approval validators. They do not confer authority.
+
+The wire schema is strict: objects are closed and all declared fields are required, with empty values or explicit nullable values where the contract permits them. Existing omitted-field recovery remains for compatible legacy responses; supplied wrong types are rejected. Work preview `scope` stays a string and arrays are never coerced into text.
+
+Dynamic journey title keys are bound to recorded event IDs. Distillation target maps list known semantic IDs, with null for unused targets decoded back to the canonical sparse map. Sparse legacy Task patches likewise omit declared null placeholders before applying the existing revision checks. For genuinely arbitrary JSON fields in legacy completion review, publication metadata, search suggestions, and user proposals, objects use an explicit recursive `_entries` key/value wire representation and are restored to the original JSON types before domain validation. Missing entry key/value and duplicate keys are rejected. This keeps open-key objects representable under strict schemas without dropping their content.
+
+Coverage includes common assistance, queued jobs (including images), separate Task Journey inference, and Problem enrichment. Free-form chat and Codex work execution are not structured result consumers. Codex App Server supports per-turn `outputSchema`, but this app's current Codex turns request natural-language work reports and do not parse them as JSON. No extra generation or retry is introduced.

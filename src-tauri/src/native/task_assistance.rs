@@ -149,11 +149,9 @@ pub(crate) async fn provider_json_with_images(
             base_url.trim_end_matches('/')
         ))
         .bearer_auth(api_key)
-        .json(&json!({
-            "model": model,
-            "messages": [{"role":"user","content":provider_content(prompt, images)}],
-            "stream": false
-        }));
+        .json(&crate::workflow_foundation::structured_output::request_body(
+            prompt_id, &context, &model, provider_content(prompt, images),
+        )?);
     let response = if let Some(token) = token {
         tokio::select! {
             _ = token.cancelled() => return Err("cancelled".into()),
@@ -164,18 +162,13 @@ pub(crate) async fn provider_json_with_images(
     }
     .map_err(|error| error.to_string())?;
     if !response.status().is_success() {
-        return Err(format!("Provider request failed ({})", response.status()));
+        return Err(crate::workflow_foundation::structured_output::http_error(response.status()));
     }
     let payload = response
         .json::<Value>()
         .await
         .map_err(|error| error.to_string())?;
-    let raw = payload
-        .pointer("/choices/0/message/content")
-        .and_then(Value::as_str)
-        .ok_or("Provider response did not include content")?;
-    let mut result = serde_json::from_str(raw)
-        .map_err(|error| format!("Provider response was not valid JSON: {error}"))?;
+    let mut result = crate::workflow_foundation::structured_output::parse_completion(prompt_id, &context, &payload)?;
     if matches!(prompt_id, PromptId::WorkPreviewPlanner | PromptId::WorkPreviewFinalizer) {
         crate::native::reference_aware_workbench::normalize_response(prompt_id, &mut result, &context);
     } else {
@@ -3237,9 +3230,26 @@ mod tests {
         .unwrap();
         assert_eq!(result, provider_result);
         let request = server.await.unwrap();
+        let (_,body)=request.split_once("\r\n\r\n").unwrap();
+        let body: Value=serde_json::from_str(body).unwrap();
+        assert_eq!(body["response_format"]["type"],"json_schema");
+        assert_eq!(body["response_format"]["json_schema"]["strict"],true);
+        assert_eq!(body["response_format"]["json_schema"]["name"],"knowledge_draft");
+        assert_eq!(body["response_format"]["json_schema"]["schema"]["properties"]["article"]["$ref"],"#/$defs/Article");
         for required in ["FINAL CONDITION", "finalOutcomes", "epistemicState", "reconsiderationConditions"] {
             assert!(request.contains(required), "provider request omitted {required}");
         }
+    }
+
+    #[tokio::test]
+    async fn structured_preview_rejection_never_retries_without_its_schema(){
+        let root=tempfile::tempdir().unwrap();let settings=root.path().join("settings.json");
+        let (base,server)=crate::workflow_foundation::structured_output::test_server::serve(json!({}),400).await;
+        super::settings::save_provider(&settings,&json!({"base_url":base,"model":"fixture","api_key":"fixture-key"})).unwrap();
+        let error=provider_json(&settings,"solution_assistance",PromptId::WorkPreviewFinalizer,json!({}),None).await.unwrap_err();
+        assert!(error.contains("structured_output_request_rejected")&&error.contains("no schema-free fallback"),"{error}");
+        let sent=server.await.unwrap();assert_eq!(sent["response_format"]["json_schema"]["strict"],true);
+        assert_eq!(sent["response_format"]["json_schema"]["schema"]["properties"]["preview"]["properties"]["scope"]["type"],"string");
     }
 
     fn capture(db: &Path) -> String {
@@ -4143,6 +4153,7 @@ mod tests {
         let cases=vec![
             (PromptId::WorkPreviewPlanner,json!({"retrieval":{"needed":false,"reason":"Manual context is sufficient"}}),true),
             (PromptId::WorkPreviewFinalizer,json!({"preview":{"description":"Review CSV offline","goal":"Preserve approval"},"optionalInvestigation":{"needed":false,"reason":"No remaining question"}}),true),
+            (PromptId::WorkPreviewFinalizer,json!({"preview":{"description":"Review","goal":"Preserve approval","scope":["API","Tests"]},"optionalInvestigation":{"needed":false,"reason":"None"}}),false),
             (PromptId::WorkPreviewPlanner,json!({"retrieval":{"needed":true,"reason":"Need sources","queries":"invalid"}}),false),
             (PromptId::WorkPreviewFinalizer,json!({"preview":{"description":"Review","goal":"Preserve approval","constraints":"invalid"},"optionalInvestigation":{"needed":false,"reason":"None"}}),false),
         ];
@@ -4159,6 +4170,13 @@ mod tests {
                     }
                 }
                 calls+=1;
+                let end=bytes.windows(4).position(|w|w==b"\r\n\r\n").unwrap();
+                let sent: Value=serde_json::from_slice(&bytes[end+4..]).unwrap();
+                assert_eq!(sent["response_format"]["type"],"json_schema");
+                assert_eq!(sent["response_format"]["json_schema"]["strict"],true);
+                if sent["response_format"]["json_schema"]["name"]=="work_preview_finalizer" {
+                    assert_eq!(sent["response_format"]["json_schema"]["schema"]["properties"]["preview"]["properties"]["scope"]["type"],"string");
+                }
                 let body=json!({"choices":[{"message":{"content":response.to_string()},"finish_reason":"stop"}]}).to_string();
                 socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",body.len(),body).as_bytes()).await.unwrap();
             }
