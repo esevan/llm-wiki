@@ -84,7 +84,7 @@ pub(crate) fn validate_planner_output(v: &Value) -> Result<(), String> {
     for assumption in list(&v["preliminaryAssumptions"])? {
         keys(assumption, &["id", "text", "basis"])?;
         if !ids.insert(string(assumption, "id")?)
-            || string(assumption, "text")?.len() > 12000
+            || string(assumption, "text")?.chars().take(12001).count() > 12000
             || !matches!(
                 assumption["basis"].as_str(),
                 Some("user_context" | "source" | "model_inference")
@@ -95,6 +95,10 @@ pub(crate) fn validate_planner_output(v: &Value) -> Result<(), String> {
     }
     Ok(())
 }
+fn json_type(value: &Value) -> &'static str {
+    match value { Value::Null => "null", Value::Bool(_) => "boolean", Value::Number(_) => "number", Value::String(_) => "string", Value::Array(_) => "array", Value::Object(_) => "object" }
+}
+
 pub(crate) fn validate_output(v: &Value) -> Result<(), String> {
     keys(v, &["preview", "claimSources", "optionalInvestigation", "generationStatus", "generationDiagnostics", "omittedPreviewFields"])?;
     let p = &v["preview"];
@@ -119,13 +123,17 @@ pub(crate) fn validate_output(v: &Value) -> Result<(), String> {
         }
     }
     for k in ["description", "background", "goal", "scope", "nonGoals"] {
-        if p[k].as_str().is_none_or(|s| s.len() > 12000) {
-            return Err("invalid_preview: text".into());
+        let text = p[k].as_str().ok_or_else(|| format!("invalid_preview: text preview.{k}: expected string, got {}", json_type(&p[k])))?;
+        // Omitted fields come from saved user context, not new model output.
+        // Their exact original text is preserved and excluded from Task patches.
+        let retained_context = v["omittedPreviewFields"].as_array().is_some_and(|keys|keys.iter().any(|key|key==k));
+        if !retained_context && text.chars().take(12001).count() > 12000 {
+            return Err(format!("invalid_preview: text preview.{k}: exceeds 12000 characters (at least 12001)"));
         }
     }
     for k in ["constraints", "completionCriteria", "initialApproach"] {
         for s in list(&p[k])? {
-            if s.as_str().is_none_or(|s| s.len() > 12000) {
+            if s.as_str().is_none_or(|s| s.chars().take(12001).count() > 12000) {
                 return Err("invalid_preview: list text".into());
             }
         }
@@ -134,7 +142,7 @@ pub(crate) fn validate_output(v: &Value) -> Result<(), String> {
     for a in list(&p["assumptions"])? {
         keys(a, &["id", "text", "basis", "sourceClaimIds"])?;
         if !ids.insert(string(a, "id")?)
-            || string(a, "text")?.len() > 12000
+            || string(a, "text")?.chars().take(12001).count() > 12000
             || !matches!(
                 a["basis"].as_str(),
                 Some("user_context" | "source" | "model_inference")
@@ -935,4 +943,33 @@ pub(crate) fn bind_sent_mentions_tx(tx:&Transaction<'_>,session:&str,mentions:&V
 
 pub(crate) fn sent_mention_references(c:&Connection,session:&str)->Result<Value,String>{
     Ok(json!(rows(c,"SELECT DISTINCT json_object('documentId',u.document_id,'documentVersion',u.source_revision,'section',u.section,'path',u.path,'title',d.title,'excerpt',substr(u.text,1,500),'aspect',u.aspect,'status',u.status,'retrievalRequestHash','explicit_mention') FROM refinement_document_mentions m JOIN vault_search_units u ON u.document_id=m.document_id AND u.source_revision=m.document_version AND u.section=m.section JOIN vault_documents d ON d.path=u.path AND d.source_hash=u.source_revision WHERE m.session_id=? ORDER BY m.rowid DESC LIMIT 16",[session])?))
+}
+
+#[cfg(test)]
+mod exact_error_tests {
+    use super::*;
+    fn preview() -> Value {
+        json!({"preview":{"description":"Review","background":"","goal":"Review offline","scope":"","nonGoals":"","constraints":[],"completionCriteria":[],"initialApproach":[],"assumptions":[]},"claimSources":[],"optionalInvestigation":{"needed":false,"reason":"None","queries":[],"aspects":[],"filters":{},"requery":null}})
+    }
+    #[test]
+    fn exact_text_error_obeys_character_contract_and_identifies_type() {
+        let mut value=preview();value["preview"]["description"]=json!("가".repeat(4001));
+        validate_output(&value).unwrap();
+        value["preview"]["description"]=json!("가".repeat(12000));validate_output(&value).unwrap();
+        value["preview"]["description"]=json!("가".repeat(12001));
+        let error=validate_output(&value).unwrap_err();assert!(error.contains("preview.description")&&error.contains("12001"),"{error}");
+        for wrong in [Value::Null,json!([]),json!({}),json!(false),json!(3)] {
+            let mut value=preview();value["preview"]["background"]=wrong;
+            let error=validate_output(&value).unwrap_err();assert!(error.contains("preview.background")&&error.contains("expected string"),"{error}");
+        }
+    }
+    #[test]
+    fn exact_text_error_does_not_reject_long_trusted_fallback_or_erase_task() {
+        let original="기존 원문 보존 ".repeat(3000);
+        let mut value=json!({"preview":{"goal":"Review"}});
+        normalize_response(PromptId::WorkPreviewFinalizer,&mut value,&json!({"context":{"session":{"taskSnapshot":{"detail":original,"outcome":"Existing goal"}}}}));
+        validate_output(&value).unwrap();assert_eq!(value["preview"]["description"],original);
+        let mut patch=task_fields(&value["preview"]);preserve_omitted_task_fields(&mut patch,&value["omittedPreviewFields"]);
+        assert!(patch.get("detail").is_none());assert!(patch.get("title").is_none());
+    }
 }

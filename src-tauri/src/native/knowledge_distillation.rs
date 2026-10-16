@@ -768,6 +768,39 @@ pub(crate) fn validate_result(snapshot: &Value, result: &GenerationResult) -> Re
     Ok(())
 }
 
+// Rejected quotes are review material, never valid citations. Keep their text in
+// a blocking finding with no sourceRefs so exact-source viewers cannot present
+// them as authenticated excerpts. Unknown source identities remain hard errors.
+fn quarantine_rejected_quotes(snapshot: &Value, result: &mut GenerationResult) -> Result<(), String> {
+    let manifest = snapshot["sourceManifest"].as_array().ok_or("source snapshot manifest is missing")?;
+    let sources = manifest.iter().map(|source| (manifest_key(source), source)).collect::<BTreeMap<_, _>>();
+    let mut rejected = Vec::new();
+    let mut check = |refs: &mut Vec<SourceRef>, locator: String| -> Result<(), String> {
+        for source in refs.iter() {
+            if !sources.contains_key(&source_key(source)) {
+                return Err("invalid_reference_binding: source identity is outside the exact snapshot".into());
+            }
+        }
+        refs.retain(|source| {
+            let actual = sources[&source_key(source)];
+            if value_contains_quote(&actual["content"], &source.quote) { return true; }
+            rejected.push(QualityFinding {
+                kind: "missing_reference".into(), severity: "blocking".into(), locator: locator.clone(), source_refs: vec![],
+                message: format!("Rejected citation: quote is absent from its exact source ({}:{} revision {} at {}). Unverified quote retained for human review: {}",source.source_type,source.id,source.revision,source.locator,source.quote),
+            });
+            false
+        });
+        Ok(())
+    };
+    check(&mut result.article.applicability.source_refs,"article.applicability.sourceRefs".into())?;
+    for (index,item) in result.article.claim_bindings.iter_mut().enumerate() { check(&mut item.source_refs,format!("article.claimBindings[{index}].sourceRefs"))?; }
+    for (index,item) in result.article.assumption_bindings.iter_mut().enumerate() { check(&mut item.source_refs,format!("article.assumptionBindings[{index}].sourceRefs"))?; }
+    for (index,item) in result.ideas.iter_mut().enumerate() { check(&mut item.source_refs,format!("ideas[{index}].sourceRefs"))?; }
+    for (index,item) in result.quality_findings.iter_mut().enumerate() { check(&mut item.source_refs,format!("qualityFindings[{index}].sourceRefs"))?; }
+    result.quality_findings.extend(rejected);
+    Ok(())
+}
+
 // Integrity failures cannot be softened by a missing applicability field masking them.
 fn assess_candidate(snapshot: &Value, result: &GenerationResult) -> Result<(String, String), String> {
     if result.article.body_markdown.trim().is_empty() {
@@ -816,6 +849,7 @@ pub(crate) fn prepared(
     if title_missing {
         result.article.title = snapshot["task"]["title"].as_str().unwrap_or("Untitled draft").to_owned();
     }
+    quarantine_rejected_quotes(&snapshot, &mut result)?;
     let (quality_state, issue) = assess_candidate(&snapshot, &result)?;
     let issues = [model_error, issue.as_str(), if title_missing {"article.title was missing; temporary Task title retained"} else {""}]
         .into_iter().filter(|v| !v.is_empty()).collect::<Vec<_>>().join("; ");
@@ -840,6 +874,7 @@ pub(crate) fn append_generated_tx(tx: &Transaction<'_>, prepared: &Value) -> Res
     }
     let mut result: GenerationResult = serde_json::from_value(prepared["generationResult"].clone())
         .map_err(|e| format!("invalid Knowledge result: {e}"))?;
+    quarantine_rejected_quotes(snapshot, &mut result)?;
     let (quality_state, quality_issue) = assess_candidate(snapshot, &result)?;
     for idea in &mut result.ideas {
         idea.id = stored_idea_id(task_id, &idea.id);
@@ -1098,6 +1133,7 @@ pub(crate) fn edit_as_new_tx(
     let mut result: GenerationResult =
         serde_json::from_str(&source.5).map_err(|e| e.to_string())?;
     result.article.body_markdown = body_markdown.to_owned();
+    quarantine_rejected_quotes(&snapshot, &mut result)?;
     let (quality_state, quality_issue) = assess_candidate(&snapshot, &result)?;
     let revision: i64 = tx
         .query_row(
@@ -1763,6 +1799,49 @@ mod tests {
             }
             eprintln!("candidate {mode}: mean {:.3} us (10000 iterations, debug)",started.elapsed().as_secs_f64()*1000000.0/10000.0);
         }
+    }
+
+    #[tokio::test]
+    async fn exact_quote_error_preserves_body_but_quarantines_rejected_reference() {
+        let (_root,db,_)=fixture();remove_semantic_projections(&db);
+        let mut c=database::open(&db).unwrap();c.execute("DELETE FROM task_work_log_entries",[]).unwrap();
+        let tx=c.transaction().unwrap();let snapshot=capture_snapshot_tx(&tx,"task",1,"en").unwrap();tx.commit().unwrap();
+        let exact=SourceRef{source_type:"task_revision".into(),id:"task".into(),revision:"1".into(),locator:"definition".into(),quote:"Approval flow".into()};
+        for quote in ["Approval workflow","Approval flow Keep approval explicit",""] {
+            let mut result=article(exact.clone());let body=result.article.body_markdown.clone();
+            result.article.applicability.source_refs[0].quote=quote.into();
+            let candidate=prepared(snapshot.clone(),result,"enhanced","").unwrap();
+            assert_eq!(candidate["bodyMarkdown"],body);assert_eq!(candidate["qualityState"],"blocked_unsupported");
+            assert_eq!(candidate["generationResult"]["article"]["applicability"]["sourceRefs"],json!([]));
+            let findings=candidate["generationResult"]["qualityFindings"].as_array().unwrap();
+            assert!(findings.iter().any(|f|f["kind"]=="missing_reference"&&f["severity"]=="blocking"&&f["sourceRefs"]==json!([])));
+            let tx=c.transaction().unwrap();let saved=append_generated_tx(&tx,&candidate).unwrap();tx.commit().unwrap();
+            let tx=c.transaction().unwrap();let projection=review_projection(&tx,"task",None).unwrap();tx.commit().unwrap();
+            assert_eq!(projection["versions"].as_array().unwrap().last().unwrap()["qualityState"],"blocked_unsupported");
+            add_review_note(&db,&json!({"operationId":format!("note-{}",saved["draftRevision"]),"taskId":"task","knowledgeRevision":saved["draftRevision"],"expectedContentHash":saved["contentHash"],"body":"Quote needs checking against original."})).unwrap();
+        }
+        // A good citation cannot launder a rejected quote into valid evidence.
+        let mut mixed=article(exact.clone());
+        let mut rejected=exact.clone();rejected.quote="Approval workflow".into();
+        mixed.article.applicability.source_refs.push(rejected);
+        let candidate=prepared(snapshot.clone(),mixed,"enhanced","").unwrap();
+        assert_eq!(candidate["qualityState"],"blocked_unsupported");
+        assert_eq!(candidate["generationResult"]["article"]["applicability"]["sourceRefs"].as_array().unwrap().len(),1);
+        let repeated=prepared(snapshot.clone(),serde_json::from_value(candidate["generationResult"].clone()).unwrap(),"enhanced","").unwrap();
+        assert_eq!(repeated["generationResult"]["qualityFindings"].as_array().unwrap().len(),1);
+        let tx=c.transaction().unwrap();let saved=append_generated_tx(&tx,&repeated).unwrap();tx.commit().unwrap();
+        let revision=saved["draftRevision"].as_i64().unwrap();
+        let tx=c.transaction().unwrap();let edited=edit_as_new_tx(&tx,"task",revision,saved["contentHash"].as_str().unwrap(),saved["sourceHash"].as_str().unwrap(),"# Approval flow\n\nHuman review remains pending.").unwrap();tx.commit().unwrap();
+        let edited_revision=edited["draftRevision"].as_i64().unwrap();
+        let tx=c.transaction().unwrap();restore_as_new_tx(&tx,"task",revision,edited_revision).unwrap();tx.commit().unwrap();
+        let tx=c.transaction().unwrap();let projection=review_projection(&tx,"task",None).unwrap();tx.commit().unwrap();
+        assert!(projection["versions"].as_array().unwrap().iter().all(|v|v["qualityState"]!="valid"));
+        let latest=projection["versions"].as_array().unwrap().last().unwrap();
+        let error=crate::native::knowledge_archive::prepare(&db,&_root.path().join("no-provider-settings.json"),&_root.path().join("vault"),&crate::native::semantic::SemanticEngine::new(None),&json!({"taskId":"task","knowledgeRevision":latest["revision"],"expectedKnowledgeContentHash":latest["contentHash"],"expectedGenerationSnapshotHash":latest["generationSnapshotHash"],"operationId":"reject-quarantined-publication","selectedIdeaRevisionIds":[],"locale":"en"})).await.unwrap_err();
+        assert!(error.contains("knowledge_unverified"),"{error}");
+        let valid=prepared(snapshot.clone(),article(exact.clone()),"enhanced","").unwrap();assert_eq!(valid["qualityState"],"valid");
+        let mut wrong=exact;wrong.id="outside-manifest".into();
+        assert!(prepared(snapshot,article(wrong),"enhanced","").unwrap_err().contains("outside the exact snapshot"));
     }
 
 }
