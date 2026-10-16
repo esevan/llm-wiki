@@ -92,7 +92,7 @@ async fn enrich(
             &crate::workflow_foundation::structured_output::request_body(
                 PromptId::ProblemEnrichment,
                 &context,
-                &model,
+                model,
                 json!(prompt.content),
             )?,
         )
