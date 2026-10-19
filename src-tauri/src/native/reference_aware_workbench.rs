@@ -43,7 +43,7 @@ pub(crate) fn validate_planner(value: &Value) -> Result<RetrievalIntent, String>
     validate_retrieval_intent(&intent).map_err(|e| e.to_string())?;
     if intent.queries.len()>4 || intent.aspects.iter().any(|a| !matches!(a.as_str(),"content"|"applicability"|"decision"|"exploration")) || intent.filters.keys().any(|k| !matches!(k.as_str(),"informationTypes"|"statuses")) { return Err("invalid_retrieval_intent".into()); }
     if intent.filters.values().any(|v|v.as_array().is_none_or(|a|a.len()>16||a.iter().any(|v|!v.is_string()))) {return Err("invalid_retrieval_intent: filters".into());}
-    if intent.requery.as_ref().is_some_and(|r|r.queries.len()>2||r.queries.iter().any(|q|q.len()>500)) {return Err("invalid_retrieval_intent: requery budget".into());}
+    if intent.requery.as_ref().is_some_and(|r|r.queries.len()>2||r.queries.iter().any(|q|q.chars().count()>500)) {return Err("invalid_retrieval_intent: requery budget".into());}
     Ok(intent)
 }
 pub(crate) fn finalize(preview: &Value, references: &[Value]) -> Result<Value, String> {

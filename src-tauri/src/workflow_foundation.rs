@@ -519,6 +519,12 @@ fn json_path<'a>(value: &'a Value, path: &str) -> Option<&'a Value> {
 }
 
 pub fn validate_retrieval_intent(intent: &RetrievalIntent) -> Result<(), ContractError> {
+    if intent.queries.len() > 4 || intent.queries.iter().any(|q| q.trim().is_empty() || q.chars().count() > 500) {
+        return Err(ContractError::new("invalid_retrieval_intent", "queries require nonblank text, at most 4 queries of 500 characters".into()));
+    }
+    if intent.requery.as_ref().is_some_and(|p| p.queries.len() > 2 || p.queries.iter().any(|q| q.trim().is_empty() || q.chars().count() > 500)) {
+        return Err(ContractError::new("invalid_retrieval_intent", "requery requires at most 2 nonblank queries of 500 characters".into()));
+    }
     if intent.reason.trim().is_empty() {
         return Err(ContractError::new("invalid_retrieval_intent", "reason is required".into()));
     }

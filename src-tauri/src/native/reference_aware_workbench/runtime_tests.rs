@@ -388,6 +388,17 @@ async fn indexed_or_unindexed_source_change_supersedes_delayed_output() {
     );
 }
 #[test]
+fn planner_accepts_unicode_queries_and_rejects_blank_or_over_budget_queries() {
+    let mut request = intent(true);
+    request["queries"] = json!(["\u{d55c}".repeat(500)]);
+    assert!(validate_planner(&json!({"retrieval":request})).is_ok());
+    for bad in [json!(["\u{d55c}".repeat(501)]),json!(["valid", " "]),json!(["1","2","3","4","5"])] {
+        request["queries"] = bad;
+        assert!(validate_planner(&json!({"retrieval":request})).is_err());
+    }
+}
+
+#[test]
 fn retrieval_outcomes_are_distinct_and_invalid_output_is_rejected() {
     let root = tempfile::tempdir().unwrap();
     let db = root.path().join("db");

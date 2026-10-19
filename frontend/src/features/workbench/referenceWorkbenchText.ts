@@ -124,6 +124,7 @@ const en = {
   mentions: "Reference mentions",
   removeMention: "Remove mention",
   mentionHint: "Type @ to insert a document or section without sending",
+  savedReloadFailed: "Saved successfully. Refresh failed; the saved version is retained. Try refreshing again.",
   actionFailed: "The action could not be completed. Your edits are preserved.",
 };
 const ko: typeof en = {
@@ -251,6 +252,7 @@ const ko: typeof en = {
   mentions: "참조 멘션",
   removeMention: "멘션 제거",
   mentionHint: "@로 문서나 절을 입력합니다. 자동 전송되지 않습니다",
+  savedReloadFailed: "저장했습니다. 새로고침에 실패했지만 저장된 버전은 유지됩니다. 다시 새로고침해 주세요.",
   actionFailed: "작업을 완료하지 못했습니다. 사용자 편집은 보존됩니다.",
 };
 const subscribe = (changed: () => void) => {

@@ -7,9 +7,9 @@ describe("Refinement panel", () => {
   it("retains the title editor and prevents navigation while its preview save is pending", async () => {
     let finish!: () => void;
     const pending = new Promise<void>(resolve => { finish = resolve; });
-    const result = (body: unknown) => ({ ok:true, status:200, json:async()=>body, text:async()=>"", body:null });
+    const result = (body: unknown) => ({ ok:true, status:200, json:async <T,>()=>body as T, text:async()=>"", body:null });
     window.llmWikiApplication = { request: vi.fn().mockImplementation(async ({path}:{path:string}) => {
-      if (path.endsWith("/edits")) { await pending; return result({}); }
+      if (path.endsWith("/edits")) { await pending; return result({previewId: fixtureWorkspace(2).preview!.current!.previewId, version:3, derivedFromVersion:2, contentHash:"saved-3"}); }
       if (path.endsWith("/reference-workspace")) return result(fixtureWorkspace(2));
       if (path.endsWith("/proposals")) return result([]);
       if (path.endsWith("/mention-draft")) return result({ mentions:[] });
@@ -29,6 +29,38 @@ describe("Refinement panel", () => {
     await screen.findByRole("button",{name:"Edit preview"});
     fireEvent.click(document.querySelector('[data-control="refinement-close"]')!);
     await waitFor(()=>expect(closed).toHaveBeenCalledTimes(1));
+  });
+  it("retains acknowledged edits when refreshing fails and saves the next edit against the new head", async () => {
+    const workspace = fixtureWorkspace(2);
+    let writes = 0;
+    const result = (body: unknown) => ({ ok:true, status:200, json:async <T,>()=>body as T, text:async()=>"", body:null });
+    const request = vi.fn(async ({path, body}:{path:string;body?:string}) => {
+      if (path.endsWith("/edits")) {
+        const input = JSON.parse(body!);
+        expect(input.expectedCurrentPreviewVersion).toBe(2 + writes);
+        expect(input.expectedContentHash).toBe(writes ? "saved-3" : workspace.preview!.current!.contentHash);
+        writes++;
+        return result({previewId:workspace.preview!.current!.previewId, version:2+writes, derivedFromVersion:1+writes, contentHash:`saved-${2+writes}`});
+      }
+      if (path.endsWith("/reference-workspace")) {
+        if (writes) throw new Error("read unavailable");
+        return result(workspace);
+      }
+      if (path.endsWith("/proposals")) return result([]);
+      if (path.endsWith("/mention-draft")) return result({mentions:[]});
+      return result({id:"save-read-failure",draftRevision:1,messages:[]});
+    });
+    window.llmWikiApplication = {request};
+    render(<RefinementPanel kind="capture" subjectId="save-read-failure" onClose={vi.fn()} />);
+    for (const title of ["First saved title", "Second saved title"]) {
+      fireEvent.click(await screen.findByRole("button", {name:"Edit preview"}));
+      fireEvent.change(screen.getByLabelText("Edit preview: Task title"), {target:{value:title}});
+      fireEvent.click(screen.getByRole("button", {name:"Save preview"}));
+      await screen.findByRole("button", {name:"Edit preview"});
+      expect(screen.getByText(title)).toBeInTheDocument();
+    }
+    expect(writes).toBe(2);
+    expect(screen.getByText(/Saved successfully. Refresh failed/)).toBeInTheDocument();
   });
   it("keeps chat input usable while showing source-bound failure and retry", async () => {
     let retried = false;

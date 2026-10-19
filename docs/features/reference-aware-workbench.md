@@ -80,3 +80,11 @@ Refinement keeps the Task title separate from its description. Chat can request 
 Apply to Task commits the reviewed revision, records it as refined and completes the refinement session in one transaction. The Workbench closes refinement, refreshes the lanes and opens the acknowledged Task, including when a Capture becomes a Task. Existing Tasks keep their identity. Failed Apply retains the preview; a post-save refresh problem is not reported as a failed write. Reference, head, context and Task revision checks still apply.
 
 General Task edits may retain an unchanged legacy title over 70 characters. Refinement Apply always requires a valid title, including a title recovered from an older preview or omitted AI output; explicitly edit and save a shorter title first.
+
+### Retrieval contracts and draft saves
+
+Retrieval plans use separate search/no-search schema branches. No-search plans require empty queries and null requery. Search plans require 1-4 nonblank queries and at most 2 requery queries, each limited to 500 Unicode characters. Unsupported aspects are rejected before dispatch. Missing legacy controls remain explicitly unverified without invented evidence or model retries.
+
+After an acknowledged preview edit, the saved version remains current even if refreshing fails. Refresh failure is reported separately; the next edit uses the saved version and hash. Knowledge drafts without an evidence snapshot are read-only. Generate a new draft to recover editable, source-bound content.
+
+If Knowledge correction is acknowledged but the subsequent read fails, the UI retains the acknowledged body separately and offers a read-only recovery screen. Editing, restoration, notes, and publication stay unavailable until the canonical Task, revision, content hash and body are confirmed. Retrying recovery only reads; it does not repeat the correction or invent evidence metadata. Responses from an earlier Task cannot update a different Task after navigation.

@@ -53,6 +53,13 @@ const projection = (versions = [version(1), version(2)]) => ({
 });
 
 describe("Knowledge review", () => {
+  it("explains why a legacy draft without an evidence snapshot is read-only", async () => {
+    const legacy = {...version(2), generationSnapshotHash: ""};
+    window.llmWikiApplication = {request:vi.fn(async () => response(projection([legacy as ReturnType<typeof version>])))};
+    render(<KnowledgeReviewPanel taskId="task-1" completed onGenerate={vi.fn()} />);
+    expect(await screen.findByText("This legacy draft has no evidence snapshot. Generate a new draft to edit.")).toBeInTheDocument();
+    expect(document.querySelector('[data-control="knowledge-version-edit"]')).toBeDisabled();
+  });
   it("preserves an unverified body and saves version-bound notes without enabling publication", async () => {
     const draft = { ...version(2), articleType: "", qualityState: "blocked_unsupported", modelError: "missing_reference: applicability" };
     draft.result.article.type = "";
@@ -199,6 +206,96 @@ describe("Knowledge review", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save as new version" }));
     await waitFor(() => expect(screen.getByText("Saved as a new private version.")).toBeVisible());
     expect(screen.getByRole("combobox", { name: /Version/ })).toHaveValue("3");
+  });
+
+  it("retains an acknowledged Knowledge body through refresh failure and waits for exact canonical recovery", async () => {
+    let current = projection();
+    let readsFail = false;
+    let writes = 0;
+    const request = vi.fn(async ({path,method,body}:{path:string;method?:string;body?:string}) => {
+      if (path.endsWith("/correction") && method === "POST") {
+        const input = JSON.parse(body!);
+        expect(input.expectedContentHash).toBe(`content-${2+writes}`);
+        expect(input.expectedSourceHash).toBe("snapshot-current");
+        writes++;
+        current = projection([...current.versions, version(2+writes,input.bodyMarkdown)]);
+        readsFail = true;
+        return response({draftRevision:2+writes,bodyMarkdown:input.bodyMarkdown,contentHash:`content-${2+writes}`,state:"draft"});
+      }
+      if (readsFail) throw new Error("projection read unavailable");
+      return response(current);
+    });
+    window.llmWikiApplication = {request};
+    render(<KnowledgeReviewPanel taskId="task-1" completed onGenerate={vi.fn()} />);
+    fireEvent.click(await screen.findByRole("button",{name:"Edit current draft"}));
+    fireEvent.change(screen.getByRole("textbox",{name:"Edit current draft"}),{target:{value:"# Acknowledged new body"}});
+    fireEvent.click(screen.getByRole("button",{name:"Save as new version"}));
+    expect(await screen.findByRole("heading",{name:"Acknowledged new body"})).toBeVisible();
+    expect(screen.queryByRole("button",{name:"Edit current draft"})).not.toBeInTheDocument();
+    expect(screen.queryByRole("button",{name:"Prepare publication review"})).not.toBeInTheDocument();
+    expect(writes).toBe(1);
+    fireEvent.click(screen.getByRole("button",{name:"Try again"}));
+    await waitFor(()=>expect(screen.getByRole("alert")).toHaveTextContent("projection read unavailable"));
+    expect(writes).toBe(1);
+    readsFail = false;
+    current.versions[2].contentHash = "wrong canonical hash";
+    fireEvent.click(screen.getByRole("button",{name:"Try again"}));
+    await waitFor(()=>expect(screen.getByRole("alert")).toHaveTextContent("The saved Knowledge response is invalid."));
+    expect(screen.queryByRole("button",{name:"Edit current draft"})).not.toBeInTheDocument();
+    current.versions[2].contentHash = "content-3";
+    fireEvent.click(screen.getByRole("button",{name:"Try again"}));
+    await waitFor(()=>expect(screen.getByRole("combobox",{name:/Version/})).toHaveValue("3"));
+    fireEvent.click(screen.getByRole("button",{name:"Edit current draft"}));
+    fireEvent.change(screen.getByRole("textbox",{name:"Edit current draft"}),{target:{value:"# Next guarded edit"}});
+    fireEvent.click(screen.getByRole("button",{name:"Save as new version"}));
+    await screen.findByRole("heading",{name:"Next guarded edit"});
+    expect(writes).toBe(2);
+    expect(current.versions[2].result.article.claimBindings).toEqual(version(2).result.article.claimBindings);
+  });
+
+  it("ignores an old task save acknowledgement after switching tasks", async () => {
+    let finish!: (value: ReturnType<typeof response>) => void;
+    const pending = new Promise<ReturnType<typeof response>>(resolve => {finish=resolve;});
+    const request = vi.fn(async ({path,method}:{path:string;method?:string}) => {
+      if (path.endsWith("/correction") && method === "POST") return pending;
+      return response(path.includes("task-2") ? {...projection([version(7,"# Task two body")]),taskId:"task-2"} : projection());
+    });
+    window.llmWikiApplication={request};
+    const rendered=render(<KnowledgeReviewPanel taskId="task-1" completed onGenerate={vi.fn()} />);
+    fireEvent.click(await screen.findByRole("button",{name:"Edit current draft"}));
+    fireEvent.change(screen.getByRole("textbox",{name:"Edit current draft"}),{target:{value:"# Task one changed"}});
+    fireEvent.click(screen.getByRole("button",{name:"Save as new version"}));
+    await waitFor(()=>expect(request.mock.calls.some(([r])=>r.path.endsWith("/correction"))).toBe(true));
+    rendered.rerender(<KnowledgeReviewPanel taskId="task-2" completed onGenerate={vi.fn()} />);
+    await screen.findByRole("heading",{name:"Task two body"});
+    const oldReads=request.mock.calls.filter(([r])=>r.path==="/tasks/task-1/knowledge").length;
+    await act(async()=>finish(response({draftRevision:3,contentHash:"content-3",bodyMarkdown:"# Task one changed",state:"draft"})));
+    expect(screen.getByRole("heading",{name:"Task two body"})).toBeVisible();
+    expect(screen.getByRole("combobox",{name:/Version/})).toHaveValue("7");
+    expect(screen.getByRole("button",{name:"Edit current draft"})).toBeEnabled();
+    expect(request.mock.calls.filter(([r])=>r.path==="/tasks/task-1/knowledge")).toHaveLength(oldReads);
+  });
+
+  it("does not display an old task save status when its post-save read finishes after switching", async () => {
+    let corrected=false;
+    let finish!: (value:ReturnType<typeof response>)=>void;
+    const pending=new Promise<ReturnType<typeof response>>(resolve=>{finish=resolve;});
+    window.llmWikiApplication={request:vi.fn(async ({path,method}:{path:string;method?:string})=>{
+      if(path.endsWith("/correction")&&method==="POST") {corrected=true;return response({draftRevision:3,bodyMarkdown:"# Old task saved",contentHash:"content-3",state:"draft"});}
+      if(path.includes("task-2")) return response({...projection([version(7,"# New task body")]),taskId:"task-2"});
+      if(corrected) return pending;
+      return response(projection());
+    })};
+    const rendered=render(<KnowledgeReviewPanel taskId="task-1" completed onGenerate={vi.fn()} />);
+    fireEvent.click(await screen.findByRole("button",{name:"Edit current draft"}));
+    fireEvent.change(screen.getByRole("textbox",{name:"Edit current draft"}),{target:{value:"# Old task saved"}});
+    fireEvent.click(screen.getByRole("button",{name:"Save as new version"}));
+    await screen.findByRole("heading",{name:"Old task saved"});
+    rendered.rerender(<KnowledgeReviewPanel taskId="task-2" completed onGenerate={vi.fn()} />);
+    await screen.findByRole("heading",{name:"New task body"});
+    await act(async()=>finish(response(projection([version(1),version(2),version(3,"# Old task saved")]))));
+    expect(screen.getByRole("heading",{name:"New task body"})).toBeVisible();
+    expect(screen.queryByText("Saved as a new private version.")).not.toBeInTheDocument();
   });
 
   it("selects historical bytes, restores as new, and compares stored versions without generation", async () => {

@@ -217,7 +217,9 @@ export function RefinementPanel({
       !("preview" in result)
     )
       return;
-    setReferenceWorkspace(result);
+    setReferenceWorkspace((current) => current?.preview && result.preview &&
+      current.preview.currentVersion > result.preview.currentVersion
+      ? { ...result, preview: current.preview } : result);
     setReferenceError("");
     if (
       !referencesLoaded.current &&
@@ -952,14 +954,32 @@ export function RefinementPanel({
     base: WorkPreviewVersion,
     fields: WorkPreviewFields,
   ) => {
-    await taskClient.editPreview(
-      session!.id,
-      base.version,
-      fields,
-      base.version,
-      base.contentHash,
+    const id = session!.id;
+    const saved = await taskClient.editPreview(
+      id, base.version, fields, base.version, base.contentHash,
     );
-    await refreshReferences();
+    if (!saved || saved.previewId !== base.previewId || !Number.isInteger(saved.version) || saved.version <= base.version || !saved.contentHash) {
+      throw new Error("Invalid preview save acknowledgement");
+    }
+    if (referenceSession.current !== id) return;
+    // An acknowledged write is authoritative even if the following read fails.
+    ++referenceReadSequence.current;
+    setReferenceWorkspace((workspace) => {
+      if (!workspace?.preview || workspace.preview.currentVersion >= saved.version) return workspace;
+      const current: WorkPreviewVersion = {
+        ...base, version: saved.version, contentHash: saved.contentHash,
+        fields, current: true, derivationKind: "edited", derivedFromVersion: base.version,
+      };
+      return { ...workspace, preview: { ...workspace.preview,
+        currentVersion: saved.version, current,
+        versions: [...workspace.preview.versions.map((v) => ({ ...v, current: false })), current],
+      } };
+    });
+    try {
+      await refreshReferences();
+    } catch {
+      setReferenceError(referenceText.savedReloadFailed);
+    }
   };
   const applyReferencePreview = async (version: WorkPreviewVersion) => {
     const application = await taskClient.applyPreview(

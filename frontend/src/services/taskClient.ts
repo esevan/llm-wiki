@@ -269,7 +269,7 @@ export const taskClient = {
   comparePreview: (id: string, left: number, right: number) =>
     request<{ left: WorkPreviewVersion; right: WorkPreviewVersion; comparison: PreviewComparison }>(`/refinement/${encodeURIComponent(id)}/preview-versions/${left}/compare/${right}`),
   editPreview: (id: string, version: number, fields: WorkPreviewFields, expectedCurrentPreviewVersion: number, expectedContentHash: string) =>
-    request(`/refinement/${encodeURIComponent(id)}/preview-versions/${version}/edits`, "POST", { version, fields, expectedCurrentPreviewVersion, expectedContentHash }),
+    request<{ previewId: string; version: number; derivedFromVersion: number; contentHash: string }>(`/refinement/${encodeURIComponent(id)}/preview-versions/${version}/edits`, "POST", { version, fields, expectedCurrentPreviewVersion, expectedContentHash }),
   restorePreview: (id: string, version: number, expectedCurrentPreviewVersion: number) =>
     request(`/refinement/${encodeURIComponent(id)}/preview-versions/${version}/restore`, "POST", { version, expectedCurrentPreviewVersion }),
   applyPreview: (id: string, version: number, expectedCurrentPreviewVersion: number, expectedContentHash: string, expectedTaskRevision?: number, editedFieldHashes?: Record<string, string>) =>

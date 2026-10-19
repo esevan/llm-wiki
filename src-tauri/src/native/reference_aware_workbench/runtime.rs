@@ -244,10 +244,11 @@ pub(super) fn retrieve(
     semantic: &SemanticEngine,
     intent: &RetrievalIntent,
 ) -> Result<(String, Vec<Value>), String> {
+    validate_retrieval_intent(intent).map_err(|e| e.to_string())?;
     if !intent.needed {
         return Ok(("not_needed".into(), vec![]));
     }
-    if intent.queries.len() > 4 || intent.queries.iter().any(|q| q.len() > 500) {
+    if intent.queries.len() > 4 || intent.queries.iter().any(|q| q.chars().count() > 500) {
         return Err("invalid_retrieval_intent: query budget".into());
     }
     let request_hash = hash(&serde_json::to_value(intent).map_err(|e| e.to_string())?);

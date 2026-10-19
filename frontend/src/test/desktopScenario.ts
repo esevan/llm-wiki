@@ -1,3 +1,4 @@
+import { waitFor, waitForAsync } from "./desktopWait";
 import type { KnowledgeReviewProjection } from "../types/taskWorkbench";
 import {
   completeDesktopE2e,
@@ -76,22 +77,6 @@ type RefinementSnapshot = {
 };
 const pause = (ms: number) =>
   new Promise((resolve) => window.setTimeout(resolve, ms));
-async function waitFor(check: () => boolean, label: string) {
-  const deadline = performance.now() + 10_000;
-  while (performance.now() < deadline) {
-    if (check()) return;
-    await pause(50);
-  }
-  throw new Error(`Timed out waiting for ${label}`);
-}
-async function waitForAsync(check: () => Promise<boolean>, label: string) {
-  const deadline = performance.now() + 10_000;
-  while (performance.now() < deadline) {
-    if (await check()) return;
-    await pause(50);
-  }
-  throw new Error(`Timed out waiting for ${label}`);
-}
 async function api<T>(
   path: string,
   method: "GET" | "POST" | "PUT" | "DELETE" = "GET",
@@ -473,6 +458,28 @@ async function log(step: Step, interactionCoverage: ReturnType<typeof createInte
   );
 }
 async function refinementTitleApply(step: Step) {
+  const originalRequest = window.llmWikiApplication.request;
+  const trace: Array<Record<string, unknown>> = [];
+  const startedAt = performance.now();
+  const record = (event: Record<string, unknown>) => trace.push({ms:Math.round(performance.now()-startedAt),...event});
+  window.llmWikiApplication.request = async request => {
+    const relevant = /refinement|\/tasks\//.test(request.path);
+    if (relevant) record({event:"request",path:request.path,method:request.method??"GET"});
+    try {
+      const response = await originalRequest(request);
+      if (relevant) record({event:"response",path:request.path,status:response.status});
+      return response;
+    } catch (error) {
+      if (relevant) record({event:"request-error",path:request.path,error:String(error)});
+      throw error;
+    }
+  };
+  const recordClick = (event: Event) => {
+    const control = (event.target as Element)?.closest<HTMLElement>('[data-control]');
+    if (control) record({event:"click",control:control.dataset.control,disabled:control.matches(":disabled")});
+  };
+  document.addEventListener("click",recordClick,true);
+  try {
   await api("/provider/config", "PUT", { base_url: e2eProviderUrl, model: "deterministic", api_key: "desktop-e2e-key" });
   for (const kind of ["capture", "task"] as const) {
     const source = `Title refinement ${kind} ${Date.now()}`;
@@ -485,6 +492,7 @@ async function refinementTitleApply(step: Step) {
     if (!refine) throw new Error("Refine control missing");
     clickElement(refine, `Refine ${kind}`);
     await waitFor(() => Boolean(document.querySelector('.refinement-panel[data-refinement-session]:not([data-refinement-session=""])')) && Boolean(document.querySelector('[aria-label="Refinement message"]')), "loaded title refinement");
+    await waitFor(() => Boolean(document.querySelector('[data-control="reference-preview-edit"]')), "initial persisted preview before title request");
     const requested = `Changed title ${kind} ` + String.fromCodePoint(0x1f600);
     enter(document.querySelector<HTMLTextAreaElement>('[aria-label="Refinement message"]')!, `Set title: ${requested}`);
     await waitFor(() => !document.querySelector<HTMLButtonElement>('[data-control="refinement-send"]')?.disabled, "title request ready to send");
@@ -502,8 +510,21 @@ async function refinementTitleApply(step: Step) {
     await waitFor(() => !document.querySelector<HTMLButtonElement>('[data-control="reference-preview-save"]')?.disabled, "valid title accepted");
     click('[data-control="reference-preview-save"]', "Save exact edited title");
     await waitFor(() => !document.querySelector('[data-control="reference-preview-save"]') && Boolean(document.querySelector(".reference-aware-fields")?.textContent?.includes(edited)), "saved title preview");
+    click('[data-control="reference-preview-edit"]', "Edit body after title save");
+    await waitFor(() => Boolean(document.querySelector('[aria-label="Edit preview: Goal"]')), "body editor rendered");
+    const goal = `Saved body for ${kind}`;
+    enter(document.querySelector<HTMLTextAreaElement>('[aria-label="Edit preview: Goal"]')!, goal);
+    click('[data-control="reference-preview-save"]', "Save body with the new version head");
+    await waitFor(() => !document.querySelector('[data-control="reference-preview-save"]') && Boolean(document.querySelector(".reference-aware-fields")?.textContent?.includes(goal)), "saved body preview");
+    if (!document.querySelector(".reference-aware-fields")?.textContent?.includes(edited)) throw new Error("Body save lost the independently edited title");
     click('[data-control="reference-preview-apply"]', "Apply reviewed title to Task");
-    await waitFor(() => !document.querySelector(".refinement-panel") && document.querySelector(".task-detail h2")?.getAttribute("title") === edited, "applied Task opened");
+    await waitFor(() => !document.querySelector(".refinement-panel") && document.querySelector(".task-detail h2")?.getAttribute("title") === edited, "applied Task opened").catch(error => {
+      throw new Error(`${String(error)}; ${JSON.stringify({
+        refinement: Boolean(document.querySelector(".refinement-panel")),
+        headings: [...document.querySelectorAll(".task-detail h2")].map(el => ({title:el.getAttribute("title"),text:el.textContent})),
+        alerts: [...document.querySelectorAll('[role="alert"]')].map(el => el.textContent),
+      })}`);
+    });
     const tasks = await api<{ categories: Array<{ items: Array<{ id: string; title?: string; taskRevision?: number; refinedRevision?: number }> }>; refiningShortcuts: Array<{ id: string }> }>("/workbench");
     const applied = tasks.categories.flatMap(group => group.items).find(task => task.title === edited);
     if (!applied || applied.refinedRevision !== applied.taskRevision || tasks.refiningShortcuts.some(item => item.id === applied.id)) throw new Error("Applied Task remained in refinement");
@@ -512,6 +533,21 @@ async function refinementTitleApply(step: Step) {
     await waitFor(() => !document.querySelector(".task-detail"), "Task detail closed");
     if (!document.querySelector('[data-lane="tasks"]')?.textContent?.includes(edited)) throw new Error("Refined Task lane missing applied title");
     await step(`Verified ${kind}: chat title, direct Unicode edit, exact Task persistence, refined lane and navigation.`);
+  }
+    await step(`Refinement request trace: ${JSON.stringify(trace)}`);
+  } catch (error) {
+    throw new Error(`${String(error)}; diagnostics=${JSON.stringify({
+      trace,
+      visibility:document.visibilityState,
+      refinement:Boolean(document.querySelector(".refinement-panel")),
+      sendDisabled:document.querySelector<HTMLButtonElement>('[data-control="refinement-send"]')?.disabled,
+      composer:document.querySelector<HTMLTextAreaElement>('[aria-label="Refinement message"]')?.value,
+      headings:[...document.querySelectorAll(".task-detail h2")].map(el=>({title:el.getAttribute("title"),text:el.textContent})),
+      alerts:[...document.querySelectorAll('[role="alert"]')].map(el=>el.textContent),
+    })}`);
+  } finally {
+    window.llmWikiApplication.request = originalRequest;
+    document.removeEventListener("click",recordClick,true);
   }
 }
 async function refinement(step: Step) {
@@ -968,7 +1004,27 @@ async function publication(step: Step) {
   if (!editor) throw new Error("Knowledge editor is unavailable");
   const correctedBody = `${first.bodyMarkdown}\n\nCorrected by packaged desktop E2E.`;
   enter(editor, correctedBody);
+  const originalKnowledgeRequest = window.llmWikiApplication.request;
+  let correctionWrites = 0;
+  let failKnowledgeRead = false;
+  window.llmWikiApplication.request = async request => {
+    if (failKnowledgeRead && request.path === `/tasks/${completedTask.id}/knowledge` && (!request.method || request.method === "GET")) throw new Error("Injected post-commit Knowledge read failure");
+    const result = await originalKnowledgeRequest(request);
+    if (request.path.endsWith("/correction") && request.method === "POST" && result.ok) { correctionWrites++; failKnowledgeRead = true; }
+    return result;
+  };
   await activate('[data-control="knowledge-version-save"]', "Save correction as a new revision");
+  await waitFor(() => Boolean(document.querySelector('.knowledge-review[data-saved-revision]')) && document.querySelector('.knowledge-review')?.textContent?.includes("Corrected by packaged desktop E2E.") === true, "acknowledged Knowledge body retained after read failure");
+  if (document.querySelector('[data-control="knowledge-version-edit"], [data-control="knowledge-archive-prepare"]')) throw new Error("Stale Knowledge mutation remained available");
+  const persistedResponse = await originalKnowledgeRequest({path:`/tasks/${completedTask.id}/knowledge`,method:"GET"});
+  const persisted = await persistedResponse.json<KnowledgeReviewProjection>();
+  const persistedVersion = persisted.versions.find(v => v.revision === persisted.pointers.currentPrivateRevision);
+  if (correctionWrites !== 1 || persistedVersion?.bodyMarkdown !== correctedBody || persistedVersion.generationSnapshotHash !== first.generationSnapshotHash || JSON.stringify(persistedVersion.result.article?.claimBindings) !== JSON.stringify(first.result.article?.claimBindings)) throw new Error("Knowledge correction lost canonical bytes or exact evidence bindings");
+  window.llmWikiApplication.request = originalKnowledgeRequest;
+  await activate('[data-control="knowledge-review-retry"]', "Reload exact committed Knowledge version without another write");
+  await waitFor(() => document.querySelector('.knowledge-review')?.getAttribute("data-content-hash") === persistedVersion.contentHash, "exact Knowledge hash recovered");
+  if (correctionWrites !== 1) throw new Error("Knowledge recovery repeated the correction write");
+  await step("Injected a read failure after real Knowledge persistence; acknowledged bytes survived, stale mutations were hidden, exact hash/snapshot/bindings recovered without another write.");
   await waitForAsync(async () => {
     const saved = await knowledge();
     return saved.pointers.currentPrivateRevision !== firstRevision && saved.versions.some(item => item.bodyMarkdown === correctedBody);

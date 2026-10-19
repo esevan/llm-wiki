@@ -143,6 +143,15 @@ export function KnowledgeReviewPanel({ taskId, completed, generationQueued, refr
   const text = useTaskWorkbenchText().knowledgeReview;
   const [projection, setProjection] = useState<KnowledgeReviewProjection>();
   const [selected, setSelected] = useState<number>();
+  type SavedCorrection = { taskId: string; revision: number; contentHash: string; bodyMarkdown: string };
+  const [savedCorrection, setSavedCorrection] = useState<SavedCorrection>();
+  const savedCorrectionRef = useRef<SavedCorrection | undefined>(undefined);
+  const savingCorrection = useRef(false);
+  const correctionSequence = useRef(0);
+  const currentTaskId = useRef(taskId);
+  currentTaskId.current = taskId;
+
+
   const [comparison, setComparison] = useState<PreviewComparison>();
   const [body, setBody] = useState("");
   const [savedBody, setSavedBody] = useState("");
@@ -173,13 +182,38 @@ export function KnowledgeReviewPanel({ taskId, completed, generationQueued, refr
   dirtyRef.current = dirty;
   useEffect(() => { onDirtyChange?.(dirty); return () => onDirtyChange?.(false); }, [dirty, onDirtyChange]);
 
+  useEffect(() => {
+    ++correctionSequence.current;
+    savingCorrection.current = false;
+    savedCorrectionRef.current = undefined;
+    setSavedCorrection(undefined);
+    setBusy(undefined);
+    setStatus("");
+    setError("");
+    setSource(undefined);
+    setProjection(undefined);
+    setSelected(undefined);
+    setEditing(false);
+    setBody("");
+    setSavedBody("");
+  }, [taskId]);
+
   const load = useCallback(async (preferredRevision?: number) => {
     const sequence = ++loadSequence.current;
     setLoading(true);
     try {
       const next = await taskClient.knowledge(taskId);
-      if (sequence !== loadSequence.current) return;
-      if (!isKnowledgeProjection(next)) throw new Error(text.invalidResponse);
+      if (sequence !== loadSequence.current || currentTaskId.current !== taskId) return;
+      if (!isKnowledgeProjection(next) || next.taskId !== taskId) throw new Error(text.invalidResponse);
+      const committed = savedCorrectionRef.current;
+      if (committed?.taskId === taskId) {
+        const canonical = next.versions.find(v => v.revision === committed.revision);
+        if (!canonical || canonical.contentHash !== committed.contentHash || canonical.bodyMarkdown !== committed.bodyMarkdown || (next.pointers.currentPrivateRevision ?? 0) < committed.revision) {
+          throw new Error(text.invalidResponse);
+        }
+        savedCorrectionRef.current = undefined;
+        setSavedCorrection(undefined);
+      }
       const generatedRevision = pendingGenerationRevision.current !== undefined && next.pointers.currentPrivateRevision !== undefined && next.pointers.currentPrivateRevision !== pendingGenerationRevision.current
         ? next.pointers.currentPrivateRevision
         : undefined;
@@ -191,15 +225,16 @@ export function KnowledgeReviewPanel({ taskId, completed, generationQueued, refr
       setError("");
       setSelected(current => {
         if (dirtyRef.current && current && next.versions.some(version => version.revision === current)) return current;
-        if (preferredRevision && next.versions.some(version => version.revision === preferredRevision)) return preferredRevision;
+        const preferred = preferredRevision ?? (committed?.taskId === taskId ? committed.revision : undefined);
+        if (preferred && next.versions.some(version => version.revision === preferred)) return preferred;
         if (generatedRevision !== undefined) return generatedRevision;
         if (current && next.versions.some(version => version.revision === current)) return current;
         return next.pointers.currentPrivateRevision ?? next.versions.at(-1)?.revision;
       });
     } catch (cause) {
-      if (sequence === loadSequence.current) setError(String(cause instanceof Error ? cause.message : cause));
+      if (sequence === loadSequence.current && currentTaskId.current === taskId) setError(String(cause instanceof Error ? cause.message : cause));
     } finally {
-      if (sequence === loadSequence.current) setLoading(false);
+      if (sequence === loadSequence.current && currentTaskId.current === taskId) setLoading(false);
     }
   }, [taskId, text.invalidResponse]);
 
@@ -220,7 +255,7 @@ export function KnowledgeReviewPanel({ taskId, completed, generationQueued, refr
     }
   }, [currentRevision, generationQueued]);
   useEffect(() => {
-    if (!version || dirty) return;
+    if (!version || dirty || savedCorrection?.taskId === taskId) return;
     setBody(version.bodyMarkdown);
     setSavedBody(version.bodyMarkdown);
     setEditing(false);
@@ -229,7 +264,7 @@ export function KnowledgeReviewPanel({ taskId, completed, generationQueued, refr
     setProposalOperationId(undefined);
     setPublicationOperationId(undefined);
     setSelectedIdeas(new Set());
-  }, [dirty, version]);
+  }, [dirty, savedCorrection, taskId, version]);
 
   useEffect(() => {
     if (!version || !projection?.archive) return;
@@ -306,22 +341,34 @@ export function KnowledgeReviewPanel({ taskId, completed, generationQueued, refr
     finally { setBusy(undefined); }
   };
   const save = useCallback(async () => {
+    if (savingCorrection.current || savedCorrectionRef.current?.taskId === taskId) return false;
     if (noteDirty) { setStatus(text.unsavedReviewNote); return false; }
     if (!version || version.revision !== currentRevision || !version.generationSnapshotHash || busy || !dirty) return !dirty;
+    const correction = ++correctionSequence.current;
+    savingCorrection.current = true;
     setBusy("edit"); setError(""); setStatus(text.saving);
     pendingGenerationRevision.current = undefined;
     observedGenerationQueue.current = false;
     try {
       const edited = await taskClient.correctKnowledge(taskId, version.revision, version.contentHash, version.generationSnapshotHash, body);
+      if (currentTaskId.current !== taskId || correction !== correctionSequence.current) return true;
+      if (!Number.isInteger(edited.draftRevision) || edited.draftRevision <= version.revision || typeof edited.contentHash !== "string" || !edited.contentHash || edited.bodyMarkdown !== body) {
+        throw new Error(text.invalidResponse);
+      }
+      const committed = { taskId, revision: edited.draftRevision, contentHash: edited.contentHash, bodyMarkdown: edited.bodyMarkdown };
+      savedCorrectionRef.current = committed;
+      setSavedCorrection(committed);
+      ++loadSequence.current;
       dirtyRef.current = false;
-      setSavedBody(body); setEditing(false);
+      setSavedBody(edited.bodyMarkdown); setEditing(false);
       await load(edited.draftRevision);
+      if (currentTaskId.current !== taskId || correction !== correctionSequence.current) return true;
       setStatus(text.edited);
       return true;
-    } catch (cause) { setError(`${text.saveFailed} ${String(cause instanceof Error ? cause.message : cause)}`); }
-    finally { setBusy(undefined); }
+    } catch (cause) { if (currentTaskId.current === taskId && correction === correctionSequence.current) setError(`${text.saveFailed} ${String(cause instanceof Error ? cause.message : cause)}`); }
+    finally { if (correction === correctionSequence.current) { savingCorrection.current = false; setBusy(undefined); } }
     return false;
-  }, [body, busy, currentRevision, dirty, load, noteDirty, taskId, text.edited, text.saveFailed, text.saving, text.unsavedReviewNote, version]);
+  }, [body, busy, currentRevision, dirty, load, noteDirty, taskId, text.edited, text.invalidResponse, text.saveFailed, text.saving, text.unsavedReviewNote, version]);
   useImperativeHandle(ref, () => ({
     save,
     discard: () => { setNoteDrafts({}); setBody(savedBody); setEditing(false); setStatus(""); setError(""); },
@@ -417,6 +464,13 @@ export function KnowledgeReviewPanel({ taskId, completed, generationQueued, refr
     finally { setBusy(undefined); }
   };
 
+  if (savedCorrection?.taskId === taskId) return <section ref={root} className="knowledge-review" aria-label={text.title} tabIndex={-1} data-saved-revision={savedCorrection.revision}>
+    <p role="status">{text.savedRefreshPending}</p>
+    <KnowledgeMarkdown>{savedCorrection.bodyMarkdown}</KnowledgeMarkdown>
+    {error && <p role="alert">{error}</p>}
+    <button type="button" data-control="knowledge-review-retry" disabled={loading} onClick={() => void load(savedCorrection.revision)}>{text.retry}</button>
+  </section>;
+
   if (loading && !projection) return <section ref={root} className="knowledge-review" aria-label={text.title} tabIndex={-1}><p role="status">{text.loading}</p></section>;
   if (!projection) return <section ref={root} className="knowledge-review" aria-label={text.title} tabIndex={-1}><p role="alert">{text.loadFailed} {error}</p><button type="button" data-control="knowledge-review-retry" onClick={() => void load()}>{text.retry}</button></section>;
   if (!version) return <section ref={root} className="knowledge-review knowledge-review-empty" aria-label={text.title} tabIndex={-1}><header><div><p className="knowledge-review-kicker">{text.privateDraft}</p><h3>{text.title}</h3></div><span className="knowledge-state">{text.notPublished}</span></header><p>{text.empty}</p><button type="button" data-control="task-knowledge-draft" disabled={!completed || generationQueued || busy === "generate"} onClick={() => void generate()}>{busy === "generate" || generationQueued ? text.generating : text.generate}</button>{error && <p role="alert">{error}</p>}</section>;
@@ -443,7 +497,8 @@ export function KnowledgeReviewPanel({ taskId, completed, generationQueued, refr
     <section className="knowledge-outcomes" aria-labelledby="knowledge-outcomes-title"><h4 id="knowledge-outcomes-title">{text.finalOutcomes}</h4>{outcomes.length ? <ol>{outcomes.map(outcome => <li key={outcome.topicKey}><strong>{outcome.topicKey}</strong><p>{outcome.statement}</p></li>)}</ol> : <p>{text.noFinalOutcomes}</p>}</section>
     <section className="knowledge-article" aria-label={text.articleBody}>
       {editing ? <label className="knowledge-draft-editor"><span>{text.edit}</span><textarea data-control="task-knowledge-draft-body" value={body} onChange={event => setBody(event.target.value)} /></label> : <ContentRevisionTransition as="div" entityKey={`knowledge:${taskId}:body`} revision={version.revision} cause={appliedTransition?.revision === version.revision ? appliedTransition.cause : undefined} historical={version.revision !== currentRevision} variant="body" renderContent={content => <KnowledgeMarkdown>{content}</KnowledgeMarkdown>}>{version.bodyMarkdown}</ContentRevisionTransition>}
-      {(version.revision === currentRevision || editing) && <div className="knowledge-review-actions">{editing ? <><button type="button" data-control="knowledge-version-save" disabled={Boolean(busy) || !bodyDirty || version.revision !== currentRevision || !version.generationSnapshotHash} onClick={() => void save()}>{text.save}</button><button type="button" data-control="knowledge-version-cancel" disabled={Boolean(busy)} onClick={() => { setBody(savedBody); setEditing(false); setStatus(""); }}>{text.cancelEdit}</button></> : <button type="button" data-control="knowledge-version-edit" disabled={Boolean(busy)} onClick={() => setEditing(true)}>{text.edit}</button>}</div>}
+      {!version.generationSnapshotHash && <p role="note">{document.documentElement.lang.startsWith("ko") ? "이전 초안은 근거 스냅샷이 없어 편집할 수 없습니다. 새 초안을 생성해 주세요." : "This legacy draft has no evidence snapshot. Generate a new draft to edit."}</p>}
+      {(version.revision === currentRevision || editing) && <div className="knowledge-review-actions">{editing ? <><button type="button" data-control="knowledge-version-save" disabled={Boolean(busy) || !bodyDirty || version.revision !== currentRevision || !version.generationSnapshotHash} onClick={() => void save()}>{text.save}</button><button type="button" data-control="knowledge-version-cancel" disabled={Boolean(busy)} onClick={() => { setBody(savedBody); setEditing(false); setStatus(""); }}>{text.cancelEdit}</button></> : <button type="button" data-control="knowledge-version-edit" title={!version.generationSnapshotHash ? (document.documentElement.lang.startsWith("ko") ? "이전 초안은 근거 스냅샷이 없어 편집할 수 없습니다. 새 초안을 생성해 주세요." : "This legacy draft has no evidence snapshot. Generate a new draft to edit.") : undefined} disabled={Boolean(busy) || !version.generationSnapshotHash} onClick={() => setEditing(true)}>{text.edit}</button>}</div>}
     </section>
 
     <section className="knowledge-applicability"><h4>{text.applicability}</h4><p className="knowledge-applicability-summary">{version.applicability.summary}</p><ApplicabilityList title={text.questions} values={version.applicability.representativeQuestions} /><ApplicabilityList title={text.helpsWith} values={version.applicability.helpsWith} /><ApplicabilityList title={text.conditions} values={version.applicability.conditions} /><ApplicabilityList title={text.exclusions} values={version.applicability.exclusions} /></section>

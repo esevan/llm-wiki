@@ -142,20 +142,50 @@ fn generic_decode(value: &Value) -> Result<Value, String> {
     }
 }
 fn intent() -> Value {
-    object(&[
-        ("needed", json!({"type":"boolean"})),
-        ("reason", text()),
-        ("queries", strings()),
-        ("aspects", strings()),
-        (
-            "filters",
-            object(&[("informationTypes", strings()), ("statuses", strings())]),
-        ),
-        (
-            "requery",
-            nullable(object(&[("reason", text()), ("queries", strings())])),
-        ),
-    ])
+    let reason = json!({"type":"string","minLength":1,"pattern":"\\S"});
+    let queries = |min, max| {
+        json!({"type":"array","minItems":min,"maxItems":max,
+        "items":{"type":"string","minLength":1,"maxLength":500,"pattern":"\\S"}})
+    };
+    let branch = |needed: bool| {
+        object(&[
+            ("needed", json!({"type":"boolean","enum":[needed]})),
+            ("reason", reason.clone()),
+            (
+                "queries",
+                queries(if needed { 1 } else { 0 }, if needed { 4 } else { 0 }),
+            ),
+            (
+                "aspects",
+                json!({"type":"array","items":{"type":"string","enum":["content","applicability","decision","exploration"]}}),
+            ),
+            (
+                "filters",
+                object(&[
+                    (
+                        "informationTypes",
+                        json!({"type":"array","maxItems":16,"items":{"type":"string"}}),
+                    ),
+                    (
+                        "statuses",
+                        json!({"type":"array","maxItems":16,"items":{"type":"string"}}),
+                    ),
+                ]),
+            ),
+            (
+                "requery",
+                if needed {
+                    nullable(object(&[
+                        ("reason", reason.clone()),
+                        ("queries", queries(1, 2)),
+                    ]))
+                } else {
+                    json!({"type":"null"})
+                },
+            ),
+        ])
+    };
+    json!({"anyOf":[branch(false),branch(true)]})
 }
 fn derive<T: schemars::JsonSchema>() -> Value {
     serde_json::to_value(schemars::schema_for!(T)).expect("schema serialization")
@@ -653,6 +683,25 @@ fn validate_shape(
             return Err(fail("incorrect JSON type"));
         }
     }
+    if schema["minLength"].as_u64().is_some_and(|n| {
+        value
+            .as_str()
+            .is_some_and(|s| s.chars().count() < n as usize)
+    }) {
+        return Err(fail("text below schema character minimum"));
+    }
+    // The emitted schemas use only this non-whitespace pattern.
+    if schema["pattern"].as_str() == Some("\\S")
+        && value.as_str().is_some_and(|s| s.trim().is_empty())
+    {
+        return Err(fail("text must contain a non-whitespace character"));
+    }
+    if schema["minItems"]
+        .as_u64()
+        .is_some_and(|n| value.as_array().is_some_and(|a| a.len() < n as usize))
+    {
+        return Err(fail("array below schema item minimum"));
+    }
     if let Some(limit) = schema["maxLength"].as_u64() {
         if value
             .as_str()
@@ -702,6 +751,60 @@ fn validate_shape(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn planner_wire_rejects_runtime_invalid_intents_before_dispatch() {
+        let base = json!({"needed":false,"reason":"No search needed","queries":[],"aspects":[],"filters":{"informationTypes":[],"statuses":[]},"requery":null});
+        for (key, bad) in [
+            ("queries", json!(["unused query"])),
+            ("requery", json!({"reason":"","queries":[]})),
+            ("aspects", json!(["constraints"])),
+        ] {
+            let mut intent = base.clone();
+            intent[key] = bad;
+            let output = json!({"retrieval":intent,"preliminaryAssumptions":[]});
+            assert!(
+                parse_completion(
+                    PromptId::WorkPreviewPlanner,
+                    &json!({}),
+                    &completion(output)
+                )
+                .is_err(),
+                "invalid {key} must not be schema-valid"
+            );
+        }
+    }
+    #[test]
+    fn planner_wire_query_limits_match_unicode_runtime_limits() {
+        let base = json!({"needed":true,"reason":"Find evidence","queries":["\u{d55c}".repeat(500)],"aspects":["content"],"filters":{"informationTypes":[],"statuses":[]},"requery":null});
+        let parse = |intent: Value| {
+            parse_completion(
+                PromptId::WorkPreviewPlanner,
+                &json!({}),
+                &completion(json!({"retrieval":intent,"preliminaryAssumptions":[]})),
+            )
+        };
+        assert!(parse(base.clone()).is_ok());
+        for bad in [
+            json!([]),
+            json!([" "]),
+            json!(["valid", ""]),
+            json!(["\u{d55c}".repeat(501)]),
+            json!(["1", "2", "3", "4", "5"]),
+        ] {
+            let mut intent = base.clone();
+            intent["queries"] = bad;
+            assert!(parse(intent).is_err());
+        }
+        for bad in [
+            json!({"reason":"retry","queries":[]}),
+            json!({"reason":" ","queries":["valid"]}),
+            json!({"reason":"retry","queries":["1","2","3"]}),
+        ] {
+            let mut intent = base.clone();
+            intent["requery"] = bad;
+            assert!(parse(intent).is_err());
+        }
+    }
     fn completion(value: Value) -> Value {
         json!({"choices":[{"finish_reason":"stop","message":{"content":value.to_string()}}]})
     }

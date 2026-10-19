@@ -106,7 +106,7 @@ function nativeFixture(initial?: ReferenceWorkspace) {
           return { status: 409, body: { error: "preview_head_conflict" } };
         workspace = fixtureWorkspace(Number(input.version) + 1);
         workspace.preview!.current!.fields = input.fields as WorkPreviewFields;
-        body = { version: workspace.preview!.currentVersion };
+        body = { previewId: workspace.preview!.current!.previewId, version: workspace.preview!.currentVersion, derivedFromVersion: input.version, contentHash: workspace.preview!.current!.contentHash };
         break;
       case "task-refinement.reference-apply":
         taskRevision += 1;

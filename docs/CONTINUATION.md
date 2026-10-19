@@ -1,5 +1,90 @@
 # LLM Wiki — Continuation handoff
 
+## Main integration authorization (2026-10-19)
+
+The user authorized merging and pushing this retrieval/draft-save feature.
+The implementation commits `90904c9` and `6380013` are combined for publication
+under the repository's single-feature-commit convention. A local backup branch
+retains the original two commits. This supersedes earlier local-only notes for
+this feature; the CPU optimization worktree and installed app are excluded.
+Application and test source remain unchanged during integration. Final checks
+and CI for the published main SHA are reported in the integration handoff.
+
+## Knowledge save recovery and timeout verification (2026-10-19)
+
+Follow-up work remains on `codex/retrieval-draft-save`, after local commit
+`90904c9`, without merge, push, installation or external publication.
+
+A failing regression reproduced Knowledge correction committing successfully
+followed by a projection-read failure: the old body/revision/hash reappeared.
+The UI now retains acknowledged body/revision/hash separately and hides all
+old-version mutation controls until a canonical read confirms Task identity,
+revision, content hash, body and a non-regressed head. Recovery repeats reads,
+not writes. Source/quality metadata is never synthesized. Repeated read failures
+and mismatched canonical hashes remain blocked. Recovery then allows another
+edit using the new revision/hash. Late acknowledgements and late post-save
+reads/status updates cannot overwrite a different Task after navigation.
+
+Verification: 400 React/unit tests and npm helper checks, typecheck, lint,
+whitespace checks and the final no-bundle release build passed. Independent
+review found and closed both Task-identity races; final review found no further
+confirmed defect. No Rust source changed in this follow-up; the preceding
+366-pass/3-ignored Rust result remains the relevant baseline.
+
+Two focused real-app scenarios passed in three consecutive independent homes:
+`task-refinement-title-apply` and `task-publication`. The latter injects a read
+failure after the real correction IPC has returned, reads the temporary DB
+through the original IPC adapter, checks exact body/snapshot/claim bindings,
+then recovers the canonical hash without another correction. Across the three
+refinement runs, 12 edit requests and 6 Apply requests returned HTTP 200.
+Results are under `.tmp/desktop-e2e-artifacts-{JcXfHQ,yPFPXb,sZcok4}/results.json`.
+These use a local fake provider and temporary Vault; live models and installed
+or signed packages are outside this coverage.
+
+Timeout diagnosis is separate from storage correctness. Instrumented failure
+`rlRRSb` observed a hidden WebView, successful edit/refresh IPC, then roughly
+23 seconds without JavaScript observations. The old condition-wait helpers
+checked their deadline before checking the condition after resume. Two unit
+regressions reproduced false timeouts for already-satisfied conditions; both
+now pass, while two still-false cases continue to time out. Strict latency
+assertions are unchanged. Final passing traces still contain 22-27 second
+observation gaps, confirming the new condition check handles suspension rather
+than proving foreground performance. The two original Q7Q61z/8CLQla failures
+lack enough telemetry to assign their individual causes conclusively; a later
+pass alone is not evidence that they were resolved. No currently reproducible
+save blocker remains in the tested flows, and no office/user logs are needed
+to reproduce these fixes. The original model response would only help attribute
+the old retrieval incident, not unblock this local work. Existing 31-file fmt
+failures remain a separate baseline.
+
+## Retrieval contract and draft-save correction (2026-10-19)
+
+Local branch `codex/retrieval-draft-save` in
+`.worktrees/retrieval-draft-save` is based on main `16698ac` and is not merged
+or pushed. The reported model response was not supplied, so the exact incident
+cannot be attributed conclusively. A regression test reproduced schema-valid
+no-search queries rejected by the runtime. Search/no-search schema branches now
+match runtime intent constraints; query limits count Unicode characters.
+Acknowledged refinement edits advance the local version/hash even when the
+following read fails. Legacy Knowledge without an evidence snapshot explains
+its read-only state before entering an unsaveable editor.
+
+Validation: npm test (393 React tests plus helper checks), typecheck, lint,
+366 Rust tests (3 ignored), whitespace check and no-bundle release build passed.
+Independent read-only review found no additional confirmed defect. The focused
+`task-refinement-title-apply` app scenario passed for Capture and Task with
+consecutive title-only and body-only saves using an isolated DB and fake server.
+Final artifact: `.tmp/desktop-e2e-artifacts-NJy849/results.json`.
+
+Two earlier focused runs timed out: one before the Task chat was recorded, and
+one awaiting navigation after Capture edits and Apply had committed. Initial
+preview readiness and failure DOM diagnostics were added; the final run passed,
+but the intermittent timeout cause is unconfirmed. Keep this limitation visible.
+Whole-repository fmt still fails in the same 31 files as the recorded baseline.
+No installed app, live provider, user database, signing identity or remote was
+changed. Legacy Knowledge editing without a snapshot remains unsupported; no
+source provenance is synthesized. The follow-up above covers Knowledge post-save read failure with fault injection.
+
 ## Shared AI timeout and settings singleton (2026-10-13)
 
 Local work is in `.worktrees/generation-timeout` on `codex/generation-timeout`.
