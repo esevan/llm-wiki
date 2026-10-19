@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
+import { taskTitleLength, validTaskTitle } from "../../services/taskTitle";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { DraftVersionControls } from "../../components/DraftVersionControls";
 import {
   ReferenceViewer,
@@ -20,6 +21,7 @@ import { ReferenceList } from "./ReferenceList";
 import { useReferenceWorkbenchText } from "./referenceWorkbenchText";
 
 const fields = [
+  "title",
   "description",
   "background",
   "goal",
@@ -70,6 +72,7 @@ export function ReferenceAwarePreview(props: ReferenceAwarePreviewProps) {
   }>();
   const [comparison, setComparison] = useState<PreviewComparison>();
   const [pending, setPending] = useState(false);
+  const pendingRef = useRef(false);
   const [loadingVersion, setLoadingVersion] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -83,6 +86,8 @@ export function ReferenceAwarePreview(props: ReferenceAwarePreviewProps) {
   const isHistorical =
     chosen?.version !== workspace?.preview?.currentVersion && !edit;
   const shownFields = edit?.fields ?? chosen?.fields;
+  const shownTitle = shownFields?.title ?? shownFields?.description ?? "";
+  const titleInvalid = !validTaskTitle(shownTitle);
   const generationBusy = busy(workspace?.generation?.status);
   const investigation = workspace?.investigations?.at(-1);
   const sourceReferences = useMemo(() => {
@@ -97,9 +102,9 @@ export function ReferenceAwarePreview(props: ReferenceAwarePreviewProps) {
     return [...references.values()];
   }, [chosen?.references, isHistorical, workspace?.findings]);
   useEffect(() => {
-    onDirtyChange?.(Boolean(edit));
+    onDirtyChange?.(Boolean(edit) || pending);
     return () => onDirtyChange?.(false);
-  }, [edit, onDirtyChange]);
+  }, [edit, pending, onDirtyChange]);
   useEffect(() => {
     if (selected === undefined) return;
     let cancelled = false;
@@ -120,7 +125,8 @@ export function ReferenceAwarePreview(props: ReferenceAwarePreviewProps) {
     };
   }, [selected, onSelect, text.actionFailed]);
   const act = async (action: () => Promise<void>, success?: string) => {
-    if (pending) return;
+    if (pendingRef.current) return;
+    pendingRef.current = true;
     setPending(true);
     setError("");
     setNotice("");
@@ -130,6 +136,7 @@ export function ReferenceAwarePreview(props: ReferenceAwarePreviewProps) {
     } catch {
       setError(text.actionFailed);
     } finally {
+      pendingRef.current = false;
       setPending(false);
     }
   };
@@ -221,19 +228,23 @@ export function ReferenceAwarePreview(props: ReferenceAwarePreviewProps) {
                   <p>{finding.summary}</p>
                 </div>
               ))}
+          {shownFields.title === undefined && <p role="status">{text.legacyTitle}</p>}
+          <p id="preview-title-limit" role={titleInvalid ? "alert" : undefined}>{text.titleLimit} ({taskTitleLength(shownTitle)}/70)</p>
           <dl className="reference-aware-fields">
             {fields.map((key) => (
               <div key={key}>
-                <dt>{text[key]}</dt>
+                <dt>{key === "title" ? text.taskTitle : text[key]}</dt>
                 <dd>
                   {edit ? (
                     <textarea
                       data-control="reference-preview-field"
-                      aria-label={`${text.edit}: ${text[key]}`}
+                      aria-label={`${text.edit}: ${key === "title" ? text.taskTitle : text[key]}`}
+                      aria-invalid={key === "title" && titleInvalid}
+                      aria-describedby={key === "title" ? "preview-title-limit" : undefined}
                       value={
                         Array.isArray(shownFields[key])
                           ? shownFields[key].join("\n")
-                          : shownFields[key]
+                          : key === "title" ? shownTitle : shownFields[key]
                       }
                       onChange={(event) => {
                         const value = event.target.value;
@@ -261,7 +272,7 @@ export function ReferenceAwarePreview(props: ReferenceAwarePreviewProps) {
                     >
                       {(Array.isArray(shownFields[key])
                         ? shownFields[key].join("\n")
-                        : shownFields[key]) || text.empty}
+                        : key === "title" ? shownTitle : shownFields[key]) || text.empty}
                     </ContentRevisionTransition>
                   )}
                 </dd>
@@ -303,7 +314,7 @@ export function ReferenceAwarePreview(props: ReferenceAwarePreviewProps) {
                 <button
                   data-control="reference-preview-save"
                   type="button"
-                  disabled={pending}
+                  disabled={pending || titleInvalid}
                   onClick={() =>
                     void act(async () => {
                       await props.onSave(edit.base, edit.fields);
@@ -334,7 +345,7 @@ export function ReferenceAwarePreview(props: ReferenceAwarePreviewProps) {
                     onClick={() => {
                       setEdit({
                         base: chosen,
-                        fields: structuredClone(chosen.fields),
+                        fields: { ...structuredClone(chosen.fields), title: chosen.fields.title ?? chosen.fields.description },
                       });
                       setCause(undefined);
                     }}
@@ -345,7 +356,7 @@ export function ReferenceAwarePreview(props: ReferenceAwarePreviewProps) {
                     data-control="reference-preview-apply"
                     className="primary"
                     type="button"
-                    disabled={pending || generationBusy || loadingVersion}
+                    disabled={pending || generationBusy || loadingVersion || titleInvalid}
                     onClick={() =>
                       void act(async () => {
                         await props.onApply(chosen);

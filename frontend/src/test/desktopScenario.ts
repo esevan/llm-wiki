@@ -472,6 +472,48 @@ async function log(step: Step, interactionCoverage: ReturnType<typeof createInte
     "Rendered Work Log, file attachment, comment, checklist, and decision controls persisted their evidence.",
   );
 }
+async function refinementTitleApply(step: Step) {
+  await api("/provider/config", "PUT", { base_url: e2eProviderUrl, model: "deterministic", api_key: "desktop-e2e-key" });
+  for (const kind of ["capture", "task"] as const) {
+    const source = `Title refinement ${kind} ${Date.now()}`;
+    await create(source, kind);
+    const board = await api<{ categories: Array<{ items: Array<{ id: string; text?: string; title?: string }> }> }>("/workbench");
+    const item = board.categories.flatMap(group => group.items).find(item => item.text === source || item.title === source);
+    if (!item) throw new Error("Saved refinement source missing");
+    const card = document.querySelector<HTMLElement>(`article[data-entity-id="${item.id}"]`);
+    const refine = card?.querySelector<HTMLButtonElement>('[data-control="task-card-refine"], [data-control="task-shortcut-refine"]');
+    if (!refine) throw new Error("Refine control missing");
+    clickElement(refine, `Refine ${kind}`);
+    await waitFor(() => Boolean(document.querySelector('.refinement-panel[data-refinement-session]:not([data-refinement-session=""])')) && Boolean(document.querySelector('[aria-label="Refinement message"]')), "loaded title refinement");
+    const requested = `Changed title ${kind} ` + String.fromCodePoint(0x1f600);
+    enter(document.querySelector<HTMLTextAreaElement>('[aria-label="Refinement message"]')!, `Set title: ${requested}`);
+    await waitFor(() => !document.querySelector<HTMLButtonElement>('[data-control="refinement-send"]')?.disabled, "title request ready to send");
+    click('[data-control="refinement-send"]', "Request a title change");
+    await waitFor(() => Boolean(document.querySelector('[data-control="reference-preview-edit"]')) && Boolean(document.querySelector(".reference-aware-fields")?.textContent?.includes(requested)), "chat title in saved preview");
+    click('[data-control="reference-preview-edit"]', "Edit title directly");
+    await waitFor(() => Boolean(document.querySelector('[aria-label="Edit preview: Task title"]')), "title editor rendered");
+    const field = document.querySelector<HTMLTextAreaElement>('[aria-label="Edit preview: Task title"]')!;
+    const tooLong = String.fromCodePoint(0xac00).repeat(71);
+    enter(field, tooLong);
+    await waitFor(() => Boolean(document.querySelector<HTMLButtonElement>('[data-control="reference-preview-save"]')?.disabled), "71 characters rejected");
+    if (field.value !== tooLong) throw new Error("Overlong title was silently truncated");
+    const edited = `Edited ${kind} ` + String.fromCodePoint(0x1f600).repeat(50);
+    enter(field, edited);
+    await waitFor(() => !document.querySelector<HTMLButtonElement>('[data-control="reference-preview-save"]')?.disabled, "valid title accepted");
+    click('[data-control="reference-preview-save"]', "Save exact edited title");
+    await waitFor(() => !document.querySelector('[data-control="reference-preview-save"]') && Boolean(document.querySelector(".reference-aware-fields")?.textContent?.includes(edited)), "saved title preview");
+    click('[data-control="reference-preview-apply"]', "Apply reviewed title to Task");
+    await waitFor(() => !document.querySelector(".refinement-panel") && document.querySelector(".task-detail h2")?.getAttribute("title") === edited, "applied Task opened");
+    const tasks = await api<{ categories: Array<{ items: Array<{ id: string; title?: string; taskRevision?: number; refinedRevision?: number }> }>; refiningShortcuts: Array<{ id: string }> }>("/workbench");
+    const applied = tasks.categories.flatMap(group => group.items).find(task => task.title === edited);
+    if (!applied || applied.refinedRevision !== applied.taskRevision || tasks.refiningShortcuts.some(item => item.id === applied.id)) throw new Error("Applied Task remained in refinement");
+    if (kind === "task" && applied.id !== item.id) throw new Error("Existing Task identity changed");
+    click('[aria-label="Close Task detail"]', "Close applied Task");
+    await waitFor(() => !document.querySelector(".task-detail"), "Task detail closed");
+    if (!document.querySelector('[data-lane="tasks"]')?.textContent?.includes(edited)) throw new Error("Refined Task lane missing applied title");
+    await step(`Verified ${kind}: chat title, direct Unicode edit, exact Task persistence, refined lane and navigation.`);
+  }
+}
 async function refinement(step: Step) {
   await api("/provider/config", "PUT", { base_url: e2eProviderUrl, model: "deterministic", api_key: "desktop-e2e-key" });
   const a = `refine A ${Date.now()}`,
@@ -1285,6 +1327,7 @@ export function installDesktopScenario() {
         "task-capture": capture,
         "task-worklog": step => log(step, coverage),
         "task-refinement": refinement,
+        "task-refinement-title-apply": refinementTitleApply,
         "task-relationships": relationships,
         "task-review": review,
         "task-publication": publication,

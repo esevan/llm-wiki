@@ -1,3 +1,4 @@
+import { taskTitleLength, validTaskTitle } from "../../services/taskTitle";
 import { localizedTask } from "./taskContent";
 import { completedTasksNewestFirst } from "./completedTasks";
 import { InputImageAttachment } from "./InputImageAttachment";
@@ -172,6 +173,7 @@ export function WorkbenchView({ active, taskApplication, onTaskApplication, onPr
   const save = async (event: React.FormEvent) => {
     event.preventDefault();
     if ((!input.trim() && !(mode === "capture" && captureImage.image)) || busy || captureImage.reading) return;
+    if (mode === "task" && !validTaskTitle(input)) { setError(text.titleLengthError); return; }
     setBusy(true);
     setError("");
     try {
@@ -397,6 +399,7 @@ export function WorkbenchView({ active, taskApplication, onTaskApplication, onPr
               rows={2}
               required={mode !== "capture" || !captureImage.image}
             />
+            {mode === "task" && <p role={!validTaskTitle(input) && input.length ? "alert" : undefined}>{text.titleLengthError} ({taskTitleLength(input)}/70)</p>}
             {mode === "capture" && <InputImageAttachment attachment={captureImage} disabled={busy} />}
             <div className="task-entry-actions">
               <div className="task-entry-modes">
@@ -543,6 +546,8 @@ export function WorkbenchView({ active, taskApplication, onTaskApplication, onPr
             if (application) {
               setLocalTaskApplication(application);
               onTaskApplication?.(application);
+              setRefining(undefined);
+              setDetail(application.taskId);
             }
             setDetailRefresh(value => value + 1);
             void load();

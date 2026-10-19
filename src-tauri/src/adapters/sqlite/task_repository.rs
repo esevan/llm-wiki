@@ -225,6 +225,7 @@ pub(crate) fn create_task_tx(
         task_id.to_owned()
     };
     let title = required(input, "title")?;
+    crate::domain::task::validate_title(title)?;
     let get = |k| input.get(k).and_then(Value::as_str).unwrap_or("").trim();
     let detail = get("detail");
     let outcome = get("outcome");

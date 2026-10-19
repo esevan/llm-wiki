@@ -225,6 +225,7 @@ impl TaskApplicationService {
                 .trim()
                 .to_owned()
         };
+        let prior_title = prior.0.clone();
         let fields = [
             field("title", prior.0),
             field("detail", prior.1),
@@ -236,6 +237,7 @@ impl TaskApplicationService {
         if fields[0].is_empty() {
             return Err("invalid_input: title is required".into());
         }
+        if fields[0] != prior_title { crate::domain::task::validate_title(&fields[0])?; }
         tx.execute("INSERT INTO task_revisions(task_id,revision,title,detail,outcome,scope,non_goals,validation_criteria,content_hash,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)", params![id, revision + 1, fields[0], fields[1], fields[2], fields[3], fields[4], fields[5], content_hash(&fields.iter().map(String::as_str).collect::<Vec<_>>()), at]).map_err(|e| e.to_string())?;
         tx.execute(
             "UPDATE tasks SET current_revision=? WHERE id=?",

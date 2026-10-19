@@ -27,7 +27,10 @@ fn localized(value: Value) -> Value {
 }
 fn task_fields() -> Value {
     object(&[
-        ("title", text()),
+        (
+            "title",
+            json!({"type":"string","minLength":1,"maxLength":70}),
+        ),
         ("detail", text()),
         ("outcome", text()),
         ("scope", text()),
@@ -199,6 +202,10 @@ pub(crate) fn schema(id: PromptId, context: &Value) -> Result<Value, String> {
         ]),
         PromptId::WorkPreviewFinalizer => {
             let mut fields = vec![
+                (
+                    "title",
+                    json!({"type":"string","minLength":1,"maxLength":70}),
+                ),
                 ("description", text()),
                 ("background", text()),
                 ("goal", text()),

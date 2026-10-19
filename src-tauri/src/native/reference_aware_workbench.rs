@@ -141,6 +141,7 @@ pub(crate) fn compare(db: &Path, preview_id: &str, left: i64, right: i64) -> Res
     let a = load(left)?;
     let b = load(right)?;
     let fields = [
+        "title",
         "description",
         "background",
         "goal",
@@ -256,7 +257,7 @@ mod tests {
         .unwrap();
         assert_eq!(second["version"], 2);
         assert_eq!(
-            compare(&db, preview, 1, 2).unwrap()["fields"][2]["state"],
+            compare(&db, preview, 1, 2).unwrap()["fields"].as_array().unwrap().iter().find(|f| f["key"] == "goal").unwrap()["state"],
             "changed"
         );
         assert_eq!(restore(&db, preview, 1, 2).unwrap()["version"], 3);

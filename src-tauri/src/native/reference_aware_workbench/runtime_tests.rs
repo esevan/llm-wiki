@@ -11,7 +11,7 @@ fn intent(needed: bool) -> Value {
     json!({"needed":needed,"reason":"Check approval","queries":if needed{vec!["approval"]}else{vec![]},"aspects":[],"filters":{},"requery":null})
 }
 fn fields() -> Value {
-    json!({"description":"Change contract","background":"Approval rule applies","goal":"A reviewed contract","scope":"Contract only","nonGoals":"Deployment","constraints":["Approval before sending"],"completionCriteria":["Review approval"],"initialApproach":["Read the rule"],"assumptions":[]})
+    json!({"title":"새 승인 제목 😀","description":"Change contract","background":"Approval rule applies","goal":"A reviewed contract","scope":"Contract only","nonGoals":"Deployment","constraints":["Approval before sending"],"completionCriteria":["Review approval"],"initialApproach":["Read the rule"],"assumptions":[]})
 }
 struct Fixture {
     _root: tempfile::TempDir,
@@ -186,6 +186,9 @@ fn provider_variant(f:&Fixture,turns:usize,delay_last:bool,optional:bool,standal
                         let wire = &request["response_format"]["json_schema"]["schema"]["properties"]["claimSources"]["items"]["properties"];
                         assert_eq!(wire["referenceId"]["enum"], json!([r["referenceId"]]));
                         assert!(wire.get("documentId").is_none());
+                        let title_schema = &request["response_format"]["json_schema"]["schema"]["properties"]["preview"]["properties"]["title"];
+                        assert_eq!(title_schema["maxLength"], 70);
+                        assert_eq!(title_schema["type"], "string");
                         assert!(r["referenceId"].as_str().unwrap().starts_with("ref_"));
                         assert!(r["excerpt"].as_str().unwrap().contains("approval"));
                         if delay_last && !optional && i == turns * 3 - 1 {
@@ -229,8 +232,8 @@ async fn command_job_provider_retrieves_before_preview_and_explicit_apply_is_ato
     }
 
     let c = database::open(&f.db).unwrap();
-    assert_eq!(c.query_row("SELECT prompt_version FROM ai_jobs_v2 WHERE task_kind='refinement_preview' LIMIT 1", [], |r| r.get::<_,i64>(0)).unwrap(),2);
-    assert_eq!(c.query_row("SELECT prompt_version FROM work_preview_versions WHERE derivation_kind='generated' LIMIT 1", [], |r| r.get::<_,i64>(0)).unwrap(),2);
+    assert_eq!(c.query_row("SELECT prompt_version FROM ai_jobs_v2 WHERE task_kind='refinement_preview' LIMIT 1", [], |r| r.get::<_,i64>(0)).unwrap(),3);
+    assert_eq!(c.query_row("SELECT prompt_version FROM work_preview_versions WHERE derivation_kind='generated' LIMIT 1", [], |r| r.get::<_,i64>(0)).unwrap(),3);
     assert_eq!(
         c.query_row(
             "SELECT current_revision FROM tasks WHERE id=?",
@@ -679,4 +682,80 @@ async fn sparse_no_run_generation_keeps_two_calls_and_persists_partial_preview()
     assert_eq!(c.query_row("SELECT validation_criteria FROM task_revisions WHERE task_id=? AND revision=2",[&f.task],|r|r.get::<_,String>(0)).unwrap(),"Original acceptance criterion");
     assert_eq!(c.query_row("SELECT count(*) FROM task_work_session_runs",[],|r|r.get::<_,i64>(0)).unwrap(),0);
     assert_eq!(c.query_row("SELECT detail FROM task_revisions WHERE task_id=? AND revision=1",[&f.task],|r|r.get::<_,String>(0)).unwrap(),"User text");
+}
+
+#[tokio::test]
+async fn title_edits_and_apply_complete_capture_and_task_refinement_without_losing_bindings() {
+    use crate::application::task_service::TaskApplicationService;
+    for capture_mode in [false, true] {
+        let f = Fixture::new().await;
+        if capture_mode {
+            let c = database::open(&f.db).unwrap();
+            c.execute("INSERT INTO captures(id,text) VALUES('title-capture','Review approval')", []).unwrap();
+            c.execute("UPDATE refinement_sessions SET task_id=NULL,capture_id='title-capture' WHERE id=?", [&f.session]).unwrap();
+        }
+        let (_, _, _, server) = provider(&f, 1, false, false);
+        // The mocked model receives the actual chat and emits its new title through
+        // the real HTTP schema, parser, version persistence and Apply transaction.
+        task_assistance::execute(&f.db,&f.settings,&f.vault,SemanticEngine::new(None),"task-refinement.message",
+            &json!({"operationId":"title-chat","sessionId":f.session,"message":"제목을 새 승인 제목 😀으로 바꿔줘","locale":"ko","autoReview":false})).await.unwrap();
+        f.wait_jobs(1).await; server.join().unwrap();
+        let ws = f.op("task-refinement.reference-workspace",json!({})).unwrap();
+        let first = &ws["preview"]["current"];
+        assert_eq!(first["fields"]["title"], "새 승인 제목 😀");
+        let mut fields = first["fields"].clone();
+        fields["title"] = json!("가".repeat(71));
+        let edit = json!({"operationId":"bad-title","version":1,"expectedCurrentPreviewVersion":1,"expectedContentHash":first["contentHash"],"fields":fields});
+        assert!(f.op("task-refinement.reference-edit",edit).unwrap_err().contains("70"));
+        fields["title"] = json!("😀".repeat(70));
+        f.op("task-refinement.reference-edit",json!({"operationId":"good-title","version":1,"expectedCurrentPreviewVersion":1,"expectedContentHash":first["contentHash"],"fields":fields})).unwrap();
+        let edited = f.op("task-refinement.reference-workspace",json!({})).unwrap()["preview"]["current"].clone();
+        let comparison=f.op("task-refinement.reference-compare",json!({"left":1,"right":2})).unwrap();
+        assert!(comparison["comparison"]["fields"].as_array().unwrap().iter().any(|f|f["key"]=="title" && f["state"]=="changed"));
+        assert_eq!(edited["references"],first["references"]);
+        assert_eq!(edited["assumptions"],first["assumptions"]);
+        assert!(f.op("task-refinement.reference-apply",json!({"operationId":"old-head","version":1,"expectedCurrentPreviewVersion":1,"expectedContentHash":first["contentHash"],"expectedTaskRevision":first["taskRevision"]})).is_err());
+        let result = f.op("task-refinement.reference-apply",json!({"operationId":"title-apply","version":2,"expectedCurrentPreviewVersion":2,"expectedContentHash":edited["contentHash"],"expectedTaskRevision":edited["taskRevision"]})).unwrap();
+        let task_id = result["task"]["id"].as_str().unwrap();
+        if !capture_mode { assert_eq!(task_id,f.task); }
+        let service=TaskApplicationService::new(&f.db);
+        let saved=service.execute("task.get",&json!({"taskId":task_id})).unwrap();
+        assert_eq!(saved["title"],"😀".repeat(70));
+        assert_eq!(saved["refinedRevision"],saved["taskRevision"]);
+        let board=service.execute("workbench.get",&json!({})).unwrap();
+        assert!(!board["refiningShortcuts"].as_array().unwrap().iter().any(|s|s["id"]==task_id || s["id"]=="title-capture"));
+        let c=database::open(&f.db).unwrap();
+        assert_eq!(c.query_row("SELECT state FROM refinement_sessions WHERE id=?",[&f.session],|r|r.get::<_,String>(0)).unwrap(),"completed");
+        assert!(c.query_row("SELECT count(*) FROM reference_interactions WHERE kind='adopted'",[],|r|r.get::<_,i64>(0)).unwrap()>0);
+    }
+}
+
+#[tokio::test]
+async fn existing_long_titles_are_preserved_but_new_titles_and_legacy_preview_apply_are_validated() {
+    use crate::application::task_service::TaskApplicationService;
+    let f=Fixture::new().await;
+    let service=TaskApplicationService::new(&f.db);
+    assert!(service.execute("task.create",&json!({"operationId":"too-long-create","inputText":"가".repeat(71),"title":"가".repeat(71)})).unwrap_err().contains("70"));
+    let c=database::open(&f.db).unwrap();
+    let legacy="기존".repeat(60);
+    c.execute("UPDATE task_revisions SET title=? WHERE task_id=?",params![legacy,&f.task]).unwrap();
+    let changed=service.execute("task.revision",&json!({"operationId":"keep-legacy-title","taskId":f.task,"expectedTaskRevision":1,"patch":{"outcome":"Changed outcome"}})).unwrap();
+    assert_eq!(changed["title"],legacy);
+    assert!(service.execute("task.revision",&json!({"operationId":"invalid-new-title","taskId":f.task,"expectedTaskRevision":2,"patch":{"title":"😀".repeat(71)}})).unwrap_err().contains("70"));
+    let (_,_,_,server)=provider(&f,1,false,false);
+    f.message("legacy-preview").await; f.wait_jobs(1).await; server.join().unwrap();
+    let ws=f.op("task-refinement.reference-workspace",json!({})).unwrap();
+    let preview=ws["preview"]["id"].as_str().unwrap();
+    let mut legacy_fields=ws["preview"]["current"]["fields"].clone();
+    legacy_fields.as_object_mut().unwrap().remove("title");
+    legacy_fields["description"]=json!(legacy);
+    let original_hash=hash(&legacy_fields);
+    c.execute("UPDATE work_preview_versions SET fields_json=?,content_hash=? WHERE preview_id=? AND version=1",params![legacy_fields.to_string(),original_hash,preview]).unwrap();
+    let read=f.op("task-refinement.reference-version",json!({"version":1})).unwrap();
+    assert!(read["fields"].get("title").is_none());
+    assert_eq!(read["fields"]["description"],legacy);
+    assert_eq!(read["contentHash"],original_hash);
+    assert!(f.op("task-refinement.reference-apply",json!({"operationId":"reject-long-legacy-preview","version":1,"expectedCurrentPreviewVersion":1,"expectedContentHash":original_hash,"expectedTaskRevision":2})).unwrap_err().contains("70"));
+    assert_eq!(service.execute("task.get",&json!({"taskId":f.task})).unwrap()["title"],legacy);
+    assert_eq!(c.query_row("SELECT content_hash FROM work_preview_versions WHERE preview_id=? AND version=1",[preview],|r|r.get::<_,String>(0)).unwrap(),original_hash);
 }

@@ -26,6 +26,45 @@ const callbacks = (): ReferenceAwarePreviewProps => ({
   })),
 });
 describe("Reference-aware preview", () => {
+  it("sends one Apply while repeated clicks are pending and blocks leaving until it settles", async () => {
+    const props = callbacks();
+    let finish!: () => void;
+    props.onApply = vi.fn().mockImplementation(() => new Promise<void>(resolve => { finish = resolve; }));
+    props.onDirtyChange = vi.fn();
+    render(<ReferenceAwarePreview {...props} />);
+    const apply = screen.getByRole("button", { name: "Apply to Task" });
+    fireEvent.click(apply); fireEvent.click(apply);
+    expect(props.onApply).toHaveBeenCalledTimes(1);
+    expect(apply).toBeDisabled();
+    expect(props.onDirtyChange).toHaveBeenLastCalledWith(true);
+    finish();
+    await waitFor(() => expect(props.onDirtyChange).toHaveBeenLastCalledWith(false));
+  });
+  it("edits an independent title, preserves over-limit input and counts emoji as one", async () => {
+    const props = callbacks();
+    render(<ReferenceAwarePreview {...props} />);
+    fireEvent.click(screen.getByRole("button", { name: "Edit preview" }));
+    const title = screen.getByLabelText("Edit preview: Task title");
+    fireEvent.change(title, { target: { value: "가".repeat(71) } });
+    expect(title).toHaveValue("가".repeat(71));
+    expect(screen.getByRole("button", { name: "Save preview" })).toBeDisabled();
+    expect(screen.getByRole("alert")).toHaveTextContent("71/70");
+    fireEvent.change(title, { target: { value: "😀".repeat(70) } });
+    expect(screen.getByText(/70\/70/)).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Save preview" }));
+    await waitFor(() => expect(props.onSave).toHaveBeenCalledWith(fixtureVersion(2), expect.objectContaining({ title: "😀".repeat(70), description: "Contract preview 2" })));
+  });
+  it("keeps legacy long descriptions and hashes intact and requires a shorter title before applying", () => {
+    const props = callbacks();
+    const current = props.workspace!.preview!.current!;
+    delete current.fields.title;
+    current.fields.description = "가".repeat(180);
+    render(<ReferenceAwarePreview {...props} />);
+    expect(screen.getAllByText("가".repeat(180)).length).toBe(2);
+    expect(screen.getByRole("button", { name: "Apply to Task" })).toBeDisabled();
+    expect(current.contentHash).toBe(fixtureVersion(2).contentHash);
+    expect(current.fields.title).toBeUndefined();
+  });
   it("labels partial results and unverified retrieval without claiming reference success", () => {
     const props = callbacks();
     props.workspace = { ...props.workspace, generationStatus: "partial", generationDiagnostics: ["retrieval.needed missing"], retrievalOutcome: "unverified" };

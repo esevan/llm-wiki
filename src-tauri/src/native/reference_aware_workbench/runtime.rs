@@ -36,7 +36,7 @@ pub(crate) fn normalize_response(id: PromptId, value: &mut Value, context: &Valu
         let task=&session["taskSnapshot"];
         fill(value,"claimSources",json!([]));
         if let Some(p)=value.get_mut("preview").filter(|p|p.is_object()) {
-            for (k,default) in [("description",task["detail"].as_str().or(task["title"].as_str()).or(session["originalCapture"]["text"].as_str()).unwrap_or("").to_string()),("goal",task["outcome"].as_str().unwrap_or("").to_string()),("background",String::new()),("scope",task["scope"].as_str().unwrap_or("").to_string()),("nonGoals",task["nonGoals"].as_str().unwrap_or("").to_string())] {
+            for (k,default) in [("title",task["title"].as_str().or(p["description"].as_str()).unwrap_or("").to_string()),("description",task["detail"].as_str().or(task["title"].as_str()).or(session["originalCapture"]["text"].as_str()).unwrap_or("").to_string()),("goal",task["outcome"].as_str().unwrap_or("").to_string()),("background",String::new()),("scope",task["scope"].as_str().unwrap_or("").to_string()),("nonGoals",task["nonGoals"].as_str().unwrap_or("").to_string())] {
                 if fill(p,k,json!(default)) {omitted.push(k.into());}
             }
             for k in ["constraints","completionCriteria","initialApproach","assumptions"] {if fill(p,k,json!([])) {omitted.push(k.into());}}
@@ -105,6 +105,7 @@ pub(crate) fn validate_output(v: &Value) -> Result<(), String> {
     keys(
         p,
         &[
+            "title",
             "description",
             "background",
             "goal",
@@ -117,6 +118,12 @@ pub(crate) fn validate_output(v: &Value) -> Result<(), String> {
         ],
     )?;
     required_fields(p)?;
+    if let Some(title) = p.get("title") {
+        let title = title.as_str().ok_or("invalid_preview: title must be a string")?;
+        if !v["omittedPreviewFields"].as_array().is_some_and(|keys| keys.iter().any(|k| k == "title")) {
+            crate::domain::task::validate_title(title)?;
+        }
+    }
     for key in ["description","goal"] {
         if p[key].as_str().is_some_and(|s|s.trim().is_empty()) && !v["omittedPreviewFields"].as_array().is_some_and(|a|a.iter().any(|k|k==key)) {
             return Err(format!("invalid_preview: empty {key}"));
@@ -369,7 +376,7 @@ pub(crate) async fn prepare(
 pub(super) fn preserve_omitted_task_fields(patch: &mut Value, omitted: &Value) {
     let absent=|k:&str|omitted.as_array().is_some_and(|a|a.iter().any(|v|v.as_str()==Some(k)));
     let Some(patch)=patch.as_object_mut() else{return};
-    for (source,target) in [("description","title"),("goal","outcome"),("scope","scope"),("nonGoals","nonGoals"),("completionCriteria","validationCriteria")] {
+    for (source,target) in [("title","title"),("goal","outcome"),("scope","scope"),("nonGoals","nonGoals"),("completionCriteria","validationCriteria")] {
         if absent(source) {patch.remove(target);}
     }
     // Detail combines these fields; absence cannot safely erase the prior prose.
@@ -384,7 +391,7 @@ pub(super) fn task_fields(f: &Value) -> Value {
             .collect::<Vec<_>>()
             .join("\n")
     };
-    json!({"title":f["description"].as_str().unwrap_or("").chars().take(180).collect::<String>(),"detail":format!("{}\n\n{}\n\n{}\n\n{}",f["description"].as_str().unwrap_or(""),f["background"].as_str().unwrap_or(""),lines("constraints"),lines("initialApproach")),"outcome":f["goal"],"scope":f["scope"],"nonGoals":f["nonGoals"],"validationCriteria":lines("completionCriteria")})
+    json!({"title":f["title"].as_str().or(f["description"].as_str()).unwrap_or(""),"detail":format!("{}\n\n{}\n\n{}\n\n{}",f["description"].as_str().unwrap_or(""),f["background"].as_str().unwrap_or(""),lines("constraints"),lines("initialApproach")),"outcome":f["goal"],"scope":f["scope"],"nonGoals":f["nonGoals"],"validationCriteria":lines("completionCriteria")})
 }
 pub(crate) fn save_generated_tx(
     tx: &Transaction<'_>,
@@ -815,6 +822,10 @@ pub(crate) fn execute(
                     return Err("reference_version_unavailable".into());
                 }
             }
+            // Legacy versions keep their exact stored bytes/hash. Require an explicit
+            // title edit when the full legacy description is too long; never truncate.
+            let title = stored["fields"]["title"].as_str().or(stored["fields"]["description"].as_str()).unwrap_or("");
+            crate::domain::task::validate_title(title)?;
             let mut patch = task_fields(&stored["fields"]);
             if task.is_some() {preserve_omitted_task_fields(&mut patch,&stored["omittedPreviewFields"]);}
             let payload = if task.is_some() {
@@ -834,6 +845,7 @@ pub(crate) fn execute(
                 task.as_deref(),
                 &chrono::Utc::now().to_rfc3339(),
             )?;
+            tx.execute("UPDATE refinement_sessions SET state='completed',updated_at=CURRENT_TIMESTAMP WHERE id=?", [session]).map_err(|e|e.to_string())?;
             // Capture sessions retain their source identity; the existing decision record
             // resolves their promoted Task on subsequent refinement turns.
             tx.execute("INSERT INTO refinement_proposal_decisions(id,session_id,draft_revision,proposal_id,decision,result_json,operation_id) VALUES(?,?,?,'work-preview','apply',?,?)",params![id(),session,context,result.to_string(),string(input,"operationId")?]).map_err(|e|e.to_string())?;
@@ -951,6 +963,17 @@ mod exact_error_tests {
     use super::*;
     fn preview() -> Value {
         json!({"preview":{"description":"Review","background":"","goal":"Review offline","scope":"","nonGoals":"","constraints":[],"completionCriteria":[],"initialApproach":[],"assumptions":[]},"claimSources":[],"optionalInvestigation":{"needed":false,"reason":"None","queries":[],"aspects":[],"filters":{},"requery":null}})
+    }
+    #[test]
+    fn a_title_only_response_changes_the_headline_without_overwriting_the_description() {
+        let mut value=json!({"preview":{"title":"새 제목 😀"}});
+        normalize_response(PromptId::WorkPreviewFinalizer,&mut value,&json!({"context":{"session":{"taskSnapshot":{"title":"Old title","detail":"Keep full detail","outcome":"Keep goal"}}}}));
+        validate_output(&value).unwrap();
+        let mut patch=task_fields(&value["preview"]);
+        preserve_omitted_task_fields(&mut patch,&value["omittedPreviewFields"]);
+        assert_eq!(patch["title"],"새 제목 😀");
+        assert!(patch.get("detail").is_none());
+        assert!(patch.get("outcome").is_none());
     }
     #[test]
     fn exact_text_error_obeys_character_contract_and_identifies_type() {

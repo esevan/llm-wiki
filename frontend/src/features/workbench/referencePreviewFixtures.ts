@@ -10,6 +10,7 @@ export const fixtureVersion = (version = 1): WorkPreviewVersion => ({
   contextRevision: 1,
   derivationKind: "generated",
   fields: {
+    title: `Preview title ${version}`,
     description: `Contract preview ${version}`,
     background: "Local approval conditions",
     goal: `Goal ${version}`,

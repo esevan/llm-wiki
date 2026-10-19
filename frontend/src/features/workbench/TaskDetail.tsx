@@ -1,3 +1,4 @@
+import { taskTitleLength, validTaskTitle } from "../../services/taskTitle";
 import { localizedTask } from "./taskContent";
 import { useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, type ReactNode, type Ref } from "react";
 import { createPortal } from "react-dom";
@@ -432,6 +433,7 @@ export function TaskDetail({
   };
   const saveDraft = async () => {
     if (!detailState || !detailState.dirty.size || detailState.conflicts.length || mutationBusyRef.current) return false;
+    if (detailState.dirty.has("title") && !validTaskTitle(detailState.draft.title)) { setError(text.titleLengthError); return false; }
     mutationBusyRef.current = true;
     setMutationBusy(true);
     setError("");
@@ -648,6 +650,7 @@ export function TaskDetail({
           kind="task"
           subjectId={task.id}
           onClose={() => setRefining(false)}
+          onApplied={() => { setRefining(false); onChanged(); void load(); }}
         />
       )}
       <div id="task-tab-details" aria-labelledby="task-detail-tab-details" className="task-tab-panel" role="tabpanel" data-task-tab="details" hidden={tab !== "details"}>
@@ -658,7 +661,7 @@ export function TaskDetail({
           {editing && <button type="button" data-control="task-definition-cancel" onClick={() => { setDetailState((current) => current && baseline(current.persisted)); setEditing(false); }}>{text.cancel}</button>}
         </div>
         {editing ? definitions.map(({ field, label, control, value }) => (
-          <label key={field}>{label}<textarea data-control={control} value={value} onChange={(event) => editDefinition(field, event.target.value)} /></label>
+          <label key={field}>{label}<textarea data-control={control} value={value} aria-label={label} aria-invalid={field === "title" && detailState.dirty.has("title") && !validTaskTitle(value)} onChange={(event) => editDefinition(field, event.target.value)} />{field === "title" && <small>{text.titleLengthError} ({taskTitleLength(value)}/70)</small>}</label>
         )) : (
           <dl className="task-definition-read">
             {definitions.filter(({ field, value }) => field !== "title" && value.trim()).map(({ field, label, value }) => <div key={field}><dt>{label}</dt><dd>{value}</dd></div>)}
@@ -668,7 +671,7 @@ export function TaskDetail({
           type="button"
           data-control="task-revision-save"
           hidden={!editing}
-          disabled={!editing || !detailState.dirty.size || detailState.conflicts.length > 0 || mutationBusy}
+          disabled={!editing || !detailState.dirty.size || detailState.conflicts.length > 0 || mutationBusy || (detailState.dirty.has("title") && !validTaskTitle(detailState.draft.title))}
           onClick={() => void saveDraft().then((saved) => saved && setEditing(false))}
         >
           {text.saveChanges}

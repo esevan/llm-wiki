@@ -1,8 +1,35 @@
+import { fixtureWorkspace } from "./referencePreviewFixtures";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { RefinementPanel } from "./RefinementPanel";
 
 describe("Refinement panel", () => {
+  it("retains the title editor and prevents navigation while its preview save is pending", async () => {
+    let finish!: () => void;
+    const pending = new Promise<void>(resolve => { finish = resolve; });
+    const result = (body: unknown) => ({ ok:true, status:200, json:async()=>body, text:async()=>"", body:null });
+    window.llmWikiApplication = { request: vi.fn().mockImplementation(async ({path}:{path:string}) => {
+      if (path.endsWith("/edits")) { await pending; return result({}); }
+      if (path.endsWith("/reference-workspace")) return result(fixtureWorkspace(2));
+      if (path.endsWith("/proposals")) return result([]);
+      if (path.endsWith("/mention-draft")) return result({ mentions:[] });
+      return result({ id:"saving-title-session", draftRevision:1, messages:[] });
+    }) };
+    const closed=vi.fn();
+    render(<RefinementPanel kind="capture" subjectId="saving-title" onClose={closed} />);
+    fireEvent.click(await screen.findByRole("button", { name:"Edit preview" }));
+    const title=screen.getByLabelText("Edit preview: Task title");
+    fireEvent.change(title,{target:{value:"Keep this title"}});
+    fireEvent.click(screen.getByRole("button",{name:"Save preview"}));
+    fireEvent.click(document.querySelector('[data-control="refinement-close"]')!);
+    expect(closed).not.toHaveBeenCalled();
+    expect(title).toHaveValue("Keep this title");
+    expect(screen.getByRole("button",{name:"Save preview"})).toBeDisabled();
+    finish();
+    await screen.findByRole("button",{name:"Edit preview"});
+    fireEvent.click(document.querySelector('[data-control="refinement-close"]')!);
+    await waitFor(()=>expect(closed).toHaveBeenCalledTimes(1));
+  });
   it("keeps chat input usable while showing source-bound failure and retry", async () => {
     let retried = false;
     const summary = { captureId:"failed",sourceRevision:"r1",sourceNumber:1,currentRevision:1,contextRevision:0,eligible:true,

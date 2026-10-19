@@ -969,20 +969,20 @@ export function RefinementPanel({
       version.contentHash,
       version.taskRevision,
     );
-    onApplied?.({
-      taskId: application.task.id,
-      revision: application.task.taskRevision,
-      cause: "preview_adopted",
-    });
-    const next = await taskClient.refinementStatus(kind, subjectId);
-    setSession(next);
-    latest.current.session = next;
-    if (next.taskId) {
-      const task = await taskClient.task(next.taskId);
+    // The write is acknowledged. Do not turn a later refresh failure into an
+    // apparent Apply failure or rely on Capture sessions exposing taskId.
+    if (onApplied) {
+      onApplied({ taskId: application.task.id, revision: application.task.taskRevision, cause: "preview_adopted" });
+      return;
+    }
+    try {
+      const task = await taskClient.task(application.task.id);
       setAppliedTask(task);
       setTaskBaseline(task);
+      await refreshReferences();
+    } catch {
+      setNotice(referenceText.appliedRefreshFailed);
     }
-    await refreshReferences();
   };
   const setPreviewDirty = useCallback(
     (dirty: boolean) => {

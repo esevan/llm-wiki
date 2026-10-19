@@ -464,6 +464,7 @@ fn refinement_open(db_path: &Path, input: &Value) -> Result<Value, String> {
         params![session_id, subject_id, initial_draft],
     )
     .map_err(|error| error.to_string())?;
+    tx.execute("UPDATE refinement_sessions SET state='active' WHERE id=?", [&session_id]).map_err(|e|e.to_string())?;
     let result = session_value(&tx, &session_id)?;
     record_operation(&tx, input, &result)?;
     tx.commit().map_err(|error| error.to_string())?;
@@ -1428,6 +1429,7 @@ fn revise_task_tx(
             .trim()
             .to_owned()
     };
+    let prior_title = previous.0.clone();
     let fields = [
         field("title", previous.0),
         field("detail", previous.1),
@@ -1439,6 +1441,7 @@ fn revise_task_tx(
     if fields[0].is_empty() {
         return Err("invalid_input: title is required".into());
     }
+    if fields[0] != prior_title { crate::domain::task::validate_title(&fields[0])?; }
     let revision = current + 1;
     tx.execute("INSERT INTO task_revisions(task_id,revision,title,detail,outcome,scope,non_goals,validation_criteria,content_hash,author,source_reference,created_at) VALUES(?,?,?,?,?,?,?,?,?,'ai_proposal','refinement',?)",params![task_id,revision,fields[0],fields[1],fields[2],fields[3],fields[4],fields[5],crate::domain::task::content_hash(&fields.iter().map(String::as_str).collect::<Vec<_>>()),timestamp]).map_err(|error|error.to_string())?;
     tx.execute(

@@ -1,3 +1,15 @@
+/// Titles use Unicode scalar values, matching JSON Schema maxLength and JS Array.from.
+pub const MAX_TITLE_CHARACTERS: usize = 70;
+pub fn validate_title(title: &str) -> Result<(), String> {
+    if title.trim().is_empty() {
+        return Err("invalid_input: title is required".into());
+    }
+    if title.chars().count() > MAX_TITLE_CHARACTERS {
+        return Err("invalid_input: title must be at most 70 Unicode characters".into());
+    }
+    Ok(())
+}
+
 use sha2::{Digest, Sha256};
 
 pub const READINESS_FIELDS: [&str; 4] = ["outcome", "scope", "validationCriteria", "prerequisites"];
@@ -42,5 +54,23 @@ mod tests {
     #[test]
     fn relationship_rejects_self() {
         assert!(validate_relationship("a", "a", "related").is_err());
+    }
+}
+
+#[cfg(test)]
+mod title_tests {
+    use super::*;
+    #[test]
+    fn titles_count_unicode_scalars_not_bytes_or_utf16_units() {
+        for character in ["가", "😀", "a"] {
+            assert!(validate_title(&character.repeat(70)).is_ok());
+            assert!(validate_title(&character.repeat(71)).is_err());
+        }
+        assert!(validate_title("  ").is_err());
+        // Combining marks and ZWJ sequences count as their Unicode scalar values.
+        assert_eq!("e\u{301}".chars().count(), 2);
+        assert_eq!("👨‍👩‍👧‍👦".chars().count(), 7);
+        assert!(validate_title(&"👨‍👩‍👧‍👦".repeat(10)).is_ok());
+        assert!(validate_title(&("👨‍👩‍👧‍👦".repeat(10) + "x")).is_err());
     }
 }

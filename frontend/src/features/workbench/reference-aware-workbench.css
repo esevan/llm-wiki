@@ -365,3 +365,10 @@
     width: 100%;
   }
 }
+
+.reference-aware-fields textarea[aria-describedby="preview-title-limit"] {
+  min-height: 3rem;
+}
+.reference-aware-fields textarea[aria-invalid="true"] {
+  border-color: var(--color-status-error);
+}

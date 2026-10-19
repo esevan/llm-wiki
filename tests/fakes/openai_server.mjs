@@ -26,7 +26,9 @@ function deterministicResult(prompt) {
   if (instructions.includes("exactly retrieval and preliminaryAssumptions")) return { retrieval: noSearch, preliminaryAssumptions: [] };
   if (instructions.includes("Write a useful, complete, reviewable WORK preview now")) {
     const original = context.context?.session?.taskSnapshot ?? context.context?.taskSnapshot ?? context.taskSnapshot ?? context.session?.taskSnapshot ?? {};
-    return { preview: { description: original.detail || "Review the supplied request.", background: "", goal: original.outcome || "Prepare the requested work.", scope: original.scope || "", nonGoals: original.nonGoals || "", constraints: [], completionCriteria: [], initialApproach: [], assumptions: [] }, claimSources: [], optionalInvestigation: noSearch };
+    const session = context.context?.session ?? context.session ?? {};
+    const requestedTitle = (session.messages ?? []).map(message => message.body ?? message.content ?? "").reverse().map(text => text.match(/Set title: (.+)/)?.[1]).find(Boolean);
+    return { preview: { title: Array.from(requestedTitle || original.title || "Review the supplied request").slice(0, 70).join(""), description: original.detail || "Review the supplied request.", background: "", goal: original.outcome || "Prepare the requested work.", scope: original.scope || "", nonGoals: original.nonGoals || "", constraints: [], completionCriteria: [], initialApproach: [], assumptions: [] }, claimSources: [], optionalInvestigation: noSearch };
   }
   if (instructions.includes("Review the supplied current preview and exact references")) return { findings: [] };
   if (instructions.includes("Organize the supplied initial Capture")) {

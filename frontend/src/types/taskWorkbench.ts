@@ -9,6 +9,8 @@ export interface DocumentMention extends ExactReferenceBinding {
   mentionId: string; displayLabel: string; start?: number; end?: number;
 }
 export interface WorkPreviewFields {
+  /** Absent only on legacy stored preview versions. */
+  title?: string;
   description: string; background: string; goal: string; scope: string;
   nonGoals: string; constraints: string[]; completionCriteria: string[];
   initialApproach: string[];
