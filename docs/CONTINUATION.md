@@ -1,5 +1,30 @@
 # LLM Wiki — Continuation handoff
 
+## Refinement modal layer follow-up (2026-10-19)
+
+Local branch `codex/refinement-modal-layer` is based on published main
+`c2e62d3`. Do not merge, push, or replace the installed application without
+new authorization. Preserve the separate CPU worktree and existing edits.
+
+A user photograph identifies the legacy Problem “Explore this problem”
+refinement below the entire Workbench and sidebar. Its dialog is outside
+`.app`, so the old `.app:has(...)` grid cannot contain it; `show()` and sticky
+positioning put it into document flow. It now uses `showModal()` and bounded
+fixed positioning while retaining its context controls and ownership marker.
+Repeated opening does not call `showModal()` again. Modern Task/Capture
+refinements retain body portals. Obsolete inline-column rules, including the
+narrow-screen background hiding rule, are removed; focus uses preventScroll.
+
+The selected `task-refinement-modal-layout` desktop scenario covers actual
+WebKit geometry, scrolled Capture/Task reopen with retained drafts, nested
+Task detail, and legacy native modal placement at 1200 and 900 pixels. It
+uses a temporary home and local fake provider. Initial diagnostics showed natural document-end scroll clamping at
+1200 pixels. At 900 pixels the lock captured a different position before
+closing; removing the test helper's second scroll did not resolve it, leading
+to identification of the narrow-screen background hiding rule. Final verification
+results are recorded in the task handoff. The Mac screen is locked, so numeric
+DOM geometry is not a completed post-fix pixel review. No live data changed.
+
 ## Main integration authorization (2026-10-19)
 
 The user authorized merging and pushing this retrieval/draft-save feature.

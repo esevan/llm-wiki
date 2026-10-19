@@ -653,6 +653,7 @@ describe("Refinement panel", () => {
     window.llmWikiApplication = { request };
     const opener = document.createElement('button');
     opener.textContent = 'Open refinement';
+    const focusOpener=vi.spyOn(opener,'focus');
     document.body.append(opener);
     opener.focus();
     const app = document.createElement("div");
@@ -679,6 +680,7 @@ describe("Refinement panel", () => {
     expect(document.activeElement?.closest('.refinement-panel')).not.toBeNull();
     view.unmount();
     await waitFor(() => expect(document.activeElement).toBe(opener));
+    expect(focusOpener).toHaveBeenLastCalledWith({preventScroll:true});
     expect(app.inert).not.toBe(true);
     app.remove();
     opener.remove();

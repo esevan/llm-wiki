@@ -710,10 +710,10 @@ export function RefinementPanel({
   const restoreFocus = useCallback(() => {
     const opener = openerRef.current;
     if (opener?.isConnected) {
-      opener.focus();
+      opener.focus({ preventScroll: true });
       return;
     }
-    document.querySelector<HTMLElement>("#workbench h1")?.focus();
+    document.querySelector<HTMLElement>("#workbench h1")?.focus({ preventScroll: true });
   }, []);
   const close = useCallback(
     async (proceed: () => void = onClose) => {
@@ -764,7 +764,7 @@ export function RefinementPanel({
     [close],
   );
   useEffect(() => {
-    headingRef.current?.focus();
+    headingRef.current?.focus({ preventScroll: true });
   }, []);
   useEffect(() => {
     const root = document.documentElement;

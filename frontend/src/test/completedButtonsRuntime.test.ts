@@ -69,7 +69,14 @@ describe('production completed-work button bindings', () => {
       if (path.startsWith('/workbench/completed-solutions')) return { solutions: [] };
       return { entries: [], current_detail: { kind: 'problem', title: 'Saved Problem', detail: 'Retained context' } };
     }));
+    const modal = vi.spyOn(chat, 'showModal');
+    const nonModal = vi.spyOn(chat, 'show');
     runtime.openChat('problems', 'problem-dock', { workspaceDock: true });
+    expect(chat.closest('.app')).toBeNull();
+    expect(modal).toHaveBeenCalledOnce();
+    expect(nonModal).not.toHaveBeenCalled();
+    runtime.openChat('problems', 'problem-dock', { workspaceDock: true });
+    expect(modal).toHaveBeenCalledOnce();
     await flush();
     const context = $('#preview-context-tab') as HTMLButtonElement;
     expect($('#explore-preview-detail').hidden).toBe(false);

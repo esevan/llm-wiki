@@ -457,6 +457,89 @@ async function log(step: Step, interactionCoverage: ReturnType<typeof createInte
     "Rendered Work Log, file attachment, comment, checklist, and decision controls persisted their evidence.",
   );
 }
+async function refinementModalLayout(step: Step) {
+  await api("/provider/config", "PUT", {base_url:e2eProviderUrl,model:"deterministic",api_key:"desktop-e2e-key"});
+  for (const kind of ["capture","task"] as const) {
+    const title=`Modal layout ${kind} ${Date.now()}`;
+    await create(title,kind);
+    const board=await api<{categories:Array<{items:Array<{id:string;text?:string;title?:string}>}>}>("/workbench");
+    const item=board.categories.flatMap(g=>g.items).find(v=>v.text===title||v.title===title)!;
+    for (const width of [1200,900]) {
+      const resized=await invoke<{windowWidth:number}>("desktop_e2e_resize_window",{width,height:820});
+      await waitFor(()=>Math.abs(window.innerWidth-resized.windowWidth)<3,"settled modal layout viewport");
+      const card=document.querySelector<HTMLElement>(`article[data-entity-id="${item.id}"]`)!;
+      card.style.marginTop="900px";
+      const app=document.querySelector<HTMLElement>(".app")!;
+      app.style.paddingBottom="900px";
+      const button=card.querySelector<HTMLElement>('[data-control="task-card-refine"], [data-control="task-shortcut-refine"]')!;
+      await prepareClick(button,"Open scrolled refinement");
+      const before=window.scrollY;
+      // prepareClick already hit-tested the button; do not scroll it again
+      // after recording the page position that the modal must restore.
+      button.click();
+      await waitFor(()=>Boolean(document.querySelector('.refinement-panel[data-refinement-session]:not([data-refinement-session=""])')),"loaded modal fixture");
+      const layer=document.querySelector<HTMLElement>(".refinement-modal-layer")!;
+      const panel=document.querySelector<HTMLElement>('.refinement-panel[role="dialog"]')!;
+      const rect=panel.getBoundingClientRect();
+      if (kind==="capture" && getComputedStyle(document.querySelector<HTMLElement>(".workbench-main")!).display==="none") throw new Error("Opening modal collapsed the background Workbench");
+      if (layer.parentElement!==document.body || getComputedStyle(layer).position!=="fixed" || rect.top<0 || rect.bottom>window.innerHeight+1 || rect.left<0 || rect.right>window.innerWidth+1 || !document.querySelector<HTMLElement>(".app")?.inert) throw new Error(`Modern modal geometry failed: ${JSON.stringify({kind,width,before,rect})}`);
+      const composer=panel.querySelector<HTMLTextAreaElement>('[data-control="refinement-message"]')!;
+      const draft=`Retain ${kind} draft`;
+      if (width===1200) enter(composer,draft);
+      else if(composer.value!==draft) throw new Error("Reopening refinement lost the unsent draft");
+      composer.focus({preventScroll:true});
+      if(!panel.contains(document.activeElement)) throw new Error("Refinement focus escaped");
+      const lockedTop=document.body.style.top;
+      await step(`Geometry modern ${kind} ${width}: fixed body portal, bounded rect ${Math.round(rect.width)}x${Math.round(rect.height)}, scrolled source ${Math.round(before)}, retained draft.`);
+      await pause(1200);
+      click('[data-control="refinement-close"]',"Close refinement preserving composer");
+      await waitFor(()=>!document.querySelector(".refinement-panel"),"closed modern modal");
+      // Task refinement intentionally opens its underlying detail first.
+      // Capture retains the board; Task returns to that detail's locked offset.
+      const expectedScroll=kind==="capture"?before:Math.abs(parseFloat(lockedTop)||0);
+      await waitFor(()=>Math.abs(window.scrollY-expectedScroll)<3,"restored scrolled page position").catch(error=>{throw new Error(`${String(error)}; ${JSON.stringify({kind,width,before,after:window.scrollY,lockedTop,active:document.activeElement?.getAttribute("data-control"),height:document.documentElement.scrollHeight})}`);});
+      card.style.marginTop="";
+      app.style.paddingBottom="";
+      if(kind==="task") {
+        click('[data-control="task-detail-close"]',"Return from Task detail to board");
+        await waitFor(()=>!document.querySelector(".task-detail"),"restored Task board");
+      }
+    }
+    if(kind==="task") {
+      await detail(title);
+      await taskDetailIdle("opening nested refinement");
+      click('[data-control="task-detail-refine"]',"Open refinement above Task detail");
+      await waitFor(()=>Boolean(document.querySelector(".refinement-panel")),"nested refinement");
+      const close=document.querySelector<HTMLElement>('[data-control="refinement-close"]')!;
+      const rect=close.getBoundingClientRect();
+      if(document.elementFromPoint(rect.left+rect.width/2,rect.top+rect.height/2)!==close && !close.contains(document.elementFromPoint(rect.left+rect.width/2,rect.top+rect.height/2))) throw new Error("Task detail covered refinement");
+      clickElement(close,"Return to Task detail");
+      await waitFor(()=>!document.querySelector(".refinement-panel")&&Boolean(document.querySelector(".task-detail")),"returned to original Task detail");
+      click('[data-control="task-detail-close"]',"Close original Task detail");
+      await waitFor(()=>!document.querySelector(".task-detail"),"closed original Task detail");
+    }
+    click('[data-view="search"]',"Navigate after closing refinement");
+    click('[data-view="workbench"]',"Return to Workbench");
+  }
+}
+
+async function legacyRefinementModalGeometry(step: Step) {
+  const dialog=document.querySelector<HTMLDialogElement>("#chat-modal")!;
+  for(const width of [1200,900]) {
+    const resized=await invoke<{windowWidth:number}>("desktop_e2e_resize_window",{width,height:820});
+    await waitFor(()=>Math.abs(window.innerWidth-resized.windowWidth)<3,"settled legacy layout viewport");
+    await waitFor(()=>{
+      const rect=dialog.getBoundingClientRect();
+      return dialog.matches(":modal")&&getComputedStyle(dialog).position==="fixed"&&rect.top>=0&&rect.bottom<=window.innerHeight+1&&rect.left>=0&&rect.right<=window.innerWidth+1;
+    },"legacy refinement above the page in native modal top layer");
+    dialog.querySelector<HTMLTextAreaElement>("#chat-message")!.focus({preventScroll:true});
+    if(!dialog.contains(document.activeElement)) throw new Error("Legacy modal focus escaped");
+    const rect=dialog.getBoundingClientRect();
+    await step(`Geometry legacy ${width}: dialog outside .app, native :modal true, bounded rect ${Math.round(rect.width)}x${Math.round(rect.height)}.`);
+    await pause(1200);
+  }
+}
+
 async function refinementTitleApply(step: Step) {
   const originalRequest = window.llmWikiApplication.request;
   const trace: Array<Record<string, unknown>> = [];
@@ -1384,6 +1467,12 @@ export function installDesktopScenario() {
         "task-worklog": step => log(step, coverage),
         "task-refinement": refinement,
         "task-refinement-title-apply": refinementTitleApply,
+        "task-refinement-modal-layout": async step => {
+          await refinementModalLayout(step);
+          await runLegacyProblemRefinementScenario(scenarioHarness);
+          await legacyRefinementModalGeometry(step);
+          await closeLegacyChat("Close legacy refinement modal");
+        },
         "task-relationships": relationships,
         "task-review": review,
         "task-publication": publication,

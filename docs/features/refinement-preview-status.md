@@ -159,3 +159,9 @@ and exclusions, and the [Task-centered Workbench guide](conflict-gated-workflow.
 
 Related Spec Kit: [012 — Task-centered Workbench](../../specs/012-task-centered-workbench/spec.md),
 [005 — Refinement Preview Status](../../specs/005-refinement-preview-status/spec.md).
+
+## Migrated Problem refinement
+
+Migrated Problem-only items retain their existing context and preview controls, but open as native modal dialogs above the current page. Their dialog is mounted outside the Workbench application container, so it does not depend on a Workbench grid column or participate in page flow. Background interaction stays blocked until dismissal; opening the same dialog again does not create another modal instance.
+
+Task and Capture refinement remain body-portal dialogs. Opening or restoring focus does not scroll the document, and refinement does not hide the underlying Task list as an inline workspace column. Closing restores the document scroll position and leaves unsent conversation input available on reopen.
