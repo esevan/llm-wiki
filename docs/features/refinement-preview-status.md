@@ -6,6 +6,9 @@ Refinement helps turn a Capture or Task into reviewable work while preserving it
 A Capture that already contains a solution does not have to discover that solution again. Simple work
 can become a Task directly; refinement and Problem approval are not mandatory gates.
 
+Task details and refinement dialogs expand with the window, keeping outer gutters and scrollable content. Refinement uses separate preview and conversation panes on wide windows; narrow or short windows use a single scroll flow so the composer and actions remain reachable. Problem refinement also grows with the window, and proposal editing offers a wider reading and editing area. Small confirmation dialogs keep their compact size.
+
+
 ## Images in Capture and refinement
 
 Capture and refinement messages accept multiple images per entry, using **Attach image** or pasting

@@ -303,8 +303,8 @@ main:has(.task-workbench.active :is(.task-detail, .refinement-panel)) {
   position: relative;
   z-index: 1;
   top: auto;
-  width: min(1080px, 100%);
-  height: min(860px, calc(100dvh - (2 * var(--space-6))));
+  width: min(1600px, 100%);
+  height: calc(100dvh - (2 * var(--space-6)));
   min-height: 0;
   max-height: calc(100dvh - (2 * var(--space-6)));
   padding: var(--space-6);
@@ -839,9 +839,9 @@ main:has(.task-workbench.active :is(.task-detail, .refinement-panel)) {
   position: fixed;
   inset: 0;
   margin: auto;
-  width: min(1100px, calc(100vw - (2 * var(--space-6))));
+  width: min(1600px, calc(100vw - (2 * var(--space-6))));
   max-width: none;
-  height: min(860px, calc(100dvh - (2 * var(--space-6))));
+  height: calc(100dvh - (2 * var(--space-6)));
   max-height: calc(100dvh - (2 * var(--space-6)));
   border: var(--border-default);
   border-radius: var(--radius-dialog);
@@ -852,7 +852,7 @@ main:has(.task-workbench.active :is(.task-detail, .refinement-panel)) {
 #chat-modal[data-workspace-dock="true"] h2 { font-size: var(--font-size-lg); }
 #chat-modal[data-workspace-dock="true"] #chat-workspace { display: flex; flex-direction: column; overflow: auto; }
 #chat-modal[data-workspace-dock="true"] #chat-column { order: 1; flex: none; }
-#chat-modal[data-workspace-dock="true"] #chat-log { max-height: 220px; overflow: auto; flex: none; }
+#chat-modal[data-workspace-dock="true"] #chat-log { max-height: clamp(220px, 40dvh, 600px); overflow: auto; flex: none; }
 #chat-modal[data-workspace-dock="true"] .explore-refinement-preview { order: 2; flex: none; max-height: none; overflow: visible; border-radius: 0; border: 0; border-top: var(--border-default); background: transparent; padding: var(--space-5) 0 0; }
 #chat-modal[data-workspace-dock="true"] .preview-tabs { display: flex; gap: var(--space-3); border: 0; background: transparent; }
 #chat-modal[data-workspace-dock="true"] .preview-tabs button { flex: none; background: transparent; box-shadow: none; color: var(--color-text-secondary); font-size: var(--font-size-sm); }
@@ -888,8 +888,8 @@ main:has(.task-workbench.active :is(.task-detail, .refinement-panel)) {
   z-index: 1;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
-  width: min(1380px, 100%);
-  height: min(860px, calc(100dvh - (2 * var(--space-6))));
+  width: min(1800px, 100%);
+  height: calc(100dvh - (2 * var(--space-6)));
   min-height: 0;
   max-height: calc(100dvh - (2 * var(--space-6)));
   overflow: hidden;
@@ -1347,4 +1347,25 @@ main:has(.task-workbench.active :is(.task-detail, .refinement-panel)) {
     align-items: flex-start;
     flex-direction: column;
   }
+}
+
+/* Small windows need one reachable scroll flow instead of minimum-height panes. */
+@media (max-height: 600px), (max-width: 640px) {
+  .refinement-panel[role="dialog"] { display: block; overflow: auto; }
+  .refinement-panel[role="dialog"] .refinement-header {
+    position: sticky;
+    top: calc(-1 * var(--space-6));
+    z-index: 3;
+    background: var(--color-bg-surface);
+  }
+  .refinement-panel[role="dialog"] .refinement-workspace { display: block; }
+  .refinement-panel[role="dialog"] .refinement-preview {
+    overflow: visible;
+    border-right: 0;
+    border-bottom: var(--border-default);
+  }
+  .refinement-panel[role="dialog"] .refinement-messages { overflow: visible; flex: none; }
+}
+@media (max-height: 600px) and (max-width: 900px), (max-width: 640px) {
+  .refinement-panel[role="dialog"] .refinement-header { top: calc(-1 * var(--space-4)); }
 }

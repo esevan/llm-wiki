@@ -251,3 +251,12 @@ dialog::backdrop { background: rgb(39 36 42 / 44%); backdrop-filter: blur(4px); 
     clip-path: none !important;
   }
 }
+
+/* Proposal editing is a content workspace; confirmation dialogs retain their size. */
+#draft-modal {
+  width: min(1200px, calc(100vw - 32px));
+  max-width: none;
+  max-height: calc(100dvh - 32px);
+}
+#draft-modal .modal { max-height: calc(100dvh - 32px); }
+#draft-modal textarea { max-height: min(480px, 50dvh); }
