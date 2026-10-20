@@ -303,7 +303,7 @@ main:has(.task-workbench.active :is(.task-detail, .refinement-panel)) {
   position: relative;
   z-index: 1;
   top: auto;
-  width: min(1600px, 100%);
+  width: 100%;
   height: calc(100dvh - (2 * var(--space-6)));
   min-height: 0;
   max-height: calc(100dvh - (2 * var(--space-6)));
@@ -839,7 +839,7 @@ main:has(.task-workbench.active :is(.task-detail, .refinement-panel)) {
   position: fixed;
   inset: 0;
   margin: auto;
-  width: min(1600px, calc(100vw - (2 * var(--space-6))));
+  width: calc(100vw - (2 * var(--space-6)));
   max-width: none;
   height: calc(100dvh - (2 * var(--space-6)));
   max-height: calc(100dvh - (2 * var(--space-6)));
@@ -888,7 +888,7 @@ main:has(.task-workbench.active :is(.task-detail, .refinement-panel)) {
   z-index: 1;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
-  width: min(1800px, 100%);
+  width: 100%;
   height: calc(100dvh - (2 * var(--space-6)));
   min-height: 0;
   max-height: calc(100dvh - (2 * var(--space-6)));
@@ -1369,3 +1369,26 @@ main:has(.task-workbench.active :is(.task-detail, .refinement-panel)) {
 @media (max-height: 600px) and (max-width: 900px), (max-width: 640px) {
   .refinement-panel[role="dialog"] .refinement-header { top: calc(-1 * var(--space-4)); }
 }
+
+/* Give wide windows a workspace surface, and constrain prose inside it. */
+.task-detail-modal-layer .task-detail { container-type: inline-size; }
+.task-detail-header :is(h2, .task-goal) { max-width: 85ch; }
+.task-definition-read {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 36rem), 1fr));
+  column-gap: var(--space-8);
+  row-gap: var(--space-6);
+}
+.task-definition-read > div { min-width: 0; }
+.task-definition-read dd { max-width: 75ch; overflow-wrap: anywhere; }
+.task-definition-panel:has(> label) {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 36rem), 1fr));
+  gap: var(--space-4) var(--space-8);
+}
+.task-definition-panel > :is(h3, .task-definition-actions, button) { grid-column: 1 / -1; }
+.task-panel > p, .task-panel .knowledge-markdown { max-width: 85ch; }
+.refinement-panel[role="dialog"] .message { max-width: min(92%, 85ch); }
+.workbench-lane-cards {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
+}
+.workbench-lane-cards > .region-empty { grid-column: 1 / -1; }

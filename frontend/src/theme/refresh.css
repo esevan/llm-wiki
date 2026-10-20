@@ -254,9 +254,13 @@ dialog::backdrop { background: rgb(39 36 42 / 44%); backdrop-filter: blur(4px); 
 
 /* Proposal editing is a content workspace; confirmation dialogs retain their size. */
 #draft-modal {
-  width: min(1200px, calc(100vw - 32px));
+  width: calc(100vw - 32px);
   max-width: none;
   max-height: calc(100dvh - 32px);
 }
 #draft-modal .modal { max-height: calc(100dvh - 32px); }
 #draft-modal textarea { max-height: min(480px, 50dvh); }
+
+/* Only Workbench needs the full board width; other reading views keep their measure. */
+main:has(> .task-workbench.active) { max-width: none; min-width: 0; }
+#draft-modal .draft-section { max-width: 85ch; margin-left: auto; margin-right: auto; }

@@ -37,3 +37,18 @@ npm run test:desktop -- --scenario task-refinement --artifact-dir .tmp/refinemen
 시나리오 등록은 [러너 레지스트리](../../scripts/desktop_e2e_helpers.mjs)와 [앱 시나리오 디스패처](../../frontend/src/test/desktopScenario.ts) 양쪽에 반영합니다. 커버리지 확장 기준은 [상호작용 검증 문서](interactive-coverage.md)를 참고하세요. 역사 수치를 릴리스 보고서에 복사하지 말고, 최종 registry와 생성한 coverage artifact를 사용하세요.
 
 이 검증은 가짜 제공자를 사용하므로 실제 AI 응답의 품질·속도를 보장하지 않습니다. 이번 패키징 실행 증거는 macOS에서 확보했으며 Windows/Linux 실기기 검증은 별도입니다.
+
+## 렌더링된 작업 공간 레이아웃 검사
+
+`npm run test:layout`은 메모리 내 테스트 데이터와 격리된 브라우저로 실제
+Workbench, Task 상세, 정제 및 확인 컴포넌트를 렌더링합니다. 1440, 2560,
+3440, 5120, 640, 390 CSS 픽셀 폭과 같은 창의 실시간 확대를 검사합니다.
+콘텐츠 경계, 정의 필드의 읽기 폭, 가로 넘침, 닫기·편집·입력창 접근성을
+검사하며 네이티브 데이터베이스를 사용하지 않습니다.
+
+기존 Playwright 설치를 `LLM_WIKI_PLAYWRIGHT_MODULE`의 패키지 이름 또는
+절대 모듈 경로로 지정하고, 필요하면 기존 Chromium 실행 파일을
+`LLM_WIKI_BROWSER_EXECUTABLE`로 지정합니다. 지정하지 않으면
+`playwright-core`와 설정된 Chromium을 사용합니다. 브라우저를 설치하지 않습니다.
+`LLM_WIKI_LAYOUT_ARTIFACT_DIR`로 테스트 화면 캡처를 저장할 수 있습니다.
+이 검사는 네이티브 WebKit 시각 검토를 보완하며 대체하지 않습니다.

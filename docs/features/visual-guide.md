@@ -11,6 +11,9 @@ The primary navigation opens **Workbench**, **Search vault**, **Compass**, and *
 Workbench is where an idea becomes tracked work; the other views find evidence, record direction,
 and configure AI connections and model routing.
 
+Workbench uses the available main-window width, including ultrawide displays. The three workflow lanes expand together and arrange cards into additional columns when space permits. Task detail and refinement dialogs fill the window with outer gutters rather than stopping at a fixed desktop width. Task definition fields form responsive columns with readable text measures; narrow windows retain a single column and scrolling.
+
+
 ## 1. Capture an idea or register a Task
 
 Workbench starts with a compact entry that saves the same input as a **Capture** or registers it

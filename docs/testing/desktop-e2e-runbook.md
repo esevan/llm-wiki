@@ -37,3 +37,19 @@ npm run test:desktop -- --scenario task-refinement --artifact-dir .tmp/refinemen
 Register new scenarios in both the [runner registry](../../scripts/desktop_e2e_helpers.mjs) and the [application scenario dispatcher](../../frontend/src/test/desktopScenario.ts). Follow the [interaction coverage guide](interactive-coverage.md) when expanding assertions. Do not copy historical totals into a release report; use the final generated registry and coverage artifacts.
 
 The fake provider does not validate real AI response quality or latency. Packaged execution evidence for this task was collected on macOS; Windows/Linux device verification remains separate.
+
+## Rendered workspace layout checks
+
+`npm run test:layout` runs the real Workbench, Task detail, refinement, and
+confirmation components in an isolated browser with in-memory fixture data.
+It checks 1440, 2560, 3440, 5120, 640, and 390 CSS-pixel window widths,
+including content bounds, readable definition fields, horizontal overflow,
+and reachable close/edit/composer controls. It does not use a native database.
+
+Provide an existing Playwright installation through
+`LLM_WIKI_PLAYWRIGHT_MODULE` (an importable package or absolute module path),
+and optionally an existing Chromium executable through
+`LLM_WIKI_BROWSER_EXECUTABLE`. Otherwise the runner uses `playwright-core`
+and its configured Chromium. No browser installation is performed.
+`LLM_WIKI_LAYOUT_ARTIFACT_DIR` optionally saves synthetic fixture screenshots.
+These checks complement, but do not replace, native WebKit visual review.
