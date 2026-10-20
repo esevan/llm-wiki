@@ -72,6 +72,7 @@ A user compares or restores an earlier work preview without losing actual activi
 
 - **FR-001**: The system MUST structure work, not a Knowledge article: description, background, goal, scope/non-goals, constraints, completion criteria, initial approach, uncertainty.
 - **FR-002**: The system MUST consume prompt-provided retrieval intent; necessary retrieval precedes the first complete preview, while follow-up speculative investigation runs beside conversation.
+- **FR-002a**: Routine retrieval decisions, empty search outcomes and technical diagnostics MUST be available through a collapsed detail view rather than prominent draft banners. Material uncertainty, failed required search and critical missing information MUST remain visible. Title-length errors MUST appear inline only for invalid current input; valid titles MUST NOT carry imperative validation guidance.
 - **FR-003**: The system MUST apply evidence-backed draft preparation automatically within the agreed scope, label assumptions/provenance, and never infer user adoption from silence.
 - **FR-004**: The system MUST NOT overwrite explicit user conditions or intervening edits; conflicting changes remain proposals.
 - **FR-005**: The system MUST surface important contradictions or failed historical approaches promptly, supporting evidence in a subsequent answer, ancillary results in the reference area.

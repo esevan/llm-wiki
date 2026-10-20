@@ -1,5 +1,5 @@
 import { taskTitleLength, validTaskTitle } from "../../services/taskTitle";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { DraftVersionControls } from "../../components/DraftVersionControls";
 import {
   ReferenceViewer,
@@ -62,6 +62,7 @@ export interface ReferenceAwarePreviewProps {
 }
 export function ReferenceAwarePreview(props: ReferenceAwarePreviewProps) {
   const text = useReferenceWorkbenchText();
+  const titleErrorId = useId();
   const { workspace, onDirtyChange, onSelect } = props;
   const current = workspace?.preview?.current;
   const [selected, setSelected] = useState<number>();
@@ -176,33 +177,19 @@ export function ReferenceAwarePreview(props: ReferenceAwarePreviewProps) {
       {workspace?.generation?.status === "failed" && (
         <p role="alert">{text.failed}</p>
       )}
-      {workspace?.generationStatus === "partial" && <section className="reference-status" data-control="reference-preview-partial"><p>{text.partial}</p>{Boolean(workspace.generationDiagnostics?.length) && <ul>{workspace.generationDiagnostics!.map((diagnostic, index) => <li key={index}>{diagnostic}</li>)}</ul>}</section>}
-      {workspace?.retrievalOutcome && (
-        <p className="reference-status">
-          {workspace.retrievalOutcome === "unverified"
-            ? text.unverifiedRetrieval
-            : workspace.retrievalOutcome === "not_needed"
-            ? text.notNeeded
-            : workspace.retrievalOutcome === "no_suitable_result"
-              ? text.noResults
-              : text.results}
+      {workspace?.generationStatus === "partial" && <p className="reference-status" data-control="reference-preview-partial">{text.partial}</p>}
+      {workspace?.retrievalOutcome === "unverified" && <p className="reference-status" role="alert">{text.unverifiedRetrieval}</p>}
+      {investigation && !["no_suitable_result", "not_needed"].includes(investigation.state) && (
+        <p role={investigation.state === "failed" ? "alert" : "status"} className="reference-status">
+          {busy(investigation.state) ? text.optionalRunning : investigation.state === "failed" ? text.optionalFailed : investigation.state === "changed_context" ? text.changed : text.optionalDone}
         </p>
       )}
-      {investigation && (
-        <p role="status" className="reference-status">
-          {busy(investigation.state)
-            ? text.optionalRunning
-            : investigation.state === "failed"
-              ? text.optionalFailed
-              : investigation.state === "changed_context"
-                ? text.changed
-                : investigation.state === "no_suitable_result"
-                  ? text.noResults
-                  : investigation.state === "not_needed"
-                    ? text.notNeeded
-                    : text.optionalDone}
-        </p>
-      )}
+      {(workspace?.retrievalOutcome || investigation || Boolean(workspace?.generationDiagnostics?.length)) && <details className="reference-status" data-control="reference-preview-search-details">
+        <summary>{text.searchDetails}</summary>
+        {workspace?.retrievalOutcome && <p>{workspace.retrievalOutcome === "unverified" ? text.unverifiedRetrieval : workspace.retrievalOutcome === "not_needed" ? text.notNeeded : workspace.retrievalOutcome === "no_suitable_result" ? text.noResults : text.results}</p>}
+        {investigation && ["no_suitable_result", "not_needed"].includes(investigation.state) && <p>{investigation.state === "not_needed" ? text.notNeeded : text.noResults}</p>}
+        {Boolean(workspace?.generationDiagnostics?.length) && <ul>{workspace!.generationDiagnostics!.map((diagnostic, index) => <li key={index}>{diagnostic}</li>)}</ul>}
+      </details>}
       {(error || notice) && (
         <p role={error ? "alert" : "status"}>{error || notice}</p>
       )}
@@ -229,18 +216,19 @@ export function ReferenceAwarePreview(props: ReferenceAwarePreviewProps) {
                 </div>
               ))}
           {shownFields.title === undefined && <p role="status">{text.legacyTitle}</p>}
-          <p id="preview-title-limit" role={titleInvalid ? "alert" : undefined}>{text.titleLimit} ({taskTitleLength(shownTitle)}/70)</p>
           <dl className="reference-aware-fields">
             {fields.map((key) => (
               <div key={key}>
                 <dt>{key === "title" ? text.taskTitle : text[key]}</dt>
                 <dd>
+                  {key === "title" && titleInvalid && !isHistorical && <p id={titleErrorId} role="alert">{text.titleLimit} ({taskTitleLength(shownTitle)}/70)</p>}
+                  {key === "title" && edit && !titleInvalid && <small>{taskTitleLength(shownTitle)}/70</small>}
                   {edit ? (
                     <textarea
                       data-control="reference-preview-field"
                       aria-label={`${text.edit}: ${key === "title" ? text.taskTitle : text[key]}`}
                       aria-invalid={key === "title" && titleInvalid}
-                      aria-describedby={key === "title" ? "preview-title-limit" : undefined}
+                      aria-describedby={key === "title" && titleInvalid ? titleErrorId : undefined}
                       value={
                         Array.isArray(shownFields[key])
                           ? shownFields[key].join("\n")

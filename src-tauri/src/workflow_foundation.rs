@@ -619,8 +619,10 @@ mod tests {
     #[test]
     fn distillation_provider_prompt_contains_the_complete_grounding_contract() {
         let prompt=build_prompt(PromptId::RunReportDistillation,&json!({"context":{"distillationInput":{"sources":[]},"existingSemanticGraph":{"nodes":[{"id":"node","revision":4}]}}})).unwrap();
-        assert_eq!(prompt.version, 3);
+        assert_eq!(prompt.version, 4);
         for required in [
+            "normally 2–3 concise statements",
+            "never imply that an email draft was sent",
             "expectedTargetRevisions",
             "contradictedBy",
             "completionSnapshots",

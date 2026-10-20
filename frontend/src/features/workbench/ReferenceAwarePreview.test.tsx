@@ -70,10 +70,33 @@ describe("Reference-aware preview", () => {
     props.workspace = { ...props.workspace, generationStatus: "partial", generationDiagnostics: ["retrieval.needed missing"], retrievalOutcome: "unverified" };
     render(<ReferenceAwarePreview {...props} />);
     expect(screen.getByText("Partial preview — review missing fields before applying.")).toBeVisible();
-    expect(screen.getByText("Reference search is unverified.")).toBeVisible();
+    expect(screen.getAllByText("Reference search is unverified.")[0]).toBeVisible();
+    expect(screen.getByText("retrieval.needed missing")).not.toBeVisible();
+    fireEvent.click(screen.getByText("Reference search details"));
     expect(screen.getByText("retrieval.needed missing")).toBeVisible();
     expect(props.onGenerate).not.toHaveBeenCalled();
   });
+  it("keeps routine retrieval decisions out of the draft and never warns for a valid title", () => {
+    const props = callbacks();
+    props.workspace = {...props.workspace, retrievalOutcome:"no_suitable_result", investigations:[{id:"search", contextRevision:1, state:"not_needed"}]};
+    render(<ReferenceAwarePreview {...props} />);
+    expect(screen.getByText("No suitable local evidence found")).not.toBeVisible();
+    expect(screen.getByText("No search needed")).not.toBeVisible();
+    expect(screen.queryByText(/Title must contain/)).not.toBeInTheDocument();
+    expect(screen.getByText("Contract preview 2")).toBeVisible();
+    fireEvent.click(screen.getByText("Reference search details"));
+    expect(screen.getByText("No suitable local evidence found")).toBeVisible();
+    expect(screen.getByText("No search needed")).toBeVisible();
+  });
+
+  it("keeps genuine optional search failure and missing-information findings visible", () => {
+    const props = callbacks();
+    props.workspace = {...props.workspace, investigations:[{id:"search", contextRevision:1, state:"failed"}], findings:[{id:"missing", priority:"critical", summary:"Confirm the billing table before applying", references:[]}]};
+    render(<ReferenceAwarePreview {...props} />);
+    expect(screen.getByText("Confirm the billing table before applying")).toBeVisible();
+    expect(screen.getAllByRole("alert").length).toBeGreaterThan(1);
+  });
+
   it("keeps zero-result filtering mounted and opens the exact version", async () => {
     const props = callbacks();
     render(<ReferenceAwarePreview {...props} />);

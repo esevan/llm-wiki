@@ -63,7 +63,7 @@ See [Reference-aware work previews](reference-aware-workbench.md) and
 Opening a Task shows four tabs in this order:
 
 - **Work** holds the checklist, recorded Work Log evidence, comments, attachments, and explicit
-  decisions. A completed Codex Run can add a readable **Distilled Run result** while preserving the
+  decisions. A completed Codex Run can add a readable **Execution summary** while preserving the
   original evidence. Suggestions, decisions, attempts, observations, performed work, and verification
   remain distinct.
 - **Sessions** contains saved work conversations. A note is local; **Run with Codex** separately

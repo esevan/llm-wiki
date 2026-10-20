@@ -302,7 +302,7 @@ describe("Task detail", () => {
     expect(screen.getByRole("heading", { name: "Artifacts" })).toBeVisible();
     expect(screen.getByText("reports/result.txt")).toBeVisible();
     expect(screen.getByRole("heading", { name: "Unresolved limitations" })).toBeVisible();
-    expect(screen.getByText("Final provider state was not recovered")).toBeVisible();
+    expect(screen.getAllByText("Final provider state was not recovered")).toHaveLength(2);
   });
 
   it("labels the Work Log execution status and report attribution in Korean", async () => {

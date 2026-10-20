@@ -53,8 +53,44 @@ describe("WorkLogDistillation", () => {
 
   it("renders the factual unavailable state without invented claims", () => {
     render(<WorkLogDistillation projection={{ projectionRevision: 0, freshness: "unavailable", result: { claims: [], workLogView: { sections: [] }, warnings: ["No final report is available"] } }} onOpenOriginal={() => undefined} />);
-    expect(screen.getByText("No supported result is available yet.")).toBeInTheDocument();
+    expect(screen.getByText("No execution summary is available. Inspect the original record.")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Inspect original Run" })).not.toBeInTheDocument();
+  });
+
+  it.each(["en", "ko"])("handles empty legacy projections and preserves original access in %s", locale => {
+    document.documentElement.lang = locale;
+    const open = vi.fn();
+    const retry = vi.fn();
+    render(<WorkLogDistillation projection={{...projection(), result: {claims: [], workLogView: {sections: [{kind: "outcome", claimIds: ["missing"]}]}, warnings: []}}} execution={{runId:"draft-run", sessionId:"session", status:"succeeded", provider:"codex", model:"model", reportExcerpt:"Draft: production transition is complete", evidence:[], artifacts:[], limitations:[], syncState:"synced"}} onOpenOriginal={open} onRetry={retry} />);
+    expect(screen.getByRole("heading", {name: locale === "ko" ? "실행 요약" : "Execution summary"})).toBeVisible();
+    expect(screen.getByText(locale === "ko" ? "저장된 실행 요약이 아직 없습니다. 원본 기록을 확인하거나 요약을 다시 생성하세요." : "No execution summary has been saved yet. Inspect the original record or retry the summary.")).toBeVisible();
+    expect(screen.queryByText(/Draft:/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", {name: locale === "ko" ? "원본 Run 확인" : "Inspect original Run"}));
+    fireEvent.click(screen.getByRole("button", {name: locale === "ko" ? "업데이트 재시도" : "Retry update"}));
+    expect(open).toHaveBeenCalledOnce();
+    expect(retry).toHaveBeenCalledOnce();
+    document.documentElement.lang = "en";
+  });
+
+  it("distinguishes missing report, generation failure, pending summary and failed execution", () => {
+    const execution = {runId:"run", sessionId:"session", status:"failed" as const, provider:"codex" as const, model:"model", evidence:[], artifacts:[], limitations:["Delivery was not confirmed"], syncState:"synced" as const};
+    const {rerender} = render(<WorkLogDistillation execution={execution} onOpenOriginal={() => undefined} />);
+    expect(screen.getByText("This Run failed.")).toBeVisible();
+    expect(screen.getByText("No final report was saved. Inspect the retained execution evidence.")).toBeVisible();
+    expect(screen.getByText("Delivery was not confirmed")).toBeVisible();
+    const empty = {...projection(), result: {claims: [], workLogView: {sections: []}, warnings: []}};
+    rerender(<WorkLogDistillation projection={{...empty, freshness:"retryable_failure"}} execution={{...execution, reportExcerpt:"An email draft"}} onOpenOriginal={() => undefined} />);
+    expect(screen.getByText("Could not generate an execution summary. Inspect the original record.")).toBeVisible();
+    rerender(<WorkLogDistillation projection={{...empty, freshness:"pending"}} execution={execution} onOpenOriginal={() => undefined} />);
+    expect(screen.getByText("Generating the execution summary. The original record is available.")).toBeVisible();
+  });
+
+  it("labels report-only statements as reported rather than verified or performed", () => {
+    const result = projection();
+    result.result.claims[0] = {...result.result.claims[0], statement:"The model prepared an email draft", actor:"ai", epistemicState:"performed", sources:[{type:"run_final_report",id:"run",revision:"1",locator:"final_report",quote:"Email draft"}]};
+    render(<WorkLogDistillation projection={result} onOpenOriginal={() => undefined} />);
+    expect(screen.getByText("Reported · AI")).toBeVisible();
+    expect(screen.queryByText("Verified · AI")).not.toBeInTheDocument();
   });
 
   it("keeps collapsed Work Log projection within the 100 ms p95 budget", () => {

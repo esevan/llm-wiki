@@ -873,6 +873,36 @@ pub fn validate_result(
             return Err("known contradictory or failed evidence was omitted".into());
         }
     }
+    if input.projection_kind == "work_log" {
+        let visible_ids = result
+            .work_log_view
+            .sections
+            .iter()
+            .flat_map(|section| &section.claim_ids)
+            .collect::<BTreeSet<_>>();
+        if visible_ids.iter().any(|id| !claims.contains_key(id.as_str())) {
+            return Err("execution summary references an unknown claim".into());
+        }
+        let is_visible = |source: &ExactSource| {
+            visible_ids.iter().any(|id| {
+                claims.get(id.as_str()).is_some_and(|claim| {
+                    claim.sources.iter().chain(&claim.contradicted_by).any(|citation| {
+                        citation_source(&manifest, citation).is_some_and(|bound| bound == source)
+                    })
+                })
+            })
+        };
+        if input.primary_source.as_ref().is_some_and(|primary| !is_visible(primary)) {
+            return Err("execution summary requires a visible primary-report-backed claim".into());
+        }
+        for source in input.sources.iter().filter(|source| {
+            matches!(source.evidence_state.as_str(), "failed_check" | "failed_approach")
+        }) {
+            if !is_visible(source) {
+                return Err("execution summary must display known failed evidence".into());
+            }
+        }
+    }
     Ok(())
 }
 
@@ -1133,6 +1163,29 @@ mod tests {
     }
 
     #[test]
+    fn execution_summary_requires_visible_primary_report_and_known_claims() {
+        let input = build_run_input(owner(), Some("Prepared an email draft; delivery is unconfirmed"), None, [], 0, "en").unwrap();
+        let mut result = factual_fallback(&input, "succeeded");
+        assert!(validate_result(&input, &result).is_ok());
+        result.work_log_view.sections.clear();
+        assert!(validate_result(&input, &result).unwrap_err().contains("visible primary-report"));
+        result.work_log_view.sections.push(WorkLogSection { kind: "outcome".into(), claim_ids: vec!["absent".into()] });
+        assert!(validate_result(&input, &result).unwrap_err().contains("unknown claim"));
+    }
+
+    #[test]
+    fn execution_summary_cannot_hide_known_failure_in_unrendered_claims() {
+        let mut failure = evidence("contradicts");
+        failure.evidence_state = "failed_check".into();
+        failure.excerpt = "Delivery failed".into();
+        let input = build_run_input(owner(), Some("Prepared an email draft"), None, [failure], 0, "en").unwrap();
+        let mut result = factual_fallback(&input, "failed");
+        assert!(validate_result(&input, &result).is_ok());
+        result.work_log_view.sections.retain(|section| section.kind != "unresolved");
+        assert!(validate_result(&input, &result).unwrap_err().contains("display known failed"));
+    }
+
+    #[test]
     fn report_is_primary_and_routine_controls_are_omitted() {
         let mut control = evidence("corroborates");
         control.source_type = "retry_control".into();
@@ -1332,6 +1385,7 @@ mod tests {
             .contains("contradict"));
         result.claims[0].status = "contradicted".into();
         result.claims[0].contradicted_by = vec![contradiction];
+        result.work_log_view.sections.push(WorkLogSection { kind: "outcome".into(), claim_ids: vec!["c".into()] });
         validate_result(&input, &result).unwrap();
     }
 
@@ -1486,6 +1540,9 @@ mod tests {
             contradicted_by: vec![],
         });
         result.completion_snapshots[0].claim_ids = vec!["completion-claim".into()];
+        let report_view = factual_fallback(&input, "succeeded");
+        result.claims.extend(report_view.claims);
+        result.work_log_view = report_view.work_log_view;
         validate_result(&input, &result).unwrap();
     }
 
