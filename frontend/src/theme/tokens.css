@@ -61,6 +61,7 @@
   --shadow-card: 0 2px 4px rgb(56 33 43 / 4%);
   --shadow-dialog: 0 20px 70px rgb(56 33 43 / 27%);
   --workbench-card-width: 320px;
+  --workbench-card-height: 240px;
   --control-height: 36px;
   --layer-menu: 1000;
   --motion-fast: 150ms;

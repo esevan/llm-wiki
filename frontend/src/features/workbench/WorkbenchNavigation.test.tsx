@@ -31,14 +31,15 @@ describe('Workbench card navigation',()=>{
     fireEvent.click(card.querySelector('[data-control="item-actions-menu"]')!); expect(screen.getByRole('menu')).toBeInTheDocument(); expect(screen.queryByTestId('detail')).not.toBeInTheDocument();
     delete window.openChat;
   });
-  it('opens child card backgrounds without invoking the parent or its disclosure',async()=>{
+  it('opens the parent hierarchy in detail instead of growing a fixed card',async()=>{
     const data={...board,refiningShortcuts:[],categories:[{id:'General',label:'General',items:[task('parent'),task('child','task',{parentTaskId:'parent'})]}]};
     window.llmWikiApplication={request:vi.fn().mockResolvedValue({ok:true,status:200,json:async()=>data,text:async()=>'',body:null})};
     render(<WorkbenchView active />); await screen.findByText('parent');
-    const disclosure=document.querySelector<HTMLDetailsElement>('.subtask-tree')!;
-    fireEvent.click(disclosure.querySelector('summary')!); expect(disclosure.open).toBe(true); expect(screen.queryByTestId('detail')).not.toBeInTheDocument();
-    fireEvent.click(document.querySelector('article[data-entity-id="child"] small')!);
-    expect(screen.getByTestId('detail')).toHaveTextContent('child');
+    const opener=document.querySelector<HTMLButtonElement>('[data-control="task-subtasks-expand"]')!;
+    expect(opener).toHaveAttribute('aria-haspopup','dialog');
+    fireEvent.click(opener);
+    expect(screen.getByTestId('detail')).toHaveTextContent('parent');
+    expect(document.querySelector('.subtask-tree')).not.toBeInTheDocument();
   });
   it('moves via the menu, preserves identity and reveals the shared held result',async()=>{
     let state='in_progress';

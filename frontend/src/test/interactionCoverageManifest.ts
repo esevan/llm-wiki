@@ -31,7 +31,7 @@ const manifest: readonly ControlSpec[] = [
   ...['input-image-choose', 'input-image-remove'].map(id => task(id, 'F3', 'frontend/src/features/workbench/InputImageAttachment.tsx', 'image selection, preview, or removal updates the unsent entry', 'disabled while reading an attachment or saving/sending the entry')),
   ...['refinement-tab-preview','refinement-tab-status','refinement-start-work','refinement-boundaries'].map(id => task(id,'F35','frontend/src/features/workbench/RefinementPanel.tsx','refinement status, work transition, or Task boundaries appear')),
   ...['task-hierarchy-details','task-parent-open','task-family-open'].map(id => task(id,'F24','frontend/src/features/workbench/TaskDetail.tsx','explicit Task hierarchy opens or navigates')),
-  ...['task-subtasks-expand','workbench-focus-active'].map(id => task(id,'F3','frontend/src/features/workbench/WorkbenchView.tsx','Subtasks expand or active work receives focus')),
+  ...['task-subtasks-expand','workbench-focus-active'].map(id => task(id,'F3','frontend/src/features/workbench/WorkbenchView.tsx','Parent Task hierarchy opens in detail or active work receives focus')),
   ...['workbench', 'search', 'compass', 'ai-setup'].map(view => existing(`sidebar-view-${view}`, 'F1', `[data-control="sidebar-view-${view}"]`, 'frontend/src/app/Sidebar.tsx', 'sidebar-view-${view}', `${view} view is active`)),
   task('locale-select', 'F2', 'frontend/src/app/Sidebar.tsx', 'document locale changes'),
   task('search-query', 'F36', 'frontend/src/features/search/SearchView.tsx', 'query value participates in search'),

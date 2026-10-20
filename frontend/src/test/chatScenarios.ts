@@ -265,8 +265,12 @@ async function runHierarchyControls(harness: ChatScenarioHarness) {
   await harness.waitFor(() => focus.getAttribute("aria-pressed") !== previous, "active focus toggled");
   coverEffect(harness, "workbench-focus-active", () => focus.getAttribute("aria-pressed") !== previous);
   if (focus.getAttribute("aria-pressed") === "true") await click("workbench-focus-active", "Show all work");
-  await expand("task-subtasks-expand");
-  await harness.detail("Deterministic child Task");
+  await click("task-subtasks-expand", "Open parent Task hierarchy");
+  await harness.waitFor(() => document.querySelector('.task-detail h2')?.textContent === 'Edited deterministic Task', 'parent hierarchy detail opened');
+  coverEffect(harness, "task-subtasks-expand", () => Boolean(document.querySelector('.task-detail')));
+  await expand("task-hierarchy-details");
+  await click("task-family-open", "Open child Task from parent hierarchy");
+  await harness.waitFor(() => document.querySelector('.task-detail h2')?.textContent === 'Deterministic child Task', 'child detail opened');
   await expand("task-hierarchy-details");
   await click("task-parent-open", "Open parent Task");
   await harness.waitFor(() => document.querySelector(".task-detail h2")?.textContent === "Edited deterministic Task", "parent Task opened");

@@ -21,6 +21,52 @@ const origin = server.resolvedUrls.local[0];
 const browser = await chromium.launch({ headless: true, ...(process.env.LLM_WIKI_BROWSER_EXECUTABLE ? { executablePath: process.env.LLM_WIKI_BROWSER_EXECUTABLE } : {}) });
 const sizes = [[1440,900], [2560,1440], [3440,1440], [5120,1440], [640,480], [390,700]];
 try {
+  await test('Task detail groups unequal-length labels and bodies at the top', async () => {
+    for (const [width, height] of [[1440,900], [1920,1080], [3440,1440], [640,480], [390,700]]) {
+      const page = await browser.newPage({viewport: {width, height}});
+      await page.goto(`${origin}layout-review?mode=detail&alignment=1`);
+      await page.locator('[data-control="task-detail-tab-details"]').click();
+      const fields = await page.locator('.task-definition-read > div').evaluateAll(elements => elements.map(element => {
+        const field = element.getBoundingClientRect();
+        const label = element.querySelector('dt').getBoundingClientRect();
+        const body = element.querySelector('dd').getBoundingClientRect();
+        const labelText = document.createRange();
+        labelText.selectNodeContents(element.querySelector('dt'));
+        const bodyText = document.createRange();
+        bodyText.selectNodeContents(element.querySelector('dd'));
+        return {label: element.querySelector('dt').textContent, x:field.x, y:field.y, height:field.height,
+          labelTop:label.y, gap:body.y-label.bottom, textGap:bodyText.getBoundingClientRect().top-labelText.getBoundingClientRect().bottom, bodyWidth:body.width};
+      }));
+      console.log(JSON.stringify({alignmentViewport:[width,height], fields}));
+      if (process.env.LLM_WIKI_LAYOUT_ARTIFACT_DIR) {
+        await mkdir(process.env.LLM_WIKI_LAYOUT_ARTIFACT_DIR, {recursive:true});
+        await page.screenshot({path:path.join(process.env.LLM_WIKI_LAYOUT_ARTIFACT_DIR, `${width}-${height}-detail-alignment.png`)});
+      }
+      assert.equal(fields.length, 5, 'all definition sections remain present');
+      for (const field of fields) {
+        assert(field.textGap >= 0 && field.textGap <= 12, `${field.label}: visible label/body gap ${field.textGap}px at ${width}`);
+        assert(field.gap >= 0 && field.gap <= 4, `${field.label}: label/body gap ${field.gap}px at ${width}`);
+        assert(Math.abs(field.labelTop-field.y) <= 1, `${field.label}: label begins at section top`);
+        assert(field.bodyWidth < 1000, 'prose remains readable');
+      }
+      if (width >= 1440) {
+        assert(Math.abs(fields[0].labelTop-fields[1].labelTop) <= 1, 'neighbor labels align at top');
+        assert(fields[1].height < fields[0].height/2, 'short outcome must not stretch to the long description height');
+      } else {
+        assert(fields.every(field => Math.abs(field.x-fields[0].x) <= 1), 'narrow layout uses one column');
+      }
+      const lastBody = page.locator('.task-definition-read > div').last().locator('dd');
+      await lastBody.scrollIntoViewIfNeeded();
+      const lastBodyBounds = await lastBody.boundingBox();
+      assert(lastBodyBounds.y >= 0 && lastBodyBounds.y+lastBodyBounds.height <= height, 'last section remains reachable by scrolling');
+      if (process.env.LLM_WIKI_LAYOUT_ARTIFACT_DIR) await page.screenshot({path:path.join(process.env.LLM_WIKI_LAYOUT_ARTIFACT_DIR, `${width}-${height}-detail-alignment-end.png`)});
+      const close = await page.locator('[data-control="task-detail-close"]').boundingBox();
+      assert(close.y >= 0 && close.y+close.height <= height, 'close remains visible after scrolling');
+      assert.equal(await page.locator('.task-detail').evaluate(el => el.scrollWidth > el.clientWidth+1), false, 'no horizontal overflow');
+      await page.close();
+    }
+  });
+
   await test('cards keep their width and lanes scroll independently', async () => {
     const measured = [];
     for (const [width, height] of sizes) {
@@ -66,6 +112,141 @@ try {
       await page.close();
     }
     console.log(JSON.stringify({cardMeasurements: measured}));
+  });
+  await test('lane columns grow while card height width previews and actions stay fixed', async () => {
+    const measurements=[];
+    for (const [width, expectedColumns] of [[1440,1],[2560,2],[3440,2],[3840,3],[5120,4],[390,1],[320,1]]) {
+      const page=await browser.newPage({viewport:{width,height:900}});
+      await page.goto(`${origin}layout-review?mode=board&crowded=1&integrated=1&previews=1&held=3`);
+      await page.locator('[data-category="general"] [data-lane="tasks"] article').first().waitFor();
+      const laneLists=page.locator('[data-category="general"] .workbench-lane-cards');
+      const counts=await laneLists.evaluateAll(lists=>lists.map(list=>{const cards=[...list.querySelectorAll(':scope > article')];return cards.filter(card=>Math.abs(card.getBoundingClientRect().y-cards[0].getBoundingClientRect().y)<1).length;}));
+      assert.deepEqual(counts,[expectedColumns,expectedColumns,expectedColumns]);
+      await page.locator('.workbench-held > summary').click();
+      const geometry=await page.locator('.workbench-main article.canonical-card').evaluateAll(cards=>cards.map(card=>{const box=card.getBoundingClientRect(),footer=card.querySelector('footer').getBoundingClientRect();return {width:box.width,height:box.height,footerBottom:box.bottom-footer.bottom,buttons:[...card.querySelectorAll(':scope > footer button, :scope > .workbench-subtasks-open')].map(button=>{const r=button.getBoundingClientRect();return {inside:r.top>=box.top && r.bottom<=box.bottom && r.left>=box.left && r.right<=box.right};})};}));
+      assert(geometry.every(box=>box.height===240), 'long short empty active and held cards share one height');
+      assert(geometry.every(box=>box.buttons.every(button=>button.inside)), 'all actions stay inside fixed cards');
+      assert(geometry.every(box=>Math.abs(box.footerBottom-17)<1), 'action baseline is consistent');
+      if (width>=1440) assert(geometry.every(box=>box.width===320));
+      assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
+      const preview=page.locator('article[data-entity-id="task-0"] .workbench-card-preview');
+      assert((await preview.textContent()).length>1000, 'CSS clamp preserves the original text');
+      assert.equal(await preview.evaluate(el=>getComputedStyle(el).webkitLineClamp),'2');
+      assert((await preview.boundingBox()).height<=36);
+      measurements.push({viewport:width,columns:counts,cardHeight:geometry[0].height});
+      if (process.env.LLM_WIKI_LAYOUT_ARTIFACT_DIR) {
+        await mkdir(process.env.LLM_WIKI_LAYOUT_ARTIFACT_DIR,{recursive:true});
+        await laneLists.last().scrollIntoViewIfNeeded();
+        await page.screenshot({path:path.join(process.env.LLM_WIKI_LAYOUT_ARTIFACT_DIR,`cards-${width}-columns.png`)});
+      }
+      if (width===1440 || width===320) {
+        await page.locator('article[data-entity-id="task-0"] [data-control="task-card-open"]').click();
+        await page.locator('[data-control="task-detail-tab-details"]').click();
+        await page.locator('[data-control="task-origin-capture"] > summary').click();
+        const full=page.locator('[data-control="task-origin-capture"] > p');
+        assert((await full.textContent()).length>1000);
+        assert.notEqual(await full.evaluate(el=>getComputedStyle(el).webkitLineClamp),'2', 'full detail is not clamped');
+        await page.locator('[data-control="task-detail-close"]').click();
+        await page.locator('article[data-entity-id="preview-parent"] [data-control="task-subtasks-expand"]').click();
+        await page.locator('[data-control="task-hierarchy-details"] > summary').click();
+        await page.locator('[data-control="task-family-open"]').click();
+        await page.getByRole('dialog',{name:'Child Task',exact:true}).waitFor();
+        await page.locator('[data-control="task-detail-close"]').click();
+        assert.equal((await page.locator('article[data-entity-id="preview-parent"]').boundingBox()).height,240);
+      }
+      await page.close();
+    }
+    console.log(JSON.stringify({laneCardMeasurements:measurements}));
+  });
+  await test('held disclosure stays compact and expands into one horizontal card row', async () => {
+    const measurements = [];
+    for (const width of [1440, 2560, 3440, 5120, 390, 320]) for (const count of [0, 1, 20]) {
+      const page = await browser.newPage({viewport:{width,height:900},hasTouch:true});
+      await page.goto(`${origin}layout-review?mode=board&held=${count}`);
+      const held = page.locator('.workbench-held');
+      const summary = held.locator(':scope > summary');
+      const row = held.locator('.workbench-held-cards');
+      const board = page.locator('.workbench-board');
+      await summary.waitFor();
+      assert.equal(await held.getAttribute('open'), null);
+      assert((await summary.textContent()).includes(`(${count})`));
+      const collapsed = await held.boundingBox();
+      const initialBoard = await board.boundingBox();
+      const initialBoardTop = initialBoard.y + await page.evaluate(() => scrollY);
+      assert(collapsed.height <= 48, 'closed hold is a compact title row');
+      assert(initialBoard.y >= collapsed.y + collapsed.height - 1, 'board starts below the closed disclosure');
+      const appearance = await held.evaluate(el => {const s=getComputedStyle(el);return {bg:s.backgroundColor,border:s.borderTopWidth,padding:s.paddingTop,align:s.alignSelf};});
+      assert.equal(appearance.bg, 'rgba(0, 0, 0, 0)');
+      assert.equal(appearance.border, '0px');
+      assert.equal(appearance.padding, '0px');
+      assert.equal(appearance.align, 'start');
+      assert.equal(await row.isVisible(), false, 'native closed contents cannot contribute a panel');
+      await summary.focus();
+      await page.keyboard.press('Enter');
+      assert.equal(await held.getAttribute('open'), '');
+      if (count) {
+        const cards = row.locator(':scope > article');
+        await cards.first().waitFor();
+        const boxes = await cards.evaluateAll(elements => elements.map(el => {const r=el.getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height};}));
+        assert(boxes.every(box => Math.abs(box.y - boxes[0].y) < 1), 'all cards occupy one row');
+        assert(boxes.every(box => box.width === boxes[0].width), 'one consistent card width');
+        if (width >= 390) assert.equal(boxes[0].width, 320);
+        else assert(boxes[0].width < 320 && boxes[0].width > 200);
+        const expanded = await held.boundingBox();
+        const lower = await board.boundingBox();
+        assert(lower.y >= expanded.y + expanded.height - 1, 'expanded content never overlaps the lower board');
+        assert(expanded.height <= collapsed.height + Math.max(...boxes.map(box => box.height)) + 32, 'row height does not grow with card count');
+        if (count > 1) {
+          const range = await row.evaluate(el => el.scrollWidth - el.clientWidth);
+          assert(range > 0, 'many cards overflow horizontally');
+          await row.hover();
+          const before = await board.boundingBox();
+          await page.mouse.wheel(400, 0);
+          await page.waitForFunction(() => document.querySelector('.workbench-held-cards').scrollLeft > 0);
+          assert.deepEqual(await board.boundingBox(), before, 'horizontal scrolling leaves the board stationary');
+          await row.evaluate(el => {el.scrollLeft = 0;});
+          await row.focus();
+          await page.keyboard.press('ArrowRight');
+          await page.waitForFunction(() => document.querySelector('.workbench-held-cards').scrollLeft > 0);
+          await cards.last().locator('.canonical-card-title').focus();
+          const last = await cards.last().boundingBox(), viewport = await row.boundingBox();
+          assert(last.x >= viewport.x - 1 && last.x + last.width <= viewport.x + viewport.width + 1, 'keyboard focus reaches the last card');
+          assert.equal(await row.evaluate(el => el.scrollHeight > el.clientHeight + 1), false, 'held cards create no vertical scroller');
+          if (width <= 390) {
+            await row.scrollIntoViewIfNeeded();
+            await row.evaluate(el => {el.scrollLeft = 0;});
+            const touchBox = await row.boundingBox();
+            const x = touchBox.x + Math.min(260, touchBox.width - 24), y = touchBox.y + touchBox.height / 2;
+            const cdp = await page.context().newCDPSession(page);
+            await cdp.send('Input.dispatchTouchEvent', {type:'touchStart',touchPoints:[{x,y}]});
+            for (let step = 1; step <= 4; step++) {
+              await cdp.send('Input.dispatchTouchEvent', {type:'touchMove',touchPoints:[{x:x-step*30,y}]});
+              await page.waitForTimeout(20);
+            }
+            await cdp.send('Input.dispatchTouchEvent', {type:'touchEnd',touchPoints:[]});
+            await page.waitForFunction(() => document.querySelector('.workbench-held-cards').scrollLeft > 0);
+            await cdp.detach();
+          }
+        }
+        measurements.push({viewport:width,count,cardWidth:boxes[0].width,closedHeight:collapsed.height,expandedHeight:expanded.height});
+      } else {
+        assert.equal(await row.isVisible(), false);
+        assert.equal((await held.boundingBox()).height, collapsed.height, 'empty expansion adds no blank panel');
+      }
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+      if (process.env.LLM_WIKI_LAYOUT_ARTIFACT_DIR && [1440,390,320].includes(width)) {
+        await mkdir(process.env.LLM_WIKI_LAYOUT_ARTIFACT_DIR, {recursive:true});
+        await page.screenshot({path:path.join(process.env.LLM_WIKI_LAYOUT_ARTIFACT_DIR, `held-${width}-${count}-expanded.png`)});
+      }
+      await summary.focus();
+      await page.keyboard.press('Enter');
+      assert.equal(await held.getAttribute('open'), null);
+      assert.equal((await held.boundingBox()).height, collapsed.height);
+      assert.equal((await board.boundingBox()).y + await page.evaluate(() => scrollY), initialBoardTop, 'collapse restores the lower board document position');
+      if (process.env.LLM_WIKI_LAYOUT_ARTIFACT_DIR && count === 20 && [1440,390].includes(width)) await page.screenshot({path:path.join(process.env.LLM_WIKI_LAYOUT_ARTIFACT_DIR, `held-${width}-collapsed.png`)});
+      await page.close();
+    }
+    console.log(JSON.stringify({heldMeasurements:measurements}));
   });
   await test('combined menus hold routing and saved Work Log survive wide and narrow layouts', async () => {
     for (const [width, height] of [[1440,900], [3440,1440], [390,700]]) {

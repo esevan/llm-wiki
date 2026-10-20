@@ -309,7 +309,7 @@ export function WorkbenchView({ active, taskApplication, onTaskApplication, onPr
             : item.captureDistillation.distillation.applicationDisposition === "applied"
               ? text.captureOrganized : ""}
       </small>}
-      {item.kind === "task" && item.originCaptureText && <p className="workbench-card-category">{text.originalCapture}: {item.originCaptureText}</p>}
+      {item.kind === "task" && item.originCaptureText && <p className="workbench-card-category workbench-card-preview">{text.originalCapture}: {item.originCaptureText}</p>}
       {item.kind === "capture" && item.hasImage && <small>{text.attachedImage}</small>}
       {item.kind === "task" && item.parentTaskId && <small>{text.subtask}</small>}
       <p className="workbench-card-category">{categoryLabels.get(`${item.kind}:${item.id}`)}</p>
@@ -321,6 +321,7 @@ export function WorkbenchView({ active, taskApplication, onTaskApplication, onPr
         </p>
       )}
       </div>
+      {item.kind === "task" && allTasks.some(child => child.parentTaskId === item.id) && <button type="button" className="workbench-subtasks-open" data-control="task-subtasks-expand" aria-haspopup="dialog" onClick={event => selectDetail(item.id, event.currentTarget)}>{text.subtasks} · {allTasks.filter(child => child.parentTaskId === item.id).length}</button>}
       <footer>
         {item.kind === "task" ? (
           <>
@@ -374,11 +375,6 @@ export function WorkbenchView({ active, taskApplication, onTaskApplication, onPr
           </>
         )}
       </footer>
-      {item.kind === "task" && allTasks.some(child => child.parentTaskId === item.id) && <details className="subtask-tree" data-control="task-subtasks-expand">
-        <summary>{text.subtasks} · {allTasks.filter(child => child.parentTaskId === item.id).length}</summary>
-        <p>{text.subtaskHint}</p>
-        <div className="subtask-children">{allTasks.filter(child => child.parentTaskId === item.id && !child.executionBacklog && child.state !== "on_hold").map(child => renderCard(child))}</div>
-      </details>}
     </article>
   );
   return (
@@ -477,8 +473,8 @@ export function WorkbenchView({ active, taskApplication, onTaskApplication, onPr
           {activeTasks.length ? <div className="workbench-active-cards">{activeTasks.map(renderCard)}</div> : <p className="region-empty">{text.noActive}</p>}
         </section>
         <details className="workbench-held" data-control="workbench-held">
-          <summary>{text.onHold} ({heldTasks.length})</summary>
-          <div className="workbench-held-cards">{heldTasks.map(renderCard)}</div>
+          <summary id="workbench-held-title">{text.onHold} ({heldTasks.length})</summary>
+          <div className="workbench-held-cards" role="region" aria-labelledby="workbench-held-title" tabIndex={heldTasks.length ? 0 : undefined}>{heldTasks.map(renderCard)}</div>
         </details>
         <aside className="workbench-recent" aria-labelledby="recent-completed-title">
           <h2 id="recent-completed-title">{text.recentCompleted}</h2>

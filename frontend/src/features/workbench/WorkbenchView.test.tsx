@@ -129,19 +129,21 @@ describe("Task Workbench", () => {
     }
   });
 
-  it("renders Subtasks under their parent and focuses only active work", async () => {
+  it("opens Subtasks in parent detail and focuses only active work", async () => {
     const familySnapshot = { ...snapshot, categories: [{ id: "general", label: "General", items: [
       { kind: "task", id: "parent", title: "Meeting preparation", taskRevision: 2, refinedRevision: 2, state: "task" },
       { kind: "task", id: "active", parentTaskId: "parent", title: "Collect topics", taskRevision: 3, state: "in_progress" },
     ] }] };
-    window.llmWikiApplication = { request: vi.fn().mockResolvedValue(response(familySnapshot)) };
+    window.llmWikiApplication = { request: vi.fn().mockImplementation(({path}:{path:string}) => Promise.resolve(response(path === '/workbench' ? familySnapshot : {id:'parent',kind:'task',title:'Meeting preparation',state:'task',taskRevision:2,workLog:[],hierarchy:{siblings:[],children:[{id:'active',kind:'task',title:'Collect topics',state:'in_progress',taskRevision:3}]}}))) };
     render(<WorkbenchView active />);
     expect(await screen.findByText("Refined - Revision 2")).toBeInTheDocument();
-    const disclosure = document.querySelector<HTMLDetailsElement>('[data-control="task-subtasks-expand"]')!;
-    expect(disclosure.closest(".canonical-card")).toHaveTextContent("Meeting preparation");
-    fireEvent.click(disclosure.querySelector("summary")!);
-    expect(disclosure.open).toBe(true);
-    expect(disclosure.querySelector(".subtask-children")).toHaveTextContent("Collect topics");
+    const opener = document.querySelector<HTMLButtonElement>('[data-control="task-subtasks-expand"]')!;
+    expect(opener.closest('.canonical-card')).toHaveTextContent('Meeting preparation');
+    fireEvent.click(opener);
+    const family = await screen.findByRole('dialog', {name:'Meeting preparation'});
+    fireEvent.click(family.querySelector('[data-control="task-hierarchy-details"] > summary')!);
+    expect(family.querySelector('[data-control="task-family-open"]')).toHaveTextContent('Collect topics');
+    fireEvent.click(family.querySelector('[data-control="task-detail-close"]')!);
     fireEvent.click(screen.getByRole("button", { name: "Focus active work" }));
     expect(document.querySelector("#workbench")).toHaveAttribute("data-focus-active", "true");
     expect(screen.getByRole("button", { name: "Show all work" })).toHaveAttribute("aria-pressed", "true");

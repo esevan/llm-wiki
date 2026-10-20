@@ -1123,13 +1123,7 @@ main:has(.task-workbench.active :is(.task-detail, .refinement-panel)) {
   order: 2;
   margin-top: 0;
 }
-.workbench-active-cards > .canonical-card > .subtask-tree {
-  flex-shrink: 0;
-  max-height: 35%;
-  overflow: auto;
-  margin-top: var(--space-1);
-  padding-top: var(--space-1);
-}
+
 .workbench-active > .workbench-active-header { flex-shrink: 0; flex-wrap: wrap; }
 .workbench-active .canonical-card h3 { margin: var(--space-1) 0; }
 .workbench-active .canonical-card footer { padding-top: var(--space-2); }
@@ -1156,13 +1150,12 @@ main:has(.task-workbench.active :is(.task-detail, .refinement-panel)) {
   margin-bottom: var(--space-6);
 }
 .workbench-lanes {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, calc(var(--workbench-card-width) + 64px)), 1fr));
   gap: var(--space-4);
-  align-items: flex-start;
+  align-items: start;
 }
 .workbench-lane {
-  flex: 0 1 calc(var(--workbench-card-width) + 64px);
   max-width: 100%;
   min-width: 0;
   padding: var(--space-4);
@@ -1201,18 +1194,13 @@ main:has(.task-workbench.active :is(.task-detail, .refinement-panel)) {
 .workbench-active > header button { margin-left: auto; }
 .task-workbench[data-focus-active="true"] .workbench-main > :not(.workbench-current) { display: none; }
 .refined-status { color: var(--color-status-success); font-family: var(--font-family-mono); font-size: var(--font-size-sm); }
-.subtask-tree { margin-top: var(--space-4); border-top: var(--border-default); padding-top: var(--space-3); }
-.subtask-tree summary, .task-hierarchy-summary summary, .refinement-boundaries summary { cursor: pointer; min-height: var(--control-height); padding: var(--space-2) 0; font-weight: 700; }
-.subtask-children { display: grid; gap: var(--space-3); margin-left: var(--space-3); padding-left: var(--space-4); border-left: 2px solid var(--color-border-accent); }
-.subtask-children .canonical-card { min-width: 0; box-shadow: none; }
-.subtask-tree p { font-size: var(--font-size-sm); color: var(--color-text-secondary); }
+.task-hierarchy-summary summary, .refinement-boundaries summary { cursor: pointer; min-height: var(--control-height); padding: var(--space-2) 0; font-weight: 700; }
 .task-hierarchy-summary { padding: 0 var(--space-5); }
 .refinement-preview .task-detail-tabs { margin: 0 0 var(--space-5); }
 .refinement-preview [role="tabpanel"] h3 { overflow-wrap: anywhere; }
 .refinement-boundaries article { border-top: var(--border-default); padding: var(--space-3) 0; }
 .refinement-boundaries p { white-space: pre-wrap; overflow-wrap: anywhere; }
 @media (max-width: 600px) {
-  .subtask-children { margin-left: 0; padding-left: var(--space-2); }
   .workbench-active > header button { margin-left: 0; }
 }
 
@@ -1257,7 +1245,7 @@ main:has(.task-workbench.active :is(.task-detail, .refinement-panel)) {
 .compass-tabs [aria-pressed="true"] { background: var(--color-bg-accent-subtle); border-color: var(--color-accent-strong); }
 @container (max-width: 760px) {
   .workbench-current { grid-template-columns: minmax(0, 1fr); height: auto; }
-  .workbench-current > .workbench-active { height: 320px; }
+  .workbench-current > .workbench-active { height: calc(var(--workbench-card-height) + 96px); }
   .workbench-recent { height: 320px; }
 }
 .compass-tabs button { min-height: 44px; padding: var(--space-2) var(--space-4); border: var(--border-default); border-radius: var(--radius-control); background: var(--color-bg-surface); color: var(--color-text-primary); font: inherit; font-weight: 700; cursor: pointer; }
@@ -1369,11 +1357,12 @@ main:has(.task-workbench.active :is(.task-detail, .refinement-panel)) {
 .task-detail-modal-layer .task-detail { container-type: inline-size; }
 .task-detail-header :is(h2, .task-goal) { max-width: 85ch; }
 .task-definition-read {
+  align-items: start;
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 36rem), 1fr));
   column-gap: var(--space-8);
   row-gap: var(--space-6);
 }
-.task-definition-read > div { min-width: 0; }
+.task-definition-read > div { min-width: 0; align-content: start; }
 .task-definition-read dd { max-width: 75ch; overflow-wrap: anywhere; }
 .task-definition-panel:has(> label) {
   display: grid;
@@ -1384,8 +1373,9 @@ main:has(.task-workbench.active :is(.task-detail, .refinement-panel)) {
 .task-panel > p, .task-panel .knowledge-markdown { max-width: 85ch; }
 .refinement-panel[role="dialog"] .message { max-width: min(92%, 85ch); }
 .workbench-lane-cards {
-  grid-template-columns: minmax(0, 1fr);
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, var(--workbench-card-width)), var(--workbench-card-width)));
   align-content: start;
+  align-items: start;
   max-height: clamp(160px, calc(100dvh - 360px), 720px);
   overflow-y: auto;
   scrollbar-gutter: stable;
@@ -1397,12 +1387,21 @@ main:has(.task-workbench.active :is(.task-detail, .refinement-panel)) {
   box-sizing: border-box;
   width: var(--workbench-card-width);
   max-width: 100%;
+  padding: var(--space-4);
+  height: var(--workbench-card-height);
+  min-height: var(--workbench-card-height);
+  max-height: var(--workbench-card-height);
+  overflow: hidden;
 }
 .workbench-lane-cards > .region-empty { grid-column: 1 / -1; }
 
 /* Card navigation, overflow actions and shared hold area. */
-.workbench-held { grid-column: 1; padding: var(--space-3); border: var(--border-default); border-radius: var(--radius-card); background: var(--color-bg-surface); }
-.workbench-held > summary { cursor: pointer; font-weight: 700; padding: var(--space-2); }
+.workbench-held { grid-column: 1; align-self: start; min-width: 0; min-height: 0; height: auto; margin: 0; padding: 0; border: 0; background: transparent; }
+.workbench-held > summary { box-sizing: border-box; min-height: var(--control-height); cursor: pointer; font-weight: 700; padding: var(--space-2) 0; }
+/* Explicitly remove closed content from layout, including native details sizing. */
+.workbench-held:not([open]) > .workbench-held-cards,
+.workbench-held-cards:empty { display: none; }
+.workbench-held-cards:focus-visible { outline: 2px solid var(--color-accent-strong); outline-offset: 2px; }
 .canonical-card .canonical-card-title { border: 0; background: transparent; color: inherit; font: inherit; text-align: left; padding: 0; min-height: 32px; white-space: normal; overflow-wrap: anywhere; }
 .canonical-card .canonical-card-title:hover { color: var(--color-accent-strong); }
 .canonical-card button:focus-visible, .item-actions-popover button:focus-visible, .workbench-held summary:focus-visible { outline: 2px solid var(--color-accent-strong); outline-offset: 3px; }
@@ -1413,16 +1412,16 @@ main:has(.task-workbench.active :is(.task-detail, .refinement-panel)) {
 .item-actions-popover .item-actions-delete { border-top: var(--border-default); border-radius: 0; color: var(--color-status-error); margin-top: var(--space-2); }
 .task-state-history { margin: var(--space-3) 0; }
 
-.workbench-current { height: auto; grid-template-rows: 320px auto; }
+.workbench-current { height: auto; grid-template-rows: calc(var(--workbench-card-height) + 96px) auto; }
 .workbench-current > .workbench-active { grid-column: 1; grid-row: 1; }
 .workbench-current > .workbench-recent { grid-column: 2; grid-row: 1; }
 .workbench-current > .workbench-held { grid-row: 2; }
 @container (max-width: 760px) {
-  .workbench-current { grid-template-rows: 320px auto auto; }
+  .workbench-current { grid-template-rows: calc(var(--workbench-card-height) + 96px) auto auto; }
   .workbench-current > .workbench-recent { grid-column: 1; grid-row: 3; height: auto; max-height: 240px; contain: none; }
 }
-.workbench-held-cards > .canonical-card { flex: 0 1 var(--workbench-card-width); }
-.workbench-held-cards { display: flex; flex-wrap: wrap; align-items: flex-start; gap: var(--space-3); max-height: min(480px,55dvh); overflow-y: auto; }
+.workbench-held-cards > .canonical-card { flex: 0 0 min(var(--workbench-card-width), 100%); }
+.workbench-held-cards { display: flex; flex-wrap: nowrap; align-items: flex-start; min-width: 0; max-width: 100%; box-sizing: border-box; gap: var(--space-3); padding: var(--space-1); overflow-x: auto; overflow-y: hidden; scroll-padding-inline: var(--space-1); }
 
 .item-actions-popover button:disabled { opacity: .55; cursor: not-allowed; }
 .item-actions-hint { padding: var(--space-2); margin: 0; font-size: var(--font-size-sm); color: var(--color-text-secondary); }
@@ -1430,3 +1429,17 @@ main:has(.task-workbench.active :is(.task-detail, .refinement-panel)) {
 .work-log-request { white-space:pre-wrap; overflow-wrap:anywhere; }
 .work-log-distillation li { overflow-wrap:anywhere; }
 .work-log-distillation > details > .work-log-distillation-sections { margin-top:var(--space-3); }
+
+/* Fixed card previews; full content remains in Task detail/refinement. */
+:is(.workbench-board, .workbench-active, .workbench-held) .canonical-card > .canonical-card-body { display: block; flex: 1; min-height: 0; margin: -3px; padding: 3px; overflow: hidden; }
+:is(.workbench-board, .workbench-active, .workbench-held) .canonical-card > footer { flex: 0 0 auto; min-height: 40px; margin-top: var(--space-2); padding: 0; }
+:is(.workbench-board, .workbench-active, .workbench-held) .canonical-card-title,
+:is(.workbench-board, .workbench-active, .workbench-held) .workbench-card-preview,
+:is(.workbench-board, .workbench-active, .workbench-held) .capture-distillation-body { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; white-space: pre-wrap; }
+.workbench-card-category:not(.workbench-card-preview) { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.workbench-card-preview, .capture-distillation-body { line-height: 18px; }
+.workbench-subtasks-open { flex: 0 0 auto; align-self: flex-start; min-height: 28px; padding: var(--space-1) var(--space-2); font-size: var(--font-size-sm); }
+
+:is(.workbench-board, .workbench-active, .workbench-held) .canonical-card > footer button { min-height: 40px; padding: var(--space-2); font-size: 13px; }
+:is(.workbench-board, .workbench-active, .workbench-held) .canonical-card h3 { margin: 7px 0; }
+.canonical-card:has(> .workbench-subtasks-open) .workbench-card-preview { -webkit-line-clamp: 1; }

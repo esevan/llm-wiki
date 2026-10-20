@@ -47,3 +47,5 @@ The **⋯** menu replaces the old Delete button. In-progress Tasks offer **Put o
 All actions preserve content, refinement revisions, work records, sessions and the first start timestamp. New transitions have dedicated history visible under **State history** in detail. Completed Tasks still require the existing explicit reopen action.
 
 The server rejects hold/backlog moves while any session of the Task has a queued, running or awaiting-response execution, or an uncertain dispatched execution needing attention. Finish the execution or explicitly stop it and confirm its end before retrying. This menu currently has no action to reconcile an uncertain execution or override that guard. Holding a Task never silently cancels an agent. Starting a new execution while held is also rejected; resume the Task first.
+
+The collapsed hold area is a compact title/count row, including when empty. Expanding it shows one horizontal row of fixed-width cards, with horizontal scrolling and keyboard focus; it does not wrap into vertical lanes or extend behind the category board.
