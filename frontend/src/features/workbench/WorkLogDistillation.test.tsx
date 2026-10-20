@@ -14,10 +14,45 @@ const projection = (freshness: DistillationProjection["freshness"] = "current"):
 });
 
 describe("WorkLogDistillation", () => {
+  it("shows a request while execution is still running without implying completion", () => {
+    render(<WorkLogDistillation execution={{runId:"live", sessionId:"session", instruction:"Check the export", status:"running", provider:"codex", model:"model", evidence:[],artifacts:[],limitations:[],syncState:"synced"}} onOpenOriginal={() => undefined} />);
+    expect(screen.getByText("Check the export")).toBeVisible();
+    expect(screen.getByText("Execution is in progress. No final result is available yet.")).toBeVisible();
+  });
+  it("shows each exact Run request and keeps technical structure collapsed", () => {
+    const execution = {runId:"one", sessionId:"session", instruction:"Draft a reply, do not send it", status:"succeeded" as const, provider:"codex" as const, model:"model", evidence:[], artifacts:[], limitations:[], syncState:"synced" as const};
+    const {container, rerender} = render(<WorkLogDistillation execution={execution} projection={projection()} onOpenOriginal={() => undefined} />);
+    expect(screen.getByText(execution.instruction)).toBeVisible();
+    expect(screen.getByRole("heading", {name:"What Codex did"})).toBeVisible();
+    expect(screen.getByRole("heading", {name:"Result"})).toBeVisible();
+    expect(container.querySelector('[data-control="task-worklog-summary-details"]')).not.toHaveAttribute("open");
+    expect(screen.getByText(/sha256:one/)).not.toBeVisible();
+    rerender(<WorkLogDistillation execution={{...execution, runId:"two", instruction:"Review only the second draft"}} projection={projection()} onOpenOriginal={() => undefined} />);
+    expect(screen.getByText("Review only the second draft")).toBeVisible();
+    expect(screen.queryByText(execution.instruction)).not.toBeInTheDocument();
+    rerender(<WorkLogDistillation execution={{...execution, instruction:undefined}} projection={projection()} onOpenOriginal={() => undefined} />);
+    expect(screen.getByText("Original request unavailable for this Run.")).toBeVisible();
+  });
+
+  it("makes conflicting evidence explicit instead of asserting verification", () => {
+    const saved = projection();
+    saved.result.claims[0].status = "contradicted";
+    render(<WorkLogDistillation projection={saved} onOpenOriginal={() => undefined} />);
+    expect(screen.getByText("Conflicting evidence: Export check passed")).toBeVisible();
+  });
+
+  it("keeps unfinished claims visible beyond the concise default", () => {
+    const saved = projection();
+    saved.result.claims = Array.from({length:5}, (_, i) => ({...saved.result.claims[0], id:`c${i}`, statement:`Check ${i}`, epistemicState: i === 4 ? "unresolved" as const : "observed" as const}));
+    saved.result.workLogView.sections = [{kind:"checks", claimIds:saved.result.claims.map(claim => claim.id)}];
+    render(<WorkLogDistillation projection={saved} onOpenOriginal={() => undefined} />);
+    expect(screen.getByText("Unresolved: Check 4")).toBeVisible();
+    expect(screen.getByText("Check 3")).not.toBeVisible();
+  });
   it("allows an explicit retry without hiding the saved result", () => {
     const retry = vi.fn();
     render(<WorkLogDistillation projection={projection("retryable_failure")} onOpenOriginal={() => undefined} onRetry={retry} />);
-    expect(screen.getAllByText("Export check passed")[0]).toBeVisible();
+    expect(screen.getAllByText(/Export check passed/)[0]).toBeVisible();
     fireEvent.click(screen.getByRole("button", {name: "Retry update"}));
     expect(retry).toHaveBeenCalledOnce();
   });
@@ -25,7 +60,8 @@ describe("WorkLogDistillation", () => {
   it("renders readable claims and inspectable exact sources without invoking a model", () => {
     const open = vi.fn();
     render(<WorkLogDistillation projection={projection()} execution={{runId:"run", sessionId:"session", status:"succeeded", provider:"codex", model:"model", evidence:[], artifacts:[], limitations:[], syncState:"synced"}} onOpenOriginal={open} />);
-    expect(screen.getAllByText("Export check passed")[0]).toBeInTheDocument();
+    expect(screen.getAllByText(/Export check passed/)[0]).toBeInTheDocument();
+    fireEvent.click(screen.getByText("Summary details and sources"));
     fireEvent.click(screen.getByText("Sources (1)"));
     expect(screen.getByText(/sha256:one/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Inspect original Run" }));
@@ -35,7 +71,7 @@ describe("WorkLogDistillation", () => {
   it("keeps the last good content visible with explicit stale status and warning", () => {
     render(<WorkLogDistillation projection={projection("stale")} onOpenOriginal={() => undefined} />);
     expect(screen.getByRole("status")).toHaveTextContent("Source changed");
-    expect(screen.getAllByText("Export check passed")[0]).toBeInTheDocument();
+    expect(screen.getAllByText(/Export check passed/)[0]).toBeInTheDocument();
     fireEvent.click(screen.getByText("Limitations"));
     expect(screen.getByText("The saved source changed.")).toBeInTheDocument();
   });
@@ -43,7 +79,7 @@ describe("WorkLogDistillation", () => {
   it.each(["pending", "stale", "repair_required"] as const)("retains saved content and visible %s state", freshness => {
     const repair = vi.fn();
     render(<WorkLogDistillation projection={projection(freshness)} onOpenOriginal={() => undefined} onRepair={repair} />);
-    expect(screen.getAllByText("Export check passed")[0]).toBeVisible();
+    expect(screen.getAllByText(/Export check passed/)[0]).toBeVisible();
     expect(screen.getByRole("status")).not.toBeEmptyDOMElement();
     if (freshness === "repair_required") {
       fireEvent.click(screen.getByRole("button", {name: "Repair Distillation"}));
@@ -89,7 +125,7 @@ describe("WorkLogDistillation", () => {
     const result = projection();
     result.result.claims[0] = {...result.result.claims[0], statement:"The model prepared an email draft", actor:"ai", epistemicState:"performed", sources:[{type:"run_final_report",id:"run",revision:"1",locator:"final_report",quote:"Email draft"}]};
     render(<WorkLogDistillation projection={result} onOpenOriginal={() => undefined} />);
-    expect(screen.getByText("Reported · AI")).toBeVisible();
+    expect(screen.getByText("Codex reported: The model prepared an email draft")).toBeVisible();
     expect(screen.queryByText("Verified · AI")).not.toBeInTheDocument();
   });
 

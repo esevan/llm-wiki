@@ -3,7 +3,7 @@ use rusqlite::{params, Connection};
 use sha2::{Digest, Sha256};
 use tempfile::tempdir;
 
-const MIGRATED_SCHEMA_VERSION: i64 = 23;
+const MIGRATED_SCHEMA_VERSION: i64 = 24;
 
 fn drop_column_if_present(connection: &Connection, table: &str, column: &str) {
     let present = connection
@@ -70,7 +70,8 @@ fn make_v8_session_fixture(db: &std::path::Path, vault: &std::path::Path) {
     // Remove post-v8 additions before replaying migrations from the historical fixture.
     db_conn
         .execute_batch(
-            "DROP TABLE knowledge_review_notes;
+            "DROP TABLE task_state_transitions;
+        DROP TABLE knowledge_review_notes;
         DROP TABLE knowledge_archive_links;
         DROP TABLE knowledge_archive_current;
         DROP TABLE knowledge_archive_revisions;
@@ -127,6 +128,7 @@ fn make_v8_session_fixture(db: &std::path::Path, vault: &std::path::Path) {
         DROP TABLE task_refinements; DROP TABLE task_subtasks;",
         )
         .unwrap();
+    drop_column_if_present(&db_conn, "tasks", "execution_backlog");
     for column in [
         "application_disposition",
         "execution_outcome",

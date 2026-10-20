@@ -121,7 +121,12 @@ describe("Task Workbench", () => {
     expect(categories[0]).not.toHaveTextContent("Review permissions");
     expect(categories[1]).not.toHaveTextContent("Plan release");
     expect(categories[1].querySelector('[data-lane="inbox"]')).toHaveTextContent("Review permissions");
-    expect(categories[1].querySelector(".workbench-category-scroll")).toHaveAttribute("tabindex", "0");
+    expect(categories[1].querySelector(".workbench-category-scroll")).not.toHaveAttribute("tabindex");
+    for (const lane of categories[1].querySelectorAll(".workbench-lane-cards")) {
+      expect(lane).toHaveAttribute("tabindex", "0");
+      expect(lane).toHaveAttribute("role", "region");
+      expect(document.getElementById(lane.getAttribute("aria-labelledby")!)).toBeInTheDocument();
+    }
   });
 
   it("renders Subtasks under their parent and focuses only active work", async () => {
@@ -313,16 +318,17 @@ describe("Task Workbench", () => {
     window.llmWikiApplication = { request };
     render(<WorkbenchView active />);
     const card = (await screen.findAllByText("Keep this thought")).find((node) => node.closest("article"))!;
-    const trigger = card.closest("article")!.querySelector<HTMLButtonElement>('[data-control="task-card-delete"]')!;
+    const trigger = card.closest("article")!.querySelector<HTMLButtonElement>('[data-control="item-actions-menu"]')!;
+    const chooseDelete = () => { fireEvent.click(trigger); fireEvent.click(screen.getByRole("menuitem", { name: "Delete" })); };
     trigger.focus();
-    fireEvent.click(trigger);
+    chooseDelete();
     expect(screen.getByRole("button", { name: "Keep item" })).toHaveFocus();
     fireEvent.click(screen.getByRole("button", { name: "Keep item" }));
     expect(trigger).toHaveFocus();
-    fireEvent.click(trigger);
+    chooseDelete();
     fireEvent(screen.getByRole("alertdialog"), new Event("cancel", { bubbles: false, cancelable: true }));
     expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
-    fireEvent.click(trigger);
+    chooseDelete();
     expect(request.mock.calls.some(([arg]) => arg.path.includes("/items/"))).toBe(false);
     expect(screen.getByRole("alertdialog")).toHaveTextContent("Delete this item from the Workbench?");
     fireEvent.click(screen.getByRole("alertdialog").querySelector('[data-control="task-delete-confirm"]')!);
@@ -339,7 +345,8 @@ describe("Task Workbench", () => {
     window.llmWikiApplication = { request };
     render(<WorkbenchView active />);
     const card = (await screen.findAllByText("Ship workbench")).find((node) => node.closest("article"))!;
-    fireEvent.click(card.closest("article")!.querySelector('[data-control="task-card-delete"]')!);
+    fireEvent.click(card.closest("article")!.querySelector('[data-control="item-actions-menu"]')!);
+    fireEvent.click(screen.getByRole("menuitem", { name: "Delete" }));
     fireEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: /^Delete$/ }));
     await screen.findByText("Delete offline");
     expect(document.querySelector('[data-control="task-shortcut-open"]')).toBeInTheDocument();
@@ -396,6 +403,17 @@ describe("guarded Task selection", () => {
     expect(request.mock.calls.filter(([arg]) => arg.path.endsWith("/revisions"))).toHaveLength(choice === "save" || choice === "failure" ? 1 : 0);
   });
 
+  it("keeps detail open while its menu owns focus and Escape returns to the menu trigger", async () => {
+    const task = { id: "active", taskRevision: 3, state: "in_progress", title: "Ship workbench", detail: "Original" };
+    window.llmWikiApplication = { request: vi.fn().mockImplementation(({path}:{path:string})=>Promise.resolve(response(path === "/workbench" ? snapshot : task))) };
+    render(<WorkbenchView active />); await screen.findByText("Plan release"); openTask("Ship workbench");
+    await waitFor(()=>expect(document.querySelector('.task-detail')).toBeInTheDocument());
+    const trigger=document.querySelector<HTMLButtonElement>('.task-detail [data-control="item-actions-menu"]')!;
+    fireEvent.click(trigger);
+    await waitFor(()=>expect(screen.getByRole('menuitem',{name:'Put on hold'})).toHaveFocus());
+    fireEvent.keyDown(document.activeElement!,{key:'Escape'});
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument(); expect(document.querySelector('.task-detail')).toBeInTheDocument(); expect(trigger).toHaveFocus();
+  });
   it("guards unsaved detail before deletion and confirms the current Task title", async () => {
     const task = { id: "active", taskRevision: 3, state: "in_progress", title: "Ship workbench", detail: "Original" };
     const request = vi.fn().mockImplementation(({ path }: { path: string }) => Promise.resolve(response(path === "/workbench" ? snapshot : task)));
@@ -405,11 +423,13 @@ describe("guarded Task selection", () => {
     openTask("Ship workbench");
     await waitFor(() => expect(draftControl("task-revision-detail")).toBeInTheDocument());
     fireEvent.change(draftControl("task-revision-detail"), { target: { value: "Unsaved draft" } });
-    fireEvent.click(draftControl("task-detail-delete"));
+    fireEvent.click(document.querySelector('.task-detail [data-control="item-actions-menu"]')!);
+    fireEvent.click(screen.getByRole("menuitem", { name: "Delete" }));
     expect(document.querySelector(".workbench-delete-dialog")).not.toBeInTheDocument();
     fireEvent.click(draftControl("task-draft-guard-keep-editing"));
     expect(draftControl("task-revision-detail")).toHaveValue("Unsaved draft");
-    fireEvent.click(draftControl("task-detail-delete"));
+    fireEvent.click(document.querySelector('.task-detail [data-control="item-actions-menu"]')!);
+    fireEvent.click(screen.getByRole("menuitem", { name: "Delete" }));
     fireEvent.click(draftControl("task-draft-guard-discard"));
     expect(document.querySelector(".workbench-delete-dialog")).toHaveTextContent("Ship workbench");
     fireEvent.click(draftControl("task-delete-cancel"));

@@ -46,3 +46,9 @@ source hashes. Private draft acceptance and public publication are separate deci
 Knowledge tool aliases delegate to canonical Task drafts; historical approved publication jobs
 recover only their recorded exact draft with external-file guards. Other retired queued actions
 remain readable but cannot mutate through the old funnel.
+
+Native `task.transition` adds `on_hold` from `in_progress`, `resume` from `on_hold`, and
+`backlog` from either. Backlog returns state `task` with explicit Refined Tasks placement while
+retaining open refinement sessions and readiness. Active/uncertain dispatched executions reject
+hold/backlog with `active_task_execution`; held execution creation rejects with `task_on_hold`.
+All transitions retain Task revision, first-start time, session identity and operation replay.

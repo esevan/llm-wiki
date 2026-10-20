@@ -5,7 +5,7 @@ use sha2::{Digest, Sha256};
 use serde_json::{json, Map, Value};
 use std::collections::BTreeMap;
 
-pub const CURRENT_SCHEMA_VERSION: i64 = 23;
+pub const CURRENT_SCHEMA_VERSION: i64 = 24;
 
 type MigrationFunction = for<'connection> fn(&Transaction<'connection>) -> Result<(), String>;
 type LegacyLocalizationRow = (String, String, String, String, String, String, String);
@@ -116,7 +116,35 @@ const MIGRATIONS: &[Migration] = &[
     Migration { version:21, name:"add immutable Knowledge generation", run:add_knowledge_distillation },
     Migration { version:22, name:"add Knowledge archive proposals and journal", run:add_knowledge_archive },
     Migration { version:23, name:"add version-bound Knowledge review notes", run:add_knowledge_review_notes },
+    Migration { version:24, name:"add Task hold and execution backlog", run:add_task_hold },
 ];
+
+fn add_task_hold(tx: &Transaction<'_>) -> Result<(), String> {
+    // Generalized ALTER: copy before dropping, never rename the referenced parent.
+    tx.execute_batch("CREATE TABLE tasks_hold_upgrade (
+      id TEXT PRIMARY KEY, origin_capture_id TEXT REFERENCES captures(id), current_revision INTEGER NOT NULL DEFAULT 1,
+      state TEXT NOT NULL DEFAULT 'task' CHECK(state IN ('task','in_progress','on_hold','completed')),
+      archived_at TEXT, category TEXT NOT NULL DEFAULT 'General', created_at TEXT NOT NULL,
+      last_user_activity_at TEXT NOT NULL, started_at TEXT, completed_at TEXT, reopened_at TEXT,
+      execution_backlog INTEGER NOT NULL DEFAULT 0 CHECK(execution_backlog IN (0,1))
+    );
+    INSERT INTO tasks_hold_upgrade SELECT *,0 FROM tasks;
+    DROP TABLE tasks;
+    ALTER TABLE tasks_hold_upgrade RENAME TO tasks;
+    CREATE INDEX task_activity_index ON tasks(state,last_user_activity_at DESC);
+    CREATE TABLE task_state_transitions (
+      id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES tasks(id),
+      from_state TEXT NOT NULL, to_state TEXT NOT NULL, action TEXT NOT NULL,
+      reason TEXT NOT NULL DEFAULT '', operation_id TEXT NOT NULL UNIQUE,
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX task_state_transitions_task ON task_state_transitions(task_id,created_at);
+    CREATE INDEX task_runs_task_status ON task_work_session_runs(task_id,status,dispatch_state);")
+        .map_err(|e| e.to_string())?;
+    let invalid: i64 = tx.query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |r| r.get(0)).map_err(|e|e.to_string())?;
+    if invalid != 0 { return Err("Task hold migration broke foreign keys".into()); }
+    Ok(())
+}
 
 fn add_knowledge_review_notes(tx: &Transaction<'_>) -> Result<(),String> {
     tx.execute_batch("CREATE TABLE knowledge_review_notes (
@@ -1186,10 +1214,10 @@ fn apply_plan(
         }
         // SQLite's documented generalized ALTER procedure requires FK enforcement to be
         // disabled *before* the replacement transaction.  A PRAGMA issued inside the
-        // transaction is a no-op.  v9 validates the database first, validates the rebuilt
+        // transaction is a no-op. Parent rebuilds validate the database first and the rebuilt
         // graph before commit, then restores and verifies enforcement before returning.
-        let rebuild_session_parent = migration.version == 9;
-        if rebuild_session_parent {
+        let rebuild_parent = matches!(migration.version, 9 | 24);
+        if rebuild_parent {
             let invalid: i64 = connection
                 .query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |row| {
                     row.get(0)
@@ -1224,7 +1252,7 @@ fn apply_plan(
                 .map_err(|error| migration_error(migration, error))?;
             Ok(())
         })();
-        if rebuild_session_parent {
+        if rebuild_parent {
             connection
                 .pragma_update(None, "foreign_keys", "ON")
                 .map_err(|error| migration_error(migration, error))?;
@@ -2283,7 +2311,7 @@ mod tests {
         c.execute("INSERT INTO knowledge_draft_versions(task_id,revision,derivation_kind,article_type,title,body_markdown,content_hash,applicability_id,result_json,quality_state,model_status) VALUES('task',1,'legacy','concept','Exact title','# Exact bytes','exact-hash','a','{}','blocked_unsupported','legacy')",[]).unwrap();
         apply(&mut c).unwrap();apply(&mut c).unwrap();
         assert_eq!(c.query_row("SELECT title||':'||body_markdown||':'||content_hash||':'||quality_state FROM knowledge_draft_versions",[],|r|r.get::<_,String>(0)).unwrap(),"Exact title:# Exact bytes:exact-hash:blocked_unsupported");
-        assert_eq!(schema_version(&c).unwrap(),23);
+        assert_eq!(schema_version(&c).unwrap(),CURRENT_SCHEMA_VERSION);
         c.execute("INSERT INTO knowledge_review_notes(id,task_id,knowledge_revision,content_hash,body,request_hash) VALUES('note','task',1,'exact-hash','User reviewed source','request')",[]).unwrap();
         assert!(c.execute("INSERT INTO knowledge_review_notes(id,task_id,knowledge_revision,content_hash,body,request_hash) VALUES('bad','task',2,'hash','Unknown version','request')",[]).is_err());
         assert_eq!(c.query_row("SELECT count(*) FROM pragma_foreign_key_check",[],|r|r.get::<_,i64>(0)).unwrap(),0);
@@ -2291,6 +2319,31 @@ mod tests {
         failed.execute("CREATE TABLE knowledge_review_notes(dummy INTEGER)",[]).unwrap();
         assert!(apply(&mut failed).is_err());assert_eq!(schema_version(&failed).unwrap(),22);
         assert_eq!(failed.query_row("SELECT count(*) FROM sqlite_master WHERE type='index' AND name='knowledge_review_notes_version'",[],|r|r.get::<_,i64>(0)).unwrap(),0);
+    }
+
+    #[test]
+    fn task_hold_upgrade_preserves_identity_children_and_rolls_back() {
+        let mut c=Connection::open_in_memory().unwrap();
+        apply_plan(&mut c,&MIGRATIONS[..23],23).unwrap();
+        c.execute("INSERT INTO captures(id,text) VALUES('c','Exact capture')",[]).unwrap();
+        c.execute("INSERT INTO tasks(id,origin_capture_id,state,created_at,last_user_activity_at,started_at,reopened_at) VALUES('t','c','in_progress','created','activity','first-start','reopened')",[]).unwrap();
+        c.execute("INSERT INTO task_revisions(task_id,revision,title,detail,content_hash,created_at) VALUES('t',1,'Exact title','Exact bytes','hash','created')",[]).unwrap();
+        c.execute("INSERT INTO task_work_sessions(id,task_id,title,created_at,updated_at) VALUES('s','t','Existing session','created','updated')",[]).unwrap();
+        c.execute("INSERT INTO task_readiness_decisions(id,task_id,task_revision,field_key,status,reason,operation_id,created_at) VALUES('r','t',1,'scope','not_applicable','Exact reason','op','created')",[]).unwrap();
+        apply(&mut c).unwrap(); apply(&mut c).unwrap();
+        assert_eq!(c.query_row("SELECT origin_capture_id||':'||started_at||':'||reopened_at||':'||execution_backlog FROM tasks",[],|r|r.get::<_,String>(0)).unwrap(),"c:first-start:reopened:0");
+        assert_eq!(c.query_row("SELECT title||':'||detail||':'||content_hash FROM task_revisions",[],|r|r.get::<_,String>(0)).unwrap(),"Exact title:Exact bytes:hash");
+        c.execute("UPDATE tasks SET state='on_hold' WHERE id='t'",[]).unwrap();
+        assert_eq!(c.query_row("SELECT task_id FROM task_work_sessions",[],|r|r.get::<_,String>(0)).unwrap(),"t");
+        assert_eq!(c.query_row("SELECT reason FROM task_readiness_decisions",[],|r|r.get::<_,String>(0)).unwrap(),"Exact reason");
+        assert_eq!(c.query_row("SELECT count(*) FROM pragma_foreign_key_check",[],|r|r.get::<_,i64>(0)).unwrap(),0);
+        assert!(c.execute("UPDATE tasks SET state='unknown'",[]).is_err());
+        assert!(c.execute("INSERT INTO task_work_sessions(id,task_id,title,created_at,updated_at) VALUES('bad','missing','','','')",[]).is_err());
+        let mut failed=Connection::open_in_memory().unwrap(); apply_plan(&mut failed,&MIGRATIONS[..23],23).unwrap();
+        failed.execute("CREATE TABLE task_state_transitions(dummy INTEGER)",[]).unwrap();
+        assert!(apply(&mut failed).is_err()); assert_eq!(schema_version(&failed).unwrap(),23);
+        assert!(!columns(&failed,"tasks").unwrap().contains(&"execution_backlog".into()));
+        assert_eq!(failed.pragma_query_value(None,"foreign_keys",|r|r.get::<_,i64>(0)).unwrap(),1);
     }
 
     #[test]

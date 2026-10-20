@@ -90,3 +90,5 @@ After an acknowledged preview edit, the saved version remains current even if re
 If Knowledge correction is acknowledged but the subsequent read fails, the UI retains the acknowledged body separately and offers a read-only recovery screen. Editing, restoration, notes, and publication stay unavailable until the canonical Task, revision, content hash and body are confirmed. Retrying recovery only reads; it does not repeat the correction or invent evidence metadata. Responses from an earlier Task cannot update a different Task after navigation.
 
 Routine search decisions, empty search outcomes and technical diagnostics are available in collapsed **Reference search details**. Unverified or failed search, partial-preview guidance and critical missing information remain visible. Title validation appears beside an invalid current title; valid titles have no error guidance.
+
+Workbench cards stay 320 px wide on desktop and shrink only when the available lane is narrower. Lanes wrap to fit the workspace. Each lane has its own viewport-bounded, keyboard-focusable vertical card scroller; headings stay outside it, and the page scroll reaches other categories.

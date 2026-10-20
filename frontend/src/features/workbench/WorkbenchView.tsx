@@ -1,3 +1,5 @@
+import { taskMoveError } from "./taskMove";
+import { ItemActionsMenu, type TaskMove } from "./ItemActionsMenu";
 import { taskTitleLength, validTaskTitle } from "../../services/taskTitle";
 import { localizedTask } from "./taskContent";
 import { completedTasksNewestFirst } from "./completedTasks";
@@ -55,6 +57,7 @@ export function WorkbenchView({ active, taskApplication, onTaskApplication, onPr
   })) };
   const captureImage = useInputImage();
   const refinementImages = useRef(new Map<string, InputImage[]>());
+  const [movingTask, setMovingTask] = useState<string>();
   const [focusActive, setFocusActive] = useState(false);
   const detailRef = useRef<TaskDetailHandle>(null);
   const refinementRef = useRef<RefinementPanelHandle>(null);
@@ -74,7 +77,7 @@ export function WorkbenchView({ active, taskApplication, onTaskApplication, onPr
     dialog?.close();
   };
   const selectDetail = (id: string | undefined, trigger?: HTMLElement) => {
-    if (id === detail) return;
+    if (id === detail && !refining) return;
     const proceed = () => {
       closeLegacyDock();
       setRefining(undefined);
@@ -205,7 +208,7 @@ export function WorkbenchView({ active, taskApplication, onTaskApplication, onPr
       (WorkbenchSnapshot & { activeSelection?: { title?: string } }) | undefined
   )?.activeSelection?.title;
   const stateLabel = (task: TaskCard) =>
-    task.state === "completed"
+    task.state === "on_hold" ? text.onHold : task.state === "completed"
       ? text.completed
       : task.state === "in_progress"
         ? text.inProgress
@@ -237,27 +240,50 @@ export function WorkbenchView({ active, taskApplication, onTaskApplication, onPr
   const categoryLabels = new Map(snapshot?.categories.flatMap((category) =>
     category.items.map((item) => [`${item.kind}:${item.id}`, category.label] as const)));
   const refiningIds = new Set(snapshot?.refiningShortcuts.map((item) => `${item.kind}:${item.id}`));
+  const heldTasks = items.filter((item) => item.kind === "task" && item.state === "on_hold");
   const activeTasks = items.filter((item) => item.kind === "task" && item.state === "in_progress");
   const completedTasks = completedTasksNewestFirst(items).slice(0, 5);
   const allTasks = items.filter((item): item is TaskCard => item.kind === "task");
-  const pendingItems = items.filter((item) => (item.kind !== "task" || item.state === "task") && (item.kind !== "task" || !item.parentTaskId || !allTasks.some(parent => parent.id === item.parentTaskId)));
+  const pendingItems = items.filter((item) => (item.kind !== "task" || item.state === "task") && (item.kind !== "task" || item.executionBacklog || !item.parentTaskId || !allTasks.some(parent => parent.id === item.parentTaskId)));
   const lanes = [
     { id: "inbox", title: text.inbox, hint: text.inboxHint, empty: text.noInbox,
       items: pendingItems.filter((item) => item.kind === "capture" && !refiningIds.has(`capture:${item.id}`)) },
     { id: "refining", title: text.refining, hint: text.refiningHint, empty: text.noRefining,
-      items: pendingItems.filter((item) => item.kind === "refinement" || refiningIds.has(`${item.kind}:${item.id}`)) },
+      items: pendingItems.filter((item) => item.kind === "refinement" || refiningIds.has(`${item.kind}:${item.id}`) && !(item.kind === "task" && item.executionBacklog)) },
     { id: "tasks", title: text.refinedTasks, hint: text.refinedTasksHint, empty: text.noReadyTasks,
-      items: pendingItems.filter((item) => item.kind === "task" && !refiningIds.has(`task:${item.id}`)) },
+      items: pendingItems.filter((item) => item.kind === "task" && (!refiningIds.has(`task:${item.id}`) || item.executionBacklog)) },
   ];
   const visibleIds = new Set(lanes.flatMap(lane => lane.items.map(item => `${item.kind}:${item.id}`)));
   const categories = (snapshot?.categories ?? []).filter(category => category.items.some(item => visibleIds.has(`${item.kind}:${item.id}`)));
   const generalIndex = categories.findIndex(category => category.id.toLowerCase() === "general" || category.label === "General");
   if (generalIndex >= 0) categories.unshift(...categories.splice(generalIndex, 1));
+  const moveTask = async (item: TaskCard, to: TaskMove) => {
+    if (movingTask) return;
+    setMovingTask(item.id); setError("");
+    try { await taskClient.transition(item.id, item.taskRevision, to); await load(); setDetailRefresh(value => value + 1); }
+    catch (cause) { setError(taskMoveError(cause, text)); }
+    finally { setMovingTask(undefined); requestAnimationFrame(() => {
+      const card = [...document.querySelectorAll<HTMLElement>("article")].find(card => card.dataset.entityId === item.id);
+      const disclosure = card?.closest<HTMLDetailsElement>('details:not([open])');
+      if (disclosure) disclosure.open = true;
+      card?.querySelector<HTMLButtonElement>(".canonical-card-title")?.focus({ preventScroll: true });
+    }); }
+  };
+  const openItem = (item: WorkbenchItem, trigger?: HTMLElement) => {
+    if (item.kind === "task") selectDetail(item.id, trigger);
+    else if (item.kind === "capture") openRefinement({ kind: "capture", id: item.id }, trigger);
+    else openLegacyRefinement(item.problemId, item.problemRevision, item.title);
+  };
   const renderCard = (item: WorkbenchItem): React.ReactNode => (
     <article
       className={`canonical-card${(item.kind === "task" && detail === item.id) || (refining?.kind === item.kind && refining.id === item.id) ? " selected" : ""}`}
       key={`${item.kind}-${item.id}`}
       data-entity-id={item.id}
+      onClick={event => {
+        const target = event.target as HTMLElement;
+        if (target.closest('article') !== event.currentTarget || target.closest('button,a,input,textarea,select,summary,[role="menu"],[contenteditable]') || target.closest('details')?.closest('article') === event.currentTarget || window.getSelection()?.toString()) return;
+        openItem(item, event.currentTarget.querySelector<HTMLElement>('.canonical-card-title') ?? undefined);
+      }}
     >
       <div className="canonical-card-body">
       <small>
@@ -267,15 +293,9 @@ export function WorkbenchView({ active, taskApplication, onTaskApplication, onPr
             ? text.capture
             : text.refining}
       </small>
-      {item.kind === "capture" ? <ContentRevisionTransition
-        as="h3"
-        cause={item.captureDistillation?.display.revision ? "automatic_apply" : undefined}
-        entityKey={`capture:${item.id}`}
-        revision={item.captureDistillation?.display.revision ?? 0}
-        variant="title"
-      >{itemTitle(item) || text.imageCapture}</ContentRevisionTransition> : <h3>{item.kind === "task" && item.state === "in_progress" ? (
-        <button className="active-task-title" data-control="task-shortcut-open" data-entity-id={item.id} onClick={(event) => selectDetail(item.id, event.currentTarget)}><ContentRevisionTransition as="span" cause={appliedTask?.taskId === item.id && appliedTask.revision === item.taskRevision ? appliedTask.cause : undefined} entityKey={`task:${item.id}`} revision={item.taskRevision} variant="title">{itemTitle(item)}</ContentRevisionTransition></button>
-      ) : item.kind === "task" ? <ContentRevisionTransition as="span" cause={appliedTask?.taskId === item.id && appliedTask.revision === item.taskRevision ? appliedTask.cause : undefined} entityKey={`task:${item.id}`} revision={item.taskRevision} variant="title">{itemTitle(item) || text.imageCapture}</ContentRevisionTransition> : itemTitle(item) || text.imageCapture}</h3>}
+      <h3><button type="button" className="canonical-card-title active-task-title" data-control={item.kind === "task" ? "task-shortcut-open" : "item-title-open"} data-entity-id={item.id} onClick={event => openItem(item, event.currentTarget)}>
+        <ContentRevisionTransition as="span" cause={item.kind === "task" && appliedTask?.taskId === item.id && appliedTask.revision === item.taskRevision ? appliedTask.cause : item.kind === "capture" && item.captureDistillation?.display.revision ? "automatic_apply" : undefined} entityKey={`${item.kind}:${item.id}`} revision={item.kind === "task" ? item.taskRevision : item.kind === "capture" ? item.captureDistillation?.display.revision ?? 0 : 0} variant="title">{itemTitle(item) || text.imageCapture}</ContentRevisionTransition>
+      </button></h3>
       {item.kind === "capture" && item.captureDistillation?.display.content && item.captureDistillation.display.content !== item.captureDistillation.display.title &&
         <ContentRevisionTransition as="p" className="capture-distillation-body"
           cause={item.captureDistillation.display.revision ? "automatic_apply" : undefined}
@@ -322,7 +342,7 @@ export function WorkbenchView({ active, taskApplication, onTaskApplication, onPr
             >
               {text.refine}
             </button>
-            <button type="button" data-control="task-card-delete" data-entity-id={item.id} onClick={() => requestDelete("tasks", item.id, item.title)}>{text.delete}</button>
+            <ItemActionsMenu title={item.title} state={item.state} activeExecution={item.hasActiveExecution} busy={movingTask === item.id} onMove={to => void moveTask(item, to)} onDelete={() => requestDelete("tasks", item.id, item.title)} />
           </>
         ) : item.kind === "capture" ? (
           <>
@@ -336,7 +356,7 @@ export function WorkbenchView({ active, taskApplication, onTaskApplication, onPr
           >
             {text.refine}
           </button>
-          <button type="button" data-control="task-card-delete" data-entity-id={item.id} onClick={() => requestDelete("captures", item.id, item.text)}>{text.delete}</button>
+          <ItemActionsMenu title={itemTitle(item)} onDelete={() => requestDelete("captures", item.id, item.text)} />
           </>
         ) : (
           <>
@@ -350,14 +370,14 @@ export function WorkbenchView({ active, taskApplication, onTaskApplication, onPr
           >
             {text.refine}
           </button>
-          <button type="button" data-control="task-card-delete" data-entity-id={item.problemId} onClick={() => requestDelete("problems", item.problemId, item.title)}>{text.delete}</button>
+          <ItemActionsMenu title={item.title} onDelete={() => requestDelete("problems", item.problemId, item.title)} />
           </>
         )}
       </footer>
       {item.kind === "task" && allTasks.some(child => child.parentTaskId === item.id) && <details className="subtask-tree" data-control="task-subtasks-expand">
         <summary>{text.subtasks} · {allTasks.filter(child => child.parentTaskId === item.id).length}</summary>
         <p>{text.subtaskHint}</p>
-        <div className="subtask-children">{allTasks.filter(child => child.parentTaskId === item.id).map(child => renderCard(child))}</div>
+        <div className="subtask-children">{allTasks.filter(child => child.parentTaskId === item.id && !child.executionBacklog && child.state !== "on_hold").map(child => renderCard(child))}</div>
       </details>}
     </article>
   );
@@ -456,6 +476,10 @@ export function WorkbenchView({ active, taskApplication, onTaskApplication, onPr
           </header>
           {activeTasks.length ? <div className="workbench-active-cards">{activeTasks.map(renderCard)}</div> : <p className="region-empty">{text.noActive}</p>}
         </section>
+        <details className="workbench-held" data-control="workbench-held">
+          <summary>{text.onHold} ({heldTasks.length})</summary>
+          <div className="workbench-held-cards">{heldTasks.map(renderCard)}</div>
+        </details>
         <aside className="workbench-recent" aria-labelledby="recent-completed-title">
           <h2 id="recent-completed-title">{text.recentCompleted}</h2>
           {completedTasks.length ? <ol className="completed-task-list" aria-label={text.recentCompleted}>{completedTasks.map(task => (
@@ -475,7 +499,7 @@ export function WorkbenchView({ active, taskApplication, onTaskApplication, onPr
               <header className="workbench-category-header">
                 <h2 id={`category-${categoryIndex}`}>{category.label}</h2>
               </header>
-              <div className="workbench-category-scroll" role="region" aria-labelledby={`category-${categoryIndex}`} tabIndex={0}>
+              <div className="workbench-category-scroll">
               <div className="workbench-lanes">
             {lanes.map(lane => ({ ...lane, items: lane.items.filter(belongs) })).map((lane) => (
               <section className={`workbench-lane workbench-lane-${lane.id}`} data-lane={lane.id} aria-labelledby={`lane-${categoryIndex}-${lane.id}`} key={lane.id}>
@@ -484,7 +508,7 @@ export function WorkbenchView({ active, taskApplication, onTaskApplication, onPr
                   <span className="workbench-count">{lane.items.length}</span>
                 </header>
                 <p className="workbench-lane-hint">{lane.hint}</p>
-                <div className="workbench-lane-cards">
+                <div className="workbench-lane-cards" role="region" aria-labelledby={`lane-${categoryIndex}-${lane.id}`} tabIndex={0}>
                   {lane.items.length ? lane.items.map(renderCard) : <p className="region-empty">{lane.empty}</p>}
                 </div>
 

@@ -223,7 +223,7 @@ other, exercise stale approval and scope denial, and verify projection recovery 
 - **FR-003**: Workbench MUST order active Task shortcuts, refining shortcuts, then existing category groups without changing category semantics.
 - **FR-004**: Shortcuts MUST reference canonical identities, keep items in category groups, and exclude an active Task from the refining shortcut set.
 - **FR-005**: Shortcut and recent ordering MUST use allowlisted user activity only; background jobs MUST NOT update it.
-- **FR-006**: Task MUST support `task`, `in_progress`, and `completed` with explicit reopen and optimistic revision conflict handling.
+- **FR-006**: Task MUST support `task`, `in_progress`, `on_hold`, and `completed`, explicit hold/resume and return to execution backlog preserving first-start/history, with explicit reopen and optimistic revision conflict handling.
 - **FR-007**: Task MUST own text/image/file Work Log entries, comments, checklists, attachments, and append-only decisions from creation onward.
 - **FR-008**: Completed evidence MUST remain inspectable; follow-up and reopen MUST preserve original completion records.
 - **FR-009**: Problem MUST be independently revisioned and MUST have a lifecycle independent from Task.

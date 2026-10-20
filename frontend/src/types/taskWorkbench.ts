@@ -83,7 +83,7 @@ export interface CaptureDistillationSummary {
   } | null;
 }
 
-export type TaskState = "task" | "in_progress" | "completed";
+export type TaskState = "task" | "in_progress" | "on_hold" | "completed";
 export type WorkbenchItem = CaptureCard | TaskCard | LegacyRefinementCard;
 
 export interface CaptureCard {
@@ -105,6 +105,9 @@ export interface TaskCard {
   id: string;
   taskRevision: number;
   refinedRevision?: number;
+  executionBacklog?: boolean;
+  hasActiveExecution?: boolean;
+  stateTransitions?: Array<{ from: TaskState; to: TaskState; action: string; reason: string; createdAt: string }>;
   parentTaskId?: string;
   state: TaskState;
   title: string;
@@ -456,7 +459,7 @@ export type TaskExecutionRun = {
   workLogSyncError?: string; retryOfRunId?: string; revision: number;
 };
 export type TaskExecutionSnapshot = { revision?: number; runs: TaskExecutionRun[]; activeRunId: string | null; selectedRun: TaskExecutionRun | null; effectiveConfig?: TaskExecutionEffectiveConfig };
-export type TaskExecutionWorkLogLink = { runId: string; sessionId: string; status: TaskExecutionStatus; provider: "codex"; model: string; reportExcerpt?: string; evidence: TaskExecutionEvidence[]; artifacts: string[]; limitations: string[]; syncState: "pending" | "synced" | "failed" };
+export type TaskExecutionWorkLogLink = { instruction?: string; runId: string; sessionId: string; status: TaskExecutionStatus; provider: "codex"; model: string; reportExcerpt?: string; evidence: TaskExecutionEvidence[]; artifacts: string[]; limitations: string[]; syncState: "pending" | "synced" | "failed" };
 export type TaskWorkSession = {
   id: string; taskId: string; title: string; provider: "codex"; model: string;
   approvalMode: "ask" | "auto"; approvalsReviewer?: "user" | "auto_review"; workspacePath: string; createdAt: string; updatedAt: string;

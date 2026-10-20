@@ -20,7 +20,9 @@ pub fn content_hash(fields: &[&str]) -> String {
 
 pub fn validate_state_transition(from: &str, to: &str) -> Result<String, String> {
     match (from, to) {
-        ("task", "in_progress") | ("in_progress", "completed") => Ok(to.into()),
+        ("task", "in_progress") | ("in_progress", "completed") | ("in_progress", "on_hold") => Ok(to.into()),
+        ("on_hold", "resume") => Ok("in_progress".into()),
+        ("in_progress" | "on_hold", "backlog") => Ok("task".into()),
         ("completed", "reopen") => Ok("in_progress".into()),
         _ => Err(format!("transition_invalid: {from} to {to}")),
     }

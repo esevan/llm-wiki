@@ -16,7 +16,7 @@ canonical Capture remains visible after creating Tasks.
 `tasks(id, origin_capture_id?, current_revision, state, archived_at?, category, created_at,
 last_user_activity_at, started_at?, completed_at?, reopened_at?)`.
 
-State is `task | in_progress | completed`. `task_revisions` uses `(task_id, revision)` and stores
+State is `task | in_progress | on_hold | completed`. `task_revisions` uses `(task_id, revision)` and stores
 title, detail, outcome, scope, non-goals, validation criteria, content hash, author, source reference,
 and created time. Revision creation and head update are atomic.
 
@@ -118,7 +118,17 @@ mismatch leaves the earlier cache or draft intact and rejects the late result.
 
 ## Transition Rules
 
-`task→in_progress→completed`; `completed→in_progress` only through explicit reopen. Revisions use
+`task→in_progress→completed`; `in_progress→on_hold`, `on_hold→in_progress` via explicit `resume`, and either active/held state → `task` via explicit `backlog`; `completed→in_progress` only through explicit reopen. Revisions use
 expected head. A mismatch returns `head_conflict` with current revision and conflicting fields.
 Review/readiness state never blocks transition. Completion, Problem resolution, and publication do
 not imply one another.
+
+### Hold and explicit backlog placement (schema 24)
+
+`tasks.execution_backlog` defaults to false for existing data. Explicit backlog movement sets it,
+keeps `started_at`, and places the same Task in Refined Tasks ahead of an open refinement session.
+Starting/resuming clears it. This placement does not certify readiness or close refinement.
+`task_state_transitions` stores from/to/action/reason/operation ID/time without creating content
+revisions. Active or uncertain dispatched executions prevent hold/backlog atomically. Held Tasks
+cannot start new executions. Migration rebuilds only the Task parent table with foreign keys
+validated before and within the transaction, preserving child identities and restoring enforcement.

@@ -106,7 +106,7 @@ export const taskClient = {
   transition: (
     id: string,
     expectedTaskRevision: number,
-    to: "in_progress" | "completed" | "reopen",
+    to: "in_progress" | "completed" | "reopen" | "on_hold" | "resume" | "backlog",
     reason?: string,
     continueDecision?: boolean,
   ) =>

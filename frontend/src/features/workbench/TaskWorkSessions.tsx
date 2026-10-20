@@ -1,3 +1,4 @@
+import { useTaskWorkbenchText } from "./taskWorkbenchText";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -299,6 +300,7 @@ export function TaskWorkSessions({
   focusExecution?: { sessionId: string; runId: string };
   onOpenWorkLog?: (entryId: string) => void;
 }) {
+  const workbenchText = useTaskWorkbenchText();
   const t = document.documentElement.lang.startsWith("ko") ? copy.ko : copy.en;
   const fallback = useRef(new Map<string, WorkSessionDraft>());
   const drafts = draftStore ?? fallback.current;
@@ -703,6 +705,7 @@ export function TaskWorkSessions({
     }
   };
   const run = async () => {
+    if (task.state === "on_hold") { setError(workbenchText.taskHeldGuard); return; }
     if (!record || runSubmitting || retrySubmittingKeys.current.size > 0 || execution?.activeRunId || !draft.trim() || !record.session.workspacePath.trim()) {
       if (record && !record.session.workspacePath.trim()) setError(t.runUnavailable);
       return;
@@ -1077,7 +1080,7 @@ export function TaskWorkSessions({
                             data-control="task-session-run-retry"
                             aria-label={`${t.retryRun}: ${item.run.instruction}`}
                             aria-describedby={`task-session-run-retry-hint-${item.run.id}`}
-                            disabled={busy || runSubmitting || Boolean(execution?.activeRunId) || Boolean(retrySubmittingRunId) || !execution?.effectiveConfig?.ready}
+                            disabled={task.state === "on_hold" || busy || runSubmitting || Boolean(execution?.activeRunId) || Boolean(retrySubmittingRunId) || !execution?.effectiveConfig?.ready}
                             onClick={() => void retryRun(item.run)}
                           >
                             {retrySubmittingRunId === item.run.id ? t.retryingRun : t.retryRun}
@@ -1183,6 +1186,7 @@ export function TaskWorkSessions({
                     </button>
                   </div>
                 )}
+                {task.state === "on_hold" && <p role="status">{workbenchText.taskHeldGuard}</p>}
                 <footer>
                   <label className="task-session-attach">
                     {t.attach}
@@ -1204,7 +1208,7 @@ export function TaskWorkSessions({
                   >
                     {t.send}
                   </button>
-                  <button className="primary" type="button" data-control="task-session-run" disabled={runSubmitting || Boolean(retrySubmittingRunId) || !draft.trim() || !record.session.workspacePath.trim() || Boolean(execution?.activeRunId) || !execution?.effectiveConfig?.ready} onClick={() => void run()}>{t.run}</button>
+                  <button className="primary" type="button" data-control="task-session-run" disabled={task.state === "on_hold" || runSubmitting || Boolean(retrySubmittingRunId) || !draft.trim() || !record.session.workspacePath.trim() || Boolean(execution?.activeRunId) || !execution?.effectiveConfig?.ready} onClick={() => void run()}>{t.run}</button>
                 </footer>
               </div>
               <aside className="task-session-sidebar">

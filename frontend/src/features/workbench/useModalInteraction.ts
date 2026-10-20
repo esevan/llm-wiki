@@ -53,7 +53,9 @@ export function useModalInteraction(root: RefObject<HTMLElement | null>, priorit
       const panel = root.current;
       if (!panel || !ownsInput()) return;
       const active = document.activeElement;
-      if (active instanceof HTMLElement && panel.contains(active) && available(active)) {
+      const actionMenu = active instanceof Element ? active.closest('[role="menu"]') : null;
+      const ownedMenu = actionMenu && [...panel.querySelectorAll('[aria-controls]')].some(control => control.getAttribute('aria-controls') === actionMenu.id);
+      if (active instanceof HTMLElement && (panel.contains(active) || ownedMenu) && available(active)) {
         lastFocused = active;
         return;
       }
@@ -63,6 +65,7 @@ export function useModalInteraction(root: RefObject<HTMLElement | null>, priorit
     };
     const keydown = (event: KeyboardEvent) => {
       if (!ownsInput() || event.defaultPrevented || event.isComposing || event.keyCode === 229) return;
+      if (event.target instanceof Element && event.target.closest('[role="menu"]')) return;
       if (event.key === "Escape") {
         event.preventDefault();
         event.stopPropagation();

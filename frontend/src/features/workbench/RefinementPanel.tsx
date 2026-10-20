@@ -1228,7 +1228,7 @@ export function RefinementPanel({
                 </p>
                 <h3>{localizedTask(currentTask).title}</h3>
                 <p>
-                  {currentTask.state === "in_progress"
+                  {currentTask.state === "on_hold" ? text.onHold : currentTask.state === "in_progress"
                     ? text.inProgress
                     : currentTask.state === "completed"
                       ? text.completed
@@ -1272,7 +1272,7 @@ export function RefinementPanel({
                           currentTask.taskRevision,
                           currentTask.state === "completed"
                             ? "reopen"
-                            : "in_progress",
+                            : currentTask.state === "on_hold" ? "resume" : "in_progress",
                         )
                         .then(() => taskClient.task(currentTask.id))
                         .then((task) => {
@@ -1285,7 +1285,7 @@ export function RefinementPanel({
                         .finally(() => setStatusBusy(false));
                     }}
                   >
-                    {currentTask.state === "completed"
+                    {currentTask.state === "on_hold" ? text.resumeTask : currentTask.state === "completed"
                       ? text.reopen
                       : text.start}
                   </button>

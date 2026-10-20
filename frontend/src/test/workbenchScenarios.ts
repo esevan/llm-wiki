@@ -567,7 +567,10 @@ export async function runTaskControlMatrixScenario(h: WorkbenchScenarioHarness) 
   h.click(control("refinement-close"), "Close resumed Task refinement");
   await h.waitFor(() => !document.querySelector(".refinement-panel"), "closed refinement before deletion");
   const savedCaptureCard = [...document.querySelectorAll<HTMLElement>(".canonical-card")].find(card => card.textContent?.includes(shortcutCapture));
-  const captureDelete = savedCaptureCard?.querySelector<HTMLElement>('[data-control="task-card-delete"]');
+  const captureMenu = savedCaptureCard?.querySelector<HTMLElement>('[data-control="item-actions-menu"]');
+  if (!captureMenu) throw new Error("Capture actions menu missing");
+  h.click(captureMenu, "Open Capture actions");
+  const captureDelete = document.querySelector<HTMLElement>('[role="menu"] [data-control="task-card-delete"]');
   if (!captureDelete) throw new Error("Capture delete control missing");
   observe(h, "Workbench deletion controls");
   h.coverage.interact("task-card-delete", () => h.click(captureDelete, "Ask to delete Capture"));
@@ -583,9 +586,12 @@ export async function runTaskControlMatrixScenario(h: WorkbenchScenarioHarness) 
   effect(h, ["task-delete-confirm"], () => !document.querySelector(".canonical-work")?.textContent?.includes(shortcutCapture));
   await h.detail(revisedTitle);
   observe(h, "Task detail delete");
-  await clickControl(h, "task-detail-delete", "Ask to delete Task from detail");
+  const detailMenu = document.querySelector<HTMLElement>('.task-detail [data-control="item-actions-menu"]');
+  if (!detailMenu) throw new Error("Task actions menu missing");
+  h.click(detailMenu, "Open Task actions");
+  await clickControl(h, "task-card-delete", "Ask to delete Task from detail");
   await h.waitFor(() => Boolean(document.querySelector(".workbench-delete-dialog[open]")), "Task delete confirmation");
-  effect(h, ["task-detail-delete"], () => document.querySelector(".workbench-delete-dialog")?.textContent?.includes(revisedTitle) === true);
+  effect(h, ["task-card-delete"], () => document.querySelector(".workbench-delete-dialog")?.textContent?.includes(revisedTitle) === true);
   await clickControl(h, "task-delete-confirm", "Delete Task from detail");
   await h.waitFor(() => !document.querySelector(".task-detail") && !document.querySelector(".workbench-delete-dialog"), "deleted Task detail closes");
   const afterDeletion = await h.api<{ categories: Array<{ items: Array<{ title?: string; text?: string }> }> }>("/workbench");

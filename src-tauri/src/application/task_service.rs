@@ -250,6 +250,10 @@ impl TaskApplicationService {
         )
     }
 
+    fn has_active_execution(c: &rusqlite::Connection, id: &str) -> Result<bool, String> {
+        c.query_row("SELECT EXISTS(SELECT 1 FROM task_work_session_runs WHERE task_id=? AND (status IN ('queued','running','awaiting_response') OR (status='needs_attention' AND dispatch_state IN ('uncertain','accepted','dispatch_recorded'))))", [id], |r| r.get(0)).map_err(|e|e.to_string())
+    }
+
     fn task_transition_tx(
         &self,
         tx: &Transaction<'_>,
@@ -267,9 +271,14 @@ impl TaskApplicationService {
             None => req(input, "to")?,
         };
         let state = validate_state_transition(&from, requested_state)?;
+        if matches!(requested_state, "on_hold" | "backlog") {
+            let active = Self::has_active_execution(tx, id)?;
+            if active { return Err("active_task_execution: finish or stop the active execution and confirm its end before moving this Task".into()); }
+        }
         if state == "completed" {
             return self.complete_tx(tx, id, input, at);
         }
+        tx.execute("INSERT INTO task_state_transitions(id,task_id,from_state,to_state,action,reason,operation_id,created_at) VALUES(?,?,?,?,?,?,?,?)", params![task_repository::new_id(),id,from,state,requested_state,input.get("reason").and_then(Value::as_str).unwrap_or(""),req(input,"operationId")?,at]).map_err(|e|e.to_string())?;
         if from == "completed" && state == "in_progress" {
             crate::native::task_hierarchy::reopen_ancestors(
                 tx,
@@ -279,6 +288,7 @@ impl TaskApplicationService {
             )?;
         }
         tx.execute("UPDATE tasks SET state=?,completed_at=CASE WHEN ?='in_progress' THEN NULL ELSE completed_at END,started_at=CASE WHEN ?='in_progress' AND started_at IS NULL THEN ? ELSE started_at END,reopened_at=CASE WHEN ?='in_progress' AND ?='completed' THEN ? ELSE reopened_at END WHERE id=?", params![state, state, state, at, state, from, at, id]).map_err(|e| e.to_string())?;
+        tx.execute("UPDATE tasks SET execution_backlog=? WHERE id=?", params![requested_state == "backlog",id]).map_err(|e|e.to_string())?;
         self.record_task_activity(tx, id, "transition", input, at)?;
         Ok(json!({"id":id,"taskRevision":revision,"state":state}))
     }
@@ -496,6 +506,7 @@ impl TaskApplicationService {
             params![at, task],
         )
         .map_err(|e| e.to_string())?;
+        tx.execute("INSERT INTO task_state_transitions(id,task_id,from_state,to_state,action,operation_id,created_at) VALUES(?,?,'in_progress','completed','completed',?,?)", params![task_repository::new_id(),task,req(input,"operationId")?,at]).map_err(|e|e.to_string())?;
         self.record_task_activity(tx, task, "completed", input, at)?;
         crate::native::task_hierarchy::child_completed(
             tx,
@@ -731,7 +742,7 @@ impl TaskApplicationService {
                 entry["distillation"]=distillation;
                 entry["originalAvailable"]=json!(true);
             }
-            let execution=c.query_row("SELECT id,session_id,status,provider,model,final_report,work_log_sync_state,error_message FROM task_work_session_runs WHERE work_log_entry_id=? AND task_id=?",params![entry_id,id],|row|Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?,row.get::<_,String>(2)?,row.get::<_,String>(3)?,row.get::<_,String>(4)?,row.get::<_,Option<String>>(5)?,row.get::<_,String>(6)?,row.get::<_,Option<String>>(7)?))).optional().map_err(|e|e.to_string())?;
+            let execution=c.query_row("SELECT id,session_id,status,provider,model,final_report,work_log_sync_state,error_message,instruction FROM task_work_session_runs WHERE work_log_entry_id=? AND task_id=?",params![entry_id,id],|row|Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?,row.get::<_,String>(2)?,row.get::<_,String>(3)?,row.get::<_,String>(4)?,row.get::<_,Option<String>>(5)?,row.get::<_,String>(6)?,row.get::<_,Option<String>>(7)?,row.get::<_,Option<String>>(8)?))).optional().map_err(|e|e.to_string())?;
             if let Some(run) = execution {
                 let mut evidence_statement=c.prepare("SELECT provider_item_id,kind,status,content_json,created_at FROM task_work_session_run_items WHERE run_id=? ORDER BY provider_order,provider_item_id LIMIT 20").map_err(|e|e.to_string())?;
                 let evidence=evidence_statement.query_map([&run.0],|row|{let raw:String=row.get(3)?;let item:Value=serde_json::from_str(&raw).unwrap_or(json!({}));let summary=item.get("text").or_else(||item.get("aggregatedOutput")).or_else(||item.get("command")).and_then(Value::as_str).unwrap_or(item.get("type").and_then(Value::as_str).unwrap_or("Completed provider item"));Ok(json!({"id":row.get::<_,String>(0)?,"kind":row.get::<_,String>(1)?,"status":row.get::<_,String>(2)?,"label":item.get("type").and_then(Value::as_str).unwrap_or("item"),"summary":summary.chars().take(1000).collect::<String>(),"command":item.get("command"),"paths":item.get("changes"),"exitCode":item.get("exitCode"),"createdAt":row.get::<_,String>(4)?}))}).map_err(|e|e.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|e|e.to_string())?;
@@ -768,7 +779,7 @@ impl TaskApplicationService {
                     entry["distillation"]=json!({"freshness":freshness,"result":{"claims":[],"workLogView":{"sections":[]},"warnings":limitations},"projectionRevision":0});
                     entry["originalAvailable"]=json!(report.is_some() || !evidence.is_empty());
                 }
-                entry["execution"] = json!({"runId":run.0,"sessionId":run.1,"status":run.2,"provider":run.3,"model":run.4,"reportExcerpt":report,"evidence":evidence,"artifacts":artifacts,"limitations":limitations,"syncState":run.6});
+                entry["execution"] = json!({"runId":run.0,"sessionId":run.1,"status":run.2,"provider":run.3,"model":run.4,"instruction":run.8,"reportExcerpt":report,"evidence":evidence,"artifacts":artifacts,"limitations":limitations,"syncState":run.6});
             }
         }
         Ok(json!({"entries":entries}))
@@ -967,6 +978,9 @@ impl TaskApplicationService {
         }).optional().map_err(|e|e.to_string())?;
         let problem_links=c.prepare("SELECT id,problem_id,problem_revision,relationship,note FROM task_problem_links WHERE task_id=? AND unlinked_at IS NULL").map_err(|e|e.to_string())?.query_map([id],|r|Ok(json!({"id":r.get::<_,String>(0)?,"problemId":r.get::<_,String>(1)?,"problemRevision":r.get::<_,i64>(2)?,"relationship":r.get::<_,String>(3)?,"note":r.get::<_,String>(4)?}))).map_err(|e|e.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|e|e.to_string())?;
         let relationships=c.prepare("SELECT id,CASE WHEN source_task_id=? THEN target_task_id ELSE source_task_id END,kind,note FROM task_relationships WHERE (source_task_id=? OR (kind='related' AND target_task_id=?)) AND unlinked_at IS NULL").map_err(|e|e.to_string())?.query_map(params![id,id,id],|r|Ok(json!({"id":r.get::<_,String>(0)?,"targetTaskId":r.get::<_,String>(1)?,"kind":r.get::<_,String>(2)?,"note":r.get::<_,String>(3)?}))).map_err(|e|e.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|e|e.to_string())?;
+        let transitions = c.prepare("SELECT from_state,to_state,action,reason,created_at FROM task_state_transitions WHERE task_id=? ORDER BY created_at,rowid").map_err(|e|e.to_string())?.query_map([id],|r|Ok(json!({"from":r.get::<_,String>(0)?,"to":r.get::<_,String>(1)?,"action":r.get::<_,String>(2)?,"reason":r.get::<_,String>(3)?,"createdAt":r.get::<_,String>(4)?}))).map_err(|e|e.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|e|e.to_string())?;
+        x["stateTransitions"] = json!(transitions);
+        x["hasActiveExecution"] = json!(Self::has_active_execution(&c,id)?);
         let readiness = self.readiness(id)?;
         let object = x.as_object_mut().ok_or("invalid task")?;
         object.insert("workLog".into(), work_log);
@@ -1012,10 +1026,12 @@ impl TaskApplicationService {
 
     fn workbench(&self, input: &Value) -> Result<Value, String> {
         let c = crate::native::database::open(self.repo.path())?;
-        let mut s=c.prepare("SELECT t.id,t.current_revision,t.state,r.title,t.category,t.last_user_activity_at,f.revision,h.parent_task_id,(SELECT c.text FROM captures c WHERE c.id=t.origin_capture_id),t.completed_at FROM tasks t JOIN task_revisions r ON r.task_id=t.id AND r.revision=t.current_revision LEFT JOIN task_refinements f ON f.task_id=t.id LEFT JOIN task_subtasks h ON h.child_task_id=t.id WHERE t.archived_at IS NULL AND NOT EXISTS(SELECT 1 FROM deleted_entities d WHERE d.entity_type='tasks' AND d.entity_id=t.id) ORDER BY t.last_user_activity_at DESC").map_err(|x|x.to_string())?;
-        let mut rows=s.query_map([],|r|Ok(json!({"kind":"task","id":r.get::<_,String>(0)?,"taskRevision":r.get::<_,i64>(1)?,"state":r.get::<_,String>(2)?,"title":r.get::<_,String>(3)?,"category":r.get::<_,String>(4)?,"lastUserActivityAt":r.get::<_,String>(5)?,"refinedRevision":r.get::<_,Option<i64>>(6)?,"parentTaskId":r.get::<_,Option<String>>(7)?,"originCaptureText":r.get::<_,Option<String>>(8)?,"completedAt":r.get::<_,Option<String>>(9)?}))).map_err(|x|x.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|x|x.to_string())?;
+        let mut s=c.prepare("SELECT t.id,t.current_revision,t.state,r.title,t.category,t.last_user_activity_at,f.revision,h.parent_task_id,(SELECT c.text FROM captures c WHERE c.id=t.origin_capture_id),t.completed_at,t.execution_backlog FROM tasks t JOIN task_revisions r ON r.task_id=t.id AND r.revision=t.current_revision LEFT JOIN task_refinements f ON f.task_id=t.id LEFT JOIN task_subtasks h ON h.child_task_id=t.id WHERE t.archived_at IS NULL AND NOT EXISTS(SELECT 1 FROM deleted_entities d WHERE d.entity_type='tasks' AND d.entity_id=t.id) ORDER BY t.last_user_activity_at DESC").map_err(|x|x.to_string())?;
+        let mut rows=s.query_map([],|r|Ok(json!({"kind":"task","id":r.get::<_,String>(0)?,"taskRevision":r.get::<_,i64>(1)?,"state":r.get::<_,String>(2)?,"title":r.get::<_,String>(3)?,"category":r.get::<_,String>(4)?,"lastUserActivityAt":r.get::<_,String>(5)?,"refinedRevision":r.get::<_,Option<i64>>(6)?,"parentTaskId":r.get::<_,Option<String>>(7)?,"originCaptureText":r.get::<_,Option<String>>(8)?,"completedAt":r.get::<_,Option<String>>(9)?,"executionBacklog":r.get::<_,bool>(10)?}))).map_err(|x|x.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|x|x.to_string())?;
+        let executing_tasks: std::collections::BTreeSet<String> = c.prepare("SELECT DISTINCT task_id FROM task_work_session_runs WHERE status IN ('queued','running','awaiting_response') OR (status='needs_attention' AND dispatch_state IN ('uncertain','accepted','dispatch_recorded'))").map_err(|e|e.to_string())?.query_map([],|r|r.get(0)).map_err(|e|e.to_string())?.collect::<Result<_,_>>().map_err(|e|e.to_string())?;
         let mut translations = crate::native::localization::current_task_versions(&c)?;
         for item in &mut rows {
+            item["hasActiveExecution"] = json!(executing_tasks.contains(item["id"].as_str().unwrap_or_default()));
             item["contentVersions"] = translations
                 .remove(item["id"].as_str().unwrap_or_default())
                 .unwrap_or_else(|| json!({}));
@@ -1052,7 +1068,7 @@ impl TaskApplicationService {
         if let Ok(mut sessions) = c.prepare("SELECT s.capture_id,COALESCE(s.task_id,(SELECT json_extract(d.result_json,'$.id') FROM refinement_proposal_decisions d WHERE d.session_id=s.id AND d.decision!='reject' AND json_extract(d.result_json,'$.taskRevision') IS NOT NULL AND NOT EXISTS(SELECT 1 FROM task_subtasks h WHERE h.child_task_id=json_extract(d.result_json,'$.id')) ORDER BY d.created_at DESC,d.rowid DESC LIMIT 1)),s.current_draft_revision FROM refinement_sessions s WHERE (s.capture_id IS NOT NULL OR s.task_id IS NOT NULL) AND s.state!='completed' AND NOT EXISTS(SELECT 1 FROM deleted_entities d WHERE d.entity_type='captures' AND d.entity_id=s.capture_id) AND NOT EXISTS(SELECT 1 FROM deleted_entities d WHERE d.entity_type='tasks' AND d.entity_id=s.task_id) ORDER BY s.last_user_activity_at DESC") {
             let subjects = sessions.query_map([], |row| Ok((row.get::<_,Option<String>>(0)?, row.get::<_,Option<String>>(1)?, row.get::<_,i64>(2)?))).map_err(|error| error.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|error| error.to_string())?;
             refining.extend(subjects.into_iter().filter_map(|(capture_id,task_id,revision)| {
-                let (kind,id) = if let Some(id) = task_id { if active_ids.contains(&id.as_str()) { return None; } ("task",id) } else { ("capture",capture_id?) };
+                let (kind,id) = if let Some(id) = task_id { if active_ids.contains(&id.as_str()) || rows.iter().any(|item| item["id"] == id && (item["state"] == "on_hold" || item["executionBacklog"] == true)) { return None; } ("task",id) } else { ("capture",capture_id?) };
                 Some(json!({"kind":kind,"id":id,"draftRevision":revision}))
             }));
         }
@@ -1247,6 +1263,51 @@ mod tests {
                 params![format!("link-{session_id}"), session_id, event_id, task_id],
             )
             .unwrap();
+    }
+
+    #[test]
+    fn task_hold_backlog_preserves_content_sessions_and_refinement() {
+        let root=tempdir().unwrap(); let db=root.path().join("hold.db");
+        crate::native::database::initialize(&db).unwrap(); let service=TaskApplicationService::new(&db);
+        let task=service.execute("task.create",&json!({"operationId":"create","inputText":"Exact capture","title":"Keep identity"})).unwrap(); let id=task["id"].as_str().unwrap();
+        let transition=|op:&str,to:&str| service.execute("task.transition",&json!({"operationId":op,"taskId":id,"expectedTaskRevision":1,"to":to}));
+        assert!(transition("bad","resume").is_err()); transition("start","in_progress").unwrap();
+        let c=crate::native::database::open(&db).unwrap();
+        c.execute("UPDATE tasks SET started_at='first-start' WHERE id=?",[id]).unwrap();
+        c.execute("INSERT INTO refinement_sessions(id,task_id,state,current_draft_revision,last_user_activity_at,updated_at) VALUES('refine',?,'active',1,'before','before')",[id]).unwrap();
+        let session=service.execute("task.work-session.create",&json!({"operationId":"session","taskId":id,"title":"Keep conversation"})).unwrap();
+        transition("hold","on_hold").unwrap(); transition("hold","on_hold").unwrap();
+        assert_eq!(service.execute("task.get",&json!({"taskId":id})).unwrap()["state"],"on_hold");
+        transition("resume","resume").unwrap(); transition("backlog","backlog").unwrap();
+        assert_eq!(c.query_row("SELECT state||':'||started_at||':'||execution_backlog FROM tasks WHERE id=?",[id],|r|r.get::<_,String>(0)).unwrap(),"task:first-start:1");
+        let board=service.execute("workbench.get",&json!({})).unwrap(); assert_eq!(board["refiningShortcuts"],json!([]));
+        assert_eq!(board["categories"][0]["items"][0]["executionBacklog"],true);
+        assert_eq!(c.query_row("SELECT state FROM refinement_sessions WHERE id='refine'",[],|r|r.get::<_,String>(0)).unwrap(),"active");
+        assert_eq!(service.execute("task.work-session.list",&json!({"taskId":id})).unwrap()["sessions"][0]["id"],session["id"]);
+        transition("restart","in_progress").unwrap(); transition("hold-again","on_hold").unwrap(); transition("held-backlog","backlog").unwrap();
+        let detail=service.execute("task.get",&json!({"taskId":id})).unwrap(); assert_eq!(detail["title"],"Keep identity"); assert_eq!(detail["taskRevision"],1); assert_eq!(detail["stateTransitions"].as_array().unwrap().len(),7);
+        assert!(service.execute("task.transition",&json!({"operationId":"stale","taskId":id,"expectedTaskRevision":99,"to":"in_progress"})).unwrap_err().contains("head_conflict"));
+    }
+
+    #[test]
+    fn task_hold_and_backlog_reject_all_active_or_uncertain_executions_atomically() {
+        let root=tempdir().unwrap(); let db=root.path().join("guard.db"); crate::native::database::initialize(&db).unwrap(); let service=TaskApplicationService::new(&db);
+        let task=service.execute("task.create",&json!({"operationId":"create","inputText":"Guard","title":"Guard"})).unwrap(); let id=task["id"].as_str().unwrap();
+        service.execute("task.transition",&json!({"operationId":"start","taskId":id,"expectedTaskRevision":1,"to":"in_progress"})).unwrap();
+        let c=crate::native::database::open(&db).unwrap();
+        c.execute("INSERT INTO task_work_sessions(id,task_id,title,created_at,updated_at) VALUES('s',?,'Session','','')",[id]).unwrap();
+        c.execute("INSERT INTO task_work_session_entries(id,session_id,author,kind,created_at) VALUES('e','s','user','note','')",[]).unwrap();
+        c.execute("INSERT INTO task_work_log_entries(id,task_id,created_at) VALUES('log',?,'')",[id]).unwrap();
+        c.execute("INSERT INTO task_work_session_runs(id,task_id,session_id,submission_key,payload_hash,instruction,user_entry_id,work_log_entry_id,model,workspace_path,context_hash,status,created_at,updated_at) VALUES('run',?,'s','key','hash','instruction','e','log','model','','hash','queued','','')",[id]).unwrap();
+        for status in ["queued","running","awaiting_response","needs_attention"] {
+            c.execute("UPDATE task_work_session_runs SET status=?,dispatch_state='uncertain'",[status]).unwrap();
+            for to in ["on_hold","backlog"] { assert!(service.execute("task.transition",&json!({"operationId":format!("{status}-{to}"),"taskId":id,"expectedTaskRevision":1,"to":to})).unwrap_err().contains("active_task_execution")); }
+        }
+        assert_eq!(c.query_row("SELECT state FROM tasks WHERE id=?",[id],|r|r.get::<_,String>(0)).unwrap(),"in_progress");
+        assert_eq!(c.query_row("SELECT count(*) FROM task_state_transitions",[],|r|r.get::<_,i64>(0)).unwrap(),1);
+        assert_eq!(c.query_row("SELECT stop_requested FROM task_work_session_runs",[],|r|r.get::<_,i64>(0)).unwrap(),0);
+        c.execute("UPDATE task_work_session_runs SET status='cancelled'",[]).unwrap();
+        service.execute("task.transition",&json!({"operationId":"hold-after-stop","taskId":id,"expectedTaskRevision":1,"to":"on_hold"})).unwrap();
     }
 
     #[test]

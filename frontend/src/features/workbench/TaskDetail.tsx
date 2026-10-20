@@ -1,3 +1,5 @@
+import { taskMoveError } from "./taskMove";
+import { ItemActionsMenu } from "./ItemActionsMenu";
 import { taskTitleLength, validTaskTitle } from "../../services/taskTitle";
 import { localizedTask } from "./taskContent";
 import { useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, type ReactNode, type Ref } from "react";
@@ -319,7 +321,7 @@ export function TaskDetail({
       onChanged();
     });
     mutationQueue.current = pending.catch((e) => {
-      setError(String(e instanceof Error ? e.message : e));
+      setError(taskMoveError(e, text));
     });
     void pending
       .finally(() => {
@@ -534,7 +536,7 @@ export function TaskDetail({
       <div className="task-detail-header"><header>
         <div>
           <small>
-            {task.state === "completed"
+            {task.state === "on_hold" ? text.onHold : task.state === "completed"
               ? text.completed
               : task.state === "in_progress"
                 ? text.inProgress
@@ -638,10 +640,9 @@ export function TaskDetail({
             {text.reopen}
           </button>
         )}
-        {onRequestDelete && <button type="button" data-control="task-detail-delete" onClick={() => onRequestDelete(task.title)}>
-          {text.deleteItem}
-        </button>}
+        <ItemActionsMenu title={task.title} state={task.state} activeExecution={task.hasActiveExecution} busy={mutationBusy} onMove={to => { void update(() => taskClient.transition(task.id, revision, to)).catch(() => undefined); }} onDelete={onRequestDelete ? () => onRequestDelete(task.title) : undefined} />
       </section>
+      {!!task.stateTransitions?.length && <details className="task-state-history" data-control="task-state-history"><summary>{text.transitionHistory}</summary><ol>{task.stateTransitions.map((entry, index) => <li key={index}><time>{entry.createdAt}</time> · {entry.action === 'backlog' ? text.executionBacklog : entry.action === 'on_hold' ? text.hold : entry.action === 'resume' ? text.resumeTask : entry.action === 'reopen' ? text.reopen : entry.to === 'completed' ? text.completed : text.inProgress}{entry.reason && ` · ${entry.reason}`}</li>)}</ol></details>}
       <div id="task-tab-sessions" aria-labelledby="task-detail-tab-sessions" className="task-tab-panel" role="tabpanel" data-task-tab="sessions" hidden={tab !== "sessions"}>
         {tab === "sessions" && <TaskWorkSessions task={task} draftStore={workSessionDrafts} focusExecution={executionFocus} onOpenWorkLog={(entryId) => focusInTab("work", `#work-log-${entryId}`)} />}
       </div>
@@ -776,7 +777,7 @@ export function TaskDetail({
         {orderedWorkLog(task.workLog).map((log) => (
           <article className="log-entry" id={`work-log-${log.id}`} key={log.id} data-work-log-entry={log.id} tabIndex={-1}>
             {log.createdAt && <time dateTime={log.createdAt}>{workLogTimestamp(log.createdAt)}</time>}
-            {!log.distillation && <p>{log.bodyVersions?.[document.documentElement.lang.startsWith("ko") ? "ko" : "en"]?.body || log.body}</p>}
+            {!log.distillation && !log.execution && <p>{log.bodyVersions?.[document.documentElement.lang.startsWith("ko") ? "ko" : "en"]?.body || log.body}</p>}
             <WorkLogDistillation projection={log.distillation} execution={log.execution} busy={mutationBusy} onRetry={() => { void update(async () => { await taskClient.repairDistillation(task.id, "retry failed Distillation", log.execution?.runId); return task; }).catch(() => undefined); }} onRepair={() => { void update(async () => { await taskClient.repairDistillation(task.id, "repair requested by user", log.execution?.runId); return task; }).catch(() => undefined); }} onOpenOriginal={() => { if (log.execution) { setExecutionFocus({ sessionId: log.execution.sessionId, runId: log.execution.runId }); focusInTab("sessions", "[data-control=task-execution-heading]"); } }} />
             {log.execution && <details data-control="task-worklog-original-details" className="work-log-execution" aria-label="Codex execution"><summary>{displayLocale.startsWith("ko") ? "원본 실행 기록과 증거" : "Original execution and evidence"}</summary>
               {(() => {
@@ -1020,7 +1021,7 @@ export function TaskDetail({
                 onClick={() => setRelatedTaskId(candidate.id)}
               >
                 <strong>{candidate.title}</strong>
-                <small>{candidate.state === "completed" ? text.completed : candidate.state === "in_progress" ? text.inProgress : text.ready}</small>
+                <small>{candidate.state === "on_hold" ? text.onHold : candidate.state === "completed" ? text.completed : candidate.state === "in_progress" ? text.inProgress : text.ready}</small>
               </button>
             ))}
             {!matchingRelatedTasks.length && <p className="connection-picker-status">{text.noMatchingTasks}</p>}

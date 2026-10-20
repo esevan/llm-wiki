@@ -1,5 +1,7 @@
 // Render real workspace components with disposable, in-memory data only.
 import { createRoot } from 'react-dom/client';
+import type { TaskAggregate, TaskExecutionWorkLogLink, DistillationProjection, WorkbenchItem, WorkbenchSnapshot } from '../types/taskWorkbench';
+import { WorkLogDistillation } from '../features/workbench/WorkLogDistillation';
 import { WorkbenchView } from '../features/workbench/WorkbenchView';
 import { TaskDetail } from '../features/workbench/TaskDetail';
 import { DeleteItemDialog } from '../features/workbench/DeleteItemDialog';
@@ -10,15 +12,43 @@ import '../theme/refresh.css';
 import '../theme/conflict-review.css';
 
 const prose = '사용자가 검토하는 긴 작업 설명입니다. Review the task scope, outcome and validation before applying changes. '.repeat(12);
-const task = { id: 'layout-task', kind: 'task', taskRevision: 1, state: 'task', title: 'Wide workspace / 와이드 작업 공간', detail: prose, outcome: prose, scope: prose, nonGoals: prose, validationCriteria: prose, workLog: [], checklist: [], decisions: [], readinessEntries: [] };
-const snapshot = { revision: 1, activeShortcuts: [], refiningShortcuts: [], categories: [{ id: 'general', label: 'General', items: [task, { kind: 'capture', id: 'layout-capture', text: prose }] }] };
-window.llmWikiApplication = { request: async ({path}) => {
-  const body = path === '/workbench' ? snapshot : path.endsWith('/proposals') ? [] : path.endsWith('/reference-workspace') ? {references: [], mentions: []} : path.includes('execution') ? {runs: []} : path.includes('lineage') ? {} : path.includes('refinement') ? {id: 'layout-refinement', messages: [{id: 'question', role: 'user', body: prose}, {id: 'answer', role: 'assistant', body: prose}], proposals: []} : task;
+const task: TaskAggregate = { id: 'layout-task', kind: 'task', taskRevision: 1, state: 'task', title: 'Wide workspace / 와이드 작업 공간', detail: prose, outcome: prose, scope: prose, nonGoals: prose, validationCriteria: prose, workLog: [], checklist: [], decisions: [], readinessEntries: [] };
+const crowded = new URLSearchParams(location.search).has('crowded');
+const integrated = new URLSearchParams(location.search).has('integrated');
+const fixtureItems: WorkbenchItem[] = crowded ? Array.from({length: 24}, (_, index) => [{...task, id: `refining-${index}`, detail: 'Refining task description', title: `Refining ${index}`}, {...task, id: `task-${index}`, detail: 'A readable task description', title: `Task ${index} / 작업`}, {kind: 'capture' as const, id: `capture-${index}`, text: `Capture ${index} / 생각을 정리합니다.`}]).flat() : [task, {kind: 'capture', id: 'layout-capture', text: prose}];
+if (integrated) fixtureItems.push(
+  {...task, id:'integration-active', state:'in_progress', title:'Active task / 진행 중 작업'},
+  {...task, id:'integration-guarded', state:'in_progress', hasActiveExecution:true, title:'Uncertain execution / 확인이 필요한 실행'},
+  {...task, id:'integration-held', state:'on_hold', title:'Held task / 보류 작업'},
+);
+const snapshot: WorkbenchSnapshot = { revision: 1, activeShortcuts: [], refiningShortcuts: crowded ? ['','second-'].flatMap(prefix => Array.from({length: 24}, (_, index) => ({kind: 'task', id: `${prefix}refining-${index}`, draftRevision: 1}))) : [], categories: [{ id: 'general', label: 'General', items: fixtureItems }, ...(crowded ? [{id: 'second', label: 'Second category / 두 번째', items: fixtureItems.map(item => ({...item, id: `second-${item.id}`}))}] : [])] };
+const savedExecution: TaskExecutionWorkLogLink = {runId:'second-run',sessionId:'same-session',instruction:'Draft a customer reply and check the export. 고객 답변 초안을 작성하고 내보내기를 확인하세요.',status:'failed',provider:'codex',model:'model',evidence:[],artifacts:[],limitations:['Delivery has not been confirmed. 전송은 확인되지 않았습니다.'],syncState:'synced'};
+const savedProjection: DistillationProjection = {projectionRevision:1,freshness:'current',result:{claims:[{id:'draft',kind:'performed',statement:'Prepared a reply draft for review. 검토용 답변 초안을 작성했습니다.',actor:'ai',epistemicState:'performed',status:'current',sources:[{type:'run_final_report',id:'second-run',revision:'1',locator:'final_report'}]},{id:'failure',kind:'unresolved',statement:'Export failed; the reply remains unsent. 내보내기에 실패했고 답변은 전송하지 않았습니다.',actor:'tool',epistemicState:'unresolved',status:'current',sources:[]}],workLogView:{sections:[{kind:'performed',claimIds:['draft']},{kind:'unresolved',claimIds:['failure']}]},warnings:[]}};
+window.llmWikiApplication = { request: async ({path, method, body: requestBody}) => {
+  const id = path.split('/')[2];
+  const selected = snapshot.categories.flatMap(category => category.items).find(item => item.id === id);
+  if (integrated && path.endsWith('/transitions') && selected?.kind === 'task') {
+    const {to} = JSON.parse(String(requestBody));
+    if (selected.hasActiveExecution) throw new Error('active_task_execution');
+    selected.state = to === 'resume' ? 'in_progress' : to === 'backlog' ? 'task' : to;
+    selected.executionBacklog = to === 'backlog';
+  }
+  if (integrated && method === 'DELETE') for (const category of snapshot.categories) category.items = category.items.filter(item => item.id !== id);
+  const aggregate: TaskAggregate = selected?.kind === 'task' ? {...task, ...selected} : {...task};
+  if (integrated) aggregate.workLog = [
+    {id:'first-log', body:'Old retained raw request', createdAt:'2026-10-19T10:00:00Z', execution:{...savedExecution,runId:'first-run',instruction:'Review the first draft only.'},distillation:savedProjection},
+    {id:'second-log', body:'Later retained raw request', createdAt:'2026-10-20T10:00:00Z', execution:savedExecution,distillation:savedProjection},
+  ];
+  const body = path === '/workbench' ? snapshot : path.endsWith('/proposals') ? [] : path.endsWith('/reference-workspace') ? {references: [], mentions: []} : path.includes('execution') ? {runs: []} : path.includes('lineage') ? {} : path.includes('refinement') ? {id: 'layout-refinement', messages: [{id: 'question', role: 'user', body: prose}, {id: 'answer', role: 'assistant', body: prose}], proposals: []} : aggregate;
   return {ok: true, status: 200, json: async <T,>() => body as T, text: async () => '', body: null};
 } };
 const mode = new URLSearchParams(location.search).get('mode');
+if (mode === 'worklog') document.documentElement.lang = new URLSearchParams(location.search).get('lang') || 'en';
 createRoot(document.getElementById('root')!).render(<>
-  <div className="app"><aside className="side"><div className="brand">LLM Wiki</div></aside><main><WorkbenchView active /></main></div>
+  {mode === 'worklog' ? <main style={{maxWidth:900, margin:'24px auto', padding:16}}><WorkLogDistillation
+    execution={savedExecution}
+    projection={savedProjection}
+    onOpenOriginal={() => {}} /></main> : <div className="app"><aside className="side"><div className="brand">LLM Wiki</div></aside><main><WorkbenchView active /></main></div>}
   {mode === 'detail' && <TaskDetail taskId="layout-task" onClose={() => {}} onChanged={() => {}} />}
   {mode === 'refinement' && <RefinementPanel kind="task" subjectId="layout-task" onClose={() => {}} onApplied={() => {}} />}
   {mode === 'confirm' && <DeleteItemDialog title="Disposable layout fixture" busy={false} error="" onConfirm={() => {}} onCancel={() => {}} />}

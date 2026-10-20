@@ -13,6 +13,7 @@ import conflictReview from '../features/workbench/ConflictReviewPanel.tsx?raw';
 import inputImage from '../features/workbench/InputImageAttachment.tsx?raw';
 import refinement from '../features/workbench/RefinementPanel.tsx?raw';
 import deleteDialog from '../features/workbench/DeleteItemDialog.tsx?raw';
+import itemActions from '../features/workbench/ItemActionsMenu.tsx?raw';
 import taskDetail from '../features/workbench/TaskDetail.tsx?raw';
 import taskJourney from '../features/workbench/TaskJourneyGraph.tsx?raw';
 import taskWorkSessions from '../features/workbench/TaskWorkSessions.tsx?raw';
@@ -56,6 +57,7 @@ export const productionInteractiveSources = new Map<string, string>([
   ['frontend/src/features/workbench/ConflictReviewPanel.tsx', conflictReview],
   ['frontend/src/features/workbench/InputImageAttachment.tsx', inputImage],
   ['frontend/src/features/workbench/RefinementPanel.tsx', refinement],
+  ['frontend/src/features/workbench/ItemActionsMenu.tsx', itemActions],
   ['frontend/src/features/workbench/TaskDetail.tsx', taskDetail],
   ['frontend/src/features/workbench/TaskJourneyGraph.tsx', taskJourney],
   ['frontend/src/features/workbench/TaskWorkSessions.tsx', taskWorkSessions],

@@ -454,6 +454,8 @@ impl TaskExecutionApplicationService {
             if stored!=payload_hash { return Err("operation_conflict: the submission key was already used with different content".into()); }
             tx.commit().map_err(|e|e.to_string())?; return Ok((self.snapshot(task_id,session_id,Some(&run_id))?,true));
         }
+        let held: bool = tx.query_row("SELECT state='on_hold' FROM tasks WHERE id=?", [task_id], |r| r.get(0)).map_err(|e|e.to_string())?;
+        if held { return Err("task_on_hold: resume this Task before starting an execution".into()); }
         let active:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM task_work_session_runs WHERE session_id=? AND status IN ('queued','running','awaiting_response'))",[session_id],|r|r.get(0)).map_err(|e|e.to_string())?;
         if active {
             return Err("active_run_conflict: this session already has an active execution".into());
@@ -1315,6 +1317,17 @@ mod tests {
     }
 
     #[test]
+    fn held_task_cannot_start_a_new_agent_execution() {
+        let f=fixture(); let tasks=TaskApplicationService::new(&f.db);
+        tasks.execute("task.transition",&json!({"operationId":"start","taskId":f.task,"expectedTaskRevision":1,"to":"in_progress"})).unwrap();
+        tasks.execute("task.transition",&json!({"operationId":"hold","taskId":f.task,"expectedTaskRevision":1,"to":"on_hold"})).unwrap();
+        assert!(f.service.create_run(&run_input(&f,"held-run","Inspect")).unwrap_err().contains("task_on_hold"));
+        let c=database::open(&f.db).unwrap(); assert_eq!(c.query_row("SELECT count(*) FROM task_work_session_runs",[],|r|r.get::<_,i64>(0)).unwrap(),0);
+        tasks.execute("task.transition",&json!({"operationId":"resume","taskId":f.task,"expectedTaskRevision":1,"to":"resume"})).unwrap();
+        assert!(f.service.create_run(&run_input(&f,"resume-run","Inspect")).is_ok());
+    }
+
+    #[test]
     fn atomic_start_is_idempotent_and_preserves_manual_work_log_and_task_state() {
         let f = fixture();
         let tasks = TaskApplicationService::new(&f.db);
@@ -1436,6 +1449,8 @@ mod tests {
             .unwrap();
         assert_eq!(execution["runId"], run);
         assert_eq!(execution["status"], "succeeded");
+        assert_eq!(execution["instruction"], "Do it");
+        assert_eq!(execution["sessionId"], f.session);
     }
 
     #[test]
@@ -1921,7 +1936,7 @@ mod tests {
         {
             let (snapshot, _) = f
                 .service
-                .create_run(&run_input(&f, key, "No final report"))
+                .create_run(&run_input(&f, key, &format!("Request for {key}")))
                 .unwrap();
             let run = snapshot["selectedRun"]["id"].as_str().unwrap().to_owned();
             f.service.mark_dispatch_recorded(&run).unwrap();
@@ -1953,6 +1968,8 @@ mod tests {
         assert_eq!(executions.len(), 2);
         assert!(executions.iter().all(|execution| {
             execution["reportExcerpt"].is_null()
+                && execution["sessionId"] == f.session
+                && execution["instruction"] == format!("Request for {}", execution["status"].as_str().unwrap())
                 && matches!(execution["status"].as_str(), Some("failed" | "cancelled"))
         }));
     }

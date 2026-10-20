@@ -163,6 +163,19 @@ describe("Task work sessions", () => {
     expect(screen.getByText(/12 passed/)).toBeVisible();
   });
 
+  it("blocks new agent runs on a held Task without dropping its session", async () => {
+    execution.execute.mockClear();
+    const saved={...session("held-session","Held conversation"),workspacePath:"/project"};
+    window.llmWikiApplication={request:vi.fn().mockImplementation(({path}:{path:string})=>Promise.resolve(response(path.endsWith("work-sessions")?{sessions:[saved]}:{session:saved,entries:[]})))};
+    render(<TaskWorkSessions task={{...task,state:"on_hold"}} />);
+    fireEvent.change(await screen.findByLabelText("Session"),{target:{value:"held-session"}});
+    fireEvent.change(await screen.findByLabelText("Instruction or note"),{target:{value:"Keep this draft"}});
+    expect(screen.getByRole("button",{name:"Run with Codex"})).toBeDisabled();
+    expect(screen.getByText("Resume this Task before starting an agent execution.")).toBeVisible();
+    fireEvent.keyDown(screen.getByLabelText("Instruction or note"),{key:"Enter"});
+    expect(execution.execute).not.toHaveBeenCalled(); expect(screen.getByLabelText("Instruction or note")).toHaveValue("Keep this draft");
+  });
+
   it("starts Codex only from the explicit Run action and leaves an unsupported attachment unsent", async () => {
     const saved = { ...session("one", "Investigation"), workspacePath: "/project" };
     const prepared = { runs: [], activeRunId: null, selectedRun: null, effectiveConfig: { model: "gpt-5.6-sol", cwd: "/project", approvalPolicy: "ask", approvalsReviewer: "user", sandbox: "workspace-write", provenance: "preflight", settingsRevision: "settings-1", ready: true, capabilities: { structuredUserInput: true } } };

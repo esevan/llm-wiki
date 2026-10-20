@@ -191,8 +191,8 @@ describe("Refinement panel", () => {
     await waitFor(() => expect(document.querySelector(".refinement-preview")).toHaveAttribute("aria-busy", "true"), { timeout: 2000 });
   });
 
-  it("keeps the Task identity, shows its refined revision, and starts work from the status tab", async () => {
-    let task = { id: "same-task", taskRevision: 1, title: "Agenda", state: "task", scope: "Meeting topics", refinedRevision: 0 };
+  it.each(["task", "on_hold"])("keeps the Task identity and starts or resumes %s from the status tab", async initialState => {
+    let task = { id: "same-task", taskRevision: 1, title: "Agenda", state: initialState, scope: "Meeting topics", refinedRevision: 0 };
     const request = vi.fn().mockImplementation(({ path }: { path: string }) => {
       const result = (value: unknown) => Promise.resolve({ ok: true, status: 200, json: async () => value, text: async () => "", body: null });
       if (path.endsWith("/refinement")) return result({ id: "session", taskId: task.id, draftRevision: 1, messages: [] });
@@ -207,9 +207,9 @@ describe("Refinement panel", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Apply" }));
     await waitFor(() => expect(screen.getByRole("tab", { name: "Work status" })).toHaveAttribute("aria-selected", "true"));
     expect(screen.getByText("Refined - Revision 2")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Start work" }));
+    fireEvent.click(screen.getByRole("button", { name: initialState === "on_hold" ? "Resume" : "Start work" }));
     expect(await screen.findByText("In progress")).toBeInTheDocument();
-    expect(request.mock.calls.some(([input]) => input.path === "/tasks/same-task/transitions")).toBe(true);
+    expect(request.mock.calls.some(([input]) => input.path === "/tasks/same-task/transitions" && JSON.parse(input.body).to === (initialState === "on_hold" ? "resume" : "in_progress"))).toBe(true);
     expect(onApplied).toHaveBeenCalledTimes(2);
     fireEvent.keyDown(screen.getByRole("tab", { name: "Work status" }), { key: "ArrowLeft" });
     expect(screen.getByRole("tab", { name: "Preview" })).toHaveFocus();
