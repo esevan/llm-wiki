@@ -107,7 +107,7 @@ citation completeness, evidence freshness or contradiction resolution prerequisi
 for ordinary publication. One explicit Publish action publishes a nonempty selected
 saved draft. Existing failed/legacy drafts need no mandatory regeneration. Exact
 revision/content guards, guarded atomic file writes, idempotent operations and exact
-index receipts remain mandatory. Independent version files preserve prior sources;
+index receipts remain mandatory. Durable archive revisions preserve prior sources;
 move/rename/withdraw/repair keep their existing exact-file review.
 
 User experiences, explanations and direct writing are primary user-reported sources.
@@ -124,3 +124,15 @@ images are frozen and forwarded through multimodal provider inputs; image presen
 alone never establishes that the model read their content. Chat Enter/IME behavior,
 independent transcript scrolling and same-app modal session retention reuse existing
 turn/revision/job boundaries; app-restart scheduling is outside this amendment.
+
+### Follow-up: readable organization and revision review
+Ordinary publication now reuses an existing publication document ID/path, with
+guarded updates and preserved archive revisions. New documents receive readable
+filenames and shallow deterministic topic placement. Several managed MOCs may
+link one document; no blocking classification model, automatic migration or
+destructive conflict merge is introduced. All note/MOC writes remain journaled.
+
+Proposal application requires actual structural preparation, while citation
+findings stay advisory and unauthenticated links are quarantined. Legacy saved
+proposals can recover from their persisted snapshot. Exact revision guards remain.
+Proposal comparison belongs in the main reading column, separate from chat.

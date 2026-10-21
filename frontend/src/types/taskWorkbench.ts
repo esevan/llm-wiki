@@ -499,6 +499,7 @@ export interface KnowledgeRevisionReply {
   id: string; baseRevision: number; message: string; missingEvidence: string[];
   candidate: KnowledgeVersion["result"] | null; qualityState?: string | null;
   diagnostics: KnowledgeRevisionDiagnostic[];
+  applicable?: boolean; preparationError?: string; applicationState?: string; expectedPrivateRevision?: number;
 }
 export interface KnowledgeRevisionTurn {
   id: string; userMessage: string; reply?: KnowledgeRevisionReply | null;

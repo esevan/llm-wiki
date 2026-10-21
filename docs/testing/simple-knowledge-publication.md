@@ -70,3 +70,18 @@ An initial edit was rejected before execution over external-file protection. The
 accepted alternative preserves those checks and forbids occupied destinations.
 A later current-authority edit was rejected before execution; unverified authority
 and absence of canonical decision promotion remain. Neither rejection mutated files.
+
+## Readable topic publication follow-up
+Native temporary-vault tests cover readable titles without H1, real search after
+rescan, multiple MOCs for one document, stable ID/path on explicit republish,
+preserved archive revisions, managed-link deduplication, existing tagged folders,
+declared map reuse, unmanaged prose, occupied filenames and portable components.
+Recovery is repeated at every durable write boundary for a note and two maps.
+No real user vault or DB was read or migrated; topic rules are deterministic and
+do not demonstrate model classification or original-user-case reproduction.
+
+The final archive-focused run passes 28 tests, including a collision between two
+new sanitized MOC names and all three durable note/map write boundaries.
+The broad Knowledge run passes 69 unit tests plus 4 integrations; the full native
+library run passes 328 with 3 existing ignores before the last archive-only
+assertions were added. No schema migration or unrelated CI fix is included.

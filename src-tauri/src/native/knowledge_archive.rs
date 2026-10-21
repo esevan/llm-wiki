@@ -136,7 +136,7 @@ fn inventory(root: &Path) -> Result<Vec<Value>> {
             return Err("archive_target_conflict: duplicate document identity".into());
         }
         let metadata = frontmatter(&body);
-        result.push(json!({"path":path,"documentId":document_id,"revision":hash(body.as_bytes()),"title":body.lines().find_map(|l|l.strip_prefix("# ")).unwrap_or(""),"tags":metadata["tags"],"aliases":metadata["aliases"],"moc":metadata["moc"],"excerpt":body.chars().take(600).collect::<String>()}));
+        result.push(json!({"path":path,"documentId":document_id,"revision":hash(body.as_bytes()),"title":vault::document_title(Path::new(&path),&body),"tags":metadata["tags"],"aliases":metadata["aliases"],"moc":metadata["moc"],"isMoc":metadata["moc"]==true || metadata["moc"].as_str().is_some_and(|s|!s.trim().is_empty()) || metadata["title"]=="Map of content","excerpt":body.chars().take(600).collect::<String>()}));
     }
     result.sort_by_key(|v| v["path"].as_str().unwrap_or("").to_owned());
     Ok(result)
@@ -254,6 +254,73 @@ fn guard_published_file(root: &Path, evidence: &Value) -> Result<()> {
     Ok(())
 }
 
+
+fn readable_component(value: &str, fallback: &str) -> String {
+    let text=value.chars().map(|c|if c.is_control() || "<>:\"/\\|?*[]#".contains(c){' '}else{c}).collect::<String>();
+    let mut name=text.split_whitespace().collect::<Vec<_>>().join(" ").trim_matches(['.',' ']).chars().scan(0,|bytes,c|{*bytes+=c.len_utf8();(*bytes<=180).then_some(c)}).take(60).collect::<String>().trim_matches(['.',' ']).to_owned();
+    if name.is_empty(){name=fallback.into();}
+    let stem=name.split('.').next().unwrap_or("").to_ascii_uppercase();
+    if ["CON","PRN","AUX","NUL","COM1","COM2","COM3","COM4","COM5","COM6","COM7","COM8","COM9","LPT1","LPT2","LPT3","LPT4","LPT5","LPT6","LPT7","LPT8","LPT9"].contains(&stem.as_str()){name=format!("Note {name}");}
+    name
+}
+fn machine_title(value: &str) -> bool {
+    let value=value.trim().trim_start_matches("sha256:");
+    value.len()>=24 && value.chars().all(|c|c.is_ascii_hexdigit()||c=='-')
+}
+fn publication_title(evidence: &Value) -> String {
+    let version=&evidence["version"];let title=version["title"].as_str().unwrap_or("").trim();
+    if !title.is_empty()&&!machine_title(title){return title.into();}
+    if let Some(title)=version["bodyMarkdown"].as_str().unwrap_or("").lines().find_map(|s|s.strip_prefix("# ").map(str::trim)).filter(|s|!s.is_empty()&&!machine_title(s)){return title.into();}
+    evidence["sources"]["task"]["title"].as_str().filter(|s|!s.trim().is_empty()&&!machine_title(s)).unwrap_or("Knowledge").into()
+}
+fn topic_matches(text: &str, label: &str) -> bool {
+    let term=label.trim().trim_start_matches('#').to_lowercase();if term.is_empty(){return false;}
+    if !term.is_ascii(){return text.contains(&term);}
+    text.match_indices(&term).any(|(i,_)|!text[..i].chars().next_back().is_some_and(char::is_alphanumeric)&&!text[i+term.len()..].chars().next().is_some_and(char::is_alphanumeric))
+}
+fn topic_labels(note: &Value) -> Vec<String> {
+    note["tags"].as_array().into_iter().flatten().filter_map(Value::as_str).map(str::to_owned).collect()
+}
+fn free_note_path(root:&Path,taxonomy:&[Value],directory:&str,title:&str,salt:&str)->Result<String>{
+    let base=readable_component(title,"Knowledge");
+    for n in 0..100 {
+        let leaf=if n==0{base.clone()}else if n==1{format!("{base} -- {}",&hash(salt.as_bytes())[..8])}else{format!("{base} -- {}-{n}",&hash(salt.as_bytes())[..8])};
+        let path=format!("{directory}/{leaf}.md");
+        if !taxonomy.iter().any(|v|v["path"].as_str().is_some_and(|p|p.to_lowercase()==path.to_lowercase()))&&bytes_at(root,&path)?.is_none(){return Ok(path);}
+    }
+    Err("archive_target_conflict: no unused readable filename".into())
+}
+fn simple_organization(root:&Path,input:&Value,evidence:&Value,taxonomy:&[Value])->Result<Value>{
+    let title=publication_title(evidence);
+    let text=format!("{} {} {}",title,evidence["version"]["bodyMarkdown"].as_str().unwrap_or(""),evidence["version"]["applicability"]).to_lowercase();
+    let mut topics=BTreeSet::new();
+    for note in taxonomy{for tag in topic_labels(note){if topic_matches(&text,&tag){topics.insert(tag);}}}
+    if topics.is_empty(){
+        for(label,terms)in [
+            ("Engineering",vec!["code","rust","typescript","api","software","개발","코드","구현"]),
+            ("Operations",vec!["deploy","deployment","incident","monitoring","배포","운영","장애"]),
+            ("Research",vec!["research","experiment","comparison","조사","연구","실험","비교"]),
+            ("Product",vec!["product","design","ux","제품","디자인","기획"]),
+            ("Learning",vec!["learning","tutorial","학습","공부"]),
+        ]{if terms.iter().any(|term|topic_matches(&text,term)){topics.insert(label.to_owned());}}
+    }
+    if topics.is_empty(){topics.insert("General".into());}
+    let topics=topics.into_iter().take(4).collect::<Vec<_>>();let primary=&topics[0];
+    let existing=evidence["pointers"]["publicationDocumentId"].as_str().and_then(|id|taxonomy.iter().find(|v|v["documentId"]==id));
+    let directory=taxonomy.iter().filter(|v|v["isMoc"]!=true&&topic_labels(v).iter().any(|t|t.eq_ignore_ascii_case(primary)))
+        .filter_map(|v|Path::new(v["path"].as_str()?).parent()).filter(|p|!p.as_os_str().is_empty()&&p.components().count()<=2&&!p.starts_with("idea")&&!p.starts_with("MOC"))
+        .map(|p|p.to_string_lossy().into_owned()).next().unwrap_or_else(||format!("Knowledge/{}",readable_component(primary,"General")));
+    let(outcome,path)=match existing{Some(note)=>("update",required(note,"path")?.to_owned()),None=>("new",free_note_path(root,taxonomy,&directory,&title,input["taskId"].as_str().unwrap_or("knowledge"))?)};
+    let mut mocs=Vec::new();
+    let mut allocated=taxonomy.to_vec();
+    for topic in &topics{
+        let existing=taxonomy.iter().find(|v|v["isMoc"]==true&&(topic_labels(v).iter().any(|t|t.eq_ignore_ascii_case(topic))||v["title"].as_str().is_some_and(|s|s.eq_ignore_ascii_case(topic)||s.eq_ignore_ascii_case(&format!("{topic} — Map of content")))||(topic=="General"&&v["title"]=="Map of content")));
+        let path=match existing{Some(note)=>required(note,"path")?.to_owned(),None=>free_note_path(root,&allocated,"MOC",topic,&format!("moc:{topic}"))?};
+        if !mocs.contains(&path){allocated.push(json!({"path":path}));mocs.push(path);}
+    }
+    Ok(json!({"outcome":outcome,"path":path,"targetPath":if outcome=="update"{Some(path.clone())}else{None},"rationale":"Use existing topics and managed maps without a model call","tags":topics,"aliases":[],"mocPaths":mocs,"newCategoryRationale":"Shallow topic placement; existing published paths remain stable"}))
+}
+
 pub async fn prepare(
     db: &Path,
     settings: &Path,
@@ -261,7 +328,7 @@ pub async fn prepare(
     semantic: &SemanticEngine,
     input: &Value,
 ) -> Result<Value> {
-    let evidence = {
+    let mut evidence = {
         let mut c = database::open(db)?;
         if let Some(replay) = proposal_replay(&c, input)? {
             return Ok(replay);
@@ -275,15 +342,9 @@ pub async fn prepare(
     let taxonomy = inventory(root)?;
     if input["simplePublication"] == true {
         required(&evidence["version"], "bodyMarkdown")?;
-        // Independent immutable destination. Never merge or overwrite another note.
-        let suffix = hash(format!("{}:{}:{}", input["taskId"], input["knowledgeRevision"], input["expectedKnowledgeContentHash"]).as_bytes());
-        let path = format!("Knowledge/Published/{suffix}.md");
-        if bytes_at(root, &path)?.is_some() { return Err("archive_target_conflict: publication destination already exists".into()); }
-        return prepare_from_plan(db, root, input, &evidence, &taxonomy, json!({
-            "outcome":"new", "path":path,
-            "rationale":"Publish the selected immutable draft; compare sources during retrieval.",
-            "tags":[],"aliases":[],"mocPaths":[],"newCategoryRationale":"Independent publication preserving existing Knowledge"
-        }));
+        evidence["version"]["title"]=json!(publication_title(&evidence));
+        let plan=simple_organization(root,input,&evidence,&taxonomy)?;
+        return prepare_from_plan(db,root,input,&evidence,&taxonomy,plan);
     }
     let taxonomy_prompt = taxonomy
         .iter()
@@ -554,6 +615,11 @@ fn prepare_from_plan(
             body = format!("{}\n\n## Reviewed addition\n\n{body}", old_body.trim());
         }
         body.push_str(&links_markdown(&links));
+        if input["simplePublication"]==true&&!plan.moc_paths.is_empty(){
+            metadata["llm_wiki"]["moc_paths"]=json!(plan.moc_paths);
+            body.push_str("\n\n## Related maps\n");
+            for path in &plan.moc_paths{body.push_str(&format!("- [[{}|{}]]\n",path.trim_end_matches(".md"),Path::new(path).file_stem().unwrap_or_default().to_string_lossy()));}
+        }
         artifacts.push(artifact(
             root,
             plan.path.clone(),
@@ -671,14 +737,14 @@ fn prepare_from_plan(
             let base = match existing {
                 Some(text) => text,
                 None => markdown(
-                    &json!({"title":"Map of content","llm_wiki":{"schema":1,"document_id":id,"information_type":"knowledge","status":"current"}}),
-                    "# Map of content",
+                    &json!({"title":format!("{} — Map of content",Path::new(path).file_stem().unwrap_or_default().to_string_lossy()),"moc":true,"tags":[Path::new(path).file_stem().unwrap_or_default().to_string_lossy()],"llm_wiki":{"schema":1,"document_id":id,"information_type":"knowledge","status":"current"}}),
+                    &format!("# {} — Map of content",Path::new(path).file_stem().unwrap_or_default().to_string_lossy()),
                 )?,
             };
             let entry = format!(
                 "- [[{}|{}]]",
                 plan.path.trim_end_matches(".md"),
-                evidence["version"]["title"].as_str().unwrap_or("Knowledge")
+                evidence["version"]["title"].as_str().unwrap_or("Knowledge").replace(['[',']','|','\n','\r']," ")
             );
             let after = managed_patch(&base, &document_id, Some(&entry))?;
             moc_patches.push(json!({"path":path,"before":old,"after":after}));
@@ -1538,6 +1604,82 @@ mod tests {
         (temp, db, root, input, evidence)
     }
 
+
+    fn topic_revision(db:&Path,evidence:&Value,title:&str,body:&str)->Value {
+        let result:knowledge_distillation::GenerationResult=serde_json::from_value(json!({"article":{"type":"guide","title":title,"bodyMarkdown":body,"finalOutcomes":[],"applicability":{"summary":title,"representativeQuestions":[],"helpsWith":[],"conditions":[],"exclusions":[],"sourceRefs":[]},"claimBindings":[],"assumptionBindings":[]},"ideas":[],"qualityFindings":[]})).unwrap();
+        let prepared=knowledge_distillation::prepared(evidence["sources"].clone(),result,"enhanced","").unwrap();
+        let mut c=database::open(db).unwrap();let tx=c.transaction().unwrap();let saved=knowledge_distillation::append_generated_tx(&tx,&prepared).unwrap();tx.commit().unwrap();
+        json!({"operationId":format!("topic-{}",saved["draftRevision"]),"taskId":"task","knowledgeRevision":saved["draftRevision"],"expectedKnowledgeContentHash":saved["contentHash"],"expectedGenerationSnapshotHash":saved["sourceHash"],"simplePublication":true,"selectedIdeaRevisionIds":[]})
+    }
+    #[tokio::test]
+    async fn readable_topics_keep_one_identity_multiple_maps_and_exact_search_titles() {
+        let (_temp,db,root,_input,evidence)=knowledge_fixture();
+        let input=topic_revision(&db,&evidence,"Rust deployment checklist","A personal Rust API deployment record without an H1 or citations.");
+        let proposal=prepare(&db,Path::new("no-model"),&root,&SemanticEngine::new(None),&input).await.unwrap();
+        assert_eq!(proposal["target"]["path"],"Knowledge/Engineering/Rust deployment checklist.md");assert_eq!(proposal["mocPatches"].as_array().unwrap().len(),2);
+        let document=required(&proposal["target"],"documentId").unwrap().to_owned();
+        super::publish(&db,&root,&publish_input(&proposal)).unwrap();finish_index(&db,&root,&SemanticEngine::new(None),"publish-one").unwrap();
+        let bytes=fs::read_to_string(root.join("Knowledge/Engineering/Rust deployment checklist.md")).unwrap();assert!(bytes.contains("title: Rust deployment checklist"));assert!(bytes.contains("[[MOC/Operations|Operations]]"));
+        for topic in ["Engineering","Operations"]{let moc=fs::read_to_string(root.join(format!("MOC/{topic}.md"))).unwrap();assert_eq!(moc.matches(&format!("<!-- llm-wiki:{document}:start -->")).count(),1);assert!(moc.contains("Rust deployment checklist"));}
+        vault::index(&db,&root,&SemanticEngine::new(None),false,false).unwrap();
+        let search=vault::search(&db,&SemanticEngine::new(None),"Rust",10,0,false).unwrap();let article=search["results"].as_array().unwrap().iter().find(|v|v["documentId"]==document).unwrap();assert_eq!(article["title"],"Rust deployment checklist");
+        let input=topic_revision(&db,&evidence,"Rust deployment checklist revised","My revised Rust API deployment record.");
+        let next=prepare(&db,Path::new("no-model"),&root,&SemanticEngine::new(None),&input).await.unwrap();assert_eq!(next["outcome"],"update");assert_eq!(next["target"],proposal["target"]);
+        let mut publish=publish_input(&next);publish["operationId"]=json!("publish-two");super::publish(&db,&root,&publish).unwrap();finish_index(&db,&root,&SemanticEngine::new(None),"publish-two").unwrap();
+        for topic in ["Engineering","Operations"]{let moc=fs::read_to_string(root.join(format!("MOC/{topic}.md"))).unwrap();assert_eq!(moc.matches(&format!("<!-- llm-wiki:{document}:start -->")).count(),1);assert!(moc.contains("|Rust deployment checklist revised]]"));assert!(!moc.contains("|Rust deployment checklist]]"));}
+        let c=database::open(&db).unwrap();assert_eq!(c.query_row("SELECT count(*) FROM knowledge_archive_revisions WHERE document_id=?",[document],|r|r.get::<_,i64>(0)).unwrap(),2);assert_eq!(super::publish(&db,&root,&publish).unwrap()["state"],"complete");
+    }
+    #[tokio::test]
+    async fn topic_collision_reuses_declared_maps_and_preserves_unmanaged_content() {
+        let (_temp,db,root,_input,evidence)=knowledge_fixture();
+        fs::create_dir_all(root.join("Guides/API")).unwrap();fs::create_dir_all(root.join("MOC")).unwrap();fs::create_dir_all(root.join("Topics")).unwrap();
+        fs::write(root.join("Guides/API/Existing.md"),"---\ntags: [Engineering]\n---\n# Existing\n").unwrap();fs::write(root.join("Guides/API/Rust deployment.md"),"Keep existing note").unwrap();
+        fs::write(root.join("MOC/Operations.md"),"Unrelated user document").unwrap();
+        let manual="---\ntitle: Engineering\nmoc: true\ntags: [Engineering]\n---\n# Engineering\n\nKeep this introduction.\n";fs::write(root.join("Topics/API index.md"),manual).unwrap();
+        let input=topic_revision(&db,&evidence,"Rust deployment","Personal Rust deployment notes.");let proposal=prepare(&db,Path::new("no-model"),&root,&SemanticEngine::new(None),&input).await.unwrap();
+        assert!(proposal["target"]["path"].as_str().unwrap().starts_with("Guides/API/Rust deployment -- "));assert!(proposal["mocPatches"].as_array().unwrap().iter().any(|v|v["path"]=="Topics/API index.md"));
+        super::publish(&db,&root,&publish_input(&proposal)).unwrap();finish_index(&db,&root,&SemanticEngine::new(None),"publish-one").unwrap();
+        assert_eq!(fs::read_to_string(root.join("Guides/API/Rust deployment.md")).unwrap(),"Keep existing note");assert_eq!(fs::read_to_string(root.join("MOC/Operations.md")).unwrap(),"Unrelated user document");assert!(fs::read_to_string(root.join("Topics/API index.md")).unwrap().starts_with(manual));
+    }
+    #[tokio::test]
+    async fn topic_maps_recover_after_each_durable_write_boundary() {
+        for completed_steps in 0..=3 {
+            let (_temp,db,root,_input,evidence)=knowledge_fixture();
+            let input=topic_revision(&db,&evidence,"Rust deployment","My Rust API deployment record.");
+            let proposal=prepare(&db,Path::new("no-model"),&root,&SemanticEngine::new(None),&input).await.unwrap();
+            super::publish(&db,&root,&publish_input(&proposal)).unwrap();
+            let c=database::open(&db).unwrap();
+            let steps=c.prepare("SELECT path,before_bytes FROM knowledge_archive_steps WHERE operation_id='publish-one' ORDER BY ordinal").unwrap().query_map([],|r|Ok((r.get::<_,String>(0)?,r.get::<_,Option<Vec<u8>>>(1)?))).unwrap().collect::<std::result::Result<Vec<_>,_>>().unwrap();
+            assert_eq!(steps.len(),3);
+            for(path,before)in steps.iter().skip(completed_steps){
+                let target=root.join(path);
+                if let Some(bytes)=before{fs::write(target,bytes).unwrap();}else if target.exists(){fs::remove_file(target).unwrap();}
+            }
+            c.execute("UPDATE knowledge_archive_operations SET state='approved' WHERE operation_id='publish-one'",[]).unwrap();
+            assert_eq!(recover_pending(&db,&root,&SemanticEngine::new(None)).unwrap(),1);
+            assert_eq!(status(&db,&json!({"operationId":"publish-one"})).unwrap()["state"],"complete");
+            for topic in ["Engineering","Operations"]{let moc=fs::read_to_string(root.join(format!("MOC/{topic}.md"))).unwrap();assert_eq!(moc.matches("<!-- llm-wiki:").count(),2);}
+        }
+    }
+    #[test]
+    fn topic_map_names_reserve_colliding_sanitized_paths() {
+        let (_temp,_db,root,_)=fixture();
+        let taxonomy=vec![json!({"path":"Existing.md","tags":["A/B","A:B"]})];
+        let evidence=json!({"version":{"title":"A/B and A:B","bodyMarkdown":"Personal note"}});
+        let plan=simple_organization(&root,&json!({"taskId":"task"}),&evidence,&taxonomy).unwrap();
+        let paths=plan["mocPaths"].as_array().unwrap();
+        assert_eq!(paths.len(),2);assert_ne!(paths[0],paths[1]);
+    }
+    #[test]
+    fn readable_names_and_title_fallbacks_are_portable() {
+        assert_eq!(vault::document_title(Path::new("hash.md"),"---\r\ntitle: Human title\r\n---\r\nBody"),"Human title");
+        assert_eq!(vault::document_title(Path::new("fallback.md"),"# Heading\nBody"),"Heading");
+        assert_eq!(vault::document_title(Path::new("fallback.md"),"Body"),"fallback");
+        assert_eq!(readable_component("CON","Knowledge"),"Note CON");assert_eq!(readable_component("A:/bad[title]?","Knowledge"),"A bad title");assert_eq!(readable_component("...","Knowledge"),"Knowledge");assert!(readable_component(&"x".repeat(1000),"Knowledge").len()<=180);
+        let e=json!({"version":{"title":"a".repeat(64),"bodyMarkdown":"# Human heading\n\nText"},"sources":{"task":{"title":"Task title"}}});assert_eq!(publication_title(&e),"Human heading");
+        let e=json!({"version":{"title":"a".repeat(64),"bodyMarkdown":"No H1"},"sources":{"task":{"title":"Task title"}}});assert_eq!(publication_title(&e),"Task title");
+    }
+
     #[tokio::test]
     async fn simple_publication_native_dispatch_queues_index_and_exposes_search_provenance() {
         let (_temp,db,root,mut input,_)=knowledge_fixture();input["simplePublication"]=json!(true);
@@ -1602,7 +1744,7 @@ mod tests {
             input["simplePublication"]=json!(true);
             input["expectedGenerationSnapshotHash"]=json!("stale-or-missing");
             let proposal=prepare(&db,Path::new("missing-provider-settings"),&root,&SemanticEngine::new(None),&input).await.unwrap();
-            assert_eq!(proposal["artifacts"].as_array().unwrap().len(),1);
+            assert_eq!(proposal["artifacts"].as_array().unwrap().len(),2);
             let text=proposal["artifacts"][0]["bytes"].as_str().unwrap();
             assert!(text.contains("status: unverified")); assert!(text.contains("not_verified"));
             assert!(!text.contains("confirmed_final: true"));

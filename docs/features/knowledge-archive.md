@@ -13,8 +13,8 @@ legacy drafts without a generation snapshot can publish without regeneration.
 User experiences and directly written reports are primary sources. External
 citations are optional; their absence alone is not a quality failure.
 
-Normal publication creates an independent immutable file in `Knowledge/Published/`.
-It preserves existing files and both sides of a potential disagreement. Publication
+Normal publication preserves one stable document identity and its revision history.
+It preserves unrelated files and both sides of a potential disagreement. Publication
 does not mark AI content verified or turn it into the user's firsthand experience.
 Source links, user statements, AI bindings and review findings remain metadata.
 Published Knowledge is searchable as content, while its unverified authority stays
@@ -36,3 +36,25 @@ remain compatible. Ideas are still separate optional documents with their own
 unverified/deferred/out-of-scope/rejected disposition and reconsideration conditions.
 
 [Specification and policy amendment](../../specs/021-organized-knowledge-archive/spec.md)
+
+
+### Readable titles and topic maps
+Normal publication uses the saved article title, then a meaningful H1 or Task title
+when the title is a machine identifier. Search and rescans use frontmatter title,
+then H1, then filename. Internal document IDs remain stable.
+
+New notes use a shallow topic directory and readable filename. Existing matching
+tags and shallow directories are reused; otherwise a small deterministic bilingual
+keyword map chooses Engineering, Operations, Research, Product, Learning or General.
+There is no classification model call. Up to four topics can link the same note
+from declared MOCs; generated maps live in MOC/ and contain managed, deduplicated
+links. The note links back to its maps. Existing unmanaged map prose is preserved.
+Case-insensitive filename collisions receive a stable suffix.
+
+Existing published paths are retained, including old hash filenames. An explicit
+later publication updates that same document identity/path with guarded bytes;
+archive revisions preserve previous content. It never bulk-moves existing notes.
+MOC and note writes share the existing durable journal, recovery and index receipt.
+Topic selection is a conservative convenience, not semantic verification. Historic
+MOC links are not destructively removed when topics change. Vault-wide migration
+or a user-specific taxonomy review remains separate work.

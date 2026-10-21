@@ -828,23 +828,19 @@ pub(crate) fn validate_result(snapshot: &Value, result: &GenerationResult) -> Re
 
 // Rejected quotes are review material, never valid citations. Keep their text in
 // a blocking finding with no sourceRefs so exact-source viewers cannot present
-// them as authenticated excerpts. Unknown source identities remain hard errors.
+// them as authenticated excerpts. Unknown identities are also quarantined; they never authenticate a citation.
 fn quarantine_rejected_quotes(snapshot: &Value, result: &mut GenerationResult) -> Result<(), String> {
     let manifest = snapshot["sourceManifest"].as_array().ok_or("source snapshot manifest is missing")?;
     let sources = manifest.iter().map(|source| (manifest_key(source), source)).collect::<BTreeMap<_, _>>();
     let mut rejected = Vec::new();
     let mut check = |refs: &mut Vec<SourceRef>, locator: String| -> Result<(), String> {
-        for source in refs.iter() {
-            if !sources.contains_key(&source_key(source)) {
-                return Err("invalid_reference_binding: source identity is outside the exact snapshot".into());
-            }
-        }
         refs.retain(|source| {
-            let actual = sources[&source_key(source)];
-            if value_contains_quote(&actual["content"], &source.quote) { return true; }
+            let actual = sources.get(&source_key(source));
+            if actual.is_some_and(|v| value_contains_quote(&v["content"], &source.quote)) { return true; }
+            let reason=if actual.is_none(){"source identity is outside the exact snapshot"}else{"quote is absent from its exact source"};
             rejected.push(QualityFinding {
                 kind: "missing_reference".into(), severity: "blocking".into(), locator: locator.clone(), source_refs: vec![],
-                message: format!("Rejected citation: quote is absent from its exact source ({}:{} revision {} at {}). Unverified quote retained for human review: {}",source.source_type,source.id,source.revision,source.locator,source.quote),
+                message: format!("Rejected citation: {reason} ({}:{} revision {} at {}). Unverified quote retained for human review: {}",source.source_type,source.id,source.revision,source.locator,source.quote),
             });
             false
         });
@@ -1884,7 +1880,7 @@ mod tests {
             else {value["article"]["applicability"].as_object_mut().unwrap().remove("sourceRefs");}
             normalize_prompt_output(PromptId::KnowledgeDraft,&mut value);
             let candidate=prepared(snapshot.clone(),serde_json::from_value(value).unwrap(),"enhanced","");
-            if let Ok(candidate)=candidate { assert_eq!(candidate["qualityState"],"valid");assert_eq!(candidate["modelError"],""); }
+            if let Ok(candidate)=candidate { let warnings=candidate["generationResult"]["qualityFindings"].as_array().unwrap(); assert_eq!(candidate["qualityState"],if warnings.is_empty(){"valid"}else{"blocked_unsupported"}); }
             else { assert!(candidate.unwrap_err().contains("invalid_reference_binding")); }
         }
         let mut wrong=sparse.clone();wrong["ideas"]=Value::Null;
@@ -1990,7 +1986,7 @@ mod tests {
         assert!(error.contains("knowledge_unverified"),"{error}");
         let valid=prepared(snapshot.clone(),article(exact.clone()),"enhanced","").unwrap();assert_eq!(valid["qualityState"],"valid");
         let mut wrong=exact;wrong.id="outside-manifest".into();
-        assert!(prepared(snapshot,article(wrong),"enhanced","").unwrap_err().contains("outside the exact snapshot"));
+        let quarantined=prepared(snapshot,article(wrong),"enhanced","").unwrap();assert_eq!(quarantined["qualityState"],"blocked_unsupported");assert!(quarantined["generationResult"]["article"]["applicability"]["sourceRefs"].as_array().unwrap().is_empty());
     }
 
 }

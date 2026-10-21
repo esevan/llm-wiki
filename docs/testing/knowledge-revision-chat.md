@@ -104,3 +104,48 @@ real-model semantics and the original user's database remain unverified.
   ESLint passed. The full React App with production CSS was visually exercised
   using synthetic long conversations and delayed provider responses. This is
   browser fixture verification, not a packaged-native or real-model run.
+
+## Follow-up: proposal readiness and main-column review
+The previous candidate-only UI condition could expose Apply when preparation
+failed and no prepared JSON existed. The server now returns explicit readiness;
+legacy proposed rows rebuild from their saved candidate/snapshot. Unknown source
+identities are quarantined with advisory findings, like exact-quote mismatches,
+rather than leaving a misleading applicable candidate.
+
+Focused verification: 8 native revision tests and 20 React tests (15 chat, 5 App)
+pass. These include native dispatch, persisted legacy-null preparation, rejected
+citations, duplicate apply, structural failure, cancel/head guards; UI covers
+0/1/6 diagnostics, legacy malformed rows, main-column portal and update requests.
+The actual full App browser fixture uses mocked transport, not a real model or
+user DB. Korean long-document comparison and private v2 application were checked;
+native SQLite/provider fixtures separately verify backend behavior.
+
+Final follow-up checks: full React suite 466 passed with one unchanged
+ReferenceList performance threshold failure (mount p95 127.65ms while native
+work ran concurrently). The isolated performance test and production control
+inventory rerun passed, 3 tests total. Typecheck, lint and frontend build passed.
+Native library suite passed 328 tests with 3 existing ignores; Knowledge selection
+passed 69 plus 4 integration tests. Later archive-only additions passed 28 tests.
+No packaged native-window or real-model experiment was performed.
+
+Browser evidence (full production App, mocked transport): Korean long document
+at 1440x1000 and 780x900; comparison is in the main reading column, absent from the
+chat transcript; narrow comparison is one column with no horizontal overflow.
+Diagnostics 0/1/6 match rendered rows, expanded notes have no nested height limit.
+Apply produces private v2 in the fixture and leaves published v1 selected separately.
+Captures: knowledge-followup-long-compare-ko.png,
+knowledge-followup-long-narrow-ko.png and knowledge-followup-applied-narrow-ko.png
+in the task output directory. The supplied JPEG was materialized locally and
+viewed; the exact original user's database state was not inspected.
+
+An additional native regression passes after the broad run: source changes reject
+the old proposal without losing its candidate; an explicit update request includes
+that candidate and the latest snapshot, then successfully applies private v2.
+
+Main integration verification: the unchanged two-commit application tree was
+squashed on current origin/main cd32449 without conflicts. `npm test` passed
+all 467 React tests and helper/provider/runtime checks. Knowledge selection
+passed 71 native tests (one existing ignore) plus four integrations. Typecheck,
+lint, build and whitespace checks passed. Packaged desktop E2E was skipped: the
+App fixture and native persistence/index tests cover this integration, with no
+new packaging changes; native window behavior remains outside that evidence.

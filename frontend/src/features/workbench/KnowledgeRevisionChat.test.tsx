@@ -180,3 +180,35 @@ it.each(["button", "escape"])("closes the Task modal during chat via %s and rest
   await waitFor(()=>expect(screen.getByRole("textbox",{name:"What should change?"})).toBeEnabled());
   expect(sent).toBe(1);
 });
+
+describe("readable diagnostics and main review",()=>{
+  it.each([0,1,6])("renders exactly %i expanded diagnostics without a nested height-limited region",async(count)=>{
+    window.llmWikiApplication={request:vi.fn(async()=>response({diagnostics:Array.from({length:count},(_,i)=>({...diagnostic,statement:`Sentence ${i}`,reason:`Long reason ${i} `.repeat(30)})),turns:[]}))};
+    render(<KnowledgeRevisionChat taskId="diagnostics" version={chatVersion()} disabled={false} onStateChange={vi.fn()} onApplied={vi.fn()}/>);
+    await waitFor(()=>expect(document.querySelector('[data-control="knowledge-chat-diagnostics"] summary')).toHaveTextContent(`What needs fixing · ${count}`));
+    fireEvent.click(document.querySelector('[data-control="knowledge-chat-diagnostics"] summary')!);
+    expect(document.querySelectorAll('.knowledge-revision-diagnostics .knowledge-revision-issues > li')).toHaveLength(count);
+    expect(document.querySelector('.knowledge-revision-transcript > .knowledge-revision-diagnostics')).not.toBeNull();
+    if(count)expect(screen.getByText('Sentence 0')).toBeVisible();
+  });
+  it("renders a meaningful legacy note instead of an empty row and keeps the count consistent",async()=>{
+    window.llmWikiApplication={request:vi.fn(async()=>response({diagnostics:[{},null,"invalid"],turns:[]}))};
+    render(<KnowledgeRevisionChat taskId="legacy-note" version={chatVersion()} disabled={false} onStateChange={vi.fn()} onApplied={vi.fn()}/>);
+    await waitFor(()=>expect(document.querySelector('[data-control="knowledge-chat-diagnostics"] summary')).toHaveTextContent('· 1'));
+    fireEvent.click(document.querySelector('[data-control="knowledge-chat-diagnostics"] summary')!);
+    expect(screen.getByText('Saved review note')).toBeVisible();expect(screen.getByText(/A detailed reason was not saved/)).toBeVisible();
+  });
+  it("renders comparison and Apply in the main document slot and keeps non-applicable proposals reviewable",async()=>{
+    const slot=document.createElement('div');slot.className='knowledge-revision-review-slot';document.body.append(slot);
+    const reply={...proposal(),applicable:false,preparationError:'Article body is incomplete'};
+    window.llmWikiApplication={request:vi.fn(async()=>response({diagnostics:[],turns:[{id:'bad',state:'failed',userMessage:'Keep my edit',reply}]}))};
+    const mounted=render(<KnowledgeRevisionChat taskId="main-slot" version={chatVersion()} reviewContainer={slot} disabled={false} onStateChange={vi.fn()} onApplied={vi.fn()}/>);
+    await screen.findByText('Article body is incomplete');
+    expect(slot.querySelector('[data-control="knowledge-chat-apply"]')).toBeDisabled();
+    expect(document.querySelector('.knowledge-revision-transcript .knowledge-revision-proposal')).toBeNull();
+    expect(slot.querySelector('[data-control="knowledge-chat-full-compare"]')).toHaveAttribute('open');
+    fireEvent.click(screen.getByRole('button',{name:'Request updated proposal'}));
+    expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toContain('Adapt this saved proposal');
+    mounted.unmount();slot.remove();
+  });
+});

@@ -95,17 +95,16 @@ pub fn atomic_write(vault: &Path, relative: &str, content: &str) -> Result<(), S
     Ok(())
 }
 
-fn title(path: &Path, body: &str) -> String {
-    body.lines()
-        .find_map(|line| line.strip_prefix("# ").map(str::trim))
-        .filter(|value| !value.is_empty())
-        .map(str::to_owned)
-        .or_else(|| {
-            path.file_stem()
-                .map(|value| value.to_string_lossy().into_owned())
-        })
-        .unwrap_or_default()
+pub(crate) fn document_title(path: &Path, body: &str) -> String {
+    let normalized=body.replace("\r\n","\n");
+    let (header, content) = normalized.strip_prefix("---\n").and_then(|rest| rest.split_once("\n---"))
+        .map(|(head,body)|(Some(head),body)).unwrap_or((None,normalized.as_str()));
+    let declared = header.and_then(|head|serde_yaml::from_str::<Value>(head).ok())
+        .and_then(|v|v["title"].as_str().map(str::to_owned)).filter(|s|!s.trim().is_empty());
+    declared.or_else(||content.lines().find_map(|line|line.strip_prefix("# ").map(str::trim)).filter(|s|!s.is_empty()).map(str::to_owned))
+        .or_else(||path.file_stem().map(|s|s.to_string_lossy().into_owned())).unwrap_or_else(||"Knowledge".into())
 }
+
 
 pub fn index(
     db_path: &Path,
@@ -142,7 +141,7 @@ pub fn index(
             .map_err(|error| error.to_string())?
             .as_secs() as i64;
         let parsed = parse_document_at_revision(&path, &body, source_hash.clone());
-        let document_title = title(entry.path(), &body);
+        let document_title = document_title(entry.path(), &body);
         seen.insert(path.clone());
         scanned.push((
             path,

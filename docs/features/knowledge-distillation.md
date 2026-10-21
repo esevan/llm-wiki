@@ -30,3 +30,18 @@ reopening in the same app restores the Task/version input, history and running o
 completed request. Cancel is separate. App restart does not promise request resume.
 
 AI generation uses the shared AI Request Timeout setting. New versions preserve the frozen generation inputs and check source/head changes before atomic save. Completion alone never grants decided or verified authority. Ideas remain separate with their disposition and reconsideration conditions. Private review notes are separate records, not chat messages or automatic body changes.
+
+
+### Applying a chat correction
+The document column contains the selected proposal, before/after comparison,
+Apply and Cancel. Chat contains requests and conversation. Diagnostic counts use
+the same normalized rows that are rendered; expanded notes scroll with the
+conversation instead of a second clipped details viewport.
+
+Apply is offered only for a structurally prepared candidate. Rejected quotes,
+including identities outside the saved snapshot, are retained as advisory findings
+and removed from authenticated bindings. They are never marked verified. Legacy
+proposals missing prepared bytes are rebuilt from their persisted candidate and
+snapshot before applying. Exact base/private-head checks still reject stale work.
+Request an updated proposal to carry the saved suggestion into a new request;
+the original proposal and unsent input remain available.
