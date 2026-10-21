@@ -162,13 +162,14 @@ fn snapshot(tx: &Transaction<'_>, input: &Value) -> Result<Value> {
         .as_array()
         .and_then(|vs| vs.iter().find(|v| v["revision"] == revision))
         .ok_or("knowledge_revision_not_found")?;
-    if version["qualityState"] != "valid" {
+    if input["simplePublication"] != true && version["qualityState"] != "valid" {
         return Err("knowledge_unverified: review and resolve draft validation issues before publication".into());
     }
-    if projection["pointers"]["currentPrivateRevision"] != revision
+    let expected_head = if input["simplePublication"] == true { input["expectedCurrentPrivateRevision"].as_i64().unwrap_or(revision) } else { revision };
+    if projection["pointers"]["currentPrivateRevision"] != expected_head
         || version["contentHash"] != input["expectedKnowledgeContentHash"]
-        || version["generationSnapshotHash"] != input["expectedGenerationSnapshotHash"]
-        || version["freshness"] != "current"
+        || (input["simplePublication"] != true && (version["generationSnapshotHash"] != input["expectedGenerationSnapshotHash"]
+        || version["freshness"] != "current"))
     {
         return Err("generation_snapshot_conflict".into());
     }
@@ -190,7 +191,7 @@ fn snapshot(tx: &Transaction<'_>, input: &Value) -> Result<Value> {
             .ok_or("idea_revision_not_found")?;
         ideas.push(idea.clone());
     }
-    let sources:String=tx.query_row("SELECT s.manifest_json FROM knowledge_draft_versions v JOIN knowledge_evidence_snapshots s ON s.id=v.generation_snapshot_id WHERE v.task_id=? AND v.revision=?",params![task,revision],|r|r.get(0)).map_err(db_err)?;
+    let sources:String=tx.query_row("SELECT COALESCE(s.manifest_json,'{}') FROM knowledge_draft_versions v LEFT JOIN knowledge_evidence_snapshots s ON s.id=v.generation_snapshot_id WHERE v.task_id=? AND v.revision=?",params![task,revision],|r|r.get(0)).map_err(db_err)?;
     Ok(
         json!({"version":version,"ideas":ideas,"sources":parse(&sources)?,"pointers":projection["pointers"]}),
     )
@@ -272,6 +273,18 @@ pub async fn prepare(
     };
     guard_published_file(root, &evidence)?;
     let taxonomy = inventory(root)?;
+    if input["simplePublication"] == true {
+        required(&evidence["version"], "bodyMarkdown")?;
+        // Independent immutable destination. Never merge or overwrite another note.
+        let suffix = hash(format!("{}:{}:{}", input["taskId"], input["knowledgeRevision"], input["expectedKnowledgeContentHash"]).as_bytes());
+        let path = format!("Knowledge/Published/{suffix}.md");
+        if bytes_at(root, &path)?.is_some() { return Err("archive_target_conflict: publication destination already exists".into()); }
+        return prepare_from_plan(db, root, input, &evidence, &taxonomy, json!({
+            "outcome":"new", "path":path,
+            "rationale":"Publish the selected immutable draft; compare sources during retrieval.",
+            "tags":[],"aliases":[],"mocPaths":[],"newCategoryRationale":"Independent publication preserving existing Knowledge"
+        }));
+    }
     let taxonomy_prompt = taxonomy
         .iter()
         .cloned()
@@ -460,7 +473,20 @@ fn prepare_from_plan(
         uid()
     };
     let c = database::open(db)?;
-    let links = reference_links(&c, evidence, taxonomy)?;
+    let mut link_warnings = Vec::<String>::new();
+    let links = if input["simplePublication"] == true {
+        let mut links = Vec::new();
+        if let Some(references) = evidence["sources"]["actualReferenceUsages"].as_array() {
+            for reference in references {
+                let mut source = evidence.clone();
+                source["sources"]["actualReferenceUsages"] = json!([reference]);
+                match reference_links(&c, &source, taxonomy) { Ok(items) => links.extend(items), Err(issue) => link_warnings.push(issue) }
+            }
+        } else {
+            match reference_links(&c, evidence, taxonomy) { Ok(items) => links.extend(items), Err(issue) => link_warnings.push(issue) }
+        }
+        links
+    } else { reference_links(&c, evidence, taxonomy)? };
     let mut artifacts = Vec::new();
     let mut moc_patches = Vec::new();
     if plan.outcome != "conflict" {
@@ -475,6 +501,12 @@ fn prepare_from_plan(
         }
         let metadata = json!({"title":version["title"],"tags":plan.tags,"aliases":plan.aliases,"llm_wiki":{"schema":1,"document_id":document_id,"information_type":"knowledge","status":"current","task_id":input["taskId"],"source_revision":version["contentHash"],"applicability":{"summary":version["applicability"]["summary"],"representative_questions":version["applicability"]["representativeQuestions"],"helps_with":version["applicability"]["helpsWith"],"conditions":version["applicability"]["conditions"],"exclusions":version["applicability"]["exclusions"]},"decisions":decisions,"references":links}});
         let mut metadata = metadata;
+        if input["simplePublication"] == true {
+            // Permission to share does not establish factual verification.
+            metadata["llm_wiki"]["status"] = json!("unverified");
+            metadata["llm_wiki"]["decisions"] = json!([]);
+            metadata["llm_wiki"]["provenance"] = json!({"authorship":if version["derivationKind"]=="edited" {"user_edited_ai"} else {"ai_generated"},"modelStatus":version["modelStatus"],"derivationKind":version["derivationKind"],"userApprovedForPublication":true,"verification":"not_verified","actualReferenceUsages":evidence["sources"]["actualReferenceUsages"],"referenceLinkWarnings":link_warnings,"qualityState":version["qualityState"],"qualityFindings":version["result"]["qualityFindings"],"sourceRefs":version["result"]["article"]["applicability"]["sourceRefs"],"claimBindings":version["result"]["article"]["claimBindings"],"assumptionBindings":version["result"]["article"]["assumptionBindings"],"userStatements":evidence["sources"]["sourceManifest"].as_array().into_iter().flatten().filter(|s| s["type"]=="user_statement" || s["type"]=="task_work_log").map(|s|json!({"type":s["type"],"id":s["id"],"author":"user","sourceRevision":s["revision"],"origin":"user_record"})).collect::<Vec<_>>()});
+        }
         if let Some(previous) = bytes_at(root, &plan.path)? {
             let previous = String::from_utf8(previous).map_err(|e| e.to_string())?;
             let mut retained = frontmatter(&previous);
@@ -1032,7 +1064,7 @@ pub fn finish_index(db: &Path, root: &Path, semantic: &SemanticEngine, id: &str)
                 .iter()
                 .find(|a| a.document_id == doc)
                 .ok_or("archive_target_conflict")?;
-            let changed = tx.execute("UPDATE knowledge_pointers SET published_revision=?,publication_document_id=?,publication_path=?,publication_content_hash=?,updated_at=CURRENT_TIMESTAMP WHERE task_id=? AND current_private_revision=?",params![integer(&proposal,"knowledgeRevision")?,doc,a.path,a.sha256,required(&proposal,"taskId")?,integer(&proposal,"knowledgeRevision")?]).map_err(db_err)?;
+            let changed = tx.execute("UPDATE knowledge_pointers SET published_revision=?,publication_document_id=?,publication_path=?,publication_content_hash=?,updated_at=CURRENT_TIMESTAMP WHERE task_id=? AND current_private_revision=?",params![integer(&proposal,"knowledgeRevision")?,doc,a.path,a.sha256,required(&proposal,"taskId")?,if proposal["input"]["simplePublication"]==true { proposal["input"]["expectedCurrentPrivateRevision"].as_i64().unwrap_or(integer(&proposal,"knowledgeRevision")?) } else { integer(&proposal,"knowledgeRevision")? }]).map_err(db_err)?;
             if changed != 1 { return Err("generation_snapshot_conflict: publication pointer changed".into()); }
             for link in proposal["referenceLinks"].as_array().into_iter().flatten() {
                 tx.execute("INSERT OR IGNORE INTO knowledge_archive_links(operation_id,source_document_id,target_document_id,target_revision,section,role,rationale) VALUES(?,?,?,?,?,?,?)",params![id,doc,required(link,"documentId")?,required(link,"documentVersion")?,link["section"].as_str().unwrap_or(""),required(link,"role")?,required(link,"rationale")?]).map_err(db_err)?;
@@ -1506,6 +1538,105 @@ mod tests {
         (temp, db, root, input, evidence)
     }
 
+    #[tokio::test]
+    async fn simple_publication_native_dispatch_queues_index_and_exposes_search_provenance() {
+        let (_temp,db,root,mut input,_)=knowledge_fixture();input["simplePublication"]=json!(true);
+        let c=database::open(&db).unwrap();c.execute("UPDATE knowledge_draft_versions SET quality_state='blocked_unsupported',model_status='failed'",[]).unwrap();
+        let app=crate::NativeApplication::isolated(&root,&db).unwrap();
+        let prepared=app.execute_workflow(crate::NativeOperation{name:"task-knowledge.archive-prepare".into(),input}).await;
+        assert_eq!(prepared.status,200,"{}",prepared.body);
+        let result=app.execute_workflow(crate::NativeOperation{name:"task-knowledge.archive-publish".into(),input:publish_input(&prepared.body)}).await;
+        assert_eq!(result.status,200,"{}",result.body);
+        assert!(result.body["indexJob"].is_object(),"native dispatch must queue existing index worker: {}",result.body);
+        tokio::time::timeout(std::time::Duration::from_secs(5),async {
+            loop {
+                let state=status(&db,&json!({"operationId":"publish-one"})).unwrap();
+                if state["state"]=="complete" { break; }
+                assert!(!matches!(state["state"].as_str(),Some("index_failed"|"repair_required")),"{state}");
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        }).await.unwrap();
+        let result=app.execute_domain("vault",crate::NativeOperation{name:"vault.search".into(),input:json!({"query":"Approval","semantic":false})});
+        assert_eq!(result.status,200,"{}",result.body);
+        let items=result.body["results"].as_array().unwrap();assert!(!items.is_empty());
+        assert_eq!(items[0]["provenance"]["verification"],"not_verified");
+        assert_eq!(items[0]["provenance"]["authorship"],"ai_generated");
+        assert!(items.iter().all(|v|v["aspect"]!="exploration"));
+        assert!(!result.body["comparisonSources"].as_array().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn simple_publication_allows_selected_history_but_guards_the_observed_private_head() {
+        let (_temp,db,root,mut input,_)=knowledge_fixture();let mut c=database::open(&db).unwrap();
+        let tx=c.transaction().unwrap();knowledge_distillation::restore_as_new_tx(&tx,"task",1,1).unwrap();tx.commit().unwrap();
+        input["simplePublication"]=json!(true);input["expectedCurrentPrivateRevision"]=json!(2);
+        let proposal=prepare(&db,Path::new("none"),&root,&SemanticEngine::new(None),&input).await.unwrap();
+        publish(&db,&root,&publish_input(&proposal)).unwrap();finish_index(&db,&root,&SemanticEngine::new(None),"publish-one").unwrap();
+        let pointers:(i64,i64)=c.query_row("SELECT current_private_revision,published_revision FROM knowledge_pointers",[],|r|Ok((r.get(0)?,r.get(1)?))).unwrap();
+        assert_eq!(pointers,(2,1));
+    }
+
+    #[test]
+    fn simple_publication_retains_valid_links_and_unresolved_reference_metadata() {
+        let (_temp,db,root,mut input,mut evidence)=knowledge_fixture();input["simplePublication"]=json!(true);
+        evidence["sources"]["actualReferenceUsages"]=json!([
+            {"documentId":"known","documentVersion":"v1","disposition":"used","reason":"My source","section":"Result"},
+            {"documentId":"missing","documentVersion":"v2","disposition":"used","reason":"Earlier source","section":"Result"}]);
+        fs::write(root.join("Source.md"),markdown(&json!({"llm_wiki":{"schema":1,"document_id":"known","status":"current"}}),"# Source").unwrap()).unwrap();
+        let taxonomy=inventory(&root).unwrap();
+        let proposal=prepare_from_plan(&db,&root,&input,&evidence,&taxonomy,json!({"outcome":"new","path":"Known.md","rationale":"Keep sources"})).unwrap();
+        let bytes=proposal["artifacts"][0]["bytes"].as_str().unwrap();
+        assert!(bytes.contains("actualReferenceUsages"));assert!(bytes.contains("missing"));assert!(bytes.contains("referenceLinkWarnings"));
+        assert_eq!(proposal["referenceLinks"].as_array().unwrap().len(),1);
+        let c=database::open(&db).unwrap();
+        let one=json!({"sources":{"actualReferenceUsages":[{"documentId":"known","documentVersion":"v1","disposition":"used","reason":"My source"}]}});
+        assert_eq!(reference_links(&c,&one,&[json!({"documentId":"known","path":"Source.md"})]).unwrap().len(),1);
+    }
+
+    #[tokio::test]
+    async fn simple_publication_recovers_failed_stale_and_legacy_drafts_without_ai() {
+        for quality in ["valid","blocked_unsupported","blocked_omission"] {
+            let (_temp,db,root,mut input,_)=knowledge_fixture();
+            let c=database::open(&db).unwrap();
+            c.execute("UPDATE knowledge_draft_versions SET quality_state=?,model_status='failed',generation_snapshot_id=NULL",[quality]).unwrap();
+            input["simplePublication"]=json!(true);
+            input["expectedGenerationSnapshotHash"]=json!("stale-or-missing");
+            let proposal=prepare(&db,Path::new("missing-provider-settings"),&root,&SemanticEngine::new(None),&input).await.unwrap();
+            assert_eq!(proposal["artifacts"].as_array().unwrap().len(),1);
+            let text=proposal["artifacts"][0]["bytes"].as_str().unwrap();
+            assert!(text.contains("status: unverified")); assert!(text.contains("not_verified"));
+            assert!(!text.contains("confirmed_final: true"));
+            let approve=publish_input(&proposal);
+            assert_eq!(publish(&db,&root,&approve).unwrap()["state"],"index_pending");
+            assert_eq!(publish(&db,&root,&approve).unwrap()["state"],"index_pending");
+            assert_eq!(finish_index(&db,&root,&SemanticEngine::new(None),"publish-one").unwrap()["state"],"complete");
+            assert_eq!(prepare(&db,Path::new("missing-settings"),&root,&SemanticEngine::new(None),&input).await.unwrap(),proposal);
+            assert_eq!(publish(&db,&root,&approve).unwrap()["state"],"complete");
+            let search=vault::search(&db,&SemanticEngine::new(None),"Approval",10,0,true).unwrap();
+            assert!(!search["results"].as_array().unwrap().is_empty(),"published advisory must be searchable: {search}");
+            assert_eq!(c.query_row("SELECT quality_state FROM knowledge_draft_versions",[],|r|r.get::<_,String>(0)).unwrap(),quality);
+            assert_eq!(c.query_row("SELECT count(*) FROM knowledge_archive_operations",[],|r|r.get::<_,i64>(0)).unwrap(),1);
+        }
+    }
+
+    #[tokio::test]
+    async fn simple_publication_preserves_head_hash_destination_and_write_failure_guards() {
+        let (_temp,db,root,mut input,_)=knowledge_fixture();input["simplePublication"]=json!(true);
+        let mut wrong=input.clone();wrong["expectedKnowledgeContentHash"]=json!("wrong");
+        assert!(prepare(&db,Path::new("none"),&root,&SemanticEngine::new(None),&wrong).await.unwrap_err().contains("conflict"));
+        let proposal=prepare(&db,Path::new("none"),&root,&SemanticEngine::new(None),&input).await.unwrap();
+        let mut c=database::open(&db).unwrap();let tx=c.transaction().unwrap();knowledge_distillation::restore_as_new_tx(&tx,"task",1,1).unwrap();tx.commit().unwrap();
+        assert!(publish(&db,&root,&publish_input(&proposal)).unwrap_err().contains("conflict"));
+        c.execute("UPDATE knowledge_pointers SET current_private_revision=1",[]).unwrap();
+        let path=root.join(proposal["target"]["path"].as_str().unwrap());fs::create_dir_all(path.parent().unwrap()).unwrap();fs::write(&path,"External file").unwrap();
+        assert!(publish(&db,&root,&publish_input(&proposal)).is_err());
+        assert_eq!(fs::read_to_string(&path).unwrap(),"External file");
+        let c=database::open(&db).unwrap();assert_eq!(c.query_row("SELECT count(*) FROM knowledge_archive_operations",[],|r|r.get::<_,i64>(0)).unwrap(),0);
+        fs::remove_file(&path).unwrap();fs::remove_dir(path.parent().unwrap()).unwrap();fs::write(path.parent().unwrap(),"Not a directory").unwrap();
+        assert!(publish(&db,&root,&publish_input(&proposal)).is_err());
+        assert_eq!(c.query_row("SELECT published_revision FROM knowledge_pointers WHERE task_id='task'",[],|r|r.get::<_,Option<i64>>(0)).unwrap(),None);
+    }
+
     #[test]
     fn rejected_draft_regeneration_revalidates_then_publishes_and_indexes() {
         let (_temp, db, context) = seed_knowledge_context();
@@ -1566,9 +1697,13 @@ mod tests {
             let mut binding=candidate.article.claim_bindings[0].clone();binding.claim_id="detail".into();binding.statement="Keep approval explicit".into();binding.source_refs[0].quote="Keep approval explicit".into();candidate.article.claim_bindings.push(binding);
             let prepared=knowledge_distillation::prepared(snapshot,candidate,"enhanced","").unwrap();assert_eq!(prepared["qualityState"],"valid");
             c.execute("INSERT INTO knowledge_revision_turns(id,task_id,base_revision,base_content_hash,expected_private_revision,request_hash,user_message,prepared_json,state) VALUES('chat-republish','task',1,?,1,'request','Keep approval explicit',?,'proposed')",params![input["expectedKnowledgeContentHash"].as_str(),prepared.to_string()]).unwrap();
+            // Real send captures the user statement before preparing. Mirror that here.
+            let tx=c.transaction().unwrap();let current=knowledge_distillation::capture_snapshot_tx(&tx,"task",1,"en").unwrap();tx.commit().unwrap();
+            let updated=knowledge_distillation::prepared(current,serde_json::from_value(prepared["generationResult"].clone()).unwrap(),"enhanced","").unwrap();
+            c.execute("UPDATE knowledge_revision_turns SET prepared_json=? WHERE id='chat-republish'",[updated.to_string()]).unwrap();
             let app=crate::NativeApplication::isolated(&root,&db).unwrap();
             let applied=app.execute_workflow(crate::NativeOperation{name:"task-knowledge.revision-apply".into(),input:json!({"taskId":"task","turnId":"chat-republish"})}).await;
-            assert_eq!(applied.status,200);assert_eq!(applied.body["draftRevision"],2);
+            assert_eq!(applied.status,200,"{}",applied.body);assert_eq!(applied.body["draftRevision"],2);
             assert_eq!(fs::read_to_string(root.join("Knowledge/Approval.md")).unwrap(),before);
             assert_eq!(c.query_row("SELECT published_revision FROM knowledge_pointers WHERE task_id='task'",[],|r|r.get::<_,i64>(0)).unwrap(),1);
             let update_input=json!({"operationId":"prepare-chat-update","taskId":"task","knowledgeRevision":2,"expectedKnowledgeContentHash":applied.body["contentHash"],"expectedGenerationSnapshotHash":applied.body["sourceHash"],"selectedIdeaRevisionIds":[]});

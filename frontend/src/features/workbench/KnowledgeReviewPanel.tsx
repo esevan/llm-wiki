@@ -20,6 +20,8 @@ import "./knowledge-review.css";
 import { KnowledgeRevisionChat } from "./KnowledgeRevisionChat";
 
 export interface KnowledgeArchivePrepareRequest {
+  simplePublication?: boolean;
+  expectedCurrentPrivateRevision?: number;
   operationId: string;
   taskId: string;
   knowledgeRevision: number;
@@ -186,7 +188,7 @@ export function KnowledgeReviewPanel({ taskId, completed, generationQueued, refr
   const chatStateChange = useCallback((hasInput: boolean, pending: boolean) => { setChatDirty(hasInput); setBusy(current => pending ? "chat" : current === "chat" ? undefined : current); }, []);
   const dirtyRef = useRef(dirty);
   dirtyRef.current = dirty;
-  useEffect(() => { onDirtyChange?.(dirty); return () => onDirtyChange?.(false); }, [dirty, onDirtyChange]);
+  useEffect(() => { onDirtyChange?.(bodyDirty || noteDirty); return () => onDirtyChange?.(false); }, [bodyDirty, noteDirty, onDirtyChange]);
 
   useEffect(() => {
     ++correctionSequence.current;
@@ -412,24 +414,39 @@ export function KnowledgeReviewPanel({ taskId, completed, generationQueued, refr
     if (/provider|model|api.?key|credential|connection/i.test(message)) return text.generationUnavailable;
     return text.publicationFailed;
   };
+  const publicationSending = useRef(false);
   const preparePublication = async () => {
-    if (!version || busy || savingNote) return;
-    const reason = !onPrepareArchive ? text.publicationUnavailable : dirty ? text.saveBeforePublish : !version.generationSnapshotHash ? text.legacyPublication : version.freshness !== "current" ? text.stalePublication : version.qualityState !== "valid" ? text.invalidPublication : "";
-    if (reason) { setPublicationError(reason); setCanRegenerate(Boolean(onPrepareArchive && !dirty && (!version.generationSnapshotHash || version.freshness !== "current" || version.qualityState !== "valid"))); return; }
-    if (!onPrepareArchive || !version.generationSnapshotHash) return;
-    setCanRegenerate(false); setBusy("prepare"); setPublicationError(""); setStatus(text.preparingPublication);
+    if (!version || busy || savingNote || publicationSending.current) return;
+    const reason = !onPrepareArchive || !onPublishArchive ? text.publicationUnavailable : noteDirty ? text.saveBeforePublish : "";
+    if (reason) { setPublicationError(reason); setCanRegenerate(false); return; }
+    if (!onPrepareArchive || !onPublishArchive) return;
+    publicationSending.current = true;
+    setCanRegenerate(false); setPublicationError("");
     try {
-      const nextOperationId = operationId();
+      let target = version;
+      if (bodyDirty) {
+        if (!await save()) return;
+        const latest = await taskClient.knowledge(taskId);
+        const saved = latest.versions.find(v => v.revision === latest.pointers.currentPrivateRevision);
+        if (!saved) throw new Error(text.invalidResponse);
+        target = saved;
+      }
+      setBusy("prepare"); setStatus(text.publishing);
+      const nextOperationId = `knowledge:${taskId}:${target.revision}:${target.contentHash}`;
       const next = await onPrepareArchive({
-        operationId: nextOperationId, taskId, knowledgeRevision: version.revision,
-        expectedKnowledgeContentHash: version.contentHash,
-        expectedGenerationSnapshotHash: version.generationSnapshotHash,
+        operationId: nextOperationId, taskId, knowledgeRevision: target.revision, simplePublication: true, expectedCurrentPrivateRevision: bodyDirty ? target.revision : currentRevision,
+        expectedKnowledgeContentHash: target.contentHash,
+        expectedGenerationSnapshotHash: target.generationSnapshotHash ?? "",
         selectedIdeaRevisionIds: ideas.filter(idea => selectedIdeas.has(`${idea.id}:${idea.revision}`)).map(idea => ({ id: idea.id, revision: idea.revision })),
         locale: document.documentElement.lang.startsWith("ko") ? "ko" : "en",
       });
-      setProposal(next); setProposalOperationId(nextOperationId); setPublicationOperation(undefined); setPublicationOperationId(undefined); setStatus("");
+      const publishOperationId = `${nextOperationId}:publish`;
+      const operation = await onPublishArchive({ operationId: publishOperationId, proposalId: next.proposalId, proposalVersion: next.proposalVersion, proposalHash: next.proposalHash });
+      setProposal(undefined); setProposalOperationId(undefined);
+      setPublicationOperation(operation); setPublicationOperationId(operation.operationId ?? publishOperationId); setStatus("");
+      if (operation.state === "complete") await load(target.revision);
     } catch (cause) { setPublicationError(publicationFailure(cause)); setStatus(""); }
-    finally { setBusy(undefined); }
+    finally { publicationSending.current = false; setBusy(undefined); }
   };
   const prepareOrganization = async () => {
     const documentId = projection?.pointers.publicationDocumentId;
@@ -448,7 +465,7 @@ export function KnowledgeReviewPanel({ taskId, completed, generationQueued, refr
   };
   const publish = async () => {
     if (!proposal || !proposalOperationId || !onPublishArchive || busy || savingNote) return;
-    const reason = dirty ? text.saveBeforePublish : proposal.outcome === "conflict" ? text.fileConflict : version?.freshness !== "current" ? text.stalePublication : version?.qualityState !== "valid" ? text.invalidPublication : "";
+    const reason = dirty ? text.saveBeforePublish : proposal.outcome === "conflict" ? text.fileConflict : "";
     if (reason) { setPublicationError(reason); setCanRegenerate(!dirty && proposal.outcome !== "conflict"); return; }
     setBusy("publish"); setPublicationError(""); setStatus(text.publishing);
     try {

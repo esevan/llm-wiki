@@ -359,6 +359,13 @@ where
     let results=ranked.into_iter().map(|candidate|{
         let(title,body,source_hash,modified_at)=documents.get(&candidate.unit.path).cloned().unwrap_or_default();
         let mut warnings=candidate.unit.warnings.clone();warnings.extend(candidate.warning);
+        // Sharing approval is distinct from authorship or factual verification.
+        let provenance=body.strip_prefix("---\n").and_then(|s|s.split_once("\n---")).and_then(|(header,_)|serde_yaml::from_str::<Value>(header).ok()).map(|v|v["llm_wiki"]["provenance"].clone()).unwrap_or(Value::Null);
+        for finding in provenance["qualityFindings"].as_array().into_iter().flatten() {
+            if let Some(message)=finding["message"].as_str() { warnings.push(message.to_owned()); }
+        }
+
+        warnings.extend(provenance["referenceLinkWarnings"].as_array().into_iter().flatten().filter_map(Value::as_str).map(str::to_owned));
         let lower=body.to_lowercase();let lower_title=title.to_lowercase();
         let matched=query.split_whitespace().filter(|term|{let term=term.to_lowercase();lower.contains(&term)||lower_title.contains(&term)}).collect::<Vec<_>>();
         json!({"path":candidate.unit.path,"title":title,"body":body,"source_hash":source_hash,"modified_at":modified_at,
@@ -366,10 +373,11 @@ where
             "passage":{"kind":"section","section":candidate.unit.section},"score":candidate.fused_score,"semantic_score":candidate.semantic_score,
             "documentId":candidate.unit.document_id,"section":candidate.unit.section,"chunkIndex":candidate.unit.chunk_index,"chunkCount":candidate.unit.chunk_count,
             "aspect":candidate.unit.aspect,"informationType":candidate.unit.information_type,"status":candidate.unit.status,"conditions":candidate.unit.conditions,
-            "historicalMatch":candidate.historical_match,"warnings":warnings})
+            "historicalMatch":candidate.historical_match,"warnings":warnings,"provenance":provenance})
     }).collect::<Vec<_>>();
+    let comparison_sources=results.iter().map(|r|json!({"documentId":r["documentId"],"path":r["path"],"sourceRevision":r["source_hash"],"section":r["section"],"provenance":r["provenance"],"conditions":r["conditions"]})).collect::<Vec<_>>();
     Ok(
-        json!({"results":results,"offset":offset,"limit":effective_limit,"has_more":has_more,"semantic_available":semantic_available,"semantic_complete":semantic_complete,"source_revision":source_revision}),
+        json!({"results":results,"comparisonSources":comparison_sources,"comparisonPolicy":"Preserve both sources and compare their context; publication is not factual verification or automatic conflict resolution.","offset":offset,"limit":effective_limit,"has_more":has_more,"semantic_available":semantic_available,"semantic_complete":semantic_complete,"source_revision":source_revision}),
     )
 }
 

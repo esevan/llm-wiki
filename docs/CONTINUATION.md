@@ -1,5 +1,19 @@
 # LLM Wiki — Continuation handoff
 
+## Simple publication, chat sessions and images (2026-10-21)
+
+Current task: .worktrees/simple-knowledge-publication, base origin/main 0589850.
+User approved main merge/push after verification. Normal publication is one explicit
+button through existing journal/index storage, with semantic findings advisory.
+User statements are primary sources; image bytes reach draft/revision multimodal
+requests. AI origin and unverified authority remain explicit in search. Chat keyboard,
+transcript scroll and same-app close/reopen are repaired. No Agent abstraction,
+original DB read, real-data publication or app installation is included.
+
+See [verification and limitations](testing/simple-knowledge-publication.md). Compare
+the exact pushed commit's terminal CI with baseline failures. Existing v9 migration
+fixtures expect schema24 while base already has25; no unrelated cleanup is included.
+
 ## Knowledge diagnostics and revision chat (2026-10-21)
 
 Implementation lives in `.worktrees/knowledge-publication-contract`, branch

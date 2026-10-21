@@ -281,13 +281,22 @@ pub(crate) fn capture_snapshot_tx(
     for (decision_id, decision_revision, kind, payload) in decision_rows {
         manifest.push(full_source("task_decision",&decision_id,&decision_revision.to_string(),"payload_json","decision",json!({"kind":kind,"payload":serde_json::from_str::<Value>(&payload).unwrap_or(Value::String(payload))})));
     }
-    let mut logs = tx.prepare("SELECT id,body,image_summary,created_at FROM task_work_log_entries WHERE task_id=? ORDER BY created_at,id").map_err(|error| error.to_string())?;
+    let mut user_turns = tx.prepare("SELECT id,user_message,created_at FROM knowledge_revision_turns WHERE task_id=? ORDER BY created_at,id").map_err(|e|e.to_string())?;
+    let user_sources = user_turns.query_map([task_id],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?))).map_err(|e|e.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|e|e.to_string())?;
+    for (id,message,created) in user_sources { manifest.push(full_source("user_statement",&id,&created,"message","reported",json!({"author":"user","message":message}))); }
+    let mut logs = tx.prepare("SELECT id,body,image_summary,created_at,image_data,image_media_type FROM task_work_log_entries WHERE task_id=? ORDER BY created_at,id").map_err(|error| error.to_string())?;
     let recorded_logs = logs.query_map([task_id], |row| Ok(json!({
         "id":row.get::<_,String>(0)?,"body":row.get::<_,String>(1)?,
-        "imageSummary":row.get::<_,String>(2)?,"createdAt":row.get::<_,String>(3)?
+        "imageSummary":row.get::<_,String>(2)?,"createdAt":row.get::<_,String>(3)?,"legacyImage":{"data":row.get::<_,String>(4)?,"mediaType":row.get::<_,String>(5)?}
     }))).map_err(|error| error.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|error| error.to_string())?;
     drop(logs);
-    for log in recorded_logs {
+    for mut log in recorded_logs {
+        let mut attachments = tx.prepare("SELECT id,name,media_type,data,byte_hash FROM task_attachments WHERE task_id=? AND entry_id=? ORDER BY id").map_err(|e|e.to_string())?;
+        let mut images = attachments.query_map(params![task_id, log["id"].as_str()], |r| Ok(json!({"id":r.get::<_,String>(0)?,"name":r.get::<_,String>(1)?,"mediaType":r.get::<_,String>(2)?,"data":r.get::<_,String>(3)?,"byteHash":r.get::<_,String>(4)?}))).map_err(|e|e.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|e|e.to_string())?;
+        if images.is_empty() && !log["legacyImage"]["data"].as_str().unwrap_or("").is_empty() { images.push(log["legacyImage"].clone()); }
+        log.as_object_mut().unwrap().remove("legacyImage");
+        log["images"] = json!(images);
+
         manifest.push(full_source("task_work_log",log["id"].as_str().unwrap_or(""),
             &hash_value(&log),"record","reported",log.clone()));
     }
@@ -392,6 +401,7 @@ pub(crate) fn generation_context(snapshot: &Value) -> Value {
                 collect(item, source, format!("{path}/{index}"), entries);
             },
             Value::Object(items) => for (key, item) in items {
+                if key == "data" { continue; }
                 let key = key.replace('~', "~0").replace('/', "~1");
                 collect(item, source, format!("{path}/{key}"), entries);
             },
@@ -406,7 +416,8 @@ pub(crate) fn generation_context(snapshot: &Value) -> Value {
     context["citationCatalog"] = json!(entries);
     context["generationRules"] = json!({
         "citationSelection": "Copy a citationCatalog sourceRef as a unit. Its quote is a decoded individual string, not JSON, adjacent fields, a paraphrase, or text borrowed from another manifest source. contentPointer is diagnostic only; preserve the sourceRef locator.",
-        "applicability": "Applicability explains source-bounded reuse, not new observed facts. Keep each phrase in bodyMarkdown. A nonverbatim explanation must have an assumptionBinding with assumptionId starting applicability:, bodyLocator equal to that phrase, exact supporting sourceRefs also present in applicability.sourceRefs, and a body line Reuse interpretation: <phrase> (or 활용 해석: <phrase>). Preserve source conditions and limits. Actual claims about decisions, observations, verification, effectiveness or scope require claimBindings and retain their epistemic state; do not disguise factual assertions as interpretations. Flag unsupported additions, contradictions and overreach as blocking qualityFindings.",
+        "applicability": "Applicability explains source-bounded reuse, not new observed facts. Keep each phrase in bodyMarkdown. When supplying source-linked applicability metadata, a nonverbatim explanation must have an assumptionBinding with assumptionId starting applicability:, bodyLocator equal to that phrase, exact supporting sourceRefs also present in applicability.sourceRefs, and a body line Reuse interpretation: <phrase> (or 활용 해석: <phrase>). Preserve source conditions and limits. Actual claims about decisions, observations, verification, effectiveness or scope require claimBindings and retain their epistemic state; do not disguise factual assertions as interpretations. Flag unsupported additions, contradictions and overreach as blocking qualityFindings.",
+        "userAuthorship": "User-authored writing and user reports are primary sources. External citations are optional. Do not add missing-reference findings merely for absent citations. Keep AI interpretations distinct and unverified.",
         "finality": "Task completion records workflow state only. finalOutcomes may be empty even for a completed Task. Use reported source facts and preserve unresolved topics when no current adopted topic with an authoritative decided claim exists."
     });
     context
@@ -879,6 +890,12 @@ fn assess_candidate(snapshot: &Value, result: &GenerationResult) -> Result<(Stri
         if !matches!(idea.disposition.as_str(),"unverified"|"deferred"|"out_of_scope"|"rejected") {
             return Err("invalid_knowledge: idea disposition is invalid".into());
         }
+    }
+    if result.article.applicability.source_refs.is_empty()
+        && result.article.claim_bindings.is_empty() && result.article.assumption_bindings.is_empty()
+        && result.article.final_outcomes.is_empty() && result.quality_findings.is_empty()
+        && result.ideas.is_empty() {
+        return Ok(("valid".into(), String::new()));
     }
     match validate_result(snapshot,result) {
         Ok(()) => Ok(("valid".into(),String::new())),
@@ -1867,7 +1884,7 @@ mod tests {
             else {value["article"]["applicability"].as_object_mut().unwrap().remove("sourceRefs");}
             normalize_prompt_output(PromptId::KnowledgeDraft,&mut value);
             let candidate=prepared(snapshot.clone(),serde_json::from_value(value).unwrap(),"enhanced","");
-            if let Ok(candidate)=candidate { assert_eq!(candidate["qualityState"],"blocked_unsupported");assert!(candidate["modelError"].as_str().unwrap().contains("missing_reference")); }
+            if let Ok(candidate)=candidate { assert_eq!(candidate["qualityState"],"valid");assert_eq!(candidate["modelError"],""); }
             else { assert!(candidate.unwrap_err().contains("invalid_reference_binding")); }
         }
         let mut wrong=sparse.clone();wrong["ideas"]=Value::Null;
@@ -1900,7 +1917,7 @@ mod tests {
             assert!(tokio::time::timeout(std::time::Duration::from_millis(100),listener.accept()).await.is_err(),"unexpected second model call");
         });
         let prepared=crate::native::task_assistance::prepare_knowledge_draft(&db,&settings,&json!({"taskId":"task","expectedTaskRevision":1,"locale":"en"})).await.unwrap();
-        assert_eq!(prepared["qualityState"],"blocked_unsupported");
+        assert_eq!(prepared["qualityState"],"valid");
         let mut c=database::open(&db).unwrap();let tx=c.transaction().unwrap();let saved=append_generated_tx(&tx,&prepared).unwrap();tx.commit().unwrap();
         let tx=c.transaction().unwrap();let before=review_projection(&tx,"task",None).unwrap();tx.commit().unwrap();
         assert_eq!(before["versions"][0]["articleType"],"");assert_eq!(before["versions"][0]["title"],"Approval flow");
@@ -1910,8 +1927,8 @@ mod tests {
         let mut wrong=note.clone();wrong["expectedContentHash"]=json!("wrong");assert_eq!(add_review_note(&db,&wrong).unwrap_err(),"content_hash_conflict");
         let tx=c.transaction().unwrap();let after=review_projection(&tx,"task",None).unwrap();tx.commit().unwrap();
         assert_eq!(before["versions"],after["versions"]);assert_eq!(after["reviewNotes"].as_array().unwrap().len(),1);
-        let error=crate::native::knowledge_archive::prepare(&db,&settings,&vault,&crate::native::semantic::SemanticEngine::new(None),&json!({"taskId":"task","knowledgeRevision":1,"expectedKnowledgeContentHash":saved["contentHash"],"expectedGenerationSnapshotHash":saved["sourceHash"],"operationId":"archive-unverified","selectedIdeaRevisionIds":[],"locale":"en"})).await.unwrap_err();
-        assert!(error.contains("knowledge_unverified"));
+        let proposal=crate::native::knowledge_archive::prepare(&db,&settings,&vault,&crate::native::semantic::SemanticEngine::new(None),&json!({"taskId":"task","knowledgeRevision":1,"expectedKnowledgeContentHash":saved["contentHash"],"simplePublication":true,"operationId":"archive-user-writing","selectedIdeaRevisionIds":[],"locale":"en"})).await.unwrap();
+        assert!(proposal["artifacts"][0]["bytes"].as_str().unwrap().contains("Manual notes"));
         server.await.unwrap();
         let mut bad=prepared.clone();bad["generationResult"]["article"]["bodyMarkdown"]=json!("");
         let tx=c.transaction().unwrap();assert!(append_generated_tx(&tx,&bad).unwrap_err().contains("bodyMarkdown"));

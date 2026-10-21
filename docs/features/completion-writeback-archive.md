@@ -12,20 +12,13 @@ The Capture and exact linked Problem revisions remain available as provenance.
 
 Accepting an explicit Subtask enables automatic parent Knowledge publication on each evidence-backed child completion. Each revision accumulates completed-child evidence in the same parent document. The parent closes only after all children finish; reopening a child reopens completed ancestors. Publication is recoverable through a durable outbox and preserves external file edits. Standalone Tasks retain the separate review-and-publish flow below. See [Subtask lifecycle](refinement-preview-status.md#explicit-subtasks).
 
-## Review and publish separately
+## Explicit one-click publication
 
-Create a private Knowledge draft from completed work, review its readable Markdown preview, and make corrections
-before publishing. Generation enters the durable **AI Queue** immediately, where its queued, running,
-failed, retry, and completed states remain visible. The completed Queue result opens the exact draft
-revision it produced; if the draft was later edited, published, or regenerated, that original result stays read-only. Previously saved private drafts
-also reopen with their Markdown preview and editable source. The generated Markdown includes the Task's recorded outcome, context, scope,
-non-goals, validation, work evidence, checklist, decisions, completion evidence, and exact provenance.
-Unrecorded fields are identified as unrecorded rather than filled with invented claims. A queued job captures the
-requested Task revision and rejects a changed source snapshot rather than drafting from newer unreviewed work.
-
-Publishing is a separate explicit action on the reviewed draft. It writes Markdown to the Vault,
-where it remains usable outside LLM Wiki. A draft revision and source hash identify the content
-being published; publication must not silently use an unreviewed revision.
+Generate or edit a private Knowledge draft, then choose **Publish Knowledge** once.
+Quality, citation and source-freshness notes remain nonblocking metadata. User
+experience is a primary source; external citations are optional. Legacy and failed
+drafts can publish without regeneration. Storage/hash/version conflicts still
+protect files and pointers. [Publication and recovery](knowledge-archive.md).
 
 ## Correct, regenerate, or withdraw
 

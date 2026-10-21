@@ -113,6 +113,11 @@ pub(crate) fn image_context(value: &Value) -> (Value, Vec<Value>) {
         match value {
             Value::Object(object) => {
                 if let (Some(data), Some(media)) = (object.get("data").and_then(Value::as_str), object.get("mediaType").and_then(Value::as_str)) {
+                    if data.is_empty() || !matches!(media,"image/png"|"image/jpeg"|"image/gif"|"image/webp") {
+                        object.insert("imageInputState".into(),json!(if data.is_empty() {"pixels_unavailable"} else {"unsupported_media_type"}));
+                        object.remove("data");
+                        return;
+                    }
                     images.push(json!({"type":"text","text":format!("Image from {path}")}));
                     images.push(json!({"type":"image_url","image_url":{"url":format!("data:{media};base64,{data}")}}));
                     object.remove("data");
@@ -162,7 +167,7 @@ pub(crate) async fn provider_json_with_images(
     }
     .map_err(|error| error.to_string())?;
     if !response.status().is_success() {
-        return Err(crate::workflow_foundation::structured_output::http_error(response.status()));
+        return Err(if images.is_empty() { crate::workflow_foundation::structured_output::http_error(response.status()) } else { format!("image_input_rejected: attached images were sent, but the provider rejected the request ({}); check model image support and provider settings", response.status()) });
     }
     let payload = response
         .json::<Value>()
@@ -2550,11 +2555,13 @@ async fn generate_knowledge_candidate(
     let mut context = crate::native::knowledge_distillation::generation_context(&snapshot);
     let mut rejected: Option<Value> = None;
     for attempt in 0..2 {
-        let response = match provider_json(
+        let (text_context, images) = image_context(&context);
+        let response = match provider_json_with_images(
             settings_path,
             "completion_report",
             PromptId::KnowledgeDraft,
-            context.clone(),
+            text_context,
+            &images,
             None,
         )
         .await
@@ -3401,6 +3408,19 @@ mod tests {
         for required in ["FINAL CONDITION", "finalOutcomes", "epistemicState", "reconsiderationConditions"] {
             assert!(request.contains(required), "provider request omitted {required}");
         }
+    }
+
+    #[tokio::test]
+    async fn knowledge_image_rejection_is_distinct_from_absent_evidence() {
+        let root=tempfile::tempdir().unwrap();let settings=root.path().join("settings.json");
+        let (base,server)=crate::workflow_foundation::structured_output::test_server::serve(json!({"error":{"message":"model does not support images"}}),400).await;
+        super::settings::save_provider(&settings,&json!({"base_url":base,"model":"text-only-fixture","api_key":"fixture"})).unwrap();
+        let (context,images)=image_context(&json!({"sourceManifest":[{"content":{"image":{"mediaType":"image/png","data":"fixture-pixels"}}}]}));
+        let error=provider_json_with_images(&settings,"completion_report",PromptId::KnowledgeDraft,context,&images,None).await.unwrap_err();
+        assert!(error.contains("image_input_rejected"));assert!(!error.contains("missing_evidence"));
+        let sent=server.await.unwrap();assert!(sent["messages"][0]["content"].as_array().unwrap().iter().any(|v|v["type"]=="image_url"));
+        let (context,images)=image_context(&json!({"attached":{"mediaType":"image/png","data":""}}));
+        assert!(images.is_empty());assert_eq!(context["attached"]["imageInputState"],"pixels_unavailable");
     }
 
     #[tokio::test]

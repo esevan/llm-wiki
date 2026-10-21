@@ -34,3 +34,11 @@ Changing semantic instructions, input fields, output fields, evidence rules, or 
 ## Provider rule
 
 Callers may assemble domain snapshots, images, and exact evidence before registry construction. They may not bypass the registry for structured workflow output.
+
+### Knowledge policy revision (2026-10-21)
+
+`knowledge_draft` v6 and `knowledge_revision_chat` v2 recognize user reports as
+primary sources and citations as optional. Supplied exact citations keep their
+source identity checks. Work Log image bytes use provider image parts, not textual
+prompts/catalog entries. Ordinary publication uses no model or additional semantic
+validation call; its existing publication index job confirms exact stored bytes.

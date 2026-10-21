@@ -316,6 +316,21 @@ describe("Knowledge review", () => {
     expect(screen.queryByText("Saved as a new private version.")).not.toBeInTheDocument();
   });
 
+  it("saves edited bytes as a new revision before one-click publication and prevents repeat clicks", async () => {
+    let edited=false;const prepare=vi.fn().mockResolvedValue({proposalId:"saved",proposalVersion:1,proposalHash:"hash"});
+    const publish=vi.fn().mockResolvedValue({operationId:"published",state:"complete"});
+    window.llmWikiApplication={request:vi.fn(async({path,body})=>{
+      if(path.endsWith("/correction")){edited=true;expect(JSON.parse(body!).bodyMarkdown).toBe("# My experience");return response({draftRevision:3,contentHash:"content-3",bodyMarkdown:"# My experience",state:"draft"});}
+      return response(edited ? projection([version(2),version(3,"# My experience")]) : projection());
+    })};
+    render(<KnowledgeReviewPanel taskId="task-1" completed onGenerate={vi.fn()} onPrepareArchive={prepare} onPublishArchive={publish}/>);
+    fireEvent.click(await screen.findByRole("button",{name:"Edit current draft"}));
+    fireEvent.change(screen.getByRole("textbox",{name:"Edit current draft"}),{target:{value:"# My experience"}});
+    const button=screen.getByRole("button",{name:"Publish Knowledge"});fireEvent.click(button);fireEvent.click(button);
+    await waitFor(()=>expect(publish).toHaveBeenCalledOnce());
+    expect(prepare).toHaveBeenCalledWith(expect.objectContaining({knowledgeRevision:3,expectedKnowledgeContentHash:"content-3",simplePublication:true}));
+  });
+
   it("selects historical bytes, restores as new, and compares stored versions without generation", async () => {
     const historical = { ...version(1, "# Historical body"), title: "Historical Knowledge", result: { ...version(1).result, article: { ...version(1).result.article, title: "Historical Knowledge", bodyMarkdown: "# Historical body" } } };
     let current = projection([historical, version(2, "# Current body")]);
@@ -359,16 +374,9 @@ describe("Knowledge review", () => {
     fireEvent.click(screen.getByText(/Ideas to revisit/));
     fireEvent.click(screen.getByRole("checkbox", { name: "Include in publication proposal" }));
     fireEvent.click(screen.getByRole("button", { name: "Publish Knowledge" }));
-    await waitFor(() => expect(screen.getByRole("button", { name: "knowledge/offline.md" })).toBeVisible());
-    expect(prepare).toHaveBeenCalledWith(expect.objectContaining({ knowledgeRevision: 2, expectedKnowledgeContentHash: "content-2", expectedGenerationSnapshotHash: "snapshot-current", selectedIdeaRevisionIds: [{ id: "idea-reminder", revision: 1 }] }));
-    expect(screen.queryByText(exactArtifact)).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "knowledge/offline.md" }));
-    expect(await screen.findByRole("dialog", { name: "knowledge/offline.md" })).toHaveTextContent("The verified result is available offline.");
-    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Close reference" }));
-    fireEvent.click(screen.getByText("MOC and reference changes"));
-    expect(screen.getByText("[[offline]]", { exact: false })).toBeVisible();
-    expect(screen.getByText("Supports the offline result")).toBeVisible();
-    fireEvent.click(screen.getByRole("button", { name: "Publish these exact files" }));
+    await waitFor(() => expect(publish).toHaveBeenCalledOnce());
+    expect(prepare).toHaveBeenCalledWith(expect.objectContaining({ simplePublication: true, knowledgeRevision: 2, expectedKnowledgeContentHash: "content-2", selectedIdeaRevisionIds: [{id:"idea-reminder",revision:1}] }));
+    expect(screen.queryByRole("button",{name:"Publish these exact files"})).not.toBeInTheDocument();
     await waitFor(() => expect(publish).toHaveBeenCalledWith(expect.objectContaining({ proposalId: "proposal-1", proposalVersion: 1, proposalHash: "proposal-hash" })));
     expect(publish.mock.calls[0][0].operationId).not.toBe(prepare.mock.calls[0][0].operationId);
     expect(await screen.findByText("Publication state: index_pending")).toBeVisible();
@@ -391,7 +399,7 @@ describe("Knowledge review", () => {
     expect(screen.getByText("Use this when work must remain local.")).toBeVisible();
   });
 
-  it("keeps context visible, cancels preparation without writing, and retries failed publication", async () => {
+  it("keeps context visible and retries failed one-click publication with the same request", async () => {
     window.llmWikiApplication = { request: vi.fn().mockResolvedValue(response(projection())) };
     const prepared = { proposalId: "cancel-proposal", proposalVersion: 1, proposalHash: "exact-hash", state: "review_needed", outcome: "ready", rationale: "Preserve exact files", artifacts: [], mocPatches: [], referenceLinks: [] };
     const prepare = vi.fn().mockResolvedValue(prepared);
@@ -402,14 +410,9 @@ describe("Knowledge review", () => {
     expect(document.querySelector('[data-control="knowledge-history"]')).not.toHaveAttribute("open");
     expect(document.querySelector('[data-control="knowledge-provenance"]')).not.toHaveAttribute("open");
     fireEvent.click(screen.getByRole("button", { name: "Publish Knowledge" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Cancel publication" }));
-    expect(screen.queryByRole("button", { name: "Publish these exact files" })).not.toBeInTheDocument();
-    expect(publish).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: "Publish Knowledge" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Publish these exact files" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("Publication could not be completed");
-    expect(screen.getByRole("button", { name: "Publish these exact files" })).toBeEnabled();
-    fireEvent.click(screen.getByRole("button", { name: "Publish these exact files" }));
+    expect(screen.getByText("Keep final Knowledge local.")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Publish Knowledge" }));
     expect(await screen.findByText("Publication state: index_pending")).toBeVisible();
     expect(publish).toHaveBeenCalledTimes(2);
     expect(publish.mock.calls[1][0]).toMatchObject({ proposalId: "cancel-proposal", proposalHash: "exact-hash" });
@@ -470,19 +473,18 @@ describe("Knowledge review", () => {
     await waitFor(() => expect(recover).toHaveBeenCalledWith({ operationId: "organize-operation", choice: "finish" }));
   });
 
-  it("does not publish a proposal that still reports a conflict", async () => {
+  it("requests independent publication instead of semantic conflict resolution", async () => {
     window.llmWikiApplication = { request: vi.fn().mockResolvedValue(response(projection())) };
     const prepare = vi.fn().mockResolvedValue({
       proposalId: "conflict-proposal", proposalVersion: 1, proposalHash: "conflict-hash", state: "review_needed", outcome: "conflict", rationale: "Resolve the target collision first",
       artifacts: [], mocPatches: [], referenceLinks: [], unresolvedConflicts: [{ path: "knowledge/offline.md", reason: "Path is owned by another document" }],
     });
-    const publish = vi.fn();
+    const publish = vi.fn().mockResolvedValue({state:"complete"});
     render(<KnowledgeReviewPanel taskId="task-1" completed onGenerate={vi.fn()} onPrepareArchive={prepare} onPublishArchive={publish} />);
     await screen.findByRole("heading", { name: "Offline use", level: 3 });
     fireEvent.click(screen.getByRole("button", { name: "Publish Knowledge" }));
-    expect(await screen.findByText("This proposal has unresolved conflicts and cannot be published.")).toBeVisible();
-    expect(screen.getByRole("button", { name: "Publish these exact files" })).toBeDisabled();
-    expect(publish).not.toHaveBeenCalled();
+    await waitFor(()=>expect(publish).toHaveBeenCalledOnce());
+    expect(prepare).toHaveBeenCalledWith(expect.objectContaining({simplePublication:true}));
   });
 
   it("restores the newest failed operation with its exact proposal and reloads after recovery", async () => {

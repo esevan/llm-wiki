@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { invoke } from '@tauri-apps/api/core';
 import { TauriApplicationClient } from '../../services/tauriApplicationClient';
@@ -125,34 +125,18 @@ describe('App Workbench publication review through the native adapter', () => {
     fireEvent.change(document.querySelector('[data-control=knowledge-review-note-body]')!, {target:{value:'Review recorded privately.'}});
     fireEvent.click(document.querySelector('[data-control=knowledge-review-note-save]')!);
     await screen.findByText('Review recorded privately.');
-    fireEvent.click(prepare);
     if (alreadyCompleted === 'chat') {
-      expect(await screen.findByRole('alert')).toHaveTextContent('Some statements or citations');
       fireEvent.change(screen.getByRole('textbox',{name:'What should change?'}),{target:{value:'Replace the rejected citation and retain offline scope'}});
-      fireEvent.click(screen.getByRole('button',{name:'Propose revision'}));
+      fireEvent.keyDown(screen.getByRole('textbox',{name:'What should change?'}),{key:'Enter'});
       expect(await screen.findByText('Corrected citation proposal')).toBeVisible();expect(published).toBe(false);
       fireEvent.click(screen.getByRole('button',{name:'Apply and recheck private draft'}));
       await waitFor(()=>expect(document.querySelector('.knowledge-review')).toHaveAttribute('data-content-hash','content-3'));
-      expect(published).toBe(false);
-      fireEvent.click(document.querySelector('[data-control=knowledge-archive-prepare]')!);
     }
-    if (alreadyCompleted === 'blocked') {
-      expect(await screen.findByRole('alert')).toHaveTextContent('Some statements or citations');
-      expect(document.querySelector('.knowledge-review')!.textContent).not.toContain('5b722bbc');
-      expect(published).toBe(false);
-      fireEvent.click(document.querySelector('[data-control=knowledge-publication-regenerate]')!);
-      await waitFor(()=>expect(draftVersion.revision).toBe(3));
-      await act(async()=>{window.llmWikiOpenKnowledgeDraft?.({taskId:task.id,draftRevision:3,bodyMarkdown:draftVersion.bodyMarkdown,contentHash:draftVersion.contentHash,state:"draft"});});
-      await waitFor(()=>expect(document.querySelector('.knowledge-review')).toHaveAttribute('data-content-hash','content-3'));
-      fireEvent.click(document.querySelector('[data-control=knowledge-archive-prepare]')!);
-    }
-    await waitFor(() => expect(document.querySelector('[data-control=knowledge-archive-artifact-open]')).toBeVisible());
-    expect(published).toBe(false);
-    fireEvent.click(document.querySelector('[data-control=knowledge-archive-artifact-open]')!);
-    expect(await screen.findByRole('dialog', { name: 'knowledge/offline.md' })).toHaveTextContent('Exact offline article');
-    fireEvent.click(screen.getByRole('button', { name: 'Close reference' }));
-    fireEvent.click(document.querySelector('[data-control=knowledge-archive-publish]')!);
+    fireEvent.click(document.querySelector('[data-control=knowledge-archive-prepare]')!);
     await waitFor(() => expect(published).toBe(true));
+    expect(document.querySelector('[data-control=knowledge-archive-publish]')).toBeNull();
+    const call=vi.mocked(invoke).mock.calls.find(([,args])=>(args as {operation?:{name:string}})?.operation?.name==='task-knowledge.archive-prepare');
+    expect((call![1] as {operation:{input:object}}).operation.input).toMatchObject({simplePublication:true});
     await waitFor(() => expect(vi.mocked(invoke).mock.calls.some(([, args]) => (args as { operation?: { name: string } })?.operation?.name === 'task-knowledge.archive-publish')).toBe(true));
   });
   it('keeps preview details editable and maps applied completion criteria to checkable Task items', async () => {

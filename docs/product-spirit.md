@@ -5,7 +5,7 @@
 Product Spirit is the first test for every product and engineering decision. The
 [constitution](../.specify/memory/constitution.md) turns these principles into a mandatory review gate.
 
-Explicit Subtask acceptance authorizes cumulative parent Knowledge publication on each child completion. All children must finish before the parent closes. Refinement preserves Task identity; separate work has visible parent/child boundaries. Standalone Knowledge keeps its review-before-publication flow.
+Explicit Subtask acceptance authorizes cumulative parent Knowledge publication on each child completion. All children must finish before the parent closes. Refinement preserves Task identity; separate work has visible parent/child boundaries. Standalone Knowledge is published by one explicit user action; quality and citation notes do not become publication gates.
 
 Refining a Capture promotes the same work item, preserving its ID and original text. The original is provenance, not a second Inbox item. Older Tasks retain their existing IDs and Capture links. Additional work is created only through the explicit subtask split action; ordinary refinement revises the current work.
 

@@ -55,7 +55,7 @@ const projection = (versions = [version(1), version(2)]) => ({
 
 
 describe('Compass publication review through the native adapter', () => {
-  it('prepares exact files, waits for approval and completes publication', async () => {
+  it('publishes the saved draft in one explicit action', async () => {
     const task = { id: 'task-1', kind: 'task', title: 'Completed offline work', state: 'completed', taskRevision: 2, workLog: [], checklist: [], decisions: [], readinessEntries: [] };
     let published = false;
     vi.mocked(invoke).mockImplementation(async (command, args) => {
@@ -68,7 +68,7 @@ describe('Compass publication review through the native adapter', () => {
         case 'task.lineage': body = { nodes: [], edges: [], unresolved: [] }; break;
         case 'task-knowledge.get': body = projection(); break;
         case 'task-knowledge.archive-prepare':
-          expect(operation.input).toMatchObject({ taskId: 'task-1', knowledgeRevision: 2, expectedKnowledgeContentHash: 'content-2', expectedGenerationSnapshotHash: 'snapshot-current', selectedIdeaRevisionIds: [] });
+          expect(operation.input).toMatchObject({ taskId: 'task-1', knowledgeRevision: 2, expectedKnowledgeContentHash: 'content-2', expectedGenerationSnapshotHash: 'snapshot-current', selectedIdeaRevisionIds: [], simplePublication: true });
           body = { proposalId: 'proposal-1', proposalVersion: 1, proposalHash: 'exact-hash', state: 'review', outcome: 'ready', rationale: 'Reviewed local file', artifacts: [{ documentId: 'knowledge-1', path: 'knowledge/offline.md', bytes: '# Exact offline article', sha256: 'file-hash', kind: 'knowledge' }], mocPatches: [], referenceLinks: [] }; break;
         case 'task-knowledge.archive-publish':
           expect(operation.input).toMatchObject({ proposalId: 'proposal-1', proposalVersion: 1, proposalHash: 'exact-hash' });
@@ -84,12 +84,6 @@ describe('Compass publication review through the native adapter', () => {
     const prepare = await screen.findByRole('button', { name: 'Publish Knowledge' });
     expect(prepare).toBeEnabled();
     fireEvent.click(prepare);
-    expect(await screen.findByRole('button', { name: 'knowledge/offline.md' })).toBeVisible();
-    expect(published).toBe(false);
-    fireEvent.click(screen.getByRole('button', { name: 'knowledge/offline.md' }));
-    expect(await screen.findByRole('dialog', { name: 'knowledge/offline.md' })).toHaveTextContent('Exact offline article');
-    fireEvent.click(screen.getByRole('button', { name: 'Close reference' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Publish these exact files' }));
     await waitFor(() => expect(published).toBe(true));
     await waitFor(() => expect(vi.mocked(invoke).mock.calls.some(([, args]) => (args as { operation?: { name: string } })?.operation?.name === 'task-knowledge.archive-publish')).toBe(true));
   });

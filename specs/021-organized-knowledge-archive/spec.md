@@ -99,3 +99,28 @@ A user edits a Vault file or encounters an indexing failure without silent overw
 - User-specified terms and existing locale are preserved; Korean copy uses 사용자.
 - Product Spirit: reduces cognitive load, preserves resumption context and portable evidence; does not score people or transfer decision/publication authority to AI.
 - Numeric retrieval weights and timing optimizations are implementation-plan decisions; existing binding performance budgets remain applicable.
+
+## User-approved policy amendment — 2026-10-21
+
+This amendment supersedes historical requirements making semantic quality,
+citation completeness, evidence freshness or contradiction resolution prerequisites
+for ordinary publication. One explicit Publish action publishes a nonempty selected
+saved draft. Existing failed/legacy drafts need no mandatory regeneration. Exact
+revision/content guards, guarded atomic file writes, idempotent operations and exact
+index receipts remain mandatory. Independent version files preserve prior sources;
+move/rename/withdraw/repair keep their existing exact-file review.
+
+User experiences, explanations and direct writing are primary user-reported sources.
+External citations are optional; their absence alone is not a quality finding.
+Supplied direct quotes still undergo exact-source checking and rejected quotes stay
+unauthenticated. Quality findings remain advisory metadata on apply/publication.
+AI origin, user statements and inference stay distinguishable; approval does not
+create firsthand authorship, observed/verified evidence or canonical final decisions.
+Retrieval retains both sources, their revisions, conditions and provenance for
+comparison. No automatic semantic conflict adjudication or destructive merge is added.
+
+KnowledgeDraft prompt v6 and KnowledgeRevisionChat v2 carry this contract. Work Log
+images are frozen and forwarded through multimodal provider inputs; image presence
+alone never establishes that the model read their content. Chat Enter/IME behavior,
+independent transcript scrolling and same-app modal session retention reuse existing
+turn/revision/job boundaries; app-restart scheduling is outside this amendment.

@@ -121,6 +121,8 @@ struct LlmWikiMetadata {
     #[serde(default)]
     information_type: InformationType,
     status: Option<KnowledgeStatus>,
+    #[serde(default)]
+    provenance: serde_json::Value,
     applicability: Option<ApplicabilityMetadata>,
     #[serde(default)]
     decisions: Vec<DecisionMetadata>,
@@ -431,17 +433,19 @@ pub fn parse_document_at_revision(
         } else {
             format!("{section} [{}]", *occurrence)
         };
+        let published_knowledge = information_type == InformationType::Knowledge
+            && metadata.as_ref().is_some_and(|m|m.provenance["userApprovedForPublication"] == true);
         let aspect = if is_applicability_heading(&section) {
             SearchAspect::Applicability
         } else if information_type == InformationType::Idea
-            || matches!(
+            || (!published_knowledge && matches!(
                 status,
                 Some(
                     KnowledgeStatus::Unverified
                         | KnowledgeStatus::Deferred
                         | KnowledgeStatus::Rejected
                 )
-            )
+            ))
         {
             SearchAspect::Exploration
         } else {
@@ -887,6 +891,13 @@ mod tests {
         format!("---\nllm_wiki:\n  schema: 1\n  document_id: doc-{id}\n  decision:\n    id: {id}\n    status: {status}\n    confirmed_final: {finality}\n{successor}    conditions:\n{conditions}---\n# Decision\nSaved evidence.\n")
     }
 
+    #[test]
+    fn approved_citation_free_knowledge_is_content_without_becoming_verified() {
+        let parsed=parse_document("Personal.md","---\nllm_wiki:\n  schema: 1\n  document_id: personal\n  information_type: knowledge\n  status: unverified\n  provenance:\n    userApprovedForPublication: true\n    verification: not_verified\n---\n# My experience\n\nI tried this and it worked for me.");
+        assert!(parsed.units.iter().all(|u|u.aspect==SearchAspect::Content));
+        assert!(parsed.units.iter().all(|u|u.status==Some(KnowledgeStatus::Unverified) && u.decision.is_none()));
+        assert!(parsed.units.iter().all(|u|u.warnings.is_empty()));
+    }
     #[test]
     fn parses_standard_yaml_and_explicit_aspects() {
         let markdown = r#"---

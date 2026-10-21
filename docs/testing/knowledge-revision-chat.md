@@ -84,3 +84,23 @@ explicit application, cancelled publication and separate final approval;
 native fixtures check external edits before and after archive preparation.
 All model responses and UI records are synthetic. Native window behavior,
 real-model semantics and the original user's database remain unverified.
+
+## Same-app modal sessions (2026-10-21)
+
+- Enter sends once; Shift+Enter inserts a newline. Composing Enter and IME
+  keyCode 229 never send. The synchronous session request guard prevents repeat
+  submission before React renders.
+- A Task/version session preserves unsent input and an in-flight promise outside
+  the modal. X/Escape close immediately during chat; reopening reads the saved
+  conversation and reconnects to the existing request. Closing does not cancel.
+  Cancellation remains explicit. A late cancelled reply cannot clear new input.
+- Only body edits and private notes participate in the modal's unsaved guard;
+  chat drafts have their own retained session. Atomic Task mutations retain the
+  existing guard. App restart/resume scheduling is outside this change.
+- The transcript scrolls independently, diagnostics are expandable, and the
+  composer stays outside transcript scrolling. The inherited support-rail
+  max-height is overridden because it otherwise compresses this nested chat.
+- Focused chat/modal tests: 10; TaskDetail regression tests: 44. TypeScript and
+  ESLint passed. The full React App with production CSS was visually exercised
+  using synthetic long conversations and delayed provider responses. This is
+  browser fixture verification, not a packaged-native or real-model run.

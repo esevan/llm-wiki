@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { KnowledgeRevisionChat } from "./KnowledgeRevisionChat";
+import { TaskDetail } from "./TaskDetail";
 import { KnowledgeReviewPanel } from "./KnowledgeReviewPanel";
 import type { KnowledgeVersion, KnowledgeRevisionConversation, KnowledgeRevisionReply } from "../../types/taskWorkbench";
 const response = (body: unknown, ok = true) => ({ ok, status: ok ? 200 : 409, json: async <T,>() => body as T, text: async () => "", body: null });
@@ -33,7 +34,9 @@ describe("Knowledge correction chat", () => {
   it("shows an actionable sentence/source/reason then compares before explicit apply", async () => {
     const f = fixture(); const onApplied = vi.fn().mockResolvedValue(undefined);
     render(<KnowledgeRevisionChat taskId="task" version={chatVersion()} disabled={false} onStateChange={vi.fn()} onApplied={onApplied} />);
-    expect(await screen.findByText("Quote belongs to another source")).toBeVisible();
+    await screen.findByText("Quote belongs to another source");
+    fireEvent.click(document.querySelector("[data-control=knowledge-chat-diagnostics] summary")!);
+    expect(screen.getByText("Quote belongs to another source")).toBeVisible();
     expect(screen.getByText(source.quote, { selector: "blockquote p" })).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "Help fix this issue" }));
     expect((screen.getByRole("textbox") as HTMLTextAreaElement).value).toContain("Replace with exact Task");
@@ -107,4 +110,73 @@ describe("Knowledge correction chat", () => {
     await waitFor(() => expect(document.querySelector('.knowledge-review')).toHaveAttribute('data-content-hash', 'new-hash'));
     expect(published).toBe(false);
   });
+});
+
+describe("Knowledge chat modal sessions", () => {
+  it("sends Enter, keeps Shift+Enter and IME Enter for composition", async () => {
+    const { requests } = fixture();
+    render(<KnowledgeRevisionChat taskId="keyboard" version={chatVersion()} disabled={false} onStateChange={vi.fn()} onApplied={vi.fn()} />);
+    const input = screen.getByRole("textbox");
+    fireEvent.change(input, {target:{value:"My experience"}});
+    fireEvent.keyDown(input, {key:"Enter", shiftKey:true});
+    fireEvent.keyDown(input, {key:"Enter", isComposing:true});
+    fireEvent.keyDown(input, {key:"Enter", keyCode:229});
+    expect(requests.filter(r => r.body)).toHaveLength(0);
+    fireEvent.keyDown(input, {key:"Enter"});
+    await waitFor(() => expect(requests.filter(r => r.body)).toHaveLength(1));
+  });
+  it("reconnects a running request after close without sending again or affecting another Task", async () => {
+    let finish: ((value: ReturnType<typeof response>) => void) | undefined;
+    let sends = 0; let done = false;
+    window.llmWikiApplication = {request:vi.fn(async ({body}) => {
+      if (body) { sends++; return new Promise<ReturnType<typeof response>>(resolve => { finish = resolve; }); }
+      return response({diagnostics:[],turns:done ? [{id:"running",userMessage:"My story",reply:proposal(),state:"proposed"}] : []});
+    })};
+    const props = {version:chatVersion(),disabled:false,onStateChange:vi.fn(),onApplied:vi.fn()};
+    const first=render(<KnowledgeRevisionChat taskId="session-a" {...props}/>);
+    fireEvent.change(screen.getByRole("textbox"),{target:{value:"My story"}});
+    fireEvent.keyDown(screen.getByRole("textbox"),{key:"Enter"});
+    first.unmount();
+    const other=render(<KnowledgeRevisionChat taskId="session-b" {...props}/>);
+    expect(screen.getByRole("textbox")).toHaveValue(""); other.unmount();
+    const reopened=render(<KnowledgeRevisionChat taskId="session-a" {...props}/>);
+    expect(screen.getByRole("textbox")).toHaveValue("My story");
+    expect(screen.getByRole("textbox")).toBeDisabled();
+    expect(sends).toBe(1);
+    await act(async()=>{done=true;finish?.(response(proposal()));});
+    await waitFor(()=>expect(screen.getByRole("textbox")).toBeEnabled());
+    expect(screen.getByRole("textbox")).toHaveValue("");
+    expect(await screen.findByText("My story")).toBeInTheDocument();
+    reopened.unmount();
+  });
+});
+
+it.each(["button", "escape"])("closes the Task modal during chat via %s and restores the same request", async (method) => {
+  let finish: ((value: ReturnType<typeof response>) => void) | undefined;
+  let sent = 0;
+  const task={id:"modal-chat",kind:"task",taskRevision:1,state:"completed",title:"Completed story",workLog:[],checklist:[],decisions:[],readinessEntries:[]};
+  window.llmWikiApplication={request:vi.fn(async({path,body})=>{
+    if(path.includes("revision-chat")) {
+      if(body){ sent++; return new Promise<ReturnType<typeof response>>(resolve=>{finish=resolve;}); }
+      return response({turns:[],diagnostics:[]});
+    }
+    if(path.endsWith("/knowledge"))return response({taskId:task.id,pointers:{currentPrivateRevision:1},versions:[chatVersion()],ideas:[]});
+    if(path.includes("lineage"))return response({nodes:[],edges:[],unresolved:[]});
+    return response(task);
+  })};
+  const close=vi.fn();
+  const first=render(<TaskDetail taskId={task.id} onClose={close} onChanged={vi.fn()}/>);
+  fireEvent.click(await screen.findByRole("tab",{name:/Review/}));
+  const input=await screen.findByRole("textbox",{name:"What should change?"});
+  fireEvent.change(input,{target:{value:"Keep my experience"}});fireEvent.keyDown(input,{key:"Enter"});
+  await waitFor(()=>expect(sent).toBe(1));
+  if(method==="escape")fireEvent.keyDown(document,{key:"Escape"});else fireEvent.click(document.querySelector('[data-control="task-detail-close"]')!);
+  await waitFor(()=>expect(close).toHaveBeenCalledOnce());first.unmount();
+  render(<TaskDetail taskId={task.id} onClose={close} onChanged={vi.fn()}/>);
+  fireEvent.click(await screen.findByRole("tab",{name:/Review/}));
+  expect(await screen.findByRole("textbox",{name:"What should change?"})).toHaveValue("Keep my experience");
+  expect(screen.getByRole("textbox",{name:"What should change?"})).toBeDisabled();
+  await act(async()=>finish?.(response(proposal())));
+  await waitFor(()=>expect(screen.getByRole("textbox",{name:"What should change?"})).toBeEnabled());
+  expect(sent).toBe(1);
 });

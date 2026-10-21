@@ -71,8 +71,8 @@ fn suggestion(kind: &str, ko: bool) -> &'static str {
         ("invalid_finality"|"invalid_verification",false)=>"Match the claim to the recorded evidence state; remove unsupported decided or verified wording.",
         ("applicability_overreach",true)=>"활용 범위를 근거 안으로 좁히고 해석은 출처와 연결해 '활용 해석'으로 구분하세요.",
         ("applicability_overreach",false)=>"Narrow reuse to supported scope and label source-bound interpretations separately.",
-        (_,true)=>"정확한 원문 인용으로 교체하고 문장을 근거에 맞게 고치세요. 근거가 없으면 주장을 삭제하거나 필요한 원본 기록을 알려 주세요.",
-        (_,false)=>"Replace the citation with exact source text and revise the statement. Remove unsupported claims or identify the missing original record.",
+        (_,true)=>"인용문을 원문에 맞추거나 직접 인용 표시를 제거하세요. 사용자 경험은 진술로 남기고 AI 해석과 구분할 수 있습니다.",
+        (_,false)=>"Correct the direct quote or remove its quotation attribution. Keep user experience as a user report and distinguish AI interpretation.",
     }
 }
 /// Diagnostics are a projection of stored findings plus deterministic validation,
@@ -209,11 +209,11 @@ pub(crate) async fn send_registered(
                 |r| r.get(0),
             )
             .map_err(|e| e.to_string())?;
-        let snapshot =
-            kd::capture_snapshot_tx(&tx, task, actual, input["locale"].as_str().unwrap_or("en"))?;
         let expected_head = head(&tx, task)?;
         let history = turns(&tx, task, n)?;
-        tx.execute("INSERT INTO knowledge_revision_turns(id,task_id,base_revision,base_content_hash,expected_private_revision,request_hash,user_message,source_snapshot_json,prompt_version,state) VALUES(?,?,?,?,?,?,?,?,?,'running')",params![id,task,n,b["contentHash"].as_str(),expected_head,request_hash,message,snapshot.to_string(),crate::workflow_foundation::prompt_definition(PromptId::KnowledgeRevisionChat).version]).map_err(|e|e.to_string())?;
+        tx.execute("INSERT INTO knowledge_revision_turns(id,task_id,base_revision,base_content_hash,expected_private_revision,request_hash,user_message,source_snapshot_json,prompt_version,state) VALUES(?,?,?,?,?,?,?,'{}',?,'running')",params![id,task,n,b["contentHash"].as_str(),expected_head,request_hash,message,crate::workflow_foundation::prompt_definition(PromptId::KnowledgeRevisionChat).version]).map_err(|e|e.to_string())?;
+        let snapshot = kd::capture_snapshot_tx(&tx, task, actual, input["locale"].as_str().unwrap_or("en"))?;
+        tx.execute("UPDATE knowledge_revision_turns SET source_snapshot_json=? WHERE id=?",params![snapshot.to_string(),id]).map_err(|e|e.to_string())?;
         tx.commit().map_err(|e| e.to_string())?;
         (b, snapshot, history, expected_head)
     };
@@ -232,11 +232,13 @@ pub(crate) async fn send_registered(
     let scope = format!("knowledge-revision:{task}:{id}");
     let result = async {
         let token = registry.register_latest(&scope)?;
-        let response = task_assistance::provider_json(
+        let (text_context, images) = task_assistance::image_context(&context);
+        let response = task_assistance::provider_json_with_images(
             settings,
             "completion_report",
             PromptId::KnowledgeRevisionChat,
-            context,
+            text_context,
+            &images,
             Some(&token),
         )
         .await?;
@@ -391,9 +393,7 @@ pub(crate) fn decide(db: &Path, input: &Value, apply: bool) -> Result<Value, Str
     }
     let p: Value = serde_json::from_str(&prepared.ok_or("revision_proposal_unavailable")?)
         .map_err(|e| e.to_string())?;
-    if p["qualityState"] != "valid" {
-        return Err("knowledge_unverified: resolve proposal diagnostics before applying".into());
-    }
+    // Quality findings remain attached to the new version, never an apply gate.
     let saved = kd::append_generated_tx(&tx, &p)?;
     let next = saved["draftRevision"].as_i64().ok_or("invalid_revision")?;
     tx.execute("UPDATE knowledge_draft_versions SET derivation_kind='edited',derived_from_revision=? WHERE task_id=? AND revision=?",params![n,task,next]).map_err(|e|e.to_string())?;
@@ -492,6 +492,30 @@ mod tests {
             String::from_utf8(bytes).unwrap()
         })
     }
+    #[tokio::test]
+    async fn knowledge_work_log_pixels_reach_generation_and_revision_requests() {
+        let (root,db,_,data)=fixture(false);
+        let png="iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+        crate::application::task_service::TaskApplicationService::new(&db).execute("task.work-log.create",&json!({"operationId":"image-log","taskId":"task","expectedTaskRevision":1,"body":"My screenshot","attachment":{"name":"pixel.png","mediaType":"image/png","data":png}})).unwrap();
+        let settings=root.path().join("settings.json");
+        let server=provider(&settings,data["good"].clone()).await;
+        let generated=task_assistance::prepare_knowledge_draft(&db,&settings,&json!({"taskId":"task","expectedTaskRevision":1,"locale":"en"})).await.unwrap();
+        assert!(generated["bodyMarkdown"].as_str().unwrap().contains("Approval flow"));
+        let request=server.await.unwrap();
+        let payload:Value=serde_json::from_str(request.split_once("\r\n\r\n").unwrap().1).unwrap();
+        assert!(payload["messages"].to_string().contains(&format!("data:image/png;base64,{png}")));
+        let content=payload["messages"][0]["content"].as_array().unwrap();
+        assert!(!content[0]["text"].as_str().unwrap().contains(png),"binary must not enter textual prompt/catalog");
+        let server=provider(&settings,json!({"message":"Your statement is a primary user report","missingEvidence":[],"candidate":data["good"]})).await;
+        let mut input=data["input"].clone();input["message"]=json!("I experienced this myself; no external proof is needed");
+        send(&db,&settings,&input).await.unwrap();
+        let request=server.await.unwrap();
+        let payload:Value=serde_json::from_str(request.split_once("\r\n\r\n").unwrap().1).unwrap();
+        assert!(payload["messages"].to_string().contains(&format!("data:image/png;base64,{png}")));
+        assert!(payload["messages"].to_string().contains("user_statement"));
+        assert!(payload["messages"].to_string().contains("no external proof is needed"));
+    }
+
     #[tokio::test]
     async fn knowledge_revision_repairs_rejected_citation_atomically_without_touching_publication()
     {
@@ -662,21 +686,14 @@ mod tests {
             "valid"
         );
         server.await.unwrap();
-        assert!(
-            decide(&db, &json!({"taskId":"task","turnId":"chat-invalid"}), true)
-                .unwrap_err()
-                .contains("knowledge_unverified")
-        );
-        assert_eq!(
-            database::open(&db)
-                .unwrap()
-                .query_row("SELECT count(*) FROM knowledge_draft_versions", [], |r| r
-                    .get::<_, i64>(
-                    0
-                ))
-                .unwrap(),
-            1
-        );
+        let applied=decide(&db,&json!({"taskId":"task","turnId":"chat-invalid"}),true).unwrap();
+        assert_eq!(applied["draftRevision"],2);
+        let c=database::open(&db).unwrap();
+        let (quality,result):(String,String)=c.query_row("SELECT quality_state,result_json FROM knowledge_draft_versions WHERE revision=2",[],|r|Ok((r.get(0)?,r.get(1)?))).unwrap();
+        assert_eq!(quality,"blocked_unsupported");
+        let result:Value=serde_json::from_str(&result).unwrap();
+        assert!(result["article"]["applicability"]["sourceRefs"].as_array().unwrap().is_empty());
+        assert!(result["qualityFindings"].to_string().contains("fabricated approval"));
     }
 
     #[tokio::test]

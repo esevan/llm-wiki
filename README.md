@@ -16,6 +16,8 @@ keeps enough context to resume, and publishes only completed outcomes as portabl
 Compass includes a Completed tasks tab for the full completion history. Workbench keeps only the latest five completions beside active Tasks and hides empty categories.
 
 Refinement preserves the existing Task identity and shows **Refined - Revision N**. Focus active work at the top of Workbench. Explicit Subtasks form an expandable tree; completing each child updates and publishes the parent Knowledge revision, and finishing all children closes the parent.
+Knowledge publication uses one explicit button. Quality/citation notes do not block publishing; user experience is a primary source and external citations are optional. [Publication behavior](docs/features/knowledge-archive.md).
+
 
 ## Product Spirit
 
