@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import { KnowledgeMarkdown } from "../../components/KnowledgeMarkdown";
 import { taskClient } from "../../services/taskClient";
@@ -10,13 +10,16 @@ import "./knowledge-revision-chat.css";
 interface ChatSession { input: string; pending?: Promise<unknown>; requestId?: string; error?: string; previousTurnId?: string }
 const appChatSessions = new WeakMap<object, Map<string, ChatSession>>();
 
-export function KnowledgeRevisionChat({ taskId, version, disabled, publishedRevision, onSelectPublished, onStateChange, onApplied, reviewContainer, versions }: {
-  reviewContainer?: HTMLElement | null; versions?: KnowledgeVersion[];
+export function KnowledgeRevisionChat({ taskId, version, disabled, publishedRevision, onSelectPublished, onStateChange, onApplied, reviewContainer: suppliedReviewContainer, reviewContainerRef, versions }: {
+  reviewContainer?: HTMLElement | null; reviewContainerRef?: RefObject<HTMLElement | null>; versions?: KnowledgeVersion[];
   taskId: string; version: KnowledgeVersion; disabled: boolean; publishedRevision?: number; onSelectPublished?: () => void;
   onStateChange: (dirty: boolean, pending: boolean) => void;
   onApplied: (revision: number) => Promise<void>;
 }) {
   const t = useKnowledgeRevisionText();
+  const [mountedReviewContainer, setMountedReviewContainer] = useState<HTMLElement | null>(null);
+  useLayoutEffect(() => { setMountedReviewContainer(reviewContainerRef?.current ?? null); }, [reviewContainerRef]);
+  const reviewContainer = suppliedReviewContainer ?? mountedReviewContainer;
   const application = window.llmWikiApplication ?? window;
   const sessionKey = `${taskId}:${version.revision}`;
   const session = useMemo(() => {

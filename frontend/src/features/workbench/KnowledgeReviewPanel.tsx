@@ -159,7 +159,7 @@ export function KnowledgeReviewPanel({ taskId, completed, generationQueued, refr
   const [body, setBody] = useState("");
   const [chatDirty, setChatDirty] = useState(false);
   const [chatEpoch, setChatEpoch] = useState(0);
-  const [revisionReviewTarget, setRevisionReviewTarget] = useState<HTMLDivElement | null>(null);
+  const revisionReviewTarget = useRef<HTMLDivElement | null>(null);
   const [savedBody, setSavedBody] = useState("");
   const [editing, setEditing] = useState(false);
   const [noteDrafts, setNoteDrafts] = useState<Record<string, string>>({});
@@ -524,7 +524,7 @@ export function KnowledgeReviewPanel({ taskId, completed, generationQueued, refr
     <header className="knowledge-review-header"><p className="knowledge-review-kicker">{projection.pointers.publishedRevision === version.revision ? text.published : text.privateDraft} · v{version.revision}</p>
       <ContentRevisionTransition as="h3" entityKey={`knowledge:${taskId}`} revision={version.revision} cause={appliedTransition?.revision === version.revision ? appliedTransition.cause : undefined} historical={version.revision !== currentRevision} variant="title">{article?.title ?? version.title}</ContentRevisionTransition>
     </header>
-    <div className="knowledge-revision-review-slot" ref={setRevisionReviewTarget} />
+    <div className="knowledge-revision-review-slot" ref={revisionReviewTarget} />
     {status && <p role="status" className="knowledge-draft-status">{status}</p>}
     {error && <p role="alert" className="knowledge-draft-error">{error}</p>}
 
@@ -539,7 +539,7 @@ export function KnowledgeReviewPanel({ taskId, completed, generationQueued, refr
     {references.length ? <details className="knowledge-provenance" data-control="knowledge-provenance"><summary>{text.provenance} · {references.length}</summary><div className="knowledge-source-list">{references.map(reference => <button type="button" data-control="knowledge-source-open" data-record-id={`${reference.documentId}:${reference.documentVersion}`} key={`${reference.documentId}:${reference.documentVersion}:${reference.section}:${reference.excerpt}`} onClick={() => setSource(reference)}><strong>{reference.title}</strong><span>{reference.section}</span><q>{reference.excerpt}</q><small>{text.openSource}</small></button>)}</div></details> : null}
     </div>
     <aside className="knowledge-controls">
-    <KnowledgeRevisionChat key={`${taskId}:${version.revision}:${chatEpoch}`} reviewContainer={revisionReviewTarget} versions={projection.versions} taskId={taskId} version={version} publishedRevision={projection.pointers.publishedRevision ?? undefined} onSelectPublished={projection.versions.some(item => item.revision === projection.pointers.publishedRevision) ? () => { if (projection.pointers.publishedRevision) selectVersion(projection.pointers.publishedRevision); } : undefined} disabled={bodyDirty || noteDirty || Boolean(busy && busy !== "chat")} onStateChange={chatStateChange} onApplied={async revision => { dirtyRef.current = false; setAppliedTransition({ revision, cause: "version_restore" }); setChatDirty(false); setBusy(undefined); await load(revision); }} />
+    <KnowledgeRevisionChat key={`${taskId}:${version.revision}:${chatEpoch}`} reviewContainerRef={revisionReviewTarget} versions={projection.versions} taskId={taskId} version={version} publishedRevision={projection.pointers.publishedRevision ?? undefined} onSelectPublished={projection.versions.some(item => item.revision === projection.pointers.publishedRevision) ? () => { if (projection.pointers.publishedRevision) selectVersion(projection.pointers.publishedRevision); } : undefined} disabled={bodyDirty || noteDirty || Boolean(busy && busy !== "chat")} onStateChange={chatStateChange} onApplied={async revision => { dirtyRef.current = false; setAppliedTransition({ revision, cause: "version_restore" }); setChatDirty(false); setBusy(undefined); await load(revision); }} />
     <section className="knowledge-review-notes" aria-label={text.reviewNotes}>
       <h4>{text.reviewNotes}</h4><p>{text.reviewNotesHint}</p>
       {reviewNotes.length ? <ol>{reviewNotes.map(note => <li key={note.id}><time dateTime={note.createdAt}>{note.createdAt}</time><p>{note.body}</p></li>)}</ol> : null}

@@ -149,3 +149,14 @@ passed 71 native tests (one existing ignore) plus four integrations. Typecheck,
 lint, build and whitespace checks passed. Packaged desktop E2E was skipped: the
 App fixture and native persistence/index tests cover this integration, with no
 new packaging changes; native window behavior remains outside that evidence.
+
+CI follow-up: the main comparison target now uses a stable parent ref. Only chat
+resolves the mounted target, avoiding a second full document render per mount.
+The portal regression exercises the ref route. The exact first integration CI
+also exposed unrelated ReferenceList, RefinementPanel and TaskWorkSessions timing
+failures; no global timeout or unrelated test behavior is changed here.
+
+The ref follow-up passed 40 focused review/chat tests and all 467 React tests
+plus runtime helpers, typecheck, lint and build. Local timing samples report
+projection p95 19.14ms and selection p95 13.81ms, versus 26.44/20.58ms in
+the previous integration run; this is local timing evidence, not a CI guarantee.

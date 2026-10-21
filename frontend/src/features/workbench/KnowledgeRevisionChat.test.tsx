@@ -202,7 +202,7 @@ describe("readable diagnostics and main review",()=>{
     const slot=document.createElement('div');slot.className='knowledge-revision-review-slot';document.body.append(slot);
     const reply={...proposal(),applicable:false,preparationError:'Article body is incomplete'};
     window.llmWikiApplication={request:vi.fn(async()=>response({diagnostics:[],turns:[{id:'bad',state:'failed',userMessage:'Keep my edit',reply}]}))};
-    const mounted=render(<KnowledgeRevisionChat taskId="main-slot" version={chatVersion()} reviewContainer={slot} disabled={false} onStateChange={vi.fn()} onApplied={vi.fn()}/>);
+    const mounted=render(<KnowledgeRevisionChat taskId="main-slot" version={chatVersion()} reviewContainerRef={{current:slot}} disabled={false} onStateChange={vi.fn()} onApplied={vi.fn()}/>);
     await screen.findByText('Article body is incomplete');
     expect(slot.querySelector('[data-control="knowledge-chat-apply"]')).toBeDisabled();
     expect(document.querySelector('.knowledge-revision-transcript .knowledge-revision-proposal')).toBeNull();
