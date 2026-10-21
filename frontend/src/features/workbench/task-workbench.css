@@ -253,6 +253,7 @@ main:has(.task-workbench.active :is(.task-detail, .refinement-panel)) {
 .canonical-card button,
 .task-actions button,
 .task-panel button,
+.knowledge-review button,
 .refinement-panel button,
 .review-panel button,
 .workbench-delete-dialog button {
@@ -267,6 +268,7 @@ main:has(.task-workbench.active :is(.task-detail, .refinement-panel)) {
 .canonical-card button:hover,
 .task-actions button:hover,
 .task-panel button:hover,
+.knowledge-review button:hover:not(:disabled),
 .refinement-panel button:hover,
 .review-panel button:hover,
 .workbench-delete-dialog button:hover {
@@ -1443,3 +1445,51 @@ main:has(.task-workbench.active :is(.task-detail, .refinement-panel)) {
 :is(.workbench-board, .workbench-active, .workbench-held) .canonical-card > footer button { min-height: 40px; padding: var(--space-2); font-size: 13px; }
 :is(.workbench-board, .workbench-active, .workbench-held) .canonical-card h3 { margin: 7px 0; }
 .canonical-card:has(> .workbench-subtasks-open) .workbench-card-preview { -webkit-line-clamp: 1; }
+
+/* Task detail controls share the same visual and focus states as Knowledge. */
+.task-panel :is(textarea, select, input:not([type="checkbox"]):not([type="radio"])) {
+  box-sizing: border-box; max-width: 100%; padding: var(--space-3);
+  border: 1px solid var(--color-border-strong); border-radius: var(--radius-control);
+  background: var(--color-bg-surface); color: var(--color-text-primary); font: inherit;
+}
+.task-panel button { font-family: var(--font-family-body); cursor: pointer; }
+.task-panel button:disabled { cursor: default; opacity: .6; }
+.task-panel button:active:not(:disabled) { transform: translateY(1px); }
+
+.task-panel button { min-height: 40px; padding: var(--space-2) var(--space-4); }
+.task-detail [data-control="task-detail-close"] { display: inline-flex; align-items: center; gap: var(--space-2); min-height: 40px; white-space: nowrap; }
+.task-panel input[type="file"]::file-selector-button { min-height: 34px; margin-right: var(--space-3); padding: var(--space-2) var(--space-3); border: var(--border-default); border-radius: var(--radius-control); background: var(--color-bg-surface); color: var(--color-text-primary); font: inherit; cursor: pointer; }
+/* The document is primary when a structured preview is available. */
+.refinement-panel[role="dialog"]:has(.reference-aware-preview) .refinement-workspace {
+  grid-template-columns: minmax(0, 1.35fr) minmax(300px, .85fr);
+}
+
+/* Preview follows the approved reading / chat / evidence composition. */
+.refinement-panel[role="dialog"]:has(.reference-aware-preview) { background: var(--color-bg-primary); }
+.refinement-panel[role="dialog"]:has(.reference-aware-preview) .refinement-header { background: var(--color-bg-primary); border-bottom: 0; padding-bottom: 20px; }
+.refinement-panel[role="dialog"]:has(.reference-aware-preview) .refinement-header h2 { font-size: 24px; }
+.refinement-panel[role="dialog"]:has(.reference-aware-preview) .refinement-workspace { grid-template-columns: minmax(0, 1fr) 320px; gap: 24px; }
+.refinement-panel[role="dialog"]:has(.reference-aware-preview) .refinement-preview { padding: 0; border: 0; }
+.refinement-panel[role="dialog"]:has(.reference-aware-preview) .refinement-preview > .task-detail-tabs { background: transparent; border: 0; margin: 0 0 12px; padding: 0; }
+.refinement-support-rail { display: flex; flex-direction: column; min-height: 0; min-width: 0; overflow: auto; gap: 18px; }
+.refinement-panel[role="dialog"]:has(.reference-aware-preview) .refinement-support-rail .refinement-conversation { flex: 1 0 420px; max-height: 65vh; padding: 22px; border: var(--border-default); border-radius: var(--radius-panel); background: var(--color-bg-surface); }
+.refinement-conversation-title { font-size: 15px; margin: 0 0 16px; }
+.refinement-panel[role="dialog"]:has(.reference-aware-preview) .refinement-support-rail .refinement-messages > :first-child { margin-top: 0; }
+.refinement-panel[role="dialog"]:has(.reference-aware-preview) .refinement-support-rail .message { max-width: 100%; width: 100%; margin-bottom: 14px; padding: 14px; font-size: 14px; line-height: 1.75; }
+.refinement-panel[role="dialog"]:has(.reference-aware-preview) .refinement-support-rail .refinement-composer { flex-direction: column; align-items: stretch; border: 0; padding: 0; }
+.refinement-panel[role="dialog"]:has(.reference-aware-preview) .refinement-support-rail .refinement-composer > button { align-self: flex-end; }
+.refinement-evidence-slot:empty { display: none; }
+.task-detail:has(.knowledge-review) { background: var(--color-bg-primary); }
+.task-detail:has(.knowledge-review) .task-detail-header { background: var(--color-bg-primary); }
+.task-detail:has(.knowledge-review) .task-detail-tabs [role="tab"] { border: 0; border-radius: 0; background: transparent; box-shadow: none; }
+.task-detail:has(.knowledge-review) .task-detail-tabs [aria-selected="true"] { border-bottom: 3px solid var(--color-accent-primary); color: var(--color-text-primary); }
+@media(max-width:1050px) { .refinement-panel[role="dialog"]:has(.reference-aware-preview) .refinement-workspace { grid-template-columns: minmax(0,1fr) 290px; gap: 18px; } }
+@media(max-width:800px) {
+ .refinement-panel[role="dialog"]:has(.reference-aware-preview) { display: block; overflow: auto; }
+ .refinement-panel[role="dialog"]:has(.reference-aware-preview) .refinement-workspace { display: flex; flex-direction: column; }
+ .refinement-panel[role="dialog"]:has(.reference-aware-preview) .refinement-preview { overflow: visible; }
+ .refinement-support-rail { overflow: visible; }
+ .refinement-panel[role="dialog"]:has(.reference-aware-preview) .refinement-support-rail .refinement-conversation { flex-basis: auto; min-height: 360px; }
+}
+.refinement-panel[role="dialog"]:has(.reference-aware-preview), .task-detail:has(.knowledge-review) { max-width: 1240px; }
+@media(min-width:1051px) { .refinement-panel[role="dialog"]:has(.reference-aware-preview) .refinement-workspace { grid-template-columns: minmax(0,1fr) 288px; } }

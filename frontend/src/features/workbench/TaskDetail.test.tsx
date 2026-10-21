@@ -131,10 +131,9 @@ describe("Task detail", () => {
       } } },
     }} />);
 
-    expect(await screen.findByText("This is the exact lineage snapshot used to create the current Knowledge draft.")).toBeVisible();
-    expect(screen.getByRole("button", { name: "Exact draft decision" })).toBeVisible();
-    expect(screen.queryByRole("button", { name: "Newer current lineage" })).not.toBeInTheDocument();
-    expect(document.querySelectorAll(".task-journey")).toHaveLength(1);
+    await screen.findByRole("tab", { name: "Review" });
+    expect(screen.queryByText("This is the exact lineage snapshot used to create the current Knowledge draft.")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Exact draft decision" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("tab", { name: "Details" }));
     fireEvent.click(screen.getByText("Lineage"));
     expect(await screen.findByRole("button", { name: "Newer current lineage" })).toBeVisible();
@@ -392,10 +391,12 @@ describe("Task detail", () => {
     );
     await screen.findByText("Independent work");
     fireEvent.click(screen.getByRole("tab", { name: "Review" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Details" }));
     expect(screen.getAllByText("Scope")).toHaveLength(1);
     expect(screen.getAllByText("Validation criteria")).toHaveLength(1);
     expect(screen.getByText("Missing")).toBeVisible();
     expect(screen.queryByText("validationCriteria")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: "Review" }));
     expect(
       screen.getByRole("button", { name: "Complete Task" }),
     ).toBeDisabled();
@@ -707,7 +708,7 @@ it("localizes calculated readiness text but preserves authored reasons", async (
       { key: "scope", status: "missing", reason: "User-authored rationale" },
     ] })) };
     render(<TaskDetail taskId={task.id} onClose={vi.fn()} onChanged={vi.fn()} />);
-    fireEvent.click(await screen.findByRole("tab", { name: "검토" }));
+    fireEvent.click(await screen.findByRole("tab", { name: "세부 정보" }));
     await screen.findByText("명시된 선행 조건 없음");
     expect(screen.getByText("User-authored rationale")).toBeVisible();
     expect(screen.queryByText("No explicit prerequisite")).not.toBeInTheDocument();
@@ -860,7 +861,7 @@ describe("Task detail tabs and workbench sessions", () => {
     window.llmWikiApplication = { request };
     render(<TaskDetail taskId={task.id} onClose={vi.fn()} onChanged={vi.fn()} />);
 
-    fireEvent.click(await screen.findByRole("tab", { name: "Review" }));
+    fireEvent.click(await screen.findByRole("tab", { name: "Details" }));
     const reason = await screen.findByLabelText("Scope Reason");
     fireEvent.change(reason, { target: { value: "Not relevant to this discovery task" } });
     fireEvent.click(screen.getAllByRole("button", { name: "Not applicable" })[0]);
@@ -869,7 +870,7 @@ describe("Task detail tabs and workbench sessions", () => {
       expect(request).toHaveBeenCalledWith(expect.objectContaining({ method: "POST" })),
     );
     await waitFor(() =>
-      expect(screen.getByRole("tab", { name: "Review" })).toHaveAttribute("aria-selected", "true"),
+      expect(screen.getByRole("tab", { name: "Details" })).toHaveAttribute("aria-selected", "true"),
     );
   });
 

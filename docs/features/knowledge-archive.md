@@ -43,3 +43,14 @@ Obsidian Vault is outside this feature.
 Reopening review shows the stored operation state. An explicit index retry moves the same publication back to `index_pending`; enqueue failure remains `index_failed`. An operation requiring file repair must first be resolved through a recovery choice.
 
 The compatibility publication command uses the same archive indexing lifecycle. Replaying a repaired or completed operation does not launch legacy translation or a second whole-vault indexing job.
+
+Review shows the article, reuse context, sources and private notes without
+readiness or quality-check panels. Publish reports plain-language evidence or
+file-protection errors at action time and offers direct regeneration when needed.
+Raw validation payloads and source IDs are not displayed as quality messages.
+Generation retries a rejected citation or invalid finality once against the same
+immutable snapshot. Repeated failure remains blocked. Incomplete historical/manual
+content is retained without an extra model call. No manual verification procedure
+is required of the user; notes do not validate claims.
+
+The review screen uses a large reading surface for the article, final outcomes and reuse guidance. The right support column contains private review notes, editing and version controls, and explicit publication actions. On narrow windows these controls follow the article. Source inspection remains available in a disclosure; it does not interrupt the reading hierarchy.

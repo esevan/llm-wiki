@@ -270,6 +270,7 @@ async fn command_job_provider_retrieves_before_preview_and_explicit_apply_is_ato
         .op("task-refinement.reference-apply", apply.clone())
         .unwrap();
     assert_eq!(result["task"]["taskRevision"], 2);
+    assert_eq!(c.query_row("SELECT count(*) FROM task_checklist_items WHERE task_id=? AND body='Review approval' AND checked=0", [&f.task], |r|r.get::<_,i64>(0)).unwrap(),1);
     assert_eq!(
         f.op("task-refinement.reference-apply", apply).unwrap(),
         result
@@ -769,4 +770,89 @@ async fn existing_long_titles_are_preserved_but_new_titles_and_legacy_preview_ap
     assert!(f.op("task-refinement.reference-apply",json!({"operationId":"reject-long-legacy-preview","version":1,"expectedCurrentPreviewVersion":1,"expectedContentHash":original_hash,"expectedTaskRevision":2})).unwrap_err().contains("70"));
     assert_eq!(service.execute("task.get",&json!({"taskId":f.task})).unwrap()["title"],legacy);
     assert_eq!(c.query_row("SELECT content_hash FROM work_preview_versions WHERE preview_id=? AND version=1",[preview],|r|r.get::<_,String>(0)).unwrap(),original_hash);
+}
+
+#[tokio::test]
+async fn preview_completion_checks_preserve_checked_manual_and_reordered_items() {
+    let f = Fixture::new().await;
+    let mut c = database::open(&f.db).unwrap();
+    let tx = c.transaction().unwrap();
+    tx.execute("INSERT INTO task_checklist_items(id,task_id,body,checked,created_at,updated_at) VALUES('manual',?,'Keep manual item',1,'before','before')",[&f.task]).unwrap();
+    let first = json!({"completionCriteria":["Check offline", "Check versions", "Check offline", "Keep manual item", ""]});
+    super::runtime::apply_completion_checklist(&tx, &f.task, &first).unwrap();
+    assert_eq!(
+        tx.query_row(
+            "SELECT count(*) FROM task_checklist_items WHERE task_id=?",
+            [&f.task],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        3
+    );
+    let item: String = tx
+        .query_row(
+            "SELECT id FROM task_checklist_items WHERE task_id=? AND body='Check offline'",
+            [&f.task],
+            |r| r.get(0),
+        )
+        .unwrap();
+    tx.execute("UPDATE task_checklist_items SET body='Manually refined offline check',checked=1 WHERE id=?",[&item]).unwrap();
+    super::runtime::apply_completion_checklist(
+        &tx,
+        &f.task,
+        &json!({"completionCriteria":["Check versions","Check offline"]}),
+    )
+    .unwrap();
+    assert_eq!(
+        tx.query_row(
+            "SELECT count(*) FROM task_checklist_items WHERE task_id=?",
+            [&f.task],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        3
+    );
+    assert_eq!(
+        tx.query_row(
+            "SELECT checked FROM task_checklist_items WHERE id=?",
+            [&item],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        1
+    );
+    super::runtime::apply_completion_checklist(
+        &tx,
+        &f.task,
+        &json!({"completionCriteria":["A changed criterion"]}),
+    )
+    .unwrap();
+    assert_eq!(
+        tx.query_row(
+            "SELECT count(*) FROM task_checklist_items WHERE task_id=?",
+            [&f.task],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        4
+    );
+    assert_eq!(
+        tx.query_row(
+            "SELECT checked FROM task_checklist_items WHERE body='A changed criterion'",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        0
+    );
+    assert_eq!(
+        tx.query_row(
+            "SELECT checked FROM task_checklist_items WHERE id='manual'",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        1
+    );
+    tx.commit().unwrap();
 }

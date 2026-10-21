@@ -2534,18 +2534,72 @@ pub(crate) async fn prepare_knowledge_draft(
         tx.commit().map_err(|error| error.to_string())?;
         snapshot
     };
-    let response = provider_json(
-        settings_path,
-        "completion_report",
-        PromptId::KnowledgeDraft,
-        snapshot.clone(),
-        None,
-    )
-    .await?;
-    let result: crate::native::knowledge_distillation::GenerationResult =
-        serde_json::from_value(response)
-            .map_err(|error| format!("invalid Knowledge generation result: {error}"))?;
-    crate::native::knowledge_distillation::prepared(snapshot, result, "enhanced", "")
+    generate_knowledge_candidate(settings_path, snapshot).await
+}
+
+// Retry a rejected model candidate once against the SAME immutable evidence.
+// The feedback is diagnostic data, never a new source or permission to publish.
+async fn generate_knowledge_candidate(
+    settings_path: &Path,
+    snapshot: Value,
+) -> Result<Value, String> {
+    let mut context = snapshot.clone();
+    let mut rejected: Option<Value> = None;
+    for attempt in 0..2 {
+        let response = match provider_json(
+            settings_path,
+            "completion_report",
+            PromptId::KnowledgeDraft,
+            context.clone(),
+            None,
+        )
+        .await
+        {
+            Ok(response) => response,
+            Err(error) => {
+                if let Some(mut preserved) = rejected {
+                    preserved["modelError"] = json!(format!(
+                        "{}; automatic citation repair failed: {error}",
+                        preserved["modelError"].as_str().unwrap_or("")
+                    ));
+                    return Ok(preserved);
+                }
+                return Err(error);
+            }
+        };
+        let result: crate::native::knowledge_distillation::GenerationResult =
+            serde_json::from_value(response)
+                .map_err(|error| format!("invalid Knowledge generation result: {error}"))?;
+        let candidate = crate::native::knowledge_distillation::prepared(
+            snapshot.clone(),
+            result,
+            "enhanced",
+            "",
+        )?;
+        let repairable = candidate["generationResult"]["qualityFindings"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .any(|finding| {
+                finding["message"]
+                    .as_str()
+                    .is_some_and(|message| message.starts_with("Rejected citation:"))
+            })
+            || candidate["modelError"]
+                .as_str()
+                .is_some_and(|issue| issue.contains("invalid_finality"));
+        if candidate["qualityState"] == "valid" || !repairable || attempt == 1 {
+            return Ok(candidate);
+        }
+        rejected = Some(candidate.clone());
+        context["validationFeedback"] = json!({
+            "issue": candidate["modelError"],
+            "findings": candidate["generationResult"]["qualityFindings"],
+            "rejectedCandidate": candidate["generationResult"],
+            "sourcePolicy": "Use only exact original sourceManifest quotes. Do not concatenate JSON fields as a quote. Completion alone is not proof of a decided or verified claim. Keep unsupported conclusions out; retain supported reported facts, unresolved work and limits. Never invent or change evidence."
+        });
+    }
+    unreachable!("bounded Knowledge generation loop always returns")
 }
 
 async fn knowledge_regenerate(
@@ -3184,6 +3238,97 @@ mod tests {
         database::initialize(&db).unwrap();
         database::open(&db).unwrap().execute("INSERT INTO mcp_connections(id,name,scopes_json,allowed_topics_json,checkpoint_policy,state,created_at,updated_at) VALUES('native-in-app-chat','LLM Wiki Chat','[\"vault:search:lexical\"]','[]','allowed_for_started_sessions','active',?,?)",params![now(),now()]).unwrap();
         (root, db, vault, settings)
+    }
+
+    #[tokio::test]
+    async fn knowledge_generation_repairs_rejected_quotes_once_without_changing_evidence() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        for (repair_succeeds, retry_fails) in [(true, false), (false, false), (false, true)] {
+            let (_root, db, _vault, settings_path) = fixture();
+            let task = completed_task(&db);
+            let mut connection = database::open(&db).unwrap();
+            let tx = connection.transaction().unwrap();
+            let snapshot =
+                crate::native::knowledge_distillation::capture_snapshot_tx(&tx, &task, 1, "en")
+                    .unwrap();
+            tx.commit().unwrap();
+            let quote = snapshot["task"]["title"].as_str().unwrap().to_owned();
+            let reference = json!({"type":"task_revision","id":task,"revision":"1","locator":"definition","quote":quote});
+            let good = json!({"article":{"type":"concept","title":quote,"finalOutcomes":[],"bodyMarkdown":quote,"applicability":{"summary":quote,"representativeQuestions":["What was recorded?"],"helpsWith":[quote],"conditions":[],"exclusions":[],"sourceRefs":[reference]},"claimBindings":[],"assumptionBindings":[]},"ideas":[],"qualityFindings":[]});
+            let mut bad = good.clone();
+            bad["article"]["applicability"]["sourceRefs"][0]["quote"] =
+                json!("Invented quote absent from the source");
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            settings::save_provider(&settings_path, &json!({"base_url":format!("http://{address}"),"model":"fixture","api_key":"fixture-key"})).unwrap();
+            let expected_hash = snapshot["generationSnapshotHash"].clone();
+            let server = tokio::spawn(async move {
+                let mut requests = Vec::new();
+                for attempt in 0..2 {
+                    let (mut socket, _) = listener.accept().await.unwrap();
+                    let mut request = Vec::new();
+                    let mut buffer = [0_u8; 4096];
+                    loop {
+                        let count = socket.read(&mut buffer).await.unwrap();
+                        if count == 0 {
+                            break;
+                        }
+                        request.extend_from_slice(&buffer[..count]);
+                        let Some(end) = request.windows(4).position(|b| b == b"\r\n\r\n") else {
+                            continue;
+                        };
+                        let headers = String::from_utf8_lossy(&request[..end]);
+                        let length = headers
+                            .lines()
+                            .find_map(|line| {
+                                line.to_ascii_lowercase()
+                                    .strip_prefix("content-length:")
+                                    .and_then(|v| v.trim().parse::<usize>().ok())
+                            })
+                            .unwrap_or(0);
+                        if request.len() >= end + 4 + length {
+                            break;
+                        }
+                    }
+                    requests.push(String::from_utf8(request).unwrap());
+                    let result = if attempt == 1 && repair_succeeds {
+                        &good
+                    } else {
+                        &bad
+                    };
+                    let payload =
+                        json!({"choices":[{"message":{"content":result.to_string()}}]}).to_string();
+                    let status = if attempt == 1 && retry_fails {
+                        "500 Internal Server Error"
+                    } else {
+                        "200 OK"
+                    };
+                    socket.write_all(format!("HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",payload.len(),payload).as_bytes()).await.unwrap();
+                }
+                requests
+            });
+            let candidate = generate_knowledge_candidate(&settings_path, snapshot)
+                .await
+                .unwrap();
+            let requests = server.await.unwrap();
+            assert_eq!(requests.len(), 2);
+            assert!(requests[1].contains("validationFeedback"));
+            if retry_fails {
+                assert!(candidate["modelError"]
+                    .as_str()
+                    .unwrap()
+                    .contains("automatic citation repair failed"));
+            }
+            assert_eq!(candidate["sourceHash"], expected_hash);
+            assert!(candidate["generationSnapshot"]
+                .get("validationFeedback")
+                .is_none());
+            assert_eq!(candidate["qualityState"] == "valid", repair_succeeds);
+            assert_eq!(
+                candidate["generationResult"]["article"]["finalOutcomes"],
+                json!([])
+            );
+        }
     }
 
     #[tokio::test]

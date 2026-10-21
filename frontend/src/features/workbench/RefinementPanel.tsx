@@ -119,6 +119,7 @@ export function RefinementPanel({
   const [proposals, setProposals] = useState<RefinementProposal[]>([]);
   const [referenceWorkspace, setReferenceWorkspace] =
     useState<ReferenceWorkspace>();
+  const [referenceContainer, setReferenceContainer] = useState<HTMLDivElement | null>(null);
   const [mentions, setMentions] = useState<DocumentMention[]>([]);
   const [mentionOptions, setMentionOptions] = useState<ExactReferenceBinding[]>(
     [],
@@ -1124,7 +1125,7 @@ export function RefinementPanel({
           <div>
             <small>{text.optionalAssistance}</small>
             <h2 ref={headingRef} tabIndex={-1}>
-              {subjectTitle ?? text.refining}
+              {referenceWorkspace?.preview ? text.refining : subjectTitle ?? text.refining}
             </h2>
           </div>
           <button
@@ -1317,6 +1318,7 @@ export function RefinementPanel({
               {referenceWorkspace && (
                 <ReferenceAwarePreview
                   workspace={referenceWorkspace}
+                  referenceContainer={referenceContainer}
                   onGenerate={generateReferencePreview}
                   onInvestigate={investigateReferences}
                   onSave={saveReferencePreview}
@@ -1599,10 +1601,12 @@ export function RefinementPanel({
               />
             </details>
           </section>
+          <div className="refinement-support-rail">
           <section
             className="refinement-conversation"
             aria-label={text.conversation}
           >
+            <h3 className="refinement-conversation-title">{referenceWorkspace?.preview ? referenceText.conversationReading : text.conversation}</h3>
             <div
               className="refinement-messages"
               ref={scrollRef}
@@ -1850,6 +1854,8 @@ export function RefinementPanel({
               </button>
             </div>
           </section>
+          <div className="refinement-evidence-slot" ref={setReferenceContainer} />
+          </div>
         </div>
       </section>
     </div>,

@@ -100,6 +100,7 @@ describe("Reference-aware preview", () => {
   it("keeps zero-result filtering mounted and opens the exact version", async () => {
     const props = callbacks();
     render(<ReferenceAwarePreview {...props} />);
+    fireEvent.click(document.querySelector("[data-control=preview-reference-tools] > summary")!);
     const search = screen.getByLabelText("Search references");
     fireEvent.change(search, { target: { value: "missing" } });
     expect(screen.getByText("No matching references")).toBeVisible();
@@ -170,6 +171,7 @@ describe("Reference-aware preview", () => {
   it("pins the open viewer version while a newer preview arrives", async () => {
     const props = callbacks();
     const view = render(<ReferenceAwarePreview {...props} />);
+    fireEvent.click(document.querySelector("[data-control=preview-reference-tools] > summary")!);
     fireEvent.click(
       screen.getByRole("button", { name: "Approval policy Approval" }),
     );
@@ -197,6 +199,7 @@ describe("Reference-aware preview", () => {
     const view = render(
       <ReferenceAwarePreview {...props} workspace={workspace} />,
     );
+    fireEvent.click(document.querySelector("[data-control=preview-reference-tools] > summary")!);
     const rows = () =>
       Array.from(
         document.querySelectorAll('[data-control="reference-row-open"]'),

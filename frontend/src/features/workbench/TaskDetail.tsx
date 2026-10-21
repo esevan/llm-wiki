@@ -907,11 +907,7 @@ export function TaskDetail({
         ))}
       </details>
       </div>
-      <div id="task-tab-review" aria-labelledby="task-detail-tab-review" className="task-tab-panel" role="tabpanel" data-task-tab="review" hidden={tab !== "review"}>
-      {tab === "review" && <section className="task-panel" aria-label={text.flow}>
-        <p>{reviewJourney ? text.draftLineageHint : text.reviewLineageHint}</p>
-        {lineageContent}
-      </section>}
+      <div className="task-tab-panel" data-task-tab="details" hidden={tab !== "details"}>
       <section className="task-panel">
         <h3>{text.readiness}</h3>
         {task.readinessEntries?.map((item) => (
@@ -1060,8 +1056,8 @@ export function TaskDetail({
         </details>
       </section>
       </div>
-      <div className="task-tab-panel" data-task-tab="review" hidden={tab !== "review"}>
-      <section className="task-panel">
+      <div id="task-tab-review" aria-labelledby="task-detail-tab-review" role="tabpanel" className="task-tab-panel" data-task-tab="review" hidden={tab !== "review"}>
+      <section className="task-panel" hidden={Boolean(task.completion)}>
         <h3>{text.completion}</h3>
         {task.completion ? (
           <p>{task.completion.evidence ?? task.completion.report}</p>

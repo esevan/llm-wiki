@@ -1,5 +1,8 @@
 import { useSyncExternalStore } from "react";
 const en = {
+  goalReading: "What this work should achieve",
+  completionReading: "When this work is complete",
+  conversationReading: "Refine this work together",
   aspectFilter: "Evidence aspect",
   allAspects: "All aspects",
   typeFilter: "Information type",
@@ -37,6 +40,8 @@ const en = {
   insertSelectedMentions: "Insert selected mentions",
   selectedMentions: "Selected mentions",
 
+  checklistHint: "Applying adds these criteria as unchecked Task checklist items. Existing checks and manual items are preserved; checking is not proof of execution or evidence verification.",
+  moreFields: "Scope, constraints and approach",
   title: "Work preview",
   evidence: "Evidence and assumptions",
   generate: "Generate preview",
@@ -130,6 +135,9 @@ const en = {
 };
 const ko: typeof en = {
   appliedRefreshFailed: "Task에 적용했습니다. 저장 결과를 보려면 Task를 다시 불러오세요.",
+  goalReading: "이 작업으로 이루려는 것",
+  completionReading: "완료되었다고 판단할 기준",
+  conversationReading: "이 작업을 이야기하며 다듬기",
   aspectFilter: "근거 관점",
   allAspects: "모든 관점",
   typeFilter: "정보 유형",
@@ -167,6 +175,8 @@ const ko: typeof en = {
   insertSelectedMentions: "선택한 멘션 삽입",
   selectedMentions: "선택한 멘션",
 
+  checklistHint: "적용하면 완료 기준이 Task의 미체크 항목으로 추가됩니다. 기존 체크와 수동 항목은 보존하며, 체크가 실행 성공이나 근거 검증을 뜻하지는 않습니다.",
+  moreFields: "범위·제약·진행 계획",
   title: "작업 초안",
   evidence: "근거와 가정",
   generate: "초안 생성",

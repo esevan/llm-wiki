@@ -1,3 +1,4 @@
+import { createPortal } from "react-dom";
 import { taskTitleLength, validTaskTitle } from "../../services/taskTitle";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { DraftVersionControls } from "../../components/DraftVersionControls";
@@ -40,6 +41,7 @@ const busy = (status?: string) =>
   ["queued", "running", "retryable"].includes(status ?? "");
 export interface ReferenceAwarePreviewProps {
   workspace?: ReferenceWorkspace;
+  referenceContainer?: HTMLElement | null;
   onGenerate: () => Promise<void>;
   onInvestigate: () => Promise<void>;
   onRestore: (version: WorkPreviewVersion) => Promise<void>;
@@ -145,81 +147,13 @@ export function ReferenceAwarePreview(props: ReferenceAwarePreviewProps) {
     void act(async () => {
       setComparison(await props.onCompare(left, right));
     });
-  return (
-    <section className="reference-aware-preview" aria-label={text.title}>
-      <header className="reference-aware-preview-header">
-        <div>
-          <small>{text.evidence}</small>
-          <h3>{text.title}</h3>
-        </div>
-        <div className="reference-aware-preview-actions">
-          <button
-            data-control="reference-preview-generate"
-            type="button"
-            disabled={pending || generationBusy}
-            onClick={() => void act(props.onGenerate)}
-          >
-            {text.generate}
-          </button>
-          {current && (
-            <button
-              data-control="reference-preview-investigate"
-              type="button"
-              disabled={pending || busy(investigation?.state)}
-              onClick={() => void act(props.onInvestigate)}
-            >
-              {text.investigate}
-            </button>
-          )}
-        </div>
-      </header>
-      {generationBusy && <p role="status">{text.generating}</p>}
-      {workspace?.generation?.status === "failed" && (
-        <p role="alert">{text.failed}</p>
-      )}
-      {workspace?.generationStatus === "partial" && <p className="reference-status" data-control="reference-preview-partial">{text.partial}</p>}
-      {workspace?.retrievalOutcome === "unverified" && <p className="reference-status" role="alert">{text.unverifiedRetrieval}</p>}
-      {investigation && !["no_suitable_result", "not_needed"].includes(investigation.state) && (
-        <p role={investigation.state === "failed" ? "alert" : "status"} className="reference-status">
-          {busy(investigation.state) ? text.optionalRunning : investigation.state === "failed" ? text.optionalFailed : investigation.state === "changed_context" ? text.changed : text.optionalDone}
-        </p>
-      )}
-      {(workspace?.retrievalOutcome || investigation || Boolean(workspace?.generationDiagnostics?.length)) && <details className="reference-status" data-control="reference-preview-search-details">
-        <summary>{text.searchDetails}</summary>
-        {workspace?.retrievalOutcome && <p>{workspace.retrievalOutcome === "unverified" ? text.unverifiedRetrieval : workspace.retrievalOutcome === "not_needed" ? text.notNeeded : workspace.retrievalOutcome === "no_suitable_result" ? text.noResults : text.results}</p>}
-        {investigation && ["no_suitable_result", "not_needed"].includes(investigation.state) && <p>{investigation.state === "not_needed" ? text.notNeeded : text.noResults}</p>}
-        {Boolean(workspace?.generationDiagnostics?.length) && <ul>{workspace!.generationDiagnostics!.map((diagnostic, index) => <li key={index}>{diagnostic}</li>)}</ul>}
-      </details>}
-      {(error || notice) && (
-        <p role={error ? "alert" : "status"}>{error || notice}</p>
-      )}
-      {loadingVersion && <p role="status">{text.loading}</p>}
-      {edit && current?.version !== edit.base.version && (
-        <p role="status">{text.queued}</p>
-      )}
-      {chosen && shownFields && (
-        <>
-          {isHistorical && (
-            <p className="reference-historical">{text.historical}</p>
-          )}
-          {!isHistorical &&
-            workspace?.findings
-              ?.filter((finding) => finding.priority === "critical")
-              .map((finding, index) => (
-                <div
-                  role="alert"
-                  className="reference-critical"
-                  key={finding.id ?? index}
-                >
-                  <strong>{text.critical}</strong>
-                  <p>{finding.summary}</p>
-                </div>
-              ))}
-          {shownFields.title === undefined && <p role="status">{text.legacyTitle}</p>}
+  const renderFields = (keys: ReadonlyArray<(typeof fields)[number]>) => {
+    if (!chosen || !shownFields) return null;
+    return (
           <dl className="reference-aware-fields">
-            {fields.map((key) => (
-              <div key={key}>
-                <dt>{key === "title" ? text.taskTitle : text[key]}</dt>
+            {keys.map((key) => (
+              <div key={key} className={`preview-field preview-field-${key}`}>
+                <dt>{key === "title" ? text.taskTitle : !edit && key === "goal" ? text.goalReading : !edit && key === "completionCriteria" ? text.completionReading : text[key]}</dt>
                 <dd>
                   {key === "title" && titleInvalid && !isHistorical && <p id={titleErrorId} role="alert">{text.titleLimit} ({taskTitleLength(shownTitle)}/70)</p>}
                   {key === "title" && edit && !titleInvalid && <small>{taskTitleLength(shownTitle)}/70</small>}
@@ -257,6 +191,7 @@ export function ReferenceAwarePreview(props: ReferenceAwarePreviewProps) {
                       variant="body"
                       cause={cause}
                       historical={isHistorical}
+                      renderContent={key === "completionCriteria" ? () => <ul className="preview-completion-list">{shownFields.completionCriteria.map((criterion, index) => <li key={index}>{criterion}</li>)}</ul> : undefined}
                     >
                       {(Array.isArray(shownFields[key])
                         ? shownFields[key].join("\n")
@@ -267,6 +202,111 @@ export function ReferenceAwarePreview(props: ReferenceAwarePreviewProps) {
               </div>
             ))}
           </dl>
+    );
+  };
+  const evidence = chosen ? (<section className="preview-evidence-card" aria-label={text.evidence}>
+            <h4>{text.evidence} <span>{sourceReferences.length}</span></h4>
+            {!sourceReferences.length && <p>{text.emptyReferences}</p>}
+            <div className="preview-evidence-summaries">{sourceReferences.slice(0, 4).map((reference) => <button type="button" data-control="preview-evidence-open" data-record-id={referenceKey(reference)} aria-label={`${text.evidence}: ${reference.title || text.references} ${reference.section || ""}`} key={referenceKey(reference)} disabled={pending} onClick={() => setViewer({ binding: reference, references: sourceReferences, version: chosen!.version })}><strong>{reference.title || text.references}</strong>{reference.excerpt && <q>{reference.excerpt}</q>}<small>{text.references} ↗</small></button>)}</div>
+            <details className="preview-reference-tools" data-control="preview-reference-tools"><summary>{text.references}</summary>          <ReferenceList
+            key={`${chosen.previewId}:${isHistorical ? chosen.version : "current"}`}
+            references={sourceReferences}
+            interactions={workspace?.interactions?.filter(
+              (fact) => fact.contextRevision === chosen.contextRevision,
+            )}
+            disabled={pending}
+            onOpen={(binding, references) =>
+              setViewer({ binding, references, version: chosen.version })
+            }
+            onUsage={
+              !isHistorical && props.onUsage
+                ? (reference, kind) =>
+                    void act(() => props.onUsage!(reference, kind))
+                : undefined
+            }
+          />
+</details>
+        <div className="reference-aware-preview-actions">
+          <button
+            data-control="reference-preview-generate"
+            type="button"
+            disabled={pending || generationBusy}
+            onClick={() => void act(props.onGenerate)}
+          >
+            {text.generate}
+          </button>
+          {current && (
+            <button
+              data-control="reference-preview-investigate"
+              type="button"
+              disabled={pending || busy(investigation?.state)}
+              onClick={() => void act(props.onInvestigate)}
+            >
+              {text.investigate}
+            </button>
+          )}
+        </div>
+      {(workspace?.retrievalOutcome || investigation || Boolean(workspace?.generationDiagnostics?.length)) && <details className="reference-status" data-control="reference-preview-search-details">
+        <summary>{text.searchDetails}</summary>
+        {workspace?.retrievalOutcome && <p>{workspace.retrievalOutcome === "unverified" ? text.unverifiedRetrieval : workspace.retrievalOutcome === "not_needed" ? text.notNeeded : workspace.retrievalOutcome === "no_suitable_result" ? text.noResults : text.results}</p>}
+        {investigation && ["no_suitable_result", "not_needed"].includes(investigation.state) && <p>{investigation.state === "not_needed" ? text.notNeeded : text.noResults}</p>}
+        {Boolean(workspace?.generationDiagnostics?.length) && <ul>{workspace!.generationDiagnostics!.map((diagnostic, index) => <li key={index}>{diagnostic}</li>)}</ul>}
+      </details>}
+
+          </section>) : null;
+  return (
+    <section className="reference-aware-preview" aria-label={text.title} aria-busy={pending || generationBusy || loadingVersion}>
+      <header className="reference-aware-preview-header">
+        <div>
+          <small className="preview-document-label">{text.title}</small>
+          <h3>{shownTitle || text.title}</h3>
+        </div>
+
+      </header>
+      {generationBusy && <p role="status">{text.generating}</p>}
+      {workspace?.generation?.status === "failed" && (
+        <p role="alert">{text.failed}</p>
+      )}
+      {workspace?.generationStatus === "partial" && <p className="reference-status" data-control="reference-preview-partial">{text.partial}</p>}
+      {workspace?.retrievalOutcome === "unverified" && <p className="reference-status" role="alert">{text.unverifiedRetrieval}</p>}
+      {investigation && !["no_suitable_result", "not_needed"].includes(investigation.state) && (
+        <p role={investigation.state === "failed" ? "alert" : "status"} className="reference-status">
+          {busy(investigation.state) ? text.optionalRunning : investigation.state === "failed" ? text.optionalFailed : investigation.state === "changed_context" ? text.changed : text.optionalDone}
+        </p>
+      )}
+
+      {(error || notice) && (
+        <p role={error ? "alert" : "status"}>{error || notice}</p>
+      )}
+      {loadingVersion && <p role="status">{text.loading}</p>}
+      {edit && current?.version !== edit.base.version && (
+        <p role="status">{text.queued}</p>
+      )}
+      {chosen && shownFields && (
+        <>
+          {isHistorical && (
+            <p className="reference-historical">{text.historical}</p>
+          )}
+          {!isHistorical &&
+            workspace?.findings
+              ?.filter((finding) => finding.priority === "critical")
+              .map((finding, index) => (
+                <div
+                  role="alert"
+                  className="reference-critical"
+                  key={finding.id ?? index}
+                >
+                  <strong>{text.critical}</strong>
+                  <p>{finding.summary}</p>
+                </div>
+              ))}
+          {shownFields.title === undefined && <p role="status">{text.legacyTitle}</p>}
+          {renderFields(fields.filter(key => ["description", "goal", "completionCriteria"].includes(key) || (key === "title" && Boolean(edit))))}
+          <p className="reference-checklist-hint">{text.checklistHint}</p>
+          <details className="reference-preview-details" data-control="reference-preview-more" open={edit ? true : undefined}>
+            <summary>{text.moreFields}</summary>
+            {renderFields(fields.filter(key => !["title", "description", "goal", "completionCriteria"].includes(key)))}
+          </details>
           <details data-control="reference-preview-assumptions">
             <summary>
               {text.assumptions} (
@@ -358,23 +398,6 @@ export function ReferenceAwarePreview(props: ReferenceAwarePreviewProps) {
               )
             )}
           </div>
-          <ReferenceList
-            key={`${chosen.previewId}:${isHistorical ? chosen.version : "current"}`}
-            references={sourceReferences}
-            interactions={workspace?.interactions?.filter(
-              (fact) => fact.contextRevision === chosen.contextRevision,
-            )}
-            disabled={pending}
-            onOpen={(binding, references) =>
-              setViewer({ binding, references, version: chosen.version })
-            }
-            onUsage={
-              !isHistorical && props.onUsage
-                ? (reference, kind) =>
-                    void act(() => props.onUsage!(reference, kind))
-                : undefined
-            }
-          />
           <DraftVersionControls
             versions={workspace?.preview?.versions ?? []}
             currentVersion={workspace?.preview?.currentVersion}
@@ -398,6 +421,7 @@ export function ReferenceAwarePreview(props: ReferenceAwarePreviewProps) {
               })
             }
           />
+          {props.referenceContainer ? createPortal(evidence, props.referenceContainer) : evidence}
           <ReferenceViewer
             open={Boolean(viewer)}
             binding={viewer?.binding}

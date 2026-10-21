@@ -287,6 +287,7 @@ describe("Mounted reference Refinement through native commands", () => {
       left: 1,
       right: 2,
     });
+    fireEvent.click(document.querySelector("[data-control=preview-reference-tools] > summary")!);
     const opener = screen.getByRole("button", {
       name: "Approval policy Approval",
     });
@@ -389,9 +390,7 @@ describe("Mounted reference Refinement through native commands", () => {
       screen.getByRole("button", { name: "초안 편집" }),
     ).toBeInTheDocument();
     expect(
-      within(screen.getByRole("region", { name: "작업 초안" })).getByLabelText(
-        "참조 검색",
-      ),
+      screen.getByLabelText("참조 검색"),
     ).toBeInTheDocument();
     expect(screen.getByDisplayValue("Still writing")).toBeInTheDocument();
     await act(async () => {

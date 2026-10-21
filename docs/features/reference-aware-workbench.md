@@ -100,3 +100,14 @@ Routine search decisions, empty search outcomes and technical diagnostics are av
 Workbench cards stay 320 px wide on desktop and shrink only when the available lane is narrower. Lanes wrap to fit the workspace. Each lane has its own viewport-bounded, keyboard-focusable vertical card scroller; headings stay outside it, and the page scroll reaches other categories.
 
 Workbench cards use a fixed 320 × 240 px desktop size. Each lane uses its available width for additional card columns without stretching cards; the lane keeps its independent vertical scroll. Titles and original-content previews show at most two lines with ellipsis, and actions share a consistent bottom baseline. Full text remains available in Task detail or Capture refinement. The Subtasks button opens the parent Task detail, where its hierarchy can expand without changing board card size.
+
+The preview starts with summary, goal and completion criteria. Scope, constraints
+and approach are expandable; editing and comparison retain all existing fields.
+Applying adds nonempty completion criteria as unchecked Task checklist items in the
+same transaction. Generating alone changes no Task. Content-based IDs prevent
+replay/reordering duplicates. Existing checked, manually edited and manually added
+items are never overwritten or deleted. Changed wording adds a new unchecked item
+and preserves the old one. Checking records user checklist state; it is not proof
+of execution or evidence verification and does not complete or publish the Task.
+
+The wide Refinement screen keeps the preview in a large reading card on the left. The existing conversation is at the upper right, with short evidence titles and excerpts below it. Full source filters remain available in the evidence disclosure. The reading and support columns scroll independently; narrow windows stack the preview, conversation, then evidence.

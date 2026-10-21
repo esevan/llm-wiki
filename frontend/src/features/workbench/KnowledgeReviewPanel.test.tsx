@@ -57,7 +57,7 @@ describe("Knowledge review", () => {
     window.llmWikiApplication = { request: vi.fn().mockResolvedValue(response(projection())) };
     render(<KnowledgeReviewPanel taskId="task-1" completed onGenerate={vi.fn()} />);
     expect(await screen.findByText("Publication review is unavailable in this view. Open the Task from Workbench and try again.")).toBeVisible();
-    expect(screen.getByRole("button", { name: "Publish Knowledge" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Publish Knowledge" })).toBeEnabled();
   });
   it("explains why a legacy draft without an evidence snapshot is read-only", async () => {
     const legacy = {...version(2), generationSnapshotHash: ""};
@@ -82,15 +82,15 @@ describe("Knowledge review", () => {
     window.llmWikiApplication = { request };
     const generate = vi.fn(); const prepare = vi.fn();
     render(<KnowledgeReviewPanel taskId="task-1" completed onGenerate={generate} onPrepareArchive={prepare} />);
-    expect(await screen.findByText("Unverified draft")).toBeVisible();
-    expect(screen.getByText("Classification unconfirmed", { exact: false })).toBeVisible();
+    await screen.findByRole("heading", { name: "Offline use", level: 3 });
+    expect(screen.queryByText("Unverified draft")).not.toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Offline use", level: 1 })).toBeVisible();
-    expect(screen.getByRole("button", { name: "Publish Knowledge" })).toBeDisabled();
-    fireEvent.change(screen.getByRole("textbox", { name: "Your verification note" }), { target: { value: "Check the original manual record." } });
+    expect(screen.getByRole("button", { name: "Publish Knowledge" })).toBeEnabled();
+    fireEvent.change(screen.getByRole("textbox", { name: "Your note" }), { target: { value: "Check the original manual record." } });
     fireEvent.click(screen.getByRole("button", { name: "Save note" }));
     expect(await screen.findByText("Check the original manual record.")).toBeVisible();
-    expect(screen.getByText("Unverified draft")).toBeVisible();
-    expect(screen.getByRole("button", { name: "Publish Knowledge" })).toBeDisabled();
+    expect(screen.queryByText("Unverified draft")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Publish Knowledge" })).toBeEnabled();
     expect(generate).not.toHaveBeenCalled(); expect(prepare).not.toHaveBeenCalled();
     expect(request.mock.calls.filter(([input]) => input.path.endsWith("/review-notes"))).toHaveLength(1);
   });
@@ -103,10 +103,10 @@ describe("Knowledge review", () => {
     });
     window.llmWikiApplication = { request };
     render(<KnowledgeReviewPanel taskId="task-1" completed onGenerate={vi.fn()} />);
-    const input = await screen.findByRole("textbox", { name: "Your verification note" });
+    const input = await screen.findByRole("textbox", { name: "Your note" });
     fireEvent.change(input, { target: { value: "Preserve this review" } });
     fireEvent.click(screen.getByRole("button", { name: "Save note" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("Content version changed");
+    expect(await screen.findByRole("alert")).toHaveTextContent("Your note could not be saved");
     expect(input).toHaveValue("Preserve this review");
     fail = false;
     fireEvent.click(screen.getByRole("button", { name: "Save note" }));
@@ -122,13 +122,13 @@ describe("Knowledge review", () => {
     window.llmWikiApplication = { request: vi.fn().mockResolvedValue(response(stored)) };
     const dirty = vi.fn();
     render(<KnowledgeReviewPanel taskId="task-1" completed onGenerate={vi.fn()} onDirtyChange={dirty} />);
-    await screen.findByRole("textbox", { name: "Your verification note" });
+    await screen.findByRole("textbox", { name: "Your note" });
     expect(screen.queryByText("Historical note")).not.toBeInTheDocument();
     expect(screen.queryByText("Unrelated note")).not.toBeInTheDocument();
-    fireEvent.change(screen.getByRole("textbox", { name: "Your verification note" }), { target: { value: "Unsaved note" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "Your note" }), { target: { value: "Unsaved note" } });
     expect(dirty).toHaveBeenLastCalledWith(true);
     expect(screen.getByRole("combobox", { name: /Version/ })).toBeDisabled();
-    expect(screen.getByRole("textbox", { name: "Your verification note" })).toHaveValue("Unsaved note");
+    expect(screen.getByRole("textbox", { name: "Your note" })).toHaveValue("Unsaved note");
   });
 
   it("reports independent projection and historical version selection timings", async () => {
@@ -182,6 +182,7 @@ describe("Knowledge review", () => {
 
     expect(await screen.findByRole("heading", { name: "Offline use", level: 3 })).toBeVisible();
     expect(screen.getByText("Keep final Knowledge local.")).toBeVisible();
+    fireEvent.click(screen.getByText("Conditions, limits and example questions"));
     expect(screen.getByText("It does not prove remote availability")).toBeVisible();
     expect(within(document.querySelector(".knowledge-article")!).queryByText("Try a reminder automation later.")).not.toBeInTheDocument();
     if (!document.querySelector<HTMLDetailsElement>('[data-control="knowledge-history"]')!.open) fireEvent.click(screen.getByText("Versions and draft tools"));
@@ -396,7 +397,7 @@ describe("Knowledge review", () => {
     expect(publish).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Publish Knowledge" }));
     fireEvent.click(await screen.findByRole("button", { name: "Publish these exact files" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("Disk unavailable");
+    expect(await screen.findByRole("alert")).toHaveTextContent("Publication could not be completed");
     expect(screen.getByRole("button", { name: "Publish these exact files" })).toBeEnabled();
     fireEvent.click(screen.getByRole("button", { name: "Publish these exact files" }));
     expect(await screen.findByText("Publication state: index_pending")).toBeVisible();
@@ -410,7 +411,7 @@ describe("Knowledge review", () => {
     render(<KnowledgeReviewPanel taskId="task-1" completed onGenerate={generate} />);
     const regenerate = await screen.findByRole("button", { name: "Regenerate private draft" });
     fireEvent.click(regenerate);
-    expect(await screen.findByRole("alert")).toHaveTextContent("Provider unavailable");
+    expect(await screen.findByRole("alert")).toHaveTextContent("The generation service could not be reached");
     fireEvent.click(regenerate);
     await waitFor(() => expect(generate).toHaveBeenCalledTimes(2));
     fireEvent.click(screen.getByRole("button", { name: "Edit current draft" }));
@@ -454,7 +455,7 @@ describe("Knowledge review", () => {
     expect(await screen.findByText("Unmanaged link must be reviewed")).toBeVisible();
     expect(organize).toHaveBeenCalledWith(expect.objectContaining({ documentId: "knowledge-1", expectedRevision: "published-hash", intent: "rename", requestedPath: "Knowledge/renamed.md" }));
     fireEvent.click(screen.getByRole("button", { name: "Publish these exact files" }));
-    expect(await screen.findByText("External bytes changed")).toBeVisible();
+    expect(await screen.findByText(/A destination file changed/)).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "Finish exact remaining steps" }));
     await waitFor(() => expect(recover).toHaveBeenCalledWith({ operationId: "organize-operation", choice: "finish" }));
   });
@@ -496,7 +497,7 @@ describe("Knowledge review", () => {
     const recover = vi.fn().mockResolvedValue({ operationId: "saved-operation", state: "complete" });
     render(<KnowledgeReviewPanel taskId="task-1" completed onGenerate={vi.fn()} onRecoverArchive={recover} onPublishArchive={vi.fn()} />);
 
-    expect(await screen.findByText("External edit retained")).toBeVisible();
+    expect(await screen.findByText(/A destination file changed/)).toBeVisible();
     fireEvent.click(screen.getByText("MOC and reference changes"));
     expect(screen.getByText("Resume newest exact recovery")).toBeVisible();
     expect(screen.queryByText("Older applied proposal")).not.toBeInTheDocument();
@@ -521,12 +522,13 @@ describe("Knowledge review", () => {
     const archiveStatus = vi.fn().mockImplementation(async () => { operationState = "complete"; return { operationId: "saved-operation", state: "complete" }; });
     render(<KnowledgeReviewPanel taskId="task-1" completed onGenerate={vi.fn()} onRetryArchive={retry} onArchiveStatus={archiveStatus} />);
 
-    expect(await screen.findByText("Index unavailable")).toBeVisible();
+    expect(await screen.findByText(/Publication could not be completed/)).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "Retry indexing" }));
     expect(await screen.findByText("Publication state: index_pending")).toBeVisible();
     await waitFor(() => expect(archiveStatus).toHaveBeenCalledWith("saved-operation"), { timeout: 2000 });
     await waitFor(() => expect(request.mock.calls.length).toBeGreaterThan(1));
-    await waitFor(() => expect(screen.getByText("Published version")).toBeVisible());
+    await waitFor(() => expect(request).toHaveBeenCalled());
+    expect(screen.queryByText("Published version")).not.toBeInTheDocument();
   });
 
   it("shows Korean freshness, limits, and exact idea dispositions", async () => {
@@ -541,7 +543,9 @@ describe("Knowledge review", () => {
     window.llmWikiApplication = { request: vi.fn().mockResolvedValue(response(stale)) };
     try {
       render(<KnowledgeReviewPanel taskId="task-1" completed onGenerate={vi.fn()} />);
-      expect(await screen.findByText("출처 변경됨")).toBeVisible();
+      await screen.findByRole("heading", { name: "Offline use", level: 3 });
+      expect(screen.queryByText("출처 변경됨")).not.toBeInTheDocument();
+      fireEvent.click(screen.getByText("적용 조건·한계·대표 질문"));
       expect(screen.getByText("한계와 제외 범위")).toBeVisible();
       fireEvent.click(screen.getByText("버전 및 초안 도구"));
       fireEvent.click(screen.getByText(/다시 살펴볼 아이디어/));

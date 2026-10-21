@@ -163,6 +163,8 @@ export function KnowledgeReviewPanel({ taskId, completed, generationQueued, refr
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<"generate" | "edit" | "restore" | "prepare" | "publish">();
   const [error, setError] = useState("");
+  const [publicationError, setPublicationError] = useState("");
+  const [canRegenerate, setCanRegenerate] = useState(false);
   const [status, setStatus] = useState("");
   const [proposal, setProposal] = useState<KnowledgeArchiveProposal>();
   const [publicationOperation, setPublicationOperation] = useState<KnowledgeArchiveOperation>();
@@ -190,6 +192,7 @@ export function KnowledgeReviewPanel({ taskId, completed, generationQueued, refr
     setBusy(undefined);
     setStatus("");
     setError("");
+    setPublicationError("");
     setSource(undefined);
     setProjection(undefined);
     setSelected(undefined);
@@ -245,7 +248,6 @@ export function KnowledgeReviewPanel({ taskId, completed, generationQueued, refr
   }, [load, preferredRevision, refreshKey]);
   const version = projection?.versions.find(candidate => candidate.revision === selected);
   const currentRevision = projection?.pointers.currentPrivateRevision;
-  const publishedRevision = projection?.pointers.publishedRevision;
   useEffect(() => {
     if (pendingGenerationRevision.current === undefined) return;
     if (generationQueued) { observedGenerationQueue.current = true; return; }
@@ -380,7 +382,7 @@ export function KnowledgeReviewPanel({ taskId, completed, generationQueued, refr
     pendingGenerationRevision.current = currentRevision;
     observedGenerationQueue.current = false;
     try { await onGenerate(); }
-    catch (cause) { pendingGenerationRevision.current = undefined; setError(String(cause instanceof Error ? cause.message : cause)); setStatus(""); }
+    catch { pendingGenerationRevision.current = undefined; setError(text.generationUnavailable); setStatus(""); }
     finally { setBusy(undefined); }
   };
   const saveReviewNote = async () => {
@@ -394,12 +396,23 @@ export function KnowledgeReviewPanel({ taskId, completed, generationQueued, refr
       setNoteDrafts(current => ({ ...current, [key]: "" }));
       await load(version.revision);
       setStatus(text.reviewNoteSaved);
-    } catch (cause) { setError(`${text.operationFailed} ${String(cause instanceof Error ? cause.message : cause)}`); }
+    } catch { setError(text.noteSaveFailed); }
     finally { setSavingNote(false); }
   };
+  const publicationFailure = (cause: unknown) => {
+    const message = String(cause instanceof Error ? cause.message : cause);
+    if (/knowledge_unverified|missing_reference|invalid_reference|invalid_knowledge|unsupported|finality|quality/i.test(message)) return text.invalidPublication;
+    if (/snapshot|content_hash|revision|stale/i.test(message)) return text.stalePublication;
+    if (/conflict|changed|collision|repair|external.*edit/i.test(message)) return text.fileConflict;
+    if (/provider|model|api.?key|credential|connection/i.test(message)) return text.generationUnavailable;
+    return text.publicationFailed;
+  };
   const preparePublication = async () => {
-    if (!version?.generationSnapshotHash || version.qualityState !== "valid" || !onPrepareArchive || busy || dirty) return;
-    setBusy("prepare"); setError(""); setStatus(text.preparingPublication);
+    if (!version || busy || savingNote) return;
+    const reason = !onPrepareArchive ? text.publicationUnavailable : dirty ? text.saveBeforePublish : !version.generationSnapshotHash ? text.legacyPublication : version.freshness !== "current" ? text.stalePublication : version.qualityState !== "valid" ? text.invalidPublication : "";
+    if (reason) { setPublicationError(reason); setCanRegenerate(Boolean(onPrepareArchive && !dirty && (!version.generationSnapshotHash || version.freshness !== "current" || version.qualityState !== "valid"))); return; }
+    if (!onPrepareArchive || !version.generationSnapshotHash) return;
+    setCanRegenerate(false); setBusy("prepare"); setPublicationError(""); setStatus(text.preparingPublication);
     try {
       const nextOperationId = operationId();
       const next = await onPrepareArchive({
@@ -410,14 +423,14 @@ export function KnowledgeReviewPanel({ taskId, completed, generationQueued, refr
         locale: document.documentElement.lang.startsWith("ko") ? "ko" : "en",
       });
       setProposal(next); setProposalOperationId(nextOperationId); setPublicationOperation(undefined); setPublicationOperationId(undefined); setStatus("");
-    } catch (cause) { setError(`${text.operationFailed} ${String(cause instanceof Error ? cause.message : cause)}`); setStatus(""); }
+    } catch (cause) { setPublicationError(publicationFailure(cause)); setStatus(""); }
     finally { setBusy(undefined); }
   };
   const prepareOrganization = async () => {
     const documentId = projection?.pointers.publicationDocumentId;
     const expectedRevision = projection?.pointers.publicationContentHash;
     if (!documentId || !expectedRevision || !onOrganizeArchive || busy || dirty) return;
-    setBusy("prepare"); setError(""); setStatus(text.preparingPublication);
+    setCanRegenerate(false); setBusy("prepare"); setPublicationError(""); setStatus(text.preparingPublication);
     try {
       const nextOperationId = operationId();
       const next = await onOrganizeArchive({
@@ -425,42 +438,44 @@ export function KnowledgeReviewPanel({ taskId, completed, generationQueued, refr
         requestedPath: organizeIntent === "withdraw" ? undefined : requestedPath.trim() || undefined,
       });
       setProposal(next); setProposalOperationId(nextOperationId); setPublicationOperation(undefined); setPublicationOperationId(undefined); setStatus("");
-    } catch (cause) { setError(`${text.operationFailed} ${String(cause instanceof Error ? cause.message : cause)}`); setStatus(""); }
+    } catch (cause) { setPublicationError(publicationFailure(cause)); setStatus(""); }
     finally { setBusy(undefined); }
   };
   const publish = async () => {
-    if (!proposal || !proposalOperationId || !onPublishArchive || busy || savingNote || dirty || proposal.outcome === "conflict" || version?.freshness !== "current" || version?.qualityState !== "valid") return;
-    setBusy("publish"); setError(""); setStatus(text.publishing);
+    if (!proposal || !proposalOperationId || !onPublishArchive || busy || savingNote) return;
+    const reason = dirty ? text.saveBeforePublish : proposal.outcome === "conflict" ? text.fileConflict : version?.freshness !== "current" ? text.stalePublication : version?.qualityState !== "valid" ? text.invalidPublication : "";
+    if (reason) { setPublicationError(reason); setCanRegenerate(!dirty && proposal.outcome !== "conflict"); return; }
+    setBusy("publish"); setPublicationError(""); setStatus(text.publishing);
     try {
       const publishOperationId = operationId();
       const operation = await onPublishArchive({ operationId: publishOperationId, proposalId: proposal.proposalId, proposalVersion: proposal.proposalVersion, proposalHash: proposal.proposalHash });
       setPublicationOperation(operation); setPublicationOperationId(operation.operationId ?? publishOperationId); setStatus("");
       if (operation.state === "complete") await load(version?.revision);
-    } catch (cause) { setError(`${text.operationFailed} ${String(cause instanceof Error ? cause.message : cause)}`); setStatus(""); }
+    } catch (cause) { setPublicationError(publicationFailure(cause)); setStatus(""); }
     finally { setBusy(undefined); }
   };
   const retryPublication = async () => {
     if (!publicationOperationId || !onRetryArchive || busy) return;
-    setBusy("publish"); setError("");
+    setBusy("publish"); setPublicationError("");
     try {
       const operation = await onRetryArchive(publicationOperationId);
       setPublicationOperation(operation);
       setPublicationOperationId(operation.operationId ?? publicationOperationId);
       if (operation.state === "complete") await load(version?.revision);
     }
-    catch (cause) { setError(`${text.operationFailed} ${String(cause instanceof Error ? cause.message : cause)}`); }
+    catch (cause) { setPublicationError(publicationFailure(cause)); }
     finally { setBusy(undefined); }
   };
   const recoverPublication = async (choice: "finish" | "compensate") => {
     if (!publicationOperationId || !onRecoverArchive || busy) return;
-    setBusy("publish"); setError("");
+    setBusy("publish"); setPublicationError("");
     try {
       const operation = await onRecoverArchive({ operationId: publicationOperationId, choice });
       setPublicationOperation(operation);
       setPublicationOperationId(operation.operationId ?? publicationOperationId);
       if (operation.state === "complete" || operation.state === "compensated") await load(version?.revision);
     }
-    catch (cause) { setError(`${text.operationFailed} ${String(cause instanceof Error ? cause.message : cause)}`); }
+    catch (cause) { setPublicationError(publicationFailure(cause)); }
     finally { setBusy(undefined); }
   };
 
@@ -479,30 +494,30 @@ export function KnowledgeReviewPanel({ taskId, completed, generationQueued, refr
   const reviewNotes = (projection.reviewNotes ?? []).filter(note => note.knowledgeRevision === version.revision && note.contentHash === version.contentHash);
   const article = version.result.article;
   const outcomes = article?.finalOutcomes ?? [];
-  const findings = version.result.qualityFindings ?? [];
   const publicationLocked = Boolean(publicationOperation && ["writing", "index_pending", "complete", "compensated"].includes(publicationOperation.state));
   const proposalConflict = proposal?.outcome === "conflict";
   return <section ref={root} className="knowledge-review" aria-label={text.title} data-content-hash={version.contentHash} tabIndex={-1}>
-    <header className="knowledge-review-header">
-      <div><p className="knowledge-review-kicker">{text.privateDraft}</p><ContentRevisionTransition as="h3" entityKey={`knowledge:${taskId}`} revision={version.revision} cause={appliedTransition?.revision === version.revision ? appliedTransition.cause : undefined} historical={version.revision !== currentRevision} variant="title">{article?.title ?? version.title}</ContentRevisionTransition><p>{text.articleType}: {(article?.type ?? version.articleType) || text.unclassified}</p></div>
-      <div className="knowledge-review-states"><span className={`knowledge-state is-${version.freshness}`}>{version.freshness === "current" ? text.current : text.stale}</span><span className="knowledge-state">{version.revision === currentRevision ? text.currentPrivate : text.historical}</span><span className="knowledge-state">{version.revision === publishedRevision ? text.exactPublished : text.notPublished}</span></div>
+    <div className="knowledge-reading">
+    <header className="knowledge-review-header"><p className="knowledge-review-kicker">{text.privateDraft} · v{version.revision}</p>
+      <ContentRevisionTransition as="h3" entityKey={`knowledge:${taskId}`} revision={version.revision} cause={appliedTransition?.revision === version.revision ? appliedTransition.cause : undefined} historical={version.revision !== currentRevision} variant="title">{article?.title ?? version.title}</ContentRevisionTransition>
     </header>
-    {version.qualityState !== "valid" && <section className="knowledge-quality" data-control="knowledge-unverified"><h4>{text.unverifiedDraft}</h4>{version.modelError && <p>{version.modelError}</p>}</section>}
     {status && <p role="status" className="knowledge-draft-status">{status}</p>}
     {error && <p role="alert" className="knowledge-draft-error">{error}</p>}
 
-    {outcomes.length > 0 && <section className="knowledge-outcomes" aria-labelledby="knowledge-outcomes-title"><h4 id="knowledge-outcomes-title">{text.finalOutcomes}</h4>{outcomes.length ? <ol>{outcomes.map(outcome => <li key={outcome.topicKey}><strong>{outcome.topicKey}</strong><p>{outcome.statement}</p></li>)}</ol> : <p>{text.noFinalOutcomes}</p>}</section>}
     <section className="knowledge-article" aria-label={text.articleBody}>
       {editing ? <label className="knowledge-draft-editor"><span>{text.edit}</span><textarea data-control="task-knowledge-draft-body" value={body} onChange={event => setBody(event.target.value)} /></label> : <ContentRevisionTransition as="div" entityKey={`knowledge:${taskId}:body`} revision={version.revision} cause={appliedTransition?.revision === version.revision ? appliedTransition.cause : undefined} historical={version.revision !== currentRevision} variant="body" renderContent={content => <KnowledgeMarkdown>{content}</KnowledgeMarkdown>}>{version.bodyMarkdown}</ContentRevisionTransition>}
       {!version.generationSnapshotHash && <p role="note">{document.documentElement.lang.startsWith("ko") ? "이전 초안은 근거 스냅샷이 없어 편집할 수 없습니다. 새 초안을 생성해 주세요." : "This legacy draft has no evidence snapshot. Generate a new draft to edit."}</p>}
-      {(version.revision === currentRevision || editing) && <div className="knowledge-review-actions">{editing ? <><button type="button" data-control="knowledge-version-save" disabled={Boolean(busy) || !bodyDirty || version.revision !== currentRevision || !version.generationSnapshotHash} onClick={() => void save()}>{text.save}</button><button type="button" data-control="knowledge-version-cancel" disabled={Boolean(busy)} onClick={() => { setBody(savedBody); setEditing(false); setStatus(""); }}>{text.cancelEdit}</button></> : <button type="button" data-control="knowledge-version-edit" title={!version.generationSnapshotHash ? (document.documentElement.lang.startsWith("ko") ? "이전 초안은 근거 스냅샷이 없어 편집할 수 없습니다. 새 초안을 생성해 주세요." : "This legacy draft has no evidence snapshot. Generate a new draft to edit.") : undefined} disabled={Boolean(busy) || !version.generationSnapshotHash} onClick={() => setEditing(true)}>{text.edit}</button>}</div>}
+
     </section>
 
-    <section className="knowledge-applicability"><h4>{text.applicability}</h4><p className="knowledge-applicability-summary">{version.applicability.summary}</p><ApplicabilityList title={text.questions} values={version.applicability.representativeQuestions} /><ApplicabilityList title={text.helpsWith} values={version.applicability.helpsWith} /><ApplicabilityList title={text.conditions} values={version.applicability.conditions} /><ApplicabilityList title={text.exclusions} values={version.applicability.exclusions} /></section>
+    {outcomes.length > 0 && <section className="knowledge-outcomes" aria-labelledby="knowledge-outcomes-title"><h4 id="knowledge-outcomes-title">{text.finalOutcomes}</h4>{outcomes.length ? <ol>{outcomes.map(outcome => <li key={outcome.topicKey}><p>{outcome.statement}</p></li>)}</ol> : <p>{text.noFinalOutcomes}</p>}</section>}
+    <section className="knowledge-applicability"><h4>{text.applicability}</h4><p className="knowledge-applicability-summary">{version.applicability.summary}</p><details className="knowledge-applicability-details" data-control="knowledge-applicability-details"><summary>{text.applicabilityDetails}</summary><div><ApplicabilityList title={text.questions} values={version.applicability.representativeQuestions} /><ApplicabilityList title={text.helpsWith} values={version.applicability.helpsWith} /><ApplicabilityList title={text.conditions} values={version.applicability.conditions} /><ApplicabilityList title={text.exclusions} values={version.applicability.exclusions} /></div></details></section>
     {references.length ? <details className="knowledge-provenance" data-control="knowledge-provenance"><summary>{text.provenance} · {references.length}</summary><div className="knowledge-source-list">{references.map(reference => <button type="button" data-control="knowledge-source-open" data-record-id={`${reference.documentId}:${reference.documentVersion}`} key={`${reference.documentId}:${reference.documentVersion}:${reference.section}:${reference.excerpt}`} onClick={() => setSource(reference)}><strong>{reference.title}</strong><span>{reference.section}</span><q>{reference.excerpt}</q><small>{text.openSource}</small></button>)}</div></details> : null}
+    </div>
+    <aside className="knowledge-controls">
     <section className="knowledge-review-notes" aria-label={text.reviewNotes}>
       <h4>{text.reviewNotes}</h4><p>{text.reviewNotesHint}</p>
-      {reviewNotes.length ? <ol>{reviewNotes.map(note => <li key={note.id}><time dateTime={note.createdAt}>{note.createdAt}</time><p>{note.body}</p></li>)}</ol> : <p>{text.noReviewNotes}</p>}
+      {reviewNotes.length ? <ol>{reviewNotes.map(note => <li key={note.id}><time dateTime={note.createdAt}>{note.createdAt}</time><p>{note.body}</p></li>)}</ol> : null}
       <label className="knowledge-draft-editor"><span>{text.reviewNoteBody}</span><textarea data-control="knowledge-review-note-body" value={noteDrafts[noteKey] ?? ""} disabled={savingNote} onChange={event => setNoteDrafts(current => ({ ...current, [noteKey]: event.target.value }))} /></label>
       <div className="knowledge-note-actions"><button type="button" data-control="knowledge-review-note-cancel" disabled={savingNote || !(noteDrafts[noteKey] ?? "")} onClick={() => setNoteDrafts(current => ({ ...current, [noteKey]: "" }))}>{text.cancelEdit}</button>
       <button type="button" data-control="knowledge-review-note-save" disabled={savingNote || Boolean(busy) || !(noteDrafts[noteKey] ?? "").trim()} onClick={() => void saveReviewNote()}>{savingNote ? text.savingReviewNote : text.saveReviewNote}</button></div>
@@ -510,8 +525,9 @@ export function KnowledgeReviewPanel({ taskId, completed, generationQueued, refr
 
 
     <section className="knowledge-publication" aria-label={text.publicationReview}>
-      <header><div><h4>{text.publicationReview}</h4>{!onPrepareArchive && <p>{text.publicationUnavailable}</p>}</div><button type="button" data-control="knowledge-archive-prepare" disabled={!onPrepareArchive || !version.generationSnapshotHash || savingNote || Boolean(busy) || dirty || version.freshness !== "current" || version.qualityState !== "valid"} onClick={() => void preparePublication()}>{busy === "prepare" ? text.preparingPublication : text.preparePublication}</button></header>
-      <p className="knowledge-publication-hint">{dirty ? text.saveBeforePublish : !version.generationSnapshotHash ? text.legacyPublication : version.freshness !== "current" ? text.stalePublication : version.qualityState !== "valid" ? text.invalidPublication : text.publicationHint}</p>
+      <header><div><h4>{text.publicationReview}</h4>{!onPrepareArchive && <p>{text.publicationUnavailable}</p>}</div><button type="button" data-control="knowledge-archive-prepare" disabled={savingNote || Boolean(busy)} onClick={() => void preparePublication()}>{busy === "prepare" ? text.preparingPublication : text.preparePublication}</button></header>
+      <p className="knowledge-publication-hint">{text.publicationHint}</p>
+      {publicationError && <div className="knowledge-publication-error"><p className="knowledge-draft-error" role="alert">{publicationError}</p>{canRegenerate && <button type="button" data-control="knowledge-publication-regenerate" disabled={!completed || Boolean(busy) || generationQueued} onClick={() => { setPublicationError(""); setCanRegenerate(false); void generate(); }}>{generationQueued || busy === "generate" ? text.generating : text.regenerate}</button>}</div>}
       {projection.pointers.publicationDocumentId && projection.pointers.publicationContentHash && <details className="knowledge-organization" data-control="knowledge-archive-organize">
         <summary>{text.managePublication}</summary>
         <p>{text.currentPublishedPath}: <code>{projection.pointers.publicationPath ?? text.noPath}</code></p>
@@ -534,25 +550,29 @@ export function KnowledgeReviewPanel({ taskId, completed, generationQueued, refr
           {proposal.referenceLinks.length > 0 && <section className="knowledge-reference-links"><h6>{text.sourceLinks}</h6>{proposal.referenceLinks.map(link => { const binding = [...linkDocuments.values()].find(document => viewerKey(document) === viewerKey({ documentId: link.documentId, documentVersion: link.documentVersion, section: link.section, title: link.path })); return <button type="button" data-control="knowledge-archive-reference-open" data-record-id={`${link.documentId}:${link.documentVersion}:${link.section ?? ""}`} key={`${link.documentId}:${link.documentVersion}:${link.section ?? ""}`} onClick={() => binding && setSource(binding)}><strong>{link.path}{link.section ? `#${link.section}` : ""}</strong><span>{link.rationale}</span><small>{link.role} · {link.documentVersion}</small></button>; })}</section>}
         </details>
         {proposalConflict && <p role="alert">{text.proposalConflict}</p>}
-        <div className="knowledge-publication-actions"><button type="button" data-control="knowledge-archive-cancel" disabled={Boolean(busy) || publicationLocked} onClick={() => { setProposal(undefined); setProposalOperationId(undefined); setStatus(""); }}>{text.cancelPublication}</button>
-        <button type="button" data-control="knowledge-archive-publish" disabled={!onPublishArchive || savingNote || Boolean(busy) || dirty || version.freshness !== "current" || version.qualityState !== "valid" || proposalConflict || publicationLocked} onClick={() => void publish()}>{busy === "publish" ? text.publishing : text.publishExact}</button></div>
+        {!onPublishArchive && onPrepareArchive && <p role="note">{text.publicationUnavailable}</p>}
+        <div className="knowledge-publication-actions"><button type="button" data-control="knowledge-archive-cancel" disabled={Boolean(busy) || publicationLocked} onClick={() => { setProposal(undefined); setProposalOperationId(undefined); setPublicationError(""); setStatus(""); }}>{text.cancelPublication}</button>
+        <button type="button" data-control="knowledge-archive-publish" disabled={!onPublishArchive || savingNote || Boolean(busy) || proposalConflict || publicationLocked} onClick={() => void publish()}>{busy === "publish" ? text.publishing : text.publishExact}</button></div>
       </div>}
       {publicationOperation && <div className={`knowledge-publication-state is-${publicationOperation.state}`} role={publicationOperation.state === "conflict" || publicationOperation.state === "repair_required" || publicationOperation.state === "index_failed" ? "alert" : "status"}>
-        <strong>{text.publicationState}: {publicationOperation.state}</strong>{publicationOperation.error && <p>{publicationOperation.error}</p>}
+        <strong>{text.publicationState}: {publicationOperation.state}</strong>{publicationOperation.error && <p>{publicationFailure(publicationOperation.error)}</p>}
         {publicationOperation.state === "index_pending" && <p>{text.indexPending}</p>}
         {publicationOperation.state === "index_failed" && <button type="button" data-control="knowledge-archive-retry-index" disabled={!onRetryArchive || Boolean(busy)} onClick={() => void retryPublication()}>{text.retryIndex}</button>}
         {(publicationOperation.state === "index_failed" || publicationOperation.state === "repair_required") && <div className="knowledge-recovery-actions"><button type="button" data-control="knowledge-archive-recover-finish" disabled={!onRecoverArchive || Boolean(busy)} onClick={() => void recoverPublication("finish")}>{text.finishRecovery}</button><button type="button" data-control="knowledge-archive-recover-compensate" disabled={!onRecoverArchive || Boolean(busy)} onClick={() => void recoverPublication("compensate")}>{text.compensate}</button></div>}
       </div>}
     </section>
+
+<section className="knowledge-version-control">      {(version.revision === currentRevision || editing) && <div className="knowledge-review-actions">{editing ? <><button type="button" data-control="knowledge-version-save" disabled={Boolean(busy) || !bodyDirty || version.revision !== currentRevision || !version.generationSnapshotHash} onClick={() => void save()}>{text.save}</button><button type="button" data-control="knowledge-version-cancel" disabled={Boolean(busy)} onClick={() => { setBody(savedBody); setEditing(false); setStatus(""); }}>{text.cancelEdit}</button></> : <button type="button" data-control="knowledge-version-edit" title={!version.generationSnapshotHash ? (document.documentElement.lang.startsWith("ko") ? "이전 초안은 근거 스냅샷이 없어 편집할 수 없습니다. 새 초안을 생성해 주세요." : "This legacy draft has no evidence snapshot. Generate a new draft to edit.") : undefined} disabled={Boolean(busy) || !version.generationSnapshotHash} onClick={() => setEditing(true)}>{text.edit}</button>}</div>}    <DraftVersionControls versions={previews.map(item => ({ version: item.version, derivationKind: item.derivationKind, createdAt: item.createdAt, derivedFromVersion: item.derivedFromVersion, current: item.current, contentHash: item.contentHash }))} selected={version.revision} currentVersion={currentRevision} comparison={comparison} disabled={Boolean(busy) || dirty} restoreDisabled={version.revision === currentRevision} onSelect={selectVersion} onCompare={(left: number, right: number) => { const a = previews.find(item => item.version === left); const b = previews.find(item => item.version === right); if (a && b) setComparison(compare(a, b)); }} onRestore={(revision: number) => void restore(revision)} /></section>
     <details className="knowledge-secondary" data-control="knowledge-history"><summary>{text.historyTools}</summary>
-    {findings.length > 0 && <section className="knowledge-quality"><h4>{text.quality}</h4><ul>{findings.map((finding, index) => <li key={`${finding.kind}:${index}`} className={`is-${finding.severity}`}><strong>{text[finding.severity as "blocking" | "warning" | "info"] ?? finding.severity}</strong><span>{finding.message || finding.kind}</span></li>)}</ul></section>}
 
-    <details className="knowledge-ideas" data-control="knowledge-ideas"><summary>{text.ideas} · {ideas.length}</summary><p>{text.ideasHint}</p>{ideas.length ? <div>{ideas.map(idea => <IdeaCard key={`${idea.id}:${idea.revision}`} idea={idea} selected={selectedIdeas.has(`${idea.id}:${idea.revision}`)} disabled={Boolean(proposal)} onToggle={() => setSelectedIdeas(current => { const next = new Set(current); const key = `${idea.id}:${idea.revision}`; if (next.has(key)) next.delete(key); else next.add(key); return next; })} onSource={item => setSource(toBinding(item))} text={text} />)}</div> : <p>{text.noIdeas}</p>}</details>
 
-    <DraftVersionControls versions={previews.map(item => ({ version: item.version, derivationKind: item.derivationKind, createdAt: item.createdAt, derivedFromVersion: item.derivedFromVersion, current: item.current, contentHash: item.contentHash }))} selected={version.revision} currentVersion={currentRevision} comparison={comparison} disabled={Boolean(busy) || dirty} restoreDisabled={version.revision === currentRevision} onSelect={selectVersion} onCompare={(left: number, right: number) => { const a = previews.find(item => item.version === left); const b = previews.find(item => item.version === right); if (a && b) setComparison(compare(a, b)); }} onRestore={(revision: number) => void restore(revision)} />
+    {ideas.length > 0 && <details className="knowledge-ideas" data-control="knowledge-ideas"><summary>{text.ideas} · {ideas.length}</summary><p>{text.ideasHint}</p>{ideas.length ? <div>{ideas.map(idea => <IdeaCard key={`${idea.id}:${idea.revision}`} idea={idea} selected={selectedIdeas.has(`${idea.id}:${idea.revision}`)} disabled={Boolean(proposal)} onToggle={() => setSelectedIdeas(current => { const next = new Set(current); const key = `${idea.id}:${idea.revision}`; if (next.has(key)) next.delete(key); else next.add(key); return next; })} onSource={item => setSource(toBinding(item))} text={text} />)}</div> : <p>{text.noIdeas}</p>}</details>}
+
+
     <p className="knowledge-compare-hint">{text.compareHint}</p>
     <div className="knowledge-regenerate"><button type="button" data-control="knowledge-version-regenerate" disabled={!completed || generationQueued || Boolean(busy) || dirty} onClick={() => void generate()}>{busy === "generate" || generationQueued ? text.generating : text.regenerate}</button></div>
     </details>
+    </aside>
     <ReferenceViewer open={Boolean(source)} binding={source} references={viewerReferences} read={async (binding: ExactReferenceBinding) => artifactDocuments.get(viewerKey(binding)) ?? linkDocuments.get(viewerKey(binding)) ?? ({ ...binding, markdown: quoteMarkdown(binding) } as ReferenceDocument)} onClose={() => setSource(undefined)} onNavigate={setSource} />
   </section>;
 }

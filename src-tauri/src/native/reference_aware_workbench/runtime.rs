@@ -383,6 +383,31 @@ pub(super) fn preserve_omitted_task_fields(patch: &mut Value, omitted: &Value) {
     // Detail combines these fields; absence cannot safely erase the prior prose.
     if ["description","background","constraints","initialApproach"].iter().any(|k|absent(k)) {patch.remove("detail");}
 }
+// Applying a preview may add completion checks; generating it never mutates Tasks.
+// Content-based IDs survive reordering/replay. Existing checked or manually edited
+// items are never rewritten or deleted; a changed criterion is a new unchecked item.
+pub(super) fn apply_completion_checklist(
+    tx: &Transaction<'_>,
+    task: &str,
+    fields: &Value,
+) -> Result<(), String> {
+    for body in fields["completionCriteria"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        let item = format!("preview-criterion:{}", hash(&json!([task, body])));
+        tx.execute(
+            "INSERT OR IGNORE INTO task_checklist_items(id,task_id,body,checked,created_at,updated_at) SELECT ?,?,?,0,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP WHERE NOT EXISTS(SELECT 1 FROM task_checklist_items WHERE task_id=? AND trim(body)=?)",
+            params![item, task, body, task, body],
+        ).map_err(|e|e.to_string())?;
+    }
+    Ok(())
+}
+
 pub(super) fn task_fields(f: &Value) -> Value {
     let lines = |k: &str| {
         f[k].as_array()
@@ -846,6 +871,7 @@ pub(crate) fn execute(
                 task.as_deref(),
                 &chrono::Utc::now().to_rfc3339(),
             )?;
+            apply_completion_checklist(&tx, string(&result, "id")?, &stored["fields"])?;
             tx.execute("UPDATE refinement_sessions SET state='completed',updated_at=CURRENT_TIMESTAMP WHERE id=?", [session]).map_err(|e|e.to_string())?;
             // Capture sessions retain their source identity; the existing decision record
             // resolves their promoted Task on subsequent refinement turns.
