@@ -9,7 +9,7 @@ publication state remains unconfirmed; these changes do not claim to fix it.
 Run from the repository root:
 
 ```sh
-python3 scripts/measure_generation_prompts.py fc02d9f
+node scripts/measure_generation_prompts.mjs fc02d9f
 ```
 
 | Instructions | Before UTF-8 bytes | After UTF-8 bytes | Change |

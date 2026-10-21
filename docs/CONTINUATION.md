@@ -10,6 +10,10 @@ The deferred dynamic output contract and uncommitted publication-review
 worktree files are excluded. Do not infer that the reported Workbench
 publication-disabled state has been reproduced or resolved.
 
+The measurement helper uses Node.js to preserve the native-only source rule.
+Its initial Python version was rejected by post-push CI and is replaced without
+changing the measurement.
+
 The integrated React/runtime suite passes 438 tests; typecheck, lint and
 frontend build pass. Full native execution passes 300 tests with three
 ignored and two time-budget failures in unchanged retrieval-index and
