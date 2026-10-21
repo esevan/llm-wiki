@@ -1,6 +1,20 @@
 # Reviewed Knowledge archive
 
-Knowledge publication starts with an organization proposal. It shows the exact
+Publication review is available from both Workbench and the completed Task list in Compass. Preparing a review only proposes exact local vault files; publishing requires a separate explicit approval. No external storage connection is required.
+
+Knowledge review focuses on the article, final outcomes, and future use. Sources,
+ideas, version history, and draft tools are available in collapsed sections. The
+Task review tab no longer runs a separate conflict review. Historical records are
+preserved. Verification notes are private records of the exact version and do not
+automatically revise the article or verify its claims.
+
+Choose **Publish Knowledge**, check the prepared destinations, then explicitly
+confirm publication. Cancel closes the confirmation without writing files. File
+conflicts still block unsafe writes; this protection is independent of the removed
+conflict review UI. Legacy drafts without evidence snapshots remain readable and
+require a new draft before publication.
+
+The expandable publication details show the exact
 Markdown/YAML files, canonical paths, tags/aliases, separately selected idea files,
 source links, and managed MOC changes. Generating the proposal does not write files.
 Publish applies the exact reviewed bytes; a conflict or changed source requires a

@@ -132,3 +132,24 @@
 .knowledge-review-notes li p { white-space: pre-wrap; overflow-wrap: anywhere; }
 .knowledge-review-notes time { color: var(--color-text-secondary); font-size: var(--font-size-sm); }
 .knowledge-review-notes textarea { min-height: 6rem; }
+
+/* Keep the article and opinion primary; context stays available on demand. */
+.knowledge-secondary { min-width: 0; border-top: var(--border-default); }
+.knowledge-secondary > summary { cursor: pointer; padding: var(--space-4) 0; font-weight: 800; }
+.knowledge-secondary[open] { display: grid; gap: var(--space-4); }
+.knowledge-review-notes .knowledge-draft-editor { display: grid; gap: var(--space-2); padding: 0; }
+.knowledge-review-notes > button { justify-self: start; }
+.knowledge-publication-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--space-3); }
+.knowledge-publication-hint { margin: var(--space-3) 0 0; color: var(--color-text-secondary); }
+.knowledge-review :is(button, summary, textarea, select, input):focus-visible { outline: var(--focus-ring); outline-offset: 3px; }
+.knowledge-review :is(button, summary) { min-height: var(--control-height); }
+.knowledge-review button:active:not(:disabled) { transform: translateY(1px); }
+.knowledge-review button:disabled { cursor: default; opacity: .6; }
+.knowledge-review-header > div { min-width: 0; overflow-wrap: anywhere; }
+
+.knowledge-note-actions { display: flex; justify-content: flex-end; gap: var(--space-2); }
+.knowledge-review-notes textarea { min-height: 7rem; height: 7rem; border: 1px solid var(--color-border-strong); border-radius: var(--radius-control); padding: var(--space-3); font: inherit; }
+.knowledge-review [data-control="knowledge-archive-prepare"],
+.knowledge-review [data-control="knowledge-archive-publish"] { background: var(--color-accent-strong); color: var(--color-bg-surface); border-color: var(--color-accent-strong); }
+.knowledge-review [data-control="knowledge-archive-prepare"]:hover:not(:disabled),
+.knowledge-review [data-control="knowledge-archive-publish"]:hover:not(:disabled) { filter: brightness(.92); }

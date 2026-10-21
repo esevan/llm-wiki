@@ -1,5 +1,48 @@
 # LLM Wiki — Continuation handoff
 
+## Knowledge review integration verification (2026-10-21)
+
+Integrate only the approved Compass publication callbacks, Workbench wiring
+fixtures, compact generation instructions, and simplified review UI on
+`4dfb363`. Preserve the existing strict data contracts, exact evidence,
+version-bound private notes, explicit publication approval, and file guards.
+The deferred dynamic output contract and uncommitted publication-review
+worktree files are excluded. Do not infer that the reported Workbench
+publication-disabled state has been reproduced or resolved.
+
+The integrated React/runtime suite passes 438 tests; typecheck, lint and
+frontend build pass. Full native execution passes 300 tests with three
+ignored and two time-budget failures in unchanged retrieval-index and
+execution-routing modules; both failed tests pass isolated reruns. The
+seven reference-search integration tests pass. Existing main CI already
+fails Rust formatting and synthetic React performance budgets. Keep those
+unrelated repairs outside this integration. Packaged E2E is not run locally:
+mounted adapter flows and native temporary-vault tests cover this change.
+
+## Workbench publication availability investigation (2026-10-20)
+
+The user clarified that publication was disabled after completing a Task
+in Workbench. The separate Compass callback fix in `b3ddfb4` fixes a real
+Compass defect but does not establish the cause of that Workbench report.
+Do not describe the reported Workbench issue as resolved by that commit.
+
+At base `4dfb363`, App supplies all six archive callbacks to Workbench,
+which forwards them to its local TaskDetail and KnowledgeReviewPanel.
+Completion reloads that same detail; recent-completed opens it locally.
+Neither action routes through Compass. There is one KnowledgeReviewPanel
+render in TaskDetail and it forwards the callbacks.
+
+The new App wiring fixtures exercise completion then review, and reopening
+from Workbench recent-completed, through the real taskClient and Tauri
+adapter. Current valid Knowledge can prepare, inspect exact files and
+explicitly publish in both fixtures. Settings/Search and jsdom modal focus
+repair are excluded; their behavior is outside these wiring tests.
+The user's disabled state and original integration placeholder have not
+been reproduced in the Workbench route. Actual runtime callback presence,
+draft freshness/quality, dirty state and pending operation remain unknown.
+Do not infer an old installed build or missing setup without evidence.
+No real Knowledge or installed application was changed for this inquiry.
+
 ## Refinement modal layer follow-up (2026-10-19)
 
 Local branch `codex/refinement-modal-layer` is based on published main

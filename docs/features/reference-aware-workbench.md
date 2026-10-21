@@ -2,6 +2,12 @@
 
 [한국어](reference-aware-workbench.ko.md) | **English**
 
+New preview generation keeps the description focused on the work and the goal on
+its intended outcome. Background, scope and approach add distinct information rather
+than repeating the description; optional areas can be empty when they add nothing.
+Material constraints, completion criteria, assumptions and exact source bindings are
+retained. Existing stored versions and explicit Apply checks are unchanged.
+
 Preview planning and final writing each use the shared **AI request timeout (seconds)** in AI setup (default 180; range 1–3600). The deadline includes the complete response body. These stages run sequentially with local retrieval between them, so the whole preview can exceed one request deadline. Queue waiting is outside that deadline. Saving a timeout applies to new requests without restarting. A timeout leaves the job failed and available for an explicit retry; preview generation does not automatically retry.
 
 Refinement now prepares its work proposal through a retrieval plan, relevant local

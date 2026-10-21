@@ -643,7 +643,7 @@ mod tests {
             &json!({"context":{"sourceManifest":[{"content":late}]}}),
         )
         .unwrap();
-        assert_eq!(prompt.version, 3);
+        assert_eq!(prompt.version, 4);
         for field in [
             "finalOutcomes",
             "representativeQuestions",
@@ -658,6 +658,53 @@ mod tests {
             validate_prompt_output(PromptId::KnowledgeDraft, &json!({"markdown":"legacy"}))
                 .is_err()
         );
+    }
+
+    #[test]
+    fn compact_generation_keeps_strict_shapes_and_unabridged_evidence() {
+        let context =
+            json!({"sourceManifest":[{"content":"Complete evidence with reuse conditions"}]});
+        for id in [PromptId::WorkPreviewFinalizer, PromptId::KnowledgeDraft] {
+            let prompt = build_prompt(id, &json!({"context":context})).unwrap();
+            assert_eq!(prompt.version, 4);
+            assert!(prompt
+                .content
+                .contains("Complete evidence with reuse conditions"));
+            let request =
+                structured_output::request_body(id, &context, "fixture", json!(prompt.content))
+                    .unwrap();
+            assert_eq!(request["response_format"]["json_schema"]["strict"], true);
+            let schema = &request["response_format"]["json_schema"]["schema"];
+            if id == PromptId::KnowledgeDraft {
+                let article = &schema["$defs"]["Article"]["properties"];
+                for field in [
+                    "applicability",
+                    "claimBindings",
+                    "finalOutcomes",
+                    "assumptionBindings",
+                ] {
+                    assert!(article.get(field).is_some(), "missing {field}");
+                }
+                assert!(prompt.content.contains("reconsiderationConditions"));
+                assert!(prompt.content.contains("verbatim in the body once"));
+                assert!(prompt.content.contains("counterevidence"));
+            } else {
+                for field in [
+                    "background",
+                    "constraints",
+                    "completionCriteria",
+                    "initialApproach",
+                    "assumptions",
+                ] {
+                    assert!(schema["properties"]["preview"]["properties"]
+                        .get(field)
+                        .is_some());
+                }
+                assert!(prompt
+                    .content
+                    .contains("not permission to clear existing Task fields"));
+            }
+        }
     }
 
     #[test]

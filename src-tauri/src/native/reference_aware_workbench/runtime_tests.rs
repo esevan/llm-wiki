@@ -232,8 +232,8 @@ async fn command_job_provider_retrieves_before_preview_and_explicit_apply_is_ato
     }
 
     let c = database::open(&f.db).unwrap();
-    assert_eq!(c.query_row("SELECT prompt_version FROM ai_jobs_v2 WHERE task_kind='refinement_preview' LIMIT 1", [], |r| r.get::<_,i64>(0)).unwrap(),3);
-    assert_eq!(c.query_row("SELECT prompt_version FROM work_preview_versions WHERE derivation_kind='generated' LIMIT 1", [], |r| r.get::<_,i64>(0)).unwrap(),3);
+    assert_eq!(c.query_row("SELECT prompt_version FROM ai_jobs_v2 WHERE task_kind='refinement_preview' LIMIT 1", [], |r| r.get::<_,i64>(0)).unwrap(),4);
+    assert_eq!(c.query_row("SELECT prompt_version FROM work_preview_versions WHERE derivation_kind='generated' LIMIT 1", [], |r| r.get::<_,i64>(0)).unwrap(),4);
     assert_eq!(
         c.query_row(
             "SELECT current_revision FROM tasks WHERE id=?",

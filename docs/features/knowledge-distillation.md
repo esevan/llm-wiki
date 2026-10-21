@@ -2,6 +2,21 @@
 
 **English** | [한국어](knowledge-distillation.ko.md)
 
+New articles use a compact result-first structure followed by when the result helps,
+its conditions and limits. Extra explanation remains when needed for safe reuse;
+material evidence, counterevidence, unresolved issues and warnings are never removed
+for brevity. Empty headings, a second executive summary and repeated conclusions are
+not requested. Structured applicability and exact source bindings remain required.
+Supported applicability summary, helps-with items, conditions and exclusions still
+appear verbatim in the article. Representative questions remain in metadata for
+reference retrieval without requiring another prose section.
+
+Publication keeps all five applicability fields in `llm_wiki.applicability` YAML.
+Indexing turns these into applicability search units, including representative
+questions. Shorter prose therefore does not remove the structured reuse search path.
+Existing documents, stored versions, quality validation and publication approval are
+unchanged. Prompt versions advance; no extra generation or retry call is added.
+
 AI generation and regeneration of a completion Knowledge draft use the shared **AI request timeout (seconds)** in AI setup (default 180; range 1–3600), including receipt of the complete response body. Queue waiting and local snapshot preparation are outside this deadline. Saving applies to new requests without restarting. A timeout preserves existing drafts and allows an explicit retry. The completion-report queue route uses the same setting.
 
 Completed Tasks can generate a private Knowledge draft from the current Task revision, canonical completion, current Distillation journey, full Run reports and completed evidence, and references that were actually used. For Tasks with a Run, generation waits for current Distillation data. All generation saves only when the same source manifest is still current.

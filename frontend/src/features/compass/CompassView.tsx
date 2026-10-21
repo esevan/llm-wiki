@@ -59,7 +59,14 @@ export function CompassView({ active }: { active: boolean }) {
             {task.title}<small>{task.category}{task.completedAt && ` · ${new Date(task.completedAt).toLocaleDateString(document.documentElement.lang || 'en')}`}</small>
           </button>
         </li>)}</ol>
-        {selected && <TaskDetail key={selected} ref={detail} taskId={selected} onClose={() => leaveDetail(() => setSelected(undefined))} onOpenTask={id => leaveDetail(() => setSelected(id))} onChanged={() => { window.dispatchEvent(new Event('llm-wiki:task-workbench-refresh')); }} />}
+        {selected && <TaskDetail key={selected} ref={detail} taskId={selected}
+          onPrepareKnowledgeArchive={taskClient.prepareKnowledgeArchive}
+          onOrganizeKnowledgeArchive={taskClient.organizeKnowledgeArchive}
+          onPublishKnowledgeArchive={taskClient.publishKnowledgeArchive}
+          onKnowledgeArchiveStatus={taskClient.knowledgeArchiveStatus}
+          onRetryKnowledgeArchive={taskClient.retryKnowledgeArchive}
+          onRecoverKnowledgeArchive={taskClient.recoverKnowledgeArchive}
+          onClose={() => leaveDetail(() => setSelected(undefined))} onOpenTask={id => leaveDetail(() => setSelected(id))} onChanged={() => { window.dispatchEvent(new Event('llm-wiki:task-workbench-refresh')); }} />}
       </section>}
     </section>
   );

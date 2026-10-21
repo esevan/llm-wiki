@@ -8,7 +8,6 @@ import { taskClient } from "../../services/taskClient";
 import { formatSystemTime } from "../../services/systemTime";
 import type { LineageSnapshot, TaskAggregate, TaskApplicationEvent, TaskCard } from "../../types/taskWorkbench";
 import { ContentRevisionTransition } from "../../components/ContentRevisionTransition";
-import { ConflictReviewPanel } from "./ConflictReviewPanel";
 import { KnowledgeReviewPanel, type KnowledgeArchiveOperation, type KnowledgeArchiveOrganizeRequest, type KnowledgeArchivePrepareRequest, type KnowledgeArchivePublishRequest, type KnowledgeArchiveRecoverRequest, type KnowledgeReviewPanelHandle } from "./KnowledgeReviewPanel";
 import { RefinementPanel } from "./RefinementPanel";
 import { TaskJourneyGraph } from "./TaskJourneyGraph";
@@ -1062,7 +1061,6 @@ export function TaskDetail({
       </section>
       </div>
       <div className="task-tab-panel" data-task-tab="review" hidden={tab !== "review"}>
-      <ConflictReviewPanel taskId={task.id} taskRevision={revision} />
       <section className="task-panel">
         <h3>{text.completion}</h3>
         {task.completion ? (

@@ -157,6 +157,67 @@ fn applicability_metadata_is_additive_and_internal_withdrawals_are_excluded() {
 }
 
 #[test]
+fn compact_knowledge_reuse_fields_are_reference_searchable_without_body_repetition() {
+    let root = tempdir().unwrap();
+    let vault = root.path().join("vault");
+    let db = root.path().join("db.sqlite");
+    std::fs::create_dir_all(&vault).unwrap();
+    // Distinct terms only in structured applicability prove this is not a body-text match.
+    std::fs::write(
+        vault.join("compact.md"),
+        r#"---
+llm_wiki:
+  schema: 1
+  document_id: compact-reuse
+  applicability:
+    summary: Diagnose aperture problems
+    representative_questions: [When should I calibrate a telescope?]
+    helps_with: [Choosing observatory settings]
+    conditions: [Requires moonlight measurements]
+    exclusions: [Excludes binocular alignment]
+---
+# Result
+Retain the supported result and its evidence.
+"#,
+    )
+    .unwrap();
+    // Existing documents without metadata remain compatible.
+    std::fs::write(
+        vault.join("legacy.md"),
+        "# Legacy\n\nRetained spectrometer instructions.",
+    )
+    .unwrap();
+    let app = NativeApplication::isolated(&vault, &db).unwrap();
+    let indexed = app.execute_domain(
+        "vault",
+        NativeOperation {
+            name: "vault.index".into(),
+            input: json!({"semantic":false}),
+        },
+    );
+    assert_eq!(indexed.status, 200, "{}", indexed.body);
+    for term in [
+        "aperture",
+        "telescope",
+        "observatory",
+        "moonlight",
+        "binocular",
+    ] {
+        let result = app.execute_work_tracking(NativeOperation {
+            name: "work_tracking.vault.lexical".into(),
+            input: json!({"query":term,"limit":5}),
+        });
+        assert_eq!(result.status, 200, "{}", result.body);
+        assert!(result.body["hits"].as_array().unwrap().iter().any(|hit| hit["documentId"] == "compact-reuse" && hit["aspect"] == "applicability"), "{term}: {}", result.body);
+    }
+    let legacy = app.execute_work_tracking(NativeOperation {
+        name: "work_tracking.vault.lexical".into(),
+        input: json!({"query":"spectrometer","limit":5}),
+    });
+    assert!(!legacy.body["hits"].as_array().unwrap().is_empty());
+}
+
+#[test]
 fn native_search_bounds_passages_after_ranking_and_reports_more() {
     let root = tempdir().unwrap();
     let vault = root.path().join("vault");

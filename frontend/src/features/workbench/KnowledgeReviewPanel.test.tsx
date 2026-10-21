@@ -53,6 +53,12 @@ const projection = (versions = [version(1), version(2)]) => ({
 });
 
 describe("Knowledge review", () => {
+  it("offers an actionable fallback when publication is unavailable", async () => {
+    window.llmWikiApplication = { request: vi.fn().mockResolvedValue(response(projection())) };
+    render(<KnowledgeReviewPanel taskId="task-1" completed onGenerate={vi.fn()} />);
+    expect(await screen.findByText("Publication review is unavailable in this view. Open the Task from Workbench and try again.")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Publish Knowledge" })).toBeDisabled();
+  });
   it("explains why a legacy draft without an evidence snapshot is read-only", async () => {
     const legacy = {...version(2), generationSnapshotHash: ""};
     window.llmWikiApplication = {request:vi.fn(async () => response(projection([legacy as ReturnType<typeof version>])))};
@@ -79,12 +85,12 @@ describe("Knowledge review", () => {
     expect(await screen.findByText("Unverified draft")).toBeVisible();
     expect(screen.getByText("Classification unconfirmed", { exact: false })).toBeVisible();
     expect(screen.getByRole("heading", { name: "Offline use", level: 1 })).toBeVisible();
-    expect(screen.getByRole("button", { name: "Prepare publication review" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Publish Knowledge" })).toBeDisabled();
     fireEvent.change(screen.getByRole("textbox", { name: "Your verification note" }), { target: { value: "Check the original manual record." } });
     fireEvent.click(screen.getByRole("button", { name: "Save note" }));
     expect(await screen.findByText("Check the original manual record.")).toBeVisible();
     expect(screen.getByText("Unverified draft")).toBeVisible();
-    expect(screen.getByRole("button", { name: "Prepare publication review" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Publish Knowledge" })).toBeDisabled();
     expect(generate).not.toHaveBeenCalled(); expect(prepare).not.toHaveBeenCalled();
     expect(request.mock.calls.filter(([input]) => input.path.endsWith("/review-notes"))).toHaveLength(1);
   });
@@ -178,6 +184,7 @@ describe("Knowledge review", () => {
     expect(screen.getByText("Keep final Knowledge local.")).toBeVisible();
     expect(screen.getByText("It does not prove remote availability")).toBeVisible();
     expect(within(document.querySelector(".knowledge-article")!).queryByText("Try a reminder automation later.")).not.toBeInTheDocument();
+    if (!document.querySelector<HTMLDetailsElement>('[data-control="knowledge-history"]')!.open) fireEvent.click(screen.getByText("Versions and draft tools"));
     fireEvent.click(screen.getByText(/Ideas to revisit/));
     expect(screen.getByText("Try a reminder automation later.")).toBeVisible();
     expect(request).toHaveBeenCalledTimes(1);
@@ -232,7 +239,7 @@ describe("Knowledge review", () => {
     fireEvent.click(screen.getByRole("button",{name:"Save as new version"}));
     expect(await screen.findByRole("heading",{name:"Acknowledged new body"})).toBeVisible();
     expect(screen.queryByRole("button",{name:"Edit current draft"})).not.toBeInTheDocument();
-    expect(screen.queryByRole("button",{name:"Prepare publication review"})).not.toBeInTheDocument();
+    expect(screen.queryByRole("button",{name:"Publish Knowledge"})).not.toBeInTheDocument();
     expect(writes).toBe(1);
     fireEvent.click(screen.getByRole("button",{name:"Try again"}));
     await waitFor(()=>expect(screen.getByRole("alert")).toHaveTextContent("projection read unavailable"));
@@ -312,11 +319,13 @@ describe("Knowledge review", () => {
     window.llmWikiApplication = { request };
     render(<KnowledgeReviewPanel taskId="task-1" completed onGenerate={vi.fn()} />);
     await screen.findByRole("heading", { name: "Offline use", level: 3 });
+    fireEvent.click(screen.getByText("Versions and draft tools"));
     const selector = document.querySelector<HTMLSelectElement>('[data-control="draft-version-select"]')!;
     fireEvent.change(selector, { target: { value: "1" } });
     expect(document.querySelector("[data-transitioning]")).not.toBeInTheDocument();
     fireEvent.click(await screen.findByRole("button", { name: "Restore as new" }));
     await waitFor(() => expect(selector).toHaveValue("3"));
+    if (!document.querySelector<HTMLDetailsElement>('[data-control="knowledge-history"]')!.open) fireEvent.click(screen.getByText("Versions and draft tools"));
     fireEvent.click(screen.getByRole("button", { name: "Compare versions" }));
     expect(screen.getByRole("region", { name: "Version comparison" })).toBeVisible();
     expect(request.mock.calls.filter(([input]) => input.path.endsWith("/knowledge/drafts")).length).toBe(0);
@@ -335,13 +344,13 @@ describe("Knowledge review", () => {
     const status = vi.fn().mockResolvedValue({ operationId: "archive-operation", state: "complete" });
     render(<KnowledgeReviewPanel taskId="task-1" completed onGenerate={vi.fn()} onPrepareArchive={prepare} onPublishArchive={publish} onArchiveStatus={status} />);
     await screen.findByRole("heading", { name: "Offline use", level: 3 });
+    if (!document.querySelector<HTMLDetailsElement>('[data-control="knowledge-history"]')!.open) fireEvent.click(screen.getByText("Versions and draft tools"));
     fireEvent.click(screen.getByText(/Ideas to revisit/));
     fireEvent.click(screen.getByRole("checkbox", { name: "Include in publication proposal" }));
-    fireEvent.click(screen.getByRole("button", { name: "Prepare publication review" }));
+    fireEvent.click(screen.getByRole("button", { name: "Publish Knowledge" }));
     await waitFor(() => expect(screen.getByRole("button", { name: "knowledge/offline.md" })).toBeVisible());
     expect(prepare).toHaveBeenCalledWith(expect.objectContaining({ knowledgeRevision: 2, expectedKnowledgeContentHash: "content-2", expectedGenerationSnapshotHash: "snapshot-current", selectedIdeaRevisionIds: [{ id: "idea-reminder", revision: 1 }] }));
     expect(screen.queryByText(exactArtifact)).not.toBeInTheDocument();
-    expect(screen.getByText(`${new TextEncoder().encode(exactArtifact).byteLength} bytes`, { exact: false })).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "knowledge/offline.md" }));
     expect(await screen.findByRole("dialog", { name: "knowledge/offline.md" })).toHaveTextContent("The verified result is available offline.");
     fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Close reference" }));
@@ -354,6 +363,45 @@ describe("Knowledge review", () => {
     expect(await screen.findByText("Publication state: index_pending")).toBeVisible();
     expect(await screen.findByText("Publication state: complete", {}, { timeout: 2000 })).toBeVisible();
     expect(status).toHaveBeenCalledWith("archive-operation");
+  });
+
+  it("renders dynamic Markdown headings without empty optional outcome or source sections", async () => {
+    const item = version(2, "## Deployment notes\n\nKeep the rollback steps nearby.\n\n## Lessons learned\n\nUse the recorded local evidence.");
+    item.result.article.finalOutcomes = [];
+    item.result.article.claimBindings = [];
+    item.result.article.applicability.sourceRefs = [];
+    item.result.qualityFindings = [];
+    window.llmWikiApplication = { request: vi.fn().mockResolvedValue(response({ ...projection([item]), ideas: [] })) };
+    render(<KnowledgeReviewPanel taskId="task-1" completed onGenerate={vi.fn()} />);
+    expect(await screen.findByRole("heading", { name: "Deployment notes" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Lessons learned" })).toBeVisible();
+    expect(screen.queryByRole("heading", { name: "Final outcomes" })).not.toBeInTheDocument();
+    expect(document.querySelector('[data-control="knowledge-provenance"]')).not.toBeInTheDocument();
+    expect(screen.getByText("Use this when work must remain local.")).toBeVisible();
+  });
+
+  it("keeps context visible, cancels preparation without writing, and retries failed publication", async () => {
+    window.llmWikiApplication = { request: vi.fn().mockResolvedValue(response(projection())) };
+    const prepared = { proposalId: "cancel-proposal", proposalVersion: 1, proposalHash: "exact-hash", state: "review_needed", outcome: "ready", rationale: "Preserve exact files", artifacts: [], mocPatches: [], referenceLinks: [] };
+    const prepare = vi.fn().mockResolvedValue(prepared);
+    const publish = vi.fn().mockRejectedValueOnce(new Error("Disk unavailable")).mockResolvedValue({ state: "index_pending", operationId: "retry-operation" });
+    render(<KnowledgeReviewPanel taskId="task-1" completed onGenerate={vi.fn()} onPrepareArchive={prepare} onPublishArchive={publish} />);
+    expect(await screen.findByText("Keep final Knowledge local.")).toBeVisible();
+    expect(screen.getByText("Use this when work must remain local.")).toBeVisible();
+    expect(document.querySelector('[data-control="knowledge-history"]')).not.toHaveAttribute("open");
+    expect(document.querySelector('[data-control="knowledge-provenance"]')).not.toHaveAttribute("open");
+    fireEvent.click(screen.getByRole("button", { name: "Publish Knowledge" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Cancel publication" }));
+    expect(screen.queryByRole("button", { name: "Publish these exact files" })).not.toBeInTheDocument();
+    expect(publish).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Publish Knowledge" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Publish these exact files" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Disk unavailable");
+    expect(screen.getByRole("button", { name: "Publish these exact files" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "Publish these exact files" }));
+    expect(await screen.findByText("Publication state: index_pending")).toBeVisible();
+    expect(publish).toHaveBeenCalledTimes(2);
+    expect(publish.mock.calls[1][0]).toMatchObject({ proposalId: "cancel-proposal", proposalHash: "exact-hash" });
   });
 
   it("regenerates an existing stale draft, preserves dirty edits, and allows retry after failure", async () => {
@@ -420,7 +468,7 @@ describe("Knowledge review", () => {
     const publish = vi.fn();
     render(<KnowledgeReviewPanel taskId="task-1" completed onGenerate={vi.fn()} onPrepareArchive={prepare} onPublishArchive={publish} />);
     await screen.findByRole("heading", { name: "Offline use", level: 3 });
-    fireEvent.click(screen.getByRole("button", { name: "Prepare publication review" }));
+    fireEvent.click(screen.getByRole("button", { name: "Publish Knowledge" }));
     expect(await screen.findByText("This proposal has unresolved conflicts and cannot be published.")).toBeVisible();
     expect(screen.getByRole("button", { name: "Publish these exact files" })).toBeDisabled();
     expect(publish).not.toHaveBeenCalled();
@@ -449,6 +497,7 @@ describe("Knowledge review", () => {
     render(<KnowledgeReviewPanel taskId="task-1" completed onGenerate={vi.fn()} onRecoverArchive={recover} onPublishArchive={vi.fn()} />);
 
     expect(await screen.findByText("External edit retained")).toBeVisible();
+    fireEvent.click(screen.getByText("MOC and reference changes"));
     expect(screen.getByText("Resume newest exact recovery")).toBeVisible();
     expect(screen.queryByText("Older applied proposal")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Finish exact remaining steps" }));
@@ -494,6 +543,7 @@ describe("Knowledge review", () => {
       render(<KnowledgeReviewPanel taskId="task-1" completed onGenerate={vi.fn()} />);
       expect(await screen.findByText("출처 변경됨")).toBeVisible();
       expect(screen.getByText("한계와 제외 범위")).toBeVisible();
+      fireEvent.click(screen.getByText("버전 및 초안 도구"));
       fireEvent.click(screen.getByText(/다시 살펴볼 아이디어/));
       expect(screen.getByText("미검증")).toBeVisible();
       expect(screen.getByText("보류")).toBeVisible();

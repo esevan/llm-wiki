@@ -774,6 +774,8 @@ it("mounts the stored Knowledge review without generating while inspecting it", 
 
   expect(await screen.findByRole("heading", { name: "Mounted Knowledge", level: 3 })).toBeVisible();
   expect(screen.getByText("Stored article.")).toBeVisible();
+  expect(document.querySelector('[data-control="conflict-review-run"]')).not.toBeInTheDocument();
+  expect(request.mock.calls.some(([input]) => input.path.includes("conflict"))).toBe(false);
   expect(request).toHaveBeenCalledWith(expect.objectContaining({ path: "/tasks/task-1/knowledge", method: "GET" }));
   expect(request.mock.calls.some(([input]) => input.path.endsWith("/knowledge/drafts"))).toBe(false);
 });

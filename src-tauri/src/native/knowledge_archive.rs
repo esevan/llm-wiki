@@ -1539,6 +1539,28 @@ mod tests {
         assert!(units
             .iter()
             .any(|u| u.aspect == crate::domain::retrieval::SearchAspect::Applicability));
+        // The compact article body need not repeat representative questions:
+        // published applicability metadata still reaches actual reference search.
+        let app = crate::NativeApplication::isolated(&root, &db).unwrap();
+        let result = app.execute_work_tracking(crate::NativeOperation {
+            name: "work_tracking.vault.lexical".into(),
+            input: json!({"query":"required","limit":10}),
+        });
+        assert_eq!(result.status, 200, "{}", result.body);
+        assert!(
+            result.body["hits"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|hit| hit["documentId"] == proposal["target"]["documentId"]
+                    && hit["aspect"] == "applicability"
+                    && hit["snippet"]
+                        .as_str()
+                        .unwrap_or("")
+                        .contains("When is approval required?")),
+            "{}",
+            result.body
+        );
         assert!(units
             .iter()
             .all(|u| u.document_id == proposal["target"]["documentId"].as_str().unwrap()));
