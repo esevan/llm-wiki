@@ -5,6 +5,7 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { assertStableSignature, configuredIdentity, identityIsAvailable, signingIdentities } from "./macos_signing.mjs";
 import { configureOnnxEnvironment, stageRuntime, verifyBundledRuntime } from "./macos_runtime.mjs";
+import { verifyBundledIcon } from "./macos_icon.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const appPath = path.join(root, "src-tauri", "target", "release", "bundle", "macos", "LLM Wiki.app");
@@ -64,6 +65,8 @@ try {
     } else if (/^--(?:bundles|features)=/.test(arg) || ["--ci", "--skip-stapling", "--verbose", "-v"].includes(arg)) bundleArgs.push(arg);
   }
   await run(process.execPath, [tauriCli, "bundle", "--config", JSON.stringify({ bundle: { macOS } }), ...bundleArgs]);
+  const icon = await verifyBundledIcon(appPath);
+  console.log(`Verified bundled macOS icon: ${icon}`);
   const count = await verifyBundledRuntime(appPath);
   console.log(`Verified ${count} bundled runtime libraries without external dependencies.`);
 } finally {

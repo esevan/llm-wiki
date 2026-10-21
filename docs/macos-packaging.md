@@ -127,3 +127,11 @@ codesign -d -r- "/Applications/LLM Wiki.app"
 The last command must show the same designated requirement before and after a replacement. Keep
 the Developer ID certificate or local self-signed identity for the life of the installed product;
 losing or replacing it starts a new identity migration.
+
+## Application icon verification
+
+Tauri explicitly bundles the existing PNG, ICNS and ICO assets. The macOS build
+checks that `CFBundleIconFile` names a real `Contents/Resources/*.icns`, validates
+the ICNS container and asks macOS to decode it. Missing or corrupt icons fail the
+package command before installation. `npm run test:macos-signing` includes icon
+regression fixtures. Building does not replace or launch `/Applications/LLM Wiki.app`.

@@ -121,3 +121,11 @@ codesign -d -r- "/Applications/LLM Wiki.app"
 마지막 명령은 교체 전후에 같은 designated requirement를 표시해야 합니다. Developer ID certificate 또는
 로컬 self-signed identity는 설치된 제품의 수명 동안 보관하세요. 잃어버리거나 교체하면 새 identity
 migration이 시작됩니다.
+
+## 앱 아이콘 검증
+
+Tauri 설정은 기존 PNG·ICNS·ICO 자산을 배포 번들에 명시적으로 포함합니다. macOS 빌드는
+`CFBundleIconFile`이 `Contents/Resources`의 실제 `.icns` 파일을 가리키는지 확인하고,
+ICNS 구조와 macOS 이미지 디코딩을 검사합니다. 아이콘이 없거나 손상되면 설치 전에
+패키징 명령이 실패합니다. `npm run test:macos-signing`에 회귀 검사가 포함됩니다.
+빌드만으로 `/Applications/LLM Wiki.app`을 교체하거나 실행하지 않습니다.
