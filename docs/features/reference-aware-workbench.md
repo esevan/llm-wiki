@@ -2,6 +2,10 @@
 
 [한국어](reference-aware-workbench.ko.md) | **English**
 
+![Task Refine with the work preview and conversation, without duplicated definitions](images/integrated-preview.en.jpg)
+
+*Full App with synthetic data in a nonpersistent WKWebView; browser fixture evidence.*
+
 New preview generation keeps the description focused on the work and the goal on
 its intended outcome. Background, scope and approach add distinct information rather
 than repeating the description; optional areas can be empty when they add nothing.

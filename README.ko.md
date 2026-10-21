@@ -9,10 +9,11 @@ Task 상세와 다듬기는 하나의 Task 화면을 사용합니다. **다듬�
 LLM Wiki는 대화를 구조화된 일로 바꾸고, 언제든 이어갈 수 있도록 맥락을 보존하며, 완료된
 결과만 휴대 가능한 Knowledge로 만드는 AI 중심·로컬 우선 Workbench입니다.
 
-![가벼운 Capture·Task 입력과 저장된 작업을 보여 주는 최신 Workbench](docs/features/images/workbench-tasks.png)
+![가벼운 Capture·Task 입력과 저장된 작업을 보여 주는 최신 Workbench](docs/features/images/integrated-workbench.ko.jpg)
+
+> 화면 캡처: 2026-10-21 전체 App·공통 CSS·글꼴·실제 runtime을 비영구 WKWebView에서 합성 데이터로 렌더링했습니다. 설치 앱 캡처가 아닙니다. [캡처 조사](docs/testing/documentation-image-audit.md)를 참고하세요.
 
 Compass의 완료 목록 탭에서 전체 완료 작업을 확인합니다. Workbench는 진행 중인 Task 옆에 최근 완료 5개만 표시하고 빈 카테고리는 숨깁니다.
-
 
 정제는 기존 Task ID를 유지하고 **Refined - Revision N**을 표시합니다. Workbench 최상단에서 진행 중인 작업에 Focus할 수 있습니다. 명시적인 Subtask는 펼칠 수 있는 계층으로 연결되며, 자식 완료마다 부모 Knowledge를 갱신·발행하고 모든 자식이 끝나면 부모도 완료합니다.
 

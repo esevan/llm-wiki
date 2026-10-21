@@ -5,7 +5,9 @@
 > **Resume where you left off.** Language changes preserve the current surface, input, and workflow
 > lineage instead of making the user start over.
 
-![The Workbench uses the selected system language while preserving authored content](images/workbench-tasks.en.png)
+![The Workbench uses the selected system language while preserving authored content](images/integrated-workbench.en.jpg)
+
+> Screenshot: full App rendered in an isolated nonpersistent WKWebView on 2026-10-21 with synthetic data, shared CSS/fonts and production runtime. This is browser fixture evidence. [Capture audit](../testing/documentation-image-audit.md).
 
 LLM Wiki supports Korean and English throughout the application. The language control is available
 from every primary surface. A change updates interface text immediately, keeps the current view and
@@ -28,7 +30,6 @@ An explicit choice is stored in local application settings and restored for late
 Raw Capture text, manual entries, Work Log bodies, comments, checklist items, file names, code,
 identifiers, citations, and quoted source material remain as authored. The interface language does
 not change an item's identity or lineage.
-
 
 New Task Work Log prose is also translated in the background using the existing Content translation
 worker. It reviews translation necessity before translating and detects the source language from

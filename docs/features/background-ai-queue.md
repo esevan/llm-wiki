@@ -22,14 +22,15 @@ job completion commit together. Publishing remains a separate user action.
 LLM Wiki separates AI execution into two process-level paths so interaction stays responsive
 without losing recoverable work.
 
-![Background Queue shows durable work by readable purpose, target, status, and recovery action](images/queue-recovery.en.png)
+![Background Queue shows durable work by readable purpose, target, status, and recovery action](images/integrated-queue.en.jpg)
+
+> Screenshot: full App rendered in an isolated nonpersistent WKWebView on 2026-10-21 with synthetic data, shared CSS/fonts and production runtime. This is browser fixture evidence. [Capture audit](../testing/documentation-image-audit.md).
 
 - The **Fast Queue** has exactly one FIFO worker. Chat and other immediate interactions use it as
   a global request throttle. It has no database state, Queue UI entry, retry history, or
   notification.
 - The **Asynchronous Queue** stores durable AI, translation, and embedding Jobs in SQLite. Its
   worker count is configurable in AI Setup and workers claim jobs with leases and heartbeats.
-
 
 The bottom-right Queue names the target item and explains what each durable task is doing. Its cards
 show readable status, step progress, system-timezone time, safe failures, cancellation, retry, and only the result
@@ -78,7 +79,7 @@ semantic runtime is absent, embedding work completes with lexical fallback and z
 coverage. AI output remains a proposal or derived representation: workflow
 state, approval, completion, and Knowledge decisions remain under user control.
 
-![AI Settings keeps endpoint and model routing visible while the API key value remains masked](images/ai-settings.en.png)
+![AI setup with synthetic endpoint and model routing; the API key field is empty](images/integrated-settings.en.jpg)
 
 See [feature specification](../../specs/009-background-ai-queue/spec.md) and
 [worker contract](../../specs/009-background-ai-queue/contracts/worker-contract.md). The

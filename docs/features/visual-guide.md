@@ -2,130 +2,90 @@
 
 **English** | [한국어](visual-guide.ko.md)
 
-Verified on 2026-09-26 against a signed native application built from `db4ada7`, with documentation
-based on `51cc1e2`. This guide follows the current application interface and the decisions a user
-makes from Capture through published Knowledge. The current screenshots and their capture limits
-are recorded in the [capture manifest](../testing/evidence/current-interface.json).
-
-The primary navigation opens **Workbench**, **Search vault**, **Compass**, and **AI setup**.
-Workbench is where an idea becomes tracked work; the other views find evidence, record direction,
-and configure AI connections and model routing.
-
-Workbench uses the available main-window width, including ultrawide displays. The three workflow lanes expand together and arrange cards into additional columns when space permits. Task detail and refinement dialogs fill the window with outer gutters rather than stopping at a fixed desktop width. Task definition fields form responsive columns with readable text measures; narrow windows retain a single column and scrolling. Each field keeps its label and body together at the top, even when neighboring fields contain very different amounts of text.
-
+Captured on 2026-10-21 from integrated source `584ae3c`. These are the full App
+and production runtime rendered in an isolated nonpersistent WKWebView with shared
+CSS, bundled fonts and synthetic API responses. They are browser fixture evidence;
+no installed application, user database, real model or API key was used.
+See the [image audit and reproduction procedure](../testing/documentation-image-audit.md).
 
 ## 1. Capture an idea or register a Task
 
-Workbench starts with a compact entry that saves the same input as a **Capture** or registers it
-directly as a **Task**. Active Tasks and recently completed Tasks appear next. Below them, **Inbox**,
-**Refining**, and **Refined Tasks** organize the remaining work. **Focus active work** hides the entry
-and lower sections when current Tasks need the full view.
+The primary navigation opens **Workbench**, **Search vault**, **Compass** and
+**AI setup**. Workbench saves the input as a Capture or registers it as a Task.
+Active Tasks, recent completions and held work remain accessible from the board.
+**Focus active work** gives current work more space.
 
-![Native Workbench with the Capture and Task entry above active work](images/current-workbench.en.jpg)
+![Full App Workbench with synthetic active, completed and held Tasks](images/integrated-workbench.en.jpg)
 
-*The native Workbench keeps the Capture or Task entry above active and recently completed work. The
-lower Inbox, Refining, and Refined Tasks sections continue below the visible fold.*
+*The input sits above active work and recent completions. The held section is collapsed.*
 
-Saving a Capture preserves its text and images immediately. The card stays in Inbox while one
-background job prepares a readable title and body from that exact saved source. Its state shows
-whether organization is running, complete, or needs attention. Generated text does not replace the
-source, create a Task, or move the Capture. Refinement exposes the source separately, and a failed
-cleanup can be retried without losing it.
+See [Task-centered Workbench](conflict-gated-workflow.md) and
+[Automatic Capture organization](capture-auto-distillation.md).
 
-See [Automatic Capture organization](capture-auto-distillation.md) and
-[Task-centered Workbench](conflict-gated-workflow.md).
+## 2. Refine inside the Task workspace
 
-## 2. Refine with conversation and exact references
+**Refine** places the saved work preview beside conversation and its evidence rail.
+Task definition values remain editable in the preview; the duplicated definition
+block has been removed. Review the goal, completion criteria, scope, constraints,
+approach and assumptions before applying a preview to the Task.
 
-Choose **Refine** when the work needs more context. Chat remains usable while the first structured
-preview and optional reference investigation run in the background. The preview records proposed
-background, goal, scope, non-goals, constraints, completion criteria, approach, and assumptions.
-Missing evidence remains visible as an assumption.
+![Task Refine tab with the work preview and expanded conversation rail](images/integrated-preview.en.jpg)
 
-![Native Refinement workspace with a saved preview and conversation composer](images/current-refinement.en.jpg)
+*The 1440px viewport gives the conversation about 429px. Preview and Knowledge chat
+use the same rail width: about 583px at 1920px and 720px at 2560px.*
 
-*The Preview and Work status tabs share the Refinement workspace with Chat. This captured preview
-was saved after a manual edit; the text in the composer has not been sent, and the preview reports
-that no search is needed.*
+Type `@` to mention a saved document or section. Exact document versions and source
+roles remain distinct. A sent message, discovered source or opened preview does not
+apply a proposal. Saved preview edits and explicit Task adoption remain separate.
 
-Type `@` in Chat to find local documents and sections. A sent mention retains its exact document
-version and section. The reference list distinguishes discovery, viewing, mentioning, actual use,
-adoption, and exclusion. Finding a source alone never makes it adopted evidence. The exact-source
-viewer can revisit viewed sources and open previous or next versions without changing the Task.
-
-Preview edits and restores append immutable versions. A newer background result cannot overwrite
-an unsaved edit. **Apply to Task** separately checks the current preview, Task, conversation,
-hierarchy, and sources before changing the Task. Closing the workspace or continuing Chat does not
-apply the proposal.
-
-See [Reference-aware work previews](reference-aware-workbench.md) and
-[Refinement Preview](refinement-preview-status.md).
+See [Reference-aware work previews](reference-aware-workbench.md).
 
 ## 3. Work in the four Task tabs
 
-Opening a Task shows four tabs in this order:
+The tabs are **Work**, **Sessions**, **Refine** and **Review**. Work holds the
+checklist and Work Log. Sessions holds saved work conversations and explicit Codex
+runs. Refine holds the preview, definition editing and refinement chat. Review holds
+completion and Knowledge review. A chat response does not complete or publish a Task.
 
-- **Work** holds the checklist, recorded Work Log evidence, comments, attachments, and explicit
-  decisions. A completed Codex Run can add a readable **Execution summary** while preserving the
-  original evidence. Suggestions, decisions, attempts, observations, performed work, and verification
-  remain distinct.
-- **Sessions** contains saved work conversations. A note is local; **Run with Codex** separately
-  creates a Run and linked Work Log record. Execution never completes the Task or
-  publishes Knowledge.
-- **Details** shows and edits the canonical Task definition, original Capture, and Task connections.
-  Unsaved definition changes are protected when leaving the Task.
-- **Review** brings together the evidence-backed Task journey, **Current decisions and evidence**,
-  readiness, conflict review, completion evidence, and Knowledge review. AI findings remain advisory;
-  completion is an explicit user action.
+![Task Work tab with a synthetic saved Work Log entry](images/integrated-task.en.jpg)
 
-![Native Task workspace showing the four tabs and a recorded Work Log entry](images/current-task.en.jpg)
+*The recorded Work Log describes a synthetic source/version check. A checked item
+alone does not prove that work was performed or verified.*
 
-*The Task workspace keeps Work, Sessions, Details, and Review together. The visible Work Log entry
-was recorded manually and is preserved as work evidence.*
+The browser's file chooser follows the host system language; its label can remain
+English in a Korean fixture. Product labels and authored fixture text use the stated locale.
 
-The Task journey updates incrementally from recorded evidence. An explicit saved decision can become
-current, superseded, withdrawn, or unresolved. Ordinary assistant prose does not become an adopted
-decision. If a source changes, the last good distilled view remains readable with a stale label while
-its update runs.
+See [Task work sessions](task-work-sessions.md) and
+[Task lineage and Knowledge](lineage-knowledge-layer.md).
 
-See [Task work sessions](task-work-sessions.md), [Task conflict review](conflict-resolution-workflow.md),
-and [Task lineage and Knowledge](lineage-knowledge-layer.md).
+## 4. Revise Knowledge before publication
 
-## 4. Review Knowledge before publication
+After completion, Review shows a private Knowledge draft and a separate revision
+conversation. Ask for a bounded correction; the request in the image is still unsent.
+Private review notes are a separate record and do not send chat messages.
 
-After completion, **Review** can generate a private Knowledge draft from the exact current Task,
-completion record, distilled work, evidence, and references that were actually used. **Final
-outcomes** appear separately from the article. **Ideas to revisit** stays collapsed outside the final
-article, retaining whether each idea is unverified, deferred, out of scope, or rejected.
+![Private Knowledge draft beside the expanded revision chat](images/integrated-knowledge.en.jpg)
 
-![Native Review tab with a current private Knowledge draft](images/current-knowledge.en.jpg)
+Compare the returned proposal before applying it. Applying appends a private revision;
+publication still needs a separate archive proposal and explicit approval of exact files.
 
-*The captured version is the current private, unpublished first draft. It reports that this example
-has no recorded final decision; the screenshot does not show publication.*
+![Knowledge revision proposal with its changed text and private apply action](images/integrated-knowledge-compare.en.jpg)
 
-Each generation, edit, or restore appends an immutable private version. The version picker reads,
-compares, and restores saved versions without regenerating them. Source changes mark a version stale
-but do not erase it.
+![New private Knowledge revision after applying the synthetic proposal](images/integrated-knowledge-applied.en.jpg)
 
-Publication starts with a separate archive proposal. Review the exact files, paths, source links,
-selected idea files, and managed index changes before choosing **Publish these exact files**.
-Publication completes only after the reviewed files are written and indexed. A pending index,
-conflict, or repair state remains visible and recoverable.
+*The applied draft remains private. These captures do not demonstrate native publication,
+source indexing or a real model's ability to produce a valid correction.*
 
 See [Evidence-bound Knowledge drafts](knowledge-distillation.md),
-[Reviewed Knowledge archive](knowledge-archive.md), and
+[Reviewed Knowledge archive](knowledge-archive.md) and
 [Completion and Knowledge](completion-writeback-archive.md).
 
-## Capture evidence
+## Historical evidence
 
-The four screenshots above are actual native application captures. The English interface retains
-Korean example content entered by the user; it does not represent automatic translation. Their
-source revision, signed application identity, image hashes, dimensions, controlled local provider,
-and verification limits are recorded in the [current capture manifest](../testing/evidence/current-interface.json).
-
-The other images in `docs/features/images/` document an earlier interface and are not embedded as
-the current workflow. The original nine-screen set came from base commit
-`de01ff47398871902a765d43b5a4060161316f92`; its provenance and limits remain in the
-[English capture manifest](../testing/evidence/docs-language-consistency.json) and later
-[entry-layout record](../testing/evidence/capture-entry-layout.json). These records are useful for
-history, not for verifying the interface described above.
+The previous `current-*` JPEGs and older PNGs remain unchanged as dated interface
+history. Their [native capture manifest](../testing/evidence/current-interface.json),
+[language capture manifest](../testing/evidence/docs-language-consistency.json) and
+[entry-layout record](../testing/evidence/capture-entry-layout.json) describe their
+original baselines, not the current images above. Conflict review remains an
+unmounted component/API contract in this baseline; its old screenshots are labeled
+historical rather than recreated as an available Task surface.

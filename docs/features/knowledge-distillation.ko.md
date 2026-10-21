@@ -2,6 +2,10 @@
 
 [English](knowledge-distillation.md) | **한국어**
 
+![Knowledge 수정 제안 비교와 넓어진 채팅 영역](images/integrated-knowledge-compare.ko.jpg)
+
+*전체 App·합성 데이터의 비영구 WKWebView 캡처입니다. 설치 앱 캡처가 아닙니다.*
+
 새 글은 핵심 결과를 먼저 적고, 추후 활용 상황·조건·한계를 이어서 설명합니다.
 안전한 재사용에 필요한 설명은 유지하며, 간결함을 위해 중요한 근거·반대 근거·미해결
 사항·경고를 제거하지 않습니다. 빈 제목, 별도 요약의 반복, 같은 결론의 반복은 요청하지

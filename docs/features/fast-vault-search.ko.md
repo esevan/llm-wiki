@@ -4,7 +4,9 @@
 
 > **Resume where you left off.** 검색은 이전 Knowledge를 현재 결정으로 다시 가져옵니다.
 
-![Vault 상대 경로와 일치한 노트 맥락을 보여주는 검색 결과](images/vault-search.png)
+![Vault 상대 경로와 일치한 노트 맥락을 보여주는 검색 결과](images/integrated-search.ko.jpg)
+
+> 화면 캡처: 2026-10-21 전체 App·공통 CSS·글꼴·실제 runtime을 비영구 WKWebView에서 합성 데이터로 렌더링했습니다. 설치 앱 캡처가 아닙니다. [캡처 조사](../testing/documentation-image-audit.md)를 참고하세요.
 
 Obsidian 호환 Markdown의 Vault 상대 경로, 제목, heading, 본문을 인덱싱합니다. 버전이 있는
 `llm_wiki` YAML 블록으로 명시적인 적용성, 주제별 결정, 아이디어 상태 metadata를 추가할 수

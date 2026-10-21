@@ -4,7 +4,9 @@
 
 > **Resume where you left off.** Search brings prior Knowledge back into the current decision.
 
-![Search results show vault-relative paths and matching note context](images/vault-search.en.png)
+![Search results show vault-relative paths and matching note context](images/integrated-search.en.jpg)
+
+> Screenshot: full App rendered in an isolated nonpersistent WKWebView on 2026-10-21 with synthetic data, shared CSS/fonts and production runtime. This is browser fixture evidence. [Capture audit](../testing/documentation-image-audit.md).
 
 Search indexes Vault-relative paths, titles, headings, and body text from Obsidian-compatible
 Markdown. A versioned `llm_wiki` YAML block may add explicit applicability, topic-specific decision,

@@ -9,10 +9,11 @@ Task details and refinement share one Task dialog. Use **Refine** for the previe
 LLM Wiki is an AI-centered, local-first workbench that turns conversation into organized work,
 keeps enough context to resume, and publishes only completed outcomes as portable knowledge.
 
-![The current Workbench shows lightweight Capture and Task entry with saved work](docs/features/images/workbench-tasks.en.png)
+![The current Workbench shows lightweight Capture and Task entry with saved work](docs/features/images/integrated-workbench.en.jpg)
+
+> Screenshot: full App rendered in an isolated nonpersistent WKWebView on 2026-10-21 with synthetic data, shared CSS/fonts and production runtime. This is browser fixture evidence. [Capture audit](docs/testing/documentation-image-audit.md).
 
 Compass includes a Completed tasks tab for the full completion history. Workbench keeps only the latest five completions beside active Tasks and hides empty categories.
-
 
 Refinement preserves the existing Task identity and shows **Refined - Revision N**. Focus active work at the top of Workbench. Explicit Subtasks form an expandable tree; completing each child updates and publishes the parent Knowledge revision, and finishing all children closes the parent.
 

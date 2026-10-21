@@ -4,7 +4,7 @@
 
 Task 상세는 Capture 출처, 선택적으로 연결한 정확한 Problem 리비전, Work Log 근거·댓글·체크리스트·결정·완료 근거·연결을 함께 보존합니다. 이 결정적 기록은 Task 완료 후 비공개 Knowledge 초안을 만드는 원본이며 자동 발행되지 않습니다.
 
-![작업 근거와 출처를 함께 보존하는 Task 상세](images/task-detail.png)
+![작업 근거와 출처를 함께 보존하는 Task 상세](images/integrated-task.ko.jpg)
 
 초안을 명시적으로 만들고 검토·수정한 뒤 별도로 발행합니다. 발행하면 영어 canonical Markdown을 Vault에 저장하고, 동시에 `Translations/ko/` 아래의 한국어 번역 작업을 자동으로 큐에 넣습니다. 초안 리비전과 콘텐츠 해시가 발행 원본을 식별합니다. 발행한 Vault 파일이 외부에서 바뀌면 해시 검사로 조용한 덮어쓰기를 막습니다. 재생성은 기록한 Task에서 초안을 갱신하며 Task의 비공개 기록을 지우지 않습니다.
 

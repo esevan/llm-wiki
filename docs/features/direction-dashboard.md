@@ -4,7 +4,9 @@
 
 > **Understand the work, never score the worker.**
 
-![Compass records direction without turning activity into a worker score](images/compass.en.png)
+![Compass records direction without turning activity into a worker score](images/integrated-compass.en.jpg)
+
+> Screenshot: full App rendered in an isolated nonpersistent WKWebView on 2026-10-21 with synthetic data, shared CSS/fonts and production runtime. This is browser fixture evidence. [Capture audit](../testing/documentation-image-audit.md).
 
 Compass stores goals, evidence-backed Problem importance, immutable milestone events, and aggregate
 direction signals. These signals describe how work relates to goals; they are not productivity

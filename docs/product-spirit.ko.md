@@ -5,7 +5,6 @@
 제품 원칙은 모든 제품·개발 판단의 첫 번째 기준입니다. [Constitution](../.specify/memory/constitution.md)은
 이 원칙들을 필수 리뷰 게이트로 구체화합니다.
 
-
 명시적인 Subtask 적용은 자식 완료마다 부모 Knowledge를 누적 갱신·자동 발행하는 흐름에 동의하는 동작입니다. 모든 자식이 완료되어야 부모도 닫힙니다. 정제는 Task ID를 보존하고, 분리한 작업에는 부모·자식 경계를 표시합니다. 독립 Task의 Knowledge는 별도 검토 후 발행합니다.
 
 Capture 정제는 ID와 원문을 보존하며 같은 업무를 Task로 전환합니다. 원본은 별도의 받은 항목이 아닌 이력으로 남습니다. 기존 Task는 현재 ID와 Capture 연결을 유지합니다. 추가 업무는 명시적인 하위 작업 분리로만 만들며, 일반 정제는 현재 업무를 갱신합니다.
@@ -23,7 +22,9 @@ Capture는 자연스러운 생각을 그대로 받습니다. AI 대화와 Refine
 Capture는 의도적으로 작고 가볍습니다. Workbench는 현재 Task를 보여주고 진행 중인 작업을 별도
 강조합니다. 상세·검증·완료 제어는 현재 결정에 필요할 때만 나타납니다.
 
-![Capture는 가볍게 유지하고 현재 Task를 바로 이어서 할 수 있게 하는 Workbench](features/images/workbench-tasks.png)
+![Capture는 가볍게 유지하고 현재 Task를 바로 이어서 할 수 있게 하는 Workbench](features/images/integrated-workbench.ko.jpg)
+
+> 화면 캡처: 2026-10-21 전체 App·공통 CSS·글꼴·실제 runtime을 비영구 WKWebView에서 합성 데이터로 렌더링했습니다. 설치 앱 캡처가 아닙니다. [캡처 조사](testing/documentation-image-audit.md)를 참고하세요.
 
 ## 3. 멈춘 곳에서 다시 이어갑니다.
 
@@ -35,9 +36,9 @@ Task Work Log는 텍스트·스크린샷·댓글·검증 체크를 지원합니�
 유지합니다. 앱이 관리하는 Knowledge의 한국어 열람은 별도 명시 동작이며 영문 canonical Markdown을
 바꾸지 않습니다.
 
-![최신 Work Log와 검증 맥락을 보존하는 Task 상세](features/images/task-detail.png)
+![최신 Work Log와 검증 맥락을 보존하는 Task 상세](features/images/integrated-task.ko.jpg)
 
-![현재 대화 옆에 이전 맥락을 유지하는 Refinement](features/images/refinement.png)
+![작업 초안과 대화를 함께 보여주는 Task 다듬기](features/images/integrated-preview.ko.jpg)
 
 ## 4. 해결하려는 문제를 중심으로 일을 정리합니다.
 
@@ -57,7 +58,7 @@ Knowledge로 검색할 수 있습니다.
 열람본은 요청할 때 파생하며, 정확히 같은 현재 원본에 대해서만 재사용합니다. 한국어 열람본이
 canonical 파일을 대체하거나 다시 쓰는 일은 없습니다.
 
-![개인 근거 검토와 Knowledge 발행 결정을 분리하는 완료 화면](features/images/completion-knowledge.png)
+![별도 발행 승인 전 비공개로 유지되는 수정된 Knowledge 초안](features/images/integrated-knowledge-applied.ko.jpg)
 
 ## 6. 작업을 이해하되, 사용자를 점수화하지 않습니다.
 

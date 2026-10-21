@@ -21,13 +21,14 @@ Knowledge 초안 생성도 지속 가능한 Queue에서 실행되며 Task 패널
 LLM Wiki는 상호작용의 반응성을 유지하면서 복구 가능한 작업을 잃지 않도록 AI 실행을 두 개의
 프로세스 경로로 분리합니다.
 
-![지속 작업의 목적, 대상, 상태, 복구 동작을 읽을 수 있게 보여주는 백그라운드 Queue](images/queue-recovery.png)
+![지속 작업의 목적, 대상, 상태, 복구 동작을 읽을 수 있게 보여주는 백그라운드 Queue](images/integrated-queue.ko.jpg)
+
+> 화면 캡처: 2026-10-21 전체 App·공통 CSS·글꼴·실제 runtime을 비영구 WKWebView에서 합성 데이터로 렌더링했습니다. 설치 앱 캡처가 아닙니다. [캡처 조사](../testing/documentation-image-audit.md)를 참고하세요.
 
 - **Fast Queue**는 FIFO Worker 하나만 사용합니다. Chat과 즉시 반응이 필요한 상호작용을 전역
   요청 제한 경로로 처리하며, 데이터베이스 상태·Queue UI·재시도 기록·알림을 만들지 않습니다.
 - **Asynchronous Queue**는 지속 가능한 AI·번역·임베딩 Job을 SQLite에 저장합니다. AI Setup에서
   Worker 수를 조절하며, Worker는 Lease와 Heartbeat로 작업을 점유합니다.
-
 
 오른쪽 아래 Queue는 각 백그라운드 작업의 대상과 목적을 설명하고, 이해하기 쉬운 상태·단계별
 진행률·시스템 타임존 기준 시간·안전한 오류·취소·재시도를 표시합니다. 결과는 작업에 맞는 화면이나 간결한 요약으로
@@ -72,7 +73,7 @@ Coverage 0과 어휘 검색 Fallback 결과로 완료됩니다. AI 결과는 제
 상태, 승인, 완료, Knowledge 결정 권한은
 사용자에게 있습니다.
 
-![Endpoint와 model routing은 표시하면서 API key 값은 마스킹된 상태로 유지하는 AI 설정](images/ai-settings.png)
+![합성 endpoint와 model routing을 표시하며 API key 입력은 비어 있는 AI 설정](images/integrated-settings.ko.jpg)
 
 [기능 명세](../../specs/009-background-ai-queue/spec.md)와
 [Worker 계약](../../specs/009-background-ai-queue/contracts/worker-contract.md)을 참고하세요. 모든 지속

@@ -4,7 +4,9 @@
 
 > **Understand the work, never score the worker.**
 
-![활동을 사람 점수로 바꾸지 않고 방향을 기록하는 Compass](images/compass.png)
+![활동을 사람 점수로 바꾸지 않고 방향을 기록하는 Compass](images/integrated-compass.ko.jpg)
+
+> 화면 캡처: 2026-10-21 전체 App·공통 CSS·글꼴·실제 runtime을 비영구 WKWebView에서 합성 데이터로 렌더링했습니다. 설치 앱 캡처가 아닙니다. [캡처 조사](../testing/documentation-image-audit.md)를 참고하세요.
 
 Compass는 목표, 근거 기반 Problem 중요도, 불변 마일스톤 이벤트, 방향 신호를 저장합니다. 이 신호는
 업무와 목표의 관계를 설명할 뿐 생산성 점수나 직원 순위가 아닙니다.

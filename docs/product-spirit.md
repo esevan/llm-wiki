@@ -5,7 +5,6 @@
 Product Spirit is the first test for every product and engineering decision. The
 [constitution](../.specify/memory/constitution.md) turns these principles into a mandatory review gate.
 
-
 Explicit Subtask acceptance authorizes cumulative parent Knowledge publication on each child completion. All children must finish before the parent closes. Refinement preserves Task identity; separate work has visible parent/child boundaries. Standalone Knowledge keeps its review-before-publication flow.
 
 Refining a Capture promotes the same work item, preserving its ID and original text. The original is provenance, not a second Inbox item. Older Tasks retain their existing IDs and Capture links. Additional work is created only through the explicit subtask split action; ordinary refinement revises the current work.
@@ -25,7 +24,9 @@ Capture remains deliberately small. The Workbench keeps current Tasks visible an
 work a dedicated highlight. Detail, validation, and completion controls
 appear only when the current decision needs them.
 
-![The Workbench keeps Capture light and makes current Tasks easy to resume](features/images/workbench-tasks.en.png)
+![The Workbench keeps Capture light and makes current Tasks easy to resume](features/images/integrated-workbench.en.jpg)
+
+> Screenshot: full App rendered in an isolated nonpersistent WKWebView on 2026-10-21 with synthetic data, shared CSS/fonts and production runtime. This is browser fixture evidence. [Capture audit](testing/documentation-image-audit.md).
 
 ## 3. Resume where you left off.
 
@@ -37,9 +38,9 @@ workflow lineage. Generated text is requested in the active language; authored W
 and legacy content remain readable in their original form. Managed Knowledge has a separate,
 explicit Korean reading flow and does not change its English canonical Markdown.
 
-![A Task detail preserves the latest Work Log and validation context](features/images/task-detail.en.png)
+![A Task detail preserves the latest Work Log and validation context](features/images/integrated-task.en.jpg)
 
-![Refinement keeps prior context beside the active conversation](features/images/refinement.en.png)
+![Task Refine keeps the work preview beside the conversation](features/images/integrated-preview.en.jpg)
 
 ## 4. Organize work around the problem to solve.
 
@@ -59,7 +60,7 @@ App-managed Knowledge uses English Markdown as its canonical portable source. A 
 version is derived on request and can be reused only for the exact current source; it never replaces
 or rewrites the canonical file.
 
-![Completion and Knowledge publication remain separate decisions](features/images/completion-knowledge.en.png)
+![A corrected Knowledge draft remains private until separate publication approval](features/images/integrated-knowledge-applied.en.jpg)
 
 ## 6. Understand the work, never score the worker.
 

@@ -1,0 +1,167 @@
+{
+  "sourceCommit": "584ae3c6a44042af41cc16c27d757bef87105c54",
+  "date": "2026-10-21",
+  "renderer": "Full App + production runtime; isolated nonpersistent WKWebView",
+  "data": "Synthetic in-memory API; no user DB, real model, API key or installed app",
+  "measurements": {
+    "1440": {
+      "preview": 429.4375,
+      "knowledge": 429.4375
+    },
+    "1920": {
+      "preview": 583.03125,
+      "knowledge": 583.03125
+    },
+    "2560": {
+      "preview": 720,
+      "knowledge": 720
+    }
+  },
+  "limits": [
+    "Two existing legacy runtime startup errors target absent .workbench-context listeners in workbench/conflicts scripts.",
+    "Host file chooser uses system English labels even in Korean fixture.",
+    "No packaged native E2E, real generation, persistence, Vault publication or indexing verified."
+  ],
+  "images": [
+    {
+      "path": "docs/features/images/integrated-compass.en.jpg",
+      "bytes": 89175,
+      "sha256": "6a699d2d84751e52adc813f9c54619eb2dcbf0da2366d954838b85ae712f9886",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "path": "docs/features/images/integrated-compass.ko.jpg",
+      "bytes": 81831,
+      "sha256": "d25eb1a96eb88e968c8525c4f53295c13322d5e6b1004d31ddd92269f7827d55",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "path": "docs/features/images/integrated-knowledge-applied.en.jpg",
+      "bytes": 147915,
+      "sha256": "f40ee0081bc08334b8a837e90c31f43f9a7385e451e190ead10a4bc79e2d9452",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "path": "docs/features/images/integrated-knowledge-applied.ko.jpg",
+      "bytes": 153419,
+      "sha256": "544c8e9cfa30d9c5bb3fcf3a37987198b9e01f5711eec99f60c98fe7be71eeb1",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "path": "docs/features/images/integrated-knowledge-compare.en.jpg",
+      "bytes": 198381,
+      "sha256": "922b27f0f01d861c3c53ff2db11007804551ae85e238c7f0001fd131f5d88e49",
+      "width": 1920,
+      "height": 1080
+    },
+    {
+      "path": "docs/features/images/integrated-knowledge-compare.ko.jpg",
+      "bytes": 198805,
+      "sha256": "19f6fe2fdb39de18ccdfc4f2e831eb63c75ef94a0192c611a2a534942ee3b37e",
+      "width": 1920,
+      "height": 1080
+    },
+    {
+      "path": "docs/features/images/integrated-knowledge.en.jpg",
+      "bytes": 162216,
+      "sha256": "091dfa185db31ef4513a552d9d51025a67c7b74620b37a20a7b1ed264b7e142f",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "path": "docs/features/images/integrated-knowledge.ko.jpg",
+      "bytes": 157574,
+      "sha256": "d98a430dc9e4d002b49bdc8c19eb7b98001967ca0d849fad2a3da2263f72a044",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "path": "docs/features/images/integrated-preview.en.jpg",
+      "bytes": 141979,
+      "sha256": "c36f5a2ba70523753d5eaff29f86c0f609e18a40b4af01e51e141032d8791870",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "path": "docs/features/images/integrated-preview.ko.jpg",
+      "bytes": 132089,
+      "sha256": "d07246623225259bcb3661f65651c7e572d09a204361ea3a2ef2a9d933aeb94f",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "path": "docs/features/images/integrated-queue.en.jpg",
+      "bytes": 114332,
+      "sha256": "2be36b89c5428c84fbf3655960e01037acedf6b55850d994df35ceb224d4bcbe",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "path": "docs/features/images/integrated-queue.ko.jpg",
+      "bytes": 106414,
+      "sha256": "1229345968cde67302d2d401f9536a22a5617f68a5085c19b8add12e7a08f19a",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "path": "docs/features/images/integrated-search.en.jpg",
+      "bytes": 66727,
+      "sha256": "b2190c64ebc6eedc88770e03b93ec82fe6f34155c801c45b3f1d0bb841f68571",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "path": "docs/features/images/integrated-search.ko.jpg",
+      "bytes": 63354,
+      "sha256": "a0d5bea464421987d6aa005b995d3718b5cdb78c2a8fc1d1387afcdf2036b0db",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "path": "docs/features/images/integrated-settings.en.jpg",
+      "bytes": 113785,
+      "sha256": "fa4021095526177869efe0425ffa19c35b150c2bb4dab781f2918422fd929cee",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "path": "docs/features/images/integrated-settings.ko.jpg",
+      "bytes": 110434,
+      "sha256": "eeb367163cc8293099a7e37e2139c04579c590439ce3f216b4d8cce295ba026e",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "path": "docs/features/images/integrated-task.en.jpg",
+      "bytes": 108324,
+      "sha256": "388c470b2abde46c6c52426a675b74bc420f8415bcf9b24ddb967fc203e6faf8",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "path": "docs/features/images/integrated-task.ko.jpg",
+      "bytes": 104960,
+      "sha256": "27cf639f364fa1d8edfd1dc1223aa7c5df25c58d8d456de88181a22172a8dbb6",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "path": "docs/features/images/integrated-workbench.en.jpg",
+      "bytes": 96576,
+      "sha256": "5244e7d54cacce2a221992f814e1c0275a258af1979e17f108bd1349f9c39373",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "path": "docs/features/images/integrated-workbench.ko.jpg",
+      "bytes": 91131,
+      "sha256": "50a32807f2fbe2e2bb55b0ee96a3a425178e757c94ca117d841ae7e40a16a3b8",
+      "width": 1440,
+      "height": 900
+    }
+  ]
+}

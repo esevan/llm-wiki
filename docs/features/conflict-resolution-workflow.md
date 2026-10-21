@@ -2,9 +2,12 @@
 
 **English** | [한국어](conflict-resolution-workflow.ko.md)
 
-Conflict review is advisory, revision-bound evidence for a Task. Run a review from Task detail; the panel shows the latest result, citations, status, and earlier attempts. A Task can continue while the review is queued, running, failed, cancelled, or reports findings. The review never approves, blocks, completes, or publishes the Task.
+Conflict review is advisory, revision-bound evidence for a Task. The retained panel contract describes the latest result, citations, status and earlier attempts; it is not currently mounted in Task detail. A Task can continue while the review is queued, running, failed, cancelled, or reports findings. The review never approves, blocks, completes, or publishes the Task.
 
 ![Task conflict review with cited findings, a Retry review action, and attempt history](images/task-review.en.png)
+
+> Historical screenshot: `ConflictReviewPanel` is retained as a component/API contract but is not mounted by the current App at `584ae3c`. The image is preserved as previous-interface evidence, not an available Task screen. See the [image audit](../testing/documentation-image-audit.md).
+
 
 ## Read and retry a review
 

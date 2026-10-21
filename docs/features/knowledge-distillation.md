@@ -2,6 +2,10 @@
 
 **English** | [한국어](knowledge-distillation.ko.md)
 
+![Knowledge revision comparison with the expanded chat rail](images/integrated-knowledge-compare.en.jpg)
+
+*Full App with synthetic data in a nonpersistent WKWebView; browser fixture evidence.*
+
 New articles use a compact result-first structure followed by when the result helps,
 its conditions and limits. Extra explanation remains when needed for safe reuse;
 material evidence, counterevidence, unresolved issues and warnings are never removed
