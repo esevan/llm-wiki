@@ -420,3 +420,8 @@
 .preview-evidence-card :is(button,summary):focus-visible { outline: var(--focus-ring); outline-offset: 3px; }
 @media(max-width:700px) { .reference-aware-preview { padding: 22px; } .reference-aware-preview > .reference-aware-preview-header h3 { font-size: 24px; } }
 .reference-aware-preview .preview-field-goal { background: color-mix(in srgb, var(--color-highlight) 9%, var(--color-bg-primary)); }
+
+/* Reading measure belongs to prose, never to the workspace surface. */
+.reference-aware-preview .preview-field-description dd,
+.reference-aware-preview .preview-field-goal dd,
+.reference-aware-preview .preview-completion-list li { max-width: 85ch; }

@@ -1491,5 +1491,5 @@ main:has(.task-workbench.active :is(.task-detail, .refinement-panel)) {
  .refinement-support-rail { overflow: visible; }
  .refinement-panel[role="dialog"]:has(.reference-aware-preview) .refinement-support-rail .refinement-conversation { flex-basis: auto; min-height: 360px; }
 }
-.refinement-panel[role="dialog"]:has(.reference-aware-preview), .task-detail:has(.knowledge-review) { max-width: 1240px; }
+.refinement-panel[role="dialog"]:has(.reference-aware-preview), .task-detail:has(.knowledge-review) { max-width: none; }
 @media(min-width:1051px) { .refinement-panel[role="dialog"]:has(.reference-aware-preview) .refinement-workspace { grid-template-columns: minmax(0,1fr) 288px; } }

@@ -9,6 +9,10 @@ import { createServer } from 'vite';
 const { chromium } = await import(process.env.LLM_WIKI_PLAYWRIGHT_MODULE || 'playwright-core');
 const server = await createServer({
   plugins: [{ name: 'layout-fixture', configureServer(server) {
+    server.middlewares.use('/review-app', async (_req, res) => {
+      res.setHeader('Content-Type', 'text/html');
+      res.end(await server.transformIndexHtml('/review-app', '<html><head></head><body><div id="root"></div><script type="module" src="/src/test/reviewLayout.fixture.tsx"></script></body></html>'));
+    });
     server.middlewares.use('/layout-review', async (_req, res) => {
       res.setHeader('Content-Type', 'text/html');
       res.end(await server.transformIndexHtml('/layout-review', '<html><head></head><body><div id="root"></div><script type="module" src="/src/test/workbenchLayout.fixture.tsx"></script></body></html>'));
@@ -21,6 +25,59 @@ const origin = server.resolvedUrls.local[0];
 const browser = await chromium.launch({ headless: true, ...(process.env.LLM_WIKI_BROWSER_EXECUTABLE ? { executablePath: process.env.LLM_WIKI_BROWSER_EXECUTABLE } : {}) });
 const sizes = [[1440,900], [2560,1440], [3440,1440], [5120,1440], [640,480], [390,700]];
 try {
+  await test('review App modals and main content grow with the viewport', async () => {
+    const measurements = [];
+    for (const mode of ['knowledge', 'preview']) {
+      const page = await browser.newPage({viewport:{width:1440,height:1100}});
+      await page.goto(`${origin}review-app`);
+      await page.locator('[data-control="workbench-completed-open"]').first().click();
+      await page.locator('[data-control="task-detail-tab-review"]').click();
+      await page.locator('.knowledge-reading').waitFor();
+      if (mode === 'preview') {
+        await page.locator('[data-control="task-detail-refine"]').click();
+        await page.locator('.refinement-evidence-slot .preview-evidence-card').waitFor();
+      }
+      const modal = mode === 'preview' ? '.refinement-panel[role="dialog"]' : '.task-detail';
+      const main = mode === 'preview' ? '.reference-aware-preview' : '.knowledge-reading';
+      const rail = mode === 'preview' ? '.refinement-support-rail' : '.knowledge-controls';
+      let previous;
+      for (const width of [1440,1920,2560,3440,3840,700,390]) {
+        await page.setViewportSize({width,height:1100});
+        await page.locator(modal).evaluate(el=>{el.scrollTop=0;for(const child of el.querySelectorAll(".knowledge-reading,.knowledge-controls,.refinement-preview,.refinement-support-rail"))child.scrollTop=0;});
+        const rect = async selector => page.locator(selector).evaluate(el => { const r=el.getBoundingClientRect(); return {x:r.x,y:r.y,width:r.width,height:r.height,right:r.right,bottom:r.bottom}; });
+        const geometry = {mode,viewport:width,modal:await rect(modal),main:await rect(main),rail:await rect(rail)};
+        measurements.push(geometry);
+        assert(geometry.modal.width >= width-64, `${mode} modal must follow ${width}px viewport`);
+        assert.equal(await page.locator(modal).evaluate(el=>el.scrollWidth>el.clientWidth+1),false,'no horizontal modal overflow');
+        if (width>=1440) {
+          assert.equal(Math.round(geometry.rail.width),288, "support rail keeps its existing desktop width");
+          assert(geometry.main.width>geometry.rail.width*2);
+          assert(geometry.rail.x>=geometry.main.right,'support remains beside reading');
+          if (previous) {
+            assert(Math.abs(geometry.modal.width-previous.modal.width-(width-previous.viewport))<2,'modal grows with live window enlargement');
+            assert(Math.abs(geometry.main.width-previous.main.width-(width-previous.viewport))<2,'main content also grows with the modal');
+          }
+          previous=geometry;
+        } else assert(geometry.rail.y>=geometry.main.bottom,'narrow layout stacks supporting controls');
+        if (process.env.LLM_WIKI_LAYOUT_ARTIFACT_DIR) {
+          await mkdir(process.env.LLM_WIKI_LAYOUT_ARTIFACT_DIR,{recursive:true});
+          await page.screenshot({path:path.join(process.env.LLM_WIKI_LAYOUT_ARTIFACT_DIR,`review-${mode}-${width}.png`)});
+        }
+        const action=page.locator(mode==='preview'?'[data-control="reference-preview-apply"]':'[data-control="knowledge-archive-prepare"]');
+        await action.scrollIntoViewIfNeeded();
+        await action.focus();
+        const bounds=await action.boundingBox();
+        assert(bounds.y>=0 && bounds.y+bounds.height<=1100,'primary action remains keyboard reachable');
+        assert.equal(await action.evaluate(el=>el===document.activeElement),true);
+        if (mode==='knowledge') {
+          const scroll=page.locator('.knowledge-reading');
+          assert(await scroll.evaluate(el=>{el.scrollTop=100;return el.scrollTop>0 || getComputedStyle(el).overflowY!=='auto';}),'reading scroll stays usable');
+        }
+      }
+      await page.close();
+    }
+    console.log(JSON.stringify({reviewMeasurements:measurements}));
+  });
   await test('Task detail groups unequal-length labels and bodies at the top', async () => {
     for (const [width, height] of [[1440,900], [1920,1080], [3440,1440], [640,480], [390,700]]) {
       const page = await browser.newPage({viewport: {width, height}});
@@ -89,7 +146,7 @@ try {
       const first = lists.first();
       await first.focus();
       await page.keyboard.press('End');
-      await page.waitForFunction(() => { const el = document.querySelector('.workbench-lane-cards'); return el.scrollTop >= el.scrollHeight - el.clientHeight - 1; });
+      await page.waitForFunction(() => { const el = document.querySelector('.workbench-lane-cards'); return el.scrollTop >= el.scrollHeight - el.clientHeight; });
       for (let index = 1; index < await lists.count(); index++) {
         const lane = lists.nth(index);
         const original = await lists.evaluateAll(elements => elements.map(el => el.scrollTop));

@@ -54,3 +54,5 @@ content is retained without an extra model call. No manual verification procedur
 is required of the user; notes do not validate claims.
 
 The review screen uses a large reading surface for the article, final outcomes and reuse guidance. The right support column contains private review notes, editing and version controls, and explicit publication actions. On narrow windows these controls follow the article. Source inspection remains available in a disclosure; it does not interrupt the reading hierarchy.
+
+The review modal and reading surface expand with the window without a desktop width cap. Only prose keeps a readable line length; the supporting controls stay in the right column on wide windows.

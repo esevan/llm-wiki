@@ -111,3 +111,5 @@ and preserves the old one. Checking records user checklist state; it is not proo
 of execution or evidence verification and does not complete or publish the Task.
 
 The wide Refinement screen keeps the preview in a large reading card on the left. The existing conversation is at the upper right, with short evidence titles and excerpts below it. Full source filters remain available in the evidence disclosure. The reading and support columns scroll independently; narrow windows stack the preview, conversation, then evidence.
+
+The preview modal and main reading card expand with the window, including ultrawide displays. Prose line length is constrained inside the fluid surface; the existing chat and evidence remain in the supporting column.
