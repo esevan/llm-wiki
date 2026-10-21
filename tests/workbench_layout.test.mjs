@@ -27,6 +27,7 @@ const sizes = [[1440,900], [2560,1440], [3440,1440], [5120,1440], [640,480], [39
 try {
   await test('review App modals and main content grow with the viewport', async () => {
     const measurements = [];
+    const chatWidths = new Map();
     for (const mode of ['knowledge', 'preview']) {
       const page = await browser.newPage({viewport:{width:1440,height:1100}});
       await page.goto(`${origin}review-app`);
@@ -45,21 +46,23 @@ try {
         await page.setViewportSize({width,height:1100});
         await page.locator(modal).evaluate(el=>{el.scrollTop=0;for(const child of el.querySelectorAll(".knowledge-reading,.knowledge-controls,.refinement-preview,.refinement-support-rail"))child.scrollTop=0;});
         const rect = async selector => page.locator(selector).evaluate(el => { const r=el.getBoundingClientRect(); return {x:r.x,y:r.y,width:r.width,height:r.height,right:r.right,bottom:r.bottom}; });
-        const geometry = {mode,viewport:width,modal:await rect(modal),main:await rect(main),rail:await rect(rail)};
+        const geometry = {mode,viewport:width,modal:await rect(modal),main:await rect(main),rail:await rect(rail),chat:await rect(mode === "preview" ? ".refinement-conversation" : ".knowledge-revision-chat")};
         const actions = await rect('.task-actions');
         const spacing = await page.locator('.task-detail').evaluate(el => parseFloat(getComputedStyle(el).getPropertyValue('--space-4')));
-        const firstPanelTop = await page.locator('.task-tab-panel:not([hidden])').evaluate(el => [...el.children].find(child => getComputedStyle(child).display !== 'none' && child.getBoundingClientRect().height > 0).getBoundingClientRect().top);
+        const firstPanelTop = await page.locator('.task-tab-panel:not([hidden])').first().evaluate(el => [...el.children].find(child => getComputedStyle(child).display !== 'none' && child.getBoundingClientRect().height > 0).getBoundingClientRect().top);
         assert.ok(Math.abs(firstPanelTop - actions.bottom - spacing) <= 1, `${mode} content keeps one section gap after Task actions at ${width}px`);
         measurements.push(geometry);
         assert(geometry.modal.width >= width-64, `${mode} modal must follow ${width}px viewport`);
         assert.equal(await page.locator(modal).evaluate(el=>el.scrollWidth>el.clientWidth+1),false,'no horizontal modal overflow');
         if (width>=1440) {
-          assert.equal(Math.round(geometry.rail.width),288, "support rail keeps its existing desktop width");
-          assert(geometry.main.width>geometry.rail.width*2);
+          assert(geometry.rail.width>=400 && geometry.rail.width<=760, "chat has a readable responsive width");
+          if (mode === "knowledge") chatWidths.set(width,geometry.chat.width);
+          else { assert(Math.abs(chatWidths.get(width)-geometry.chat.width)<=1,"Knowledge and preview chat panels have matching widths"); assert.equal(await page.locator(".task-definition-fallback").count(),0,"generated preview replaces duplicate saved definition"); }
+          assert(geometry.main.width>geometry.rail.width);
           assert(geometry.rail.x>=geometry.main.right,'support remains beside reading');
           if (previous) {
             assert(Math.abs(geometry.modal.width-previous.modal.width-(width-previous.viewport))<2,'modal grows with live window enlargement');
-            assert(Math.abs(geometry.main.width-previous.main.width-(width-previous.viewport))<2,'main content also grows with the modal');
+            assert(Math.abs(geometry.main.width+geometry.rail.width-previous.main.width-previous.rail.width-(width-previous.viewport))<2,'main and support columns grow with the modal');
           }
           previous=geometry;
         } else assert(geometry.rail.y>=geometry.main.bottom,'narrow layout stacks supporting controls');
@@ -81,6 +84,36 @@ try {
       await page.close();
     }
     console.log(JSON.stringify({reviewMeasurements:measurements}));
+  });
+  await test('Knowledge App keeps unsaved chat and requires apply and explicit publication', async () => {
+    const page=await browser.newPage({viewport:{width:1440,height:1100}});
+    await page.goto(`${origin}review-app?short=1`);
+    await page.locator('[data-control="workbench-completed-open"]').first().click();
+    await page.locator('[data-control="task-detail-tab-review"]').click();
+    const input=page.locator('[data-control="knowledge-chat-input"]');
+    await input.fill('정확한 인용을 보존해 설명을 다듬어 주세요.');
+    await page.locator('[data-control="task-detail-tab-work"]').click();
+    await page.locator('[data-control="task-detail-tab-review"]').click();
+    assert.equal(await input.inputValue(),'정확한 인용을 보존해 설명을 다듬어 주세요.');
+    await page.locator('[data-control="task-detail-close"]').click();
+    await page.locator('[data-control="task-draft-guard-keep-editing"]').click();
+    assert.equal(await input.inputValue(),'정확한 인용을 보존해 설명을 다듬어 주세요.');
+    await page.locator('[data-control="knowledge-chat-send"]').click();
+    await page.locator('[data-control="knowledge-chat-full-compare"] > summary').click();
+    assert(await page.locator('.knowledge-revision-comparison').isVisible());
+    if(process.env.LLM_WIKI_LAYOUT_ARTIFACT_DIR) await page.screenshot({path:path.join(process.env.LLM_WIKI_LAYOUT_ARTIFACT_DIR,'knowledge-chat-comparison.png')});
+    assert.equal(await page.locator('html').getAttribute('data-fixture-publications'),'0');
+    await page.locator('[data-control="knowledge-chat-apply"]').click();
+    await page.locator('.knowledge-review[data-content-hash="layout-content-2"]').waitFor();
+    if(process.env.LLM_WIKI_LAYOUT_ARTIFACT_DIR) await page.screenshot({path:path.join(process.env.LLM_WIKI_LAYOUT_ARTIFACT_DIR,'knowledge-chat-applied.png')});
+    assert.equal(await page.locator('html').getAttribute('data-fixture-publications'),'0');
+    await page.locator('[data-control="knowledge-archive-prepare"]').click();
+    await page.locator('[data-control="knowledge-archive-cancel"]').click();
+    assert.equal(await page.locator('html').getAttribute('data-fixture-publications'),'0');
+    await page.locator('[data-control="knowledge-archive-prepare"]').click();
+    await page.locator('[data-control="knowledge-archive-publish"]').click();
+    await page.waitForFunction(()=>document.documentElement.dataset.fixturePublications==='1');
+    await page.close();
   });
   await test('Task detail groups unequal-length labels and bodies at the top', async () => {
     for (const [width, height] of [[1440,900], [1920,1080], [3440,1440], [640,480], [390,700]]) {
@@ -110,7 +143,7 @@ try {
         assert(Math.abs(field.labelTop-field.y) <= 1, `${field.label}: label begins at section top`);
         assert(field.bodyWidth < 1000, 'prose remains readable');
       }
-      if (width >= 1440) {
+      if (Math.abs(fields[0].x-fields[1].x)>1) {
         assert(Math.abs(fields[0].labelTop-fields[1].labelTop) <= 1, 'neighbor labels align at top');
         assert(fields[1].height < fields[0].height/2, 'short outcome must not stretch to the long description height');
       } else {

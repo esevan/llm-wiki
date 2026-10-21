@@ -1,3 +1,4 @@
+import type { KnowledgeRevisionConversation, KnowledgeRevisionReply } from "../types/taskWorkbench";
 import type { ApplicationResponse, HttpMethod } from "../types/application";
 import type {
   InputImage,
@@ -55,6 +56,13 @@ const request = async <T>(
 };
 
 export const taskClient = {
+  knowledgeRevisionConversation: (taskId: string, revision: number) =>
+    request<KnowledgeRevisionConversation>(`/tasks/${encodeURIComponent(taskId)}/knowledge/versions/${revision}/revision-chat`),
+  knowledgeRevisionSend: (taskId: string, revision: number, expectedContentHash: string, message: string, operationId: string) =>
+    request<KnowledgeRevisionReply>(`/tasks/${encodeURIComponent(taskId)}/knowledge/versions/${revision}/revision-chat`, "POST", { expectedContentHash, message, operationId }),
+  knowledgeRevisionDecide: (taskId: string, turnId: string, decision: "apply" | "cancel") =>
+    request<{ draftRevision?: number; state?: string }>(`/tasks/${encodeURIComponent(taskId)}/knowledge/revision-chat/${encodeURIComponent(turnId)}/${decision}`, "POST", {}),
+
   workbench: () => request<WorkbenchSnapshot>("/workbench"),
   createCapture: (text: string, images?: InputImage[]) => request("/captures", "POST", { text, images }),
   createTask: (inputText: string) =>

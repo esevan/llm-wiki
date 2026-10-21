@@ -20,6 +20,7 @@ import taskWorkSessions from '../features/workbench/TaskWorkSessions.tsx?raw';
 import workLogDistillation from '../features/workbench/WorkLogDistillation.tsx?raw';
 import workbench from '../features/workbench/WorkbenchView.tsx?raw';
 import knowledgeReview from '../features/workbench/KnowledgeReviewPanel.tsx?raw';
+import knowledgeRevisionChat from '../features/workbench/KnowledgeRevisionChat.tsx?raw';
 import referenceList from '../features/workbench/ReferenceList.tsx?raw';
 import referenceAwarePreview from '../features/workbench/ReferenceAwarePreview.tsx?raw';
 import referenceViewer from '../components/ReferenceViewer.tsx?raw';
@@ -65,6 +66,7 @@ export const productionInteractiveSources = new Map<string, string>([
   ['frontend/src/features/workbench/DeleteItemDialog.tsx', deleteDialog],
   ['frontend/src/features/workbench/WorkbenchView.tsx', workbench],
   ['frontend/src/features/workbench/KnowledgeReviewPanel.tsx', knowledgeReview],
+  ['frontend/src/features/workbench/KnowledgeRevisionChat.tsx', knowledgeRevisionChat],
   ['frontend/src/features/workbench/ReferenceList.tsx', referenceList],
   ['frontend/src/features/workbench/ReferenceAwarePreview.tsx', referenceAwarePreview],
   ['frontend/src/components/ReferenceViewer.tsx', referenceViewer],

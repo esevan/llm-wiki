@@ -1,0 +1,110 @@
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
+import { KnowledgeRevisionChat } from "./KnowledgeRevisionChat";
+import { KnowledgeReviewPanel } from "./KnowledgeReviewPanel";
+import type { KnowledgeVersion, KnowledgeRevisionConversation, KnowledgeRevisionReply } from "../../types/taskWorkbench";
+const response = (body: unknown, ok = true) => ({ ok, status: ok ? 200 : 409, json: async <T,>() => body as T, text: async () => "", body: null });
+const source = { type: "task_revision", id: "task", revision: "1", locator: "definition", quote: "Approval remains required" };
+export const chatVersion = (): KnowledgeVersion => ({
+  revision: 1, derivationKind: "generated", articleType: "concept", title: "Approval guide", bodyMarkdown: "# Approval guide\n\nApproval remains required", contentHash: "original-hash", generationSnapshotHash: "source-hash", freshness: "current", qualityState: "blocked_unsupported", modelStatus: "enhanced", modelError: "Rejected citation", createdAt: "2026-10-21",
+  applicability: { summary: "Approval remains required", representativeQuestions: ["What was recorded?"], helpsWith: ["Approval remains required"], conditions: [], exclusions: [] },
+  result: { article: { type: "concept", title: "Approval guide", bodyMarkdown: "# Approval guide\n\nApproval remains required", finalOutcomes: [], applicability: { summary: "Approval remains required", representativeQuestions: ["What was recorded?"], helpsWith: ["Approval remains required"], conditions: [], exclusions: [], sourceRefs: [source] }, claimBindings: [{ claimId: "reported", statement: source.quote, epistemicState: "reported", sourceRefs: [source] }], assumptionBindings: [] }, ideas: [], qualityFindings: [] },
+});
+const diagnostic = { kind: "missing_reference", locator: "article.claimBindings[0]", statement: "Approval remains required", reason: "Quote belongs to another source", direction: "Replace with exact Task definition quote", evidence: [source] };
+const proposal = (): KnowledgeRevisionReply => ({ id: "turn-1", baseRevision: 1, message: "Replace the rejected citation and preserve approval.", missingEvidence: [], candidate: { ...chatVersion().result, article: { ...chatVersion().result.article!, bodyMarkdown: "# Corrected guide\n\nApproval remains required" } }, qualityState: "valid", diagnostics: [] });
+function fixture(fail = false) {
+  const conversation: KnowledgeRevisionConversation = { baseRevision: 1, diagnostics: [diagnostic], turns: [] };
+  const requests: Array<{path: string; body?: string}> = [];
+  let applied = false;
+  window.llmWikiApplication = { request: vi.fn(async ({ path, body }) => {
+    requests.push({ path, body });
+    if (path.endsWith("/apply")) { applied = true; return response({ draftRevision: 2 }); }
+    if (path.endsWith("/cancel")) { conversation.turns[0].state = "cancelled"; return response({ state: "cancelled" }); }
+    if (body) {
+      if (fail) return response({ detail: "fixture provider unavailable" }, false);
+      conversation.turns.push({ id: "turn-1", userMessage: JSON.parse(body).message, reply: proposal(), state: "proposed", createdAt: "now" });
+      return response(proposal());
+    }
+    return response(conversation);
+  }) };
+  return { requests, conversation, applied: () => applied };
+}
+describe("Knowledge correction chat", () => {
+  it("shows an actionable sentence/source/reason then compares before explicit apply", async () => {
+    const f = fixture(); const onApplied = vi.fn().mockResolvedValue(undefined);
+    render(<KnowledgeRevisionChat taskId="task" version={chatVersion()} disabled={false} onStateChange={vi.fn()} onApplied={onApplied} />);
+    expect(await screen.findByText("Quote belongs to another source")).toBeVisible();
+    expect(screen.getByText(source.quote, { selector: "blockquote p" })).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Help fix this issue" }));
+    expect((screen.getByRole("textbox") as HTMLTextAreaElement).value).toContain("Replace with exact Task");
+    fireEvent.click(screen.getByRole("button", { name: "Propose revision" }));
+    expect(await screen.findByText("Proposed change")).toBeVisible();
+    expect(f.applied()).toBe(false); expect(onApplied).not.toHaveBeenCalled();
+    expect(screen.getByText("# Corrected guide", { selector: "ins" })).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Apply and recheck private draft" }));
+    await waitFor(() => expect(onApplied).toHaveBeenCalledWith(2));
+    expect(f.requests.some(r => r.path.endsWith("/apply"))).toBe(true);
+  });
+  it("preserves failed input and allows explicit discard", async () => {
+    fixture(true); const state = vi.fn();
+    render(<KnowledgeRevisionChat taskId="task" version={chatVersion()} disabled={false} onStateChange={state} onApplied={vi.fn()} />);
+    await screen.findByText("Quote belongs to another source");
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "Keep my corrected sentence" } });
+    fireEvent.click(screen.getByRole("button", { name: "Propose revision" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("input and reviewed version are preserved");
+    expect(screen.getByRole("textbox")).toHaveValue("Keep my corrected sentence");
+    fireEvent.click(screen.getByRole("button", { name: "Discard unsent message" }));
+    expect(screen.getByRole("textbox")).toHaveValue("");
+  });
+  it("cancels a proposal without applying and keeps evidence requests distinct", async () => {
+    const f = fixture(); f.conversation.turns.push({ id: "turn-1", userMessage: "Fix quote", reply: proposal(), state: "proposed", createdAt: "now" });
+    render(<KnowledgeRevisionChat taskId="task" version={chatVersion()} disabled={false} onStateChange={vi.fn()} onApplied={vi.fn()} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Cancel proposal" }));
+    expect(await screen.findByText("Proposal cancelled.")).toBeVisible(); expect(f.applied()).toBe(false);
+  });
+  it("keeps a late cancelled response from erasing a newer unsent request", async () => {
+    let finish: ((v: ReturnType<typeof response>) => void) | undefined;
+    window.llmWikiApplication = { request: vi.fn(async ({ body, path }) => {
+      if (path.endsWith("/cancel")) return response({ state: "cancelled" });
+      if (body) return new Promise<ReturnType<typeof response>>(resolve => { finish = resolve; });
+      return response({ turns: [], diagnostics: [] });
+    }) };
+    render(<KnowledgeRevisionChat taskId="task" version={chatVersion()} disabled={false} onStateChange={vi.fn()} onApplied={vi.fn()} />);
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "Old request" } });
+    fireEvent.click(screen.getByRole("button", { name: "Propose revision" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Cancel pending request" }));
+    await waitFor(() => expect(screen.getByRole("textbox")).toBeEnabled());
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "Keep this newer request" } });
+    await act(async () => finish?.(response(proposal())));
+    expect(screen.getByRole("textbox")).toHaveValue("Keep this newer request");
+  });
+  it("offers the published version as a distinct correction base and protects unsent input", async () => {
+    fixture(); const select = vi.fn();
+    render(<KnowledgeRevisionChat taskId="task" version={{...chatVersion(), revision:2}} publishedRevision={1} onSelectPublished={select} disabled={false} onStateChange={vi.fn()} onApplied={vi.fn()} />);
+    fireEvent.click(await screen.findByRole("button", {name: "Revise published Knowledge · v1"}));
+    expect(select).toHaveBeenCalledOnce();
+    fireEvent.change(screen.getByRole("textbox"), {target:{value:"Unsaved correction"}});
+    expect(screen.getByRole("button", {name:"Revise published Knowledge · v1"})).toBeDisabled();
+  });
+  it("selects an already published version as the correction base without publishing", async () => {
+    const v = chatVersion(); const correction = proposal(); let applied = false; let published = false;
+    let turns: KnowledgeRevisionConversation["turns"] = [];
+    window.llmWikiApplication = { request: vi.fn(async ({ path, body }) => {
+      if (path.includes("revision-chat")) {
+        if (path.endsWith("/apply")) { applied = true; return response({ draftRevision: 2 }); }
+        if (body) { turns = [{ id: "turn-1", userMessage: JSON.parse(body).message, reply: correction, state: "proposed", createdAt: "now" }]; return response(correction); }
+        return response({ turns, diagnostics: [diagnostic] });
+      }
+      if (path.includes("publish")) published = true;
+      const versions = applied ? [v, { ...v, revision: 2, contentHash: "new-hash", qualityState: "valid", bodyMarkdown: correction.candidate!.article!.bodyMarkdown }] : [v];
+      return response({ taskId: "task", pointers: { currentPrivateRevision: applied ? 2 : 1, publishedRevision: 1 }, versions, ideas: [] });
+    }) };
+    render(<KnowledgeReviewPanel taskId="task" completed onGenerate={vi.fn()} />);
+    await screen.findByText("Quote belongs to another source");
+    fireEvent.change(screen.getByRole("textbox", { name: "What should change?" }), { target: { value: "Repair the published article's citation" } });
+    fireEvent.click(screen.getByRole("button", { name: "Propose revision" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Apply and recheck private draft" }));
+    await waitFor(() => expect(document.querySelector('.knowledge-review')).toHaveAttribute('data-content-hash', 'new-hash'));
+    expect(published).toBe(false);
+  });
+});

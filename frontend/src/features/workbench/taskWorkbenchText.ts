@@ -3,6 +3,8 @@ import { useSyncExternalStore } from "react";
 const en = {
   knowledgeReview: {
     applicabilityDetails: "Conditions, limits and example questions",
+    unsavedRevisionChat: "Send or discard your revision message before leaving. Wait for or cancel a pending proposal request.",
+    applicabilityReviewHint: "Reuse interpretations are source-linked suggestions for your review. They do not establish effectiveness or verified results.",
     noteSaveFailed: "Your note could not be saved. Your input is preserved. Try again; if the version changed, copy the note and reopen the current draft.",
     fileConflict: "A destination file changed. Your files are preserved. Inspect the destination and prepare publication again.", generationUnavailable: "The generation service could not be reached. Check the connection in Settings, then try again.", publicationFailed: "Publication could not be completed. Your draft and files are preserved. Try again; if it continues, check the destination folder access.",
     historyTools: "Versions and draft tools", reviewContext: "Review context · evidence, use and ideas", publicationHint: "Check the destination, then confirm publication. Your files are checked before writing.", confirmPublication: "Publish these prepared files? Existing files are protected against unexpected changes.", cancelPublication: "Cancel publication", saveBeforePublish: "Save or cancel your changes before publishing.", legacyPublication: "Generate a new draft to publish this legacy content with an evidence snapshot.", stalePublication: "Sources have changed. Open Versions and draft tools and regenerate the draft before publishing.", invalidPublication: "Some statements or citations do not match the saved evidence. Generate a new draft from the original records, then review it and publish.",
@@ -283,6 +285,8 @@ const ko: typeof en = {
   knowledgeReview: {
     savedRefreshPending: "저장했습니다. 편집하거나 발행하기 전에 저장된 버전을 다시 불러와 주세요. 근거 정보는 조회 후 표시됩니다.",
     applicabilityDetails: "적용 조건·한계·대표 질문",
+    unsavedRevisionChat: "이동 전에 수정 메시지를 전송하거나 버려 주세요. 진행 중 요청은 기다리거나 취소하세요.",
+    applicabilityReviewHint: "활용 해석은 근거와 연결된 검토 제안입니다. 효과나 검증된 결과를 확정하지 않습니다.",
     noteSaveFailed: "의견을 저장하지 못했습니다. 입력은 보존했습니다. 다시 시도하고, 버전이 바뀌었다면 의견을 복사한 뒤 현재 초안을 다시 여세요.",
     fileConflict: "저장할 파일이 변경되어 중단했습니다. 기존 파일은 보존했습니다. 저장 경로의 파일을 확인한 뒤 발행을 다시 준비하세요.", generationUnavailable: "생성 서비스에 연결하지 못했습니다. 설정에서 연결을 확인한 뒤 다시 시도하세요.", publicationFailed: "발행을 완료하지 못했습니다. 초안과 기존 파일은 보존했습니다. 다시 시도하고, 계속 실패하면 저장 폴더 접근 권한을 확인하세요.",
     historyTools: "버전 및 초안 도구", reviewContext: "검토 참고 · 근거, 활용 조건과 아이디어", publicationHint: "저장 경로를 확인한 뒤 발행을 승인하세요. 저장 전에 기존 파일의 변경 여부를 확인합니다.", confirmPublication: "준비된 파일을 발행할까요? 기존 파일이 예상과 다르게 변경되었으면 덮어쓰지 않습니다.", cancelPublication: "발행 취소", saveBeforePublish: "변경 내용을 저장하거나 취소한 뒤 발행하세요.", legacyPublication: "이전 문서는 근거 스냅샷이 포함된 새 초안을 생성한 뒤 발행할 수 있습니다.", stalePublication: "출처가 변경되었습니다. 아래 버전 및 초안 도구에서 초안을 다시 생성한 뒤 발행하세요.", invalidPublication: "초안의 일부 주장이나 인용이 저장된 근거와 맞지 않습니다. 원본 기록으로 새 초안을 생성한 뒤 내용을 확인하고 발행하세요.",

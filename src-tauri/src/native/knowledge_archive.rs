@@ -244,6 +244,15 @@ fn bounded_overlap_context(mut search: Value) -> Value {
     }
     search
 }
+fn guard_published_file(root: &Path, evidence: &Value) -> Result<()> {
+    if let (Some(path),Some(expected)) = (evidence["pointers"]["publicationPath"].as_str(),evidence["pointers"]["publicationContentHash"].as_str()) {
+        if bytes_at(root,path)?.map(|bytes|hash(&bytes)).as_deref() != Some(expected) {
+            return Err("archive_target_conflict: published Knowledge changed outside the reviewed publication; preserve and reconcile external edits before republishing".into());
+        }
+    }
+    Ok(())
+}
+
 pub async fn prepare(
     db: &Path,
     settings: &Path,
@@ -261,6 +270,7 @@ pub async fn prepare(
         tx.commit().map_err(db_err)?;
         evidence
     };
+    guard_published_file(root, &evidence)?;
     let taxonomy = inventory(root)?;
     let taxonomy_prompt = taxonomy
         .iter()
@@ -396,6 +406,7 @@ fn prepare_from_plan(
     taxonomy: &[Value],
     plan: Value,
 ) -> Result<Value> {
+    guard_published_file(root,evidence)?;
     let plan: Organization =
         serde_json::from_value(plan).map_err(|e| format!("invalid_archive_plan: {e}"))?;
     if !plan.validate() {
@@ -1493,6 +1504,97 @@ mod tests {
         let evidence = snapshot(&tx, &input).unwrap();
         tx.commit().unwrap();
         (temp, db, root, input, evidence)
+    }
+
+    #[test]
+    fn rejected_draft_regeneration_revalidates_then_publishes_and_indexes() {
+        let (_temp, db, context) = seed_knowledge_context();
+        let root = _temp.path().join("vault");
+        fs::create_dir(&root).unwrap();
+        let generated = knowledge_distillation::generation_context(&context);
+        let source = generated["citationCatalog"].as_array().unwrap().iter()
+            .find(|entry| entry["sourceRef"]["type"] == "task_revision"
+                && entry["sourceRef"]["quote"] == "Approval flow").unwrap()["sourceRef"].clone();
+        let mut good = json!({"article":{"type":"concept","title":"Approval flow","bodyMarkdown":"Approval flow",
+            "applicability":{"summary":"Approval flow","representativeQuestions":["What was recorded?"],"helpsWith":["Approval flow"],"sourceRefs":[source]},
+            "claimBindings":[{"claimId":"reported","statement":"Approval flow","epistemicState":"reported","sourceRefs":[source]}]},"ideas":[]});
+        let interpretation = "Planning a review with explicit approval";
+        good["article"]["applicability"]["summary"] = json!(interpretation);
+        good["article"]["bodyMarkdown"] = json!(format!("Approval flow\n\nReuse interpretation: {interpretation}"));
+        good["article"]["assumptionBindings"] = json!([{"assumptionId":"applicability:review","bodyLocator":interpretation,"sourceRefs":[source]}]);
+        let mut bad = good.clone();
+        bad["article"]["applicability"]["sourceRefs"][0]["quote"] = json!("Approval flow Keep approval explicit");
+        let mut c = database::open(&db).unwrap();
+        let mut saved = Value::Null;
+        for result in [bad, good] {
+            let prepared = knowledge_distillation::prepared(context.clone(), serde_json::from_value(result).unwrap(), "enhanced", "").unwrap();
+            let tx = c.transaction().unwrap();
+            saved = knowledge_distillation::append_generated_tx(&tx, &prepared).unwrap();
+            tx.commit().unwrap();
+            let input = json!({"operationId":"prepare-regenerated","taskId":"task","knowledgeRevision":saved["draftRevision"],"expectedKnowledgeContentHash":saved["contentHash"],"expectedGenerationSnapshotHash":context["generationSnapshotHash"],"selectedIdeaRevisionIds":[]});
+            let tx = c.transaction().unwrap();
+            let evidence = snapshot(&tx, &input);
+            tx.commit().unwrap();
+            if saved["draftRevision"] == 1 {
+                assert!(evidence.is_err());
+                assert!(!root.join("Knowledge/Approval.md").exists());
+            } else {
+                let proposal = prepare_from_plan(&db,&root,&input,&evidence.unwrap(),&[],json!({"outcome":"new","path":"Knowledge/Approval.md","rationale":"Recorded facts","tags":[],"aliases":[],"mocPaths":[]})).unwrap();
+                assert!(!root.join("Knowledge/Approval.md").exists());
+                assert_eq!(super::publish(&db,&root,&publish_input(&proposal)).unwrap()["state"], "index_pending");
+                assert_eq!(finish_index(&db,&root,&SemanticEngine::new(None),"publish-one").unwrap()["state"], "complete");
+            }
+        }
+        assert_eq!(saved["draftRevision"], 2);
+        assert_eq!(c.query_row("SELECT published_revision FROM knowledge_pointers WHERE task_id='task'",[],|row|row.get::<_,i64>(0)).unwrap(),2);
+        assert_eq!(c.query_row("SELECT quality_state FROM knowledge_draft_versions WHERE task_id='task' AND revision=1",[],|row|row.get::<_,String>(0)).unwrap(),"blocked_unsupported");
+        assert!(fs::read_to_string(root.join("Knowledge/Approval.md")).unwrap().contains("Approval flow"));
+    }
+
+    #[tokio::test]
+    async fn knowledge_revision_chat_republishes_only_after_approval_and_preserves_external_edits() {
+        for external_edit in ["none","before_prepare","after_prepare"] {
+            let (_temp,db,root,input,evidence)=knowledge_fixture();
+            let first=prepare_from_plan(&db,&root,&input,&evidence,&[],json!({"outcome":"new","path":"Knowledge/Approval.md","rationale":"Approval guide","tags":["approval"],"aliases":[],"mocPaths":[]})).unwrap();
+            super::publish(&db,&root,&publish_input(&first)).unwrap();
+            finish_index(&db,&root,&SemanticEngine::new(None),"publish-one").unwrap();
+            let before=fs::read_to_string(root.join("Knowledge/Approval.md")).unwrap();
+            let mut c=database::open(&db).unwrap();
+            let snapshot:Value=c.query_row("SELECT manifest_json FROM knowledge_evidence_snapshots WHERE task_id='task'",[],|r|r.get::<_,String>(0)).map(|s|parse(&s).unwrap()).unwrap();
+            let mut candidate:knowledge_distillation::GenerationResult=serde_json::from_value(evidence["version"]["result"].clone()).unwrap();
+            candidate.article.body_markdown.push_str("\n\nKeep approval explicit");
+            let mut binding=candidate.article.claim_bindings[0].clone();binding.claim_id="detail".into();binding.statement="Keep approval explicit".into();binding.source_refs[0].quote="Keep approval explicit".into();candidate.article.claim_bindings.push(binding);
+            let prepared=knowledge_distillation::prepared(snapshot,candidate,"enhanced","").unwrap();assert_eq!(prepared["qualityState"],"valid");
+            c.execute("INSERT INTO knowledge_revision_turns(id,task_id,base_revision,base_content_hash,expected_private_revision,request_hash,user_message,prepared_json,state) VALUES('chat-republish','task',1,?,1,'request','Keep approval explicit',?,'proposed')",params![input["expectedKnowledgeContentHash"].as_str(),prepared.to_string()]).unwrap();
+            let app=crate::NativeApplication::isolated(&root,&db).unwrap();
+            let applied=app.execute_workflow(crate::NativeOperation{name:"task-knowledge.revision-apply".into(),input:json!({"taskId":"task","turnId":"chat-republish"})}).await;
+            assert_eq!(applied.status,200);assert_eq!(applied.body["draftRevision"],2);
+            assert_eq!(fs::read_to_string(root.join("Knowledge/Approval.md")).unwrap(),before);
+            assert_eq!(c.query_row("SELECT published_revision FROM knowledge_pointers WHERE task_id='task'",[],|r|r.get::<_,i64>(0)).unwrap(),1);
+            let update_input=json!({"operationId":"prepare-chat-update","taskId":"task","knowledgeRevision":2,"expectedKnowledgeContentHash":applied.body["contentHash"],"expectedGenerationSnapshotHash":applied.body["sourceHash"],"selectedIdeaRevisionIds":[]});
+            let tx=c.transaction().unwrap();let update_evidence=super::snapshot(&tx,&update_input).unwrap();tx.commit().unwrap();
+            if external_edit == "before_prepare" { fs::write(root.join("Knowledge/Approval.md"),"Earlier external edit").unwrap(); }
+            let proposal=prepare_from_plan(&db,&root,&update_input,&update_evidence,&inventory(&root).unwrap(),json!({"outcome":"update","path":"Knowledge/Approval.md","targetPath":"Knowledge/Approval.md","rationale":"Explicitly reviewed correction","tags":[],"aliases":[],"mocPaths":[]}));
+            if external_edit == "before_prepare" {
+                assert!(proposal.unwrap_err().contains("archive_target_conflict"));
+                assert_eq!(fs::read_to_string(root.join("Knowledge/Approval.md")).unwrap(),"Earlier external edit");
+                assert_eq!(c.query_row("SELECT published_revision FROM knowledge_pointers WHERE task_id='task'",[],|r|r.get::<_,i64>(0)).unwrap(),1);
+                continue;
+            }
+            let proposal=proposal.unwrap();
+            let mut publish=publish_input(&proposal);publish["operationId"]=json!("publish-revised");
+            if external_edit == "after_prepare" {
+                fs::write(root.join("Knowledge/Approval.md"),"User external edit").unwrap();
+                assert!(super::publish(&db,&root,&publish).is_err());
+                assert_eq!(fs::read_to_string(root.join("Knowledge/Approval.md")).unwrap(),"User external edit");
+                assert_eq!(c.query_row("SELECT published_revision FROM knowledge_pointers WHERE task_id='task'",[],|r|r.get::<_,i64>(0)).unwrap(),1);
+            } else {
+                super::publish(&db,&root,&publish).unwrap();
+                assert_eq!(finish_index(&db,&root,&SemanticEngine::new(None),"publish-revised").unwrap()["state"],"complete");
+                assert_eq!(c.query_row("SELECT published_revision FROM knowledge_pointers WHERE task_id='task'",[],|r|r.get::<_,i64>(0)).unwrap(),2);
+                let bytes=fs::read_to_string(root.join("Knowledge/Approval.md")).unwrap();assert!(bytes.contains("Keep approval explicit"));assert!(bytes.contains("approval"));
+            }
+        }
     }
 
     #[test]

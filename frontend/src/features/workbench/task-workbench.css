@@ -1471,19 +1471,14 @@ main:has(.task-workbench.active :is(.task-detail, .refinement-panel)) {
 .task-panel button { min-height: 40px; padding: var(--space-2) var(--space-4); }
 .task-detail [data-control="task-detail-close"] { display: inline-flex; align-items: center; gap: var(--space-2); min-height: 40px; white-space: nowrap; }
 .task-panel input[type="file"]::file-selector-button { min-height: 34px; margin-right: var(--space-3); padding: var(--space-2) var(--space-3); border: var(--border-default); border-radius: var(--radius-control); background: var(--color-bg-surface); color: var(--color-text-primary); font: inherit; cursor: pointer; }
-/* The document is primary when a structured preview is available. */
-.refinement-panel:is([role="dialog"], [role="region"]):has(.reference-aware-preview) .refinement-workspace {
-  grid-template-columns: minmax(0, 1.35fr) minmax(300px, .85fr);
-}
-
 /* Preview follows the approved reading / chat / evidence composition. */
 .refinement-panel:is([role="dialog"], [role="region"]):has(.reference-aware-preview) { background: var(--color-bg-primary); }
 .refinement-panel:is([role="dialog"], [role="region"]):has(.reference-aware-preview) .refinement-header { background: var(--color-bg-primary); border-bottom: 0; padding-bottom: 20px; }
 .refinement-panel:is([role="dialog"], [role="region"]):has(.reference-aware-preview) .refinement-header h2 { font-size: 24px; }
-.refinement-panel:is([role="dialog"], [role="region"]):has(.reference-aware-preview) .refinement-workspace { grid-template-columns: minmax(0, 1fr) 320px; gap: 24px; }
+.refinement-panel:is([role="dialog"], [role="region"]):has(.reference-aware-preview) .refinement-workspace { grid-template-columns: minmax(0, 1fr) var(--review-support-column); gap: 24px; }
 .refinement-panel:is([role="dialog"], [role="region"]):has(.reference-aware-preview) .refinement-preview { padding: 0; border: 0; }
 .refinement-panel:is([role="dialog"], [role="region"]):has(.reference-aware-preview) .refinement-preview > .task-detail-tabs { background: transparent; border: 0; margin: 0 0 12px; padding: 0; }
-.refinement-support-rail { display: flex; flex-direction: column; min-height: 0; min-width: 0; overflow: auto; gap: 18px; }
+.refinement-support-rail { scrollbar-gutter: stable; display: flex; flex-direction: column; min-height: 0; min-width: 0; overflow: auto; gap: 18px; }
 .refinement-panel:is([role="dialog"], [role="region"]):has(.reference-aware-preview) .refinement-support-rail .refinement-conversation { flex: 1 0 420px; max-height: 65vh; padding: 22px; border: var(--border-default); border-radius: var(--radius-panel); background: var(--color-bg-surface); }
 .refinement-conversation-title { font-size: 15px; margin: 0 0 16px; }
 .refinement-panel:is([role="dialog"], [role="region"]):has(.reference-aware-preview) .refinement-support-rail .refinement-messages > :first-child { margin-top: 0; }
@@ -1495,7 +1490,7 @@ main:has(.task-workbench.active :is(.task-detail, .refinement-panel)) {
 .task-detail:has(.knowledge-review) .task-detail-header { background: var(--color-bg-primary); }
 .task-detail:has(.knowledge-review) .task-detail-tabs [role="tab"] { border: 0; border-radius: 0; background: transparent; box-shadow: none; }
 .task-detail:has(.knowledge-review) .task-detail-tabs [aria-selected="true"] { border-bottom: 3px solid var(--color-accent-primary); color: var(--color-text-primary); }
-@media(max-width:1050px) { .refinement-panel:is([role="dialog"], [role="region"]):has(.reference-aware-preview) .refinement-workspace { grid-template-columns: minmax(0,1fr) 290px; gap: 18px; } }
+@media(max-width:1050px) { .refinement-panel:is([role="dialog"], [role="region"]):has(.reference-aware-preview) .refinement-workspace { gap: 18px; } }
 @media(max-width:800px) {
  .refinement-panel:is([role="dialog"], [role="region"]):has(.reference-aware-preview) { display: block; overflow: auto; }
  .refinement-panel:is([role="dialog"], [role="region"]):has(.reference-aware-preview) .refinement-workspace { display: flex; flex-direction: column; }
@@ -1504,7 +1499,6 @@ main:has(.task-workbench.active :is(.task-detail, .refinement-panel)) {
  .refinement-panel:is([role="dialog"], [role="region"]):has(.reference-aware-preview) .refinement-support-rail .refinement-conversation { flex-basis: auto; min-height: 360px; }
 }
 .refinement-panel:is([role="dialog"], [role="region"]):has(.reference-aware-preview), .task-detail:has(.knowledge-review) { max-width: none; }
-@media(min-width:1051px) { .refinement-panel:is([role="dialog"], [role="region"]):has(.reference-aware-preview) .refinement-workspace { grid-template-columns: minmax(0,1fr) 288px; } }
 
 /* One Task dialog owns navigation and focus; refinement is an inline region. */
 .refinement-embedded .refinement-panel[role="region"] {
@@ -1514,3 +1508,11 @@ main:has(.task-workbench.active :is(.task-detail, .refinement-panel)) {
 }
 .refinement-embedded [hidden] { display: none !important; }
 .refinement-embedded .refinement-workspace { min-height: 600px; }
+
+/* Keep embedded reading and support scrolls inside their grid row. */
+@media (min-width: 801px) {
+  .refinement-embedded .refinement-workspace { height: clamp(540px, calc(100dvh - 280px), 1000px); min-height: 0; }
+}
+@media (max-width: 800px) {
+  .refinement-panel:is([role="dialog"], [role="region"]):has(.reference-aware-preview) .refinement-support-rail .refinement-conversation { max-height: none; }
+}

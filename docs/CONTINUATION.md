@@ -1,5 +1,163 @@
 # LLM Wiki — Continuation handoff
 
+## Knowledge diagnostics and revision chat (2026-10-21)
+
+Implementation lives in `.worktrees/knowledge-publication-contract`, branch
+`fix/knowledge-publication-contract`. The prior contract correction was rebased
+onto the supplied `origin/main` reference `1a57151` and is now `44c7cd9`.
+The chat feature is a separate following commit. The fluid modal widths from
+main are retained. No TaskDetail/WorkbenchView/RefinementPanel implementation
+or their modal CSS was changed; their parallel owner confirmed no migration
+conflict. KnowledgeReviewPanel's upper props/archive callbacks are unchanged.
+
+The left article stays canonical until explicit proposal apply. The right chat
+projects sentence/excerpt/reason/direction diagnostics, uses the selected
+private or published version plus exact current sources, and proposes a full
+GenerationResult rather than a body-only edit. Private review notes are not
+chat and are excluded from model inputs. Changed sentences appear first;
+complete body and binding comparisons are available before apply/cancel.
+Published versions are labelled and selectable as correction bases.
+
+Schema 25 adds one durable turn/proposal table, including base/hash, expected
+private head, input evidence snapshot, prompt version, messages, disposition
+and applied revision. It reuses the prompt registry/strict schema/provider,
+JobRegistry cancellation, existing Knowledge revisions and archive publication.
+There is one model call per turn and no added semantic-verifier call. Prompt
+`knowledge_revision_chat` is v1. Conversation history is Task-scoped; provider
+context includes 16 recent message pairs and one pending proposal, avoiding
+repeated full candidates while retaining the complete current evidence.
+
+Only a server-stored prepared valid proposal can atomically append a private
+revision; apply rechecks source freshness and the private head. Full body,
+claim/assumption/applicability/source bindings and quality findings change
+as one revision. Original versions and published pointers/files remain intact.
+Bad proposals stay repairable but cannot apply. Cancelling discards late replies
+and cancels the provider token through the existing registry. Interrupted turns
+remain visibly cancellable. Existing same-Task idea identities are preserved.
+A published-file hash guard now also blocks external edits made before archive
+preparation; existing write-time guards catch changes after preparation.
+
+Verification and screenshots are detailed in
+[the revision-chat test report](testing/knowledge-revision-chat.md). Knowledge
+native verification passes 55 unit and 4 integration tests; foundation passes
+26 tests; React passes 449 tests. Typecheck, lint, build and whitespace pass. No original
+user database was read, no real-data file was published, and no installation,
+merge or push was performed. Synthetic provider replies prove flow and integrity
+boundaries, not measured real-model quality or arbitrary semantic entailment.
+
+Remaining environment blocker: native app inventory/window capture on the Mac
+failed because the Mac is locked and automatic unlock failed. Native window
+screenshots and packaged WebView E2E remain unavailable until the host is
+unlocked. Actual React App fixture screenshots were captured in the in-app
+browser instead; they must not be described as real-user or packaged Tauri
+screenshots. No release build was run solely for unavailable E2E.
+
+## Knowledge generation contract investigation (2026-10-21)
+
+Worktree: `.worktrees/knowledge-publication-contract`; branch:
+`fix/knowledge-publication-contract`. The connected checkout's `main` was
+`4dfb363`, an ancestor of the supplied `e59de51`. The dedicated branch uses
+`e59de51` so the existing repair/UI work is retained. No other worktree,
+real application database, installation, or publication was modified.
+
+The screenshot error establishes a blocked saved candidate, not its precise
+cause. Exact quote validation searches individual decoded JSON strings in
+the identified manifest entry. It does not join fields, search another source,
+or accept JSON serialization as a quote. Save reuses the frozen snapshot and
+revalidates the result; append also rebuilds current evidence for freshness.
+Editing revalidates the same evidence and restoration preserves quality;
+neither action removes quarantined-citation blockers. Archive prepare checks
+valid quality/current private revision/hash/freshness; approval rechecks source
+and file guards, and index receipts precede the published pointer update.
+No confirmed fresh-save/reload validation mismatch was found.
+
+Generation now receives a provider-only citationCatalog pairing decoded strings
+with exact identity; the frozen snapshot/hash remains unchanged. Prompt v5
+explains that reuse prose is an interpretation, not a quotation or new verified
+fact. The overstrict source-quote substring gate now also accepts a nonverbatim
+applicability phrase when it is in the body, visibly labelled Reuse interpretation
+(or 활용 해석), and bound by an existing assumptionBinding with an applicability:
+ID, exact phrase bodyLocator and supporting exact citations shared by applicability.
+Existing literal versions still validate unchanged. Unlabelled or unbound new
+phrases remain blocked and can take the bounded same-snapshot repair path.
+No extra LLM call, schema migration, or factual authority is added. All existing
+claim, citation, material-omission, quality-finding and publication guards remain.
+The review UI identifies these interpretations as suggestions requiring review.
+Context size grows with the catalog; real-provider latency is unmeasured.
+
+Regression coverage includes decoded Korean/quotes/newlines/JSON-pointer
+escaping, wrong-source and joined-field rejection, unchanged snapshot identity,
+provider repair success/rejection/outage and applicability-only repair. A new
+temporary-vault native test saves a rejected version, verifies prepare fails,
+appends a valid regenerated version, explicitly approves files, finishes index,
+and checks the published pointer while retaining the rejected history. Existing
+native tests cover stale evidence, edits/restores, authority and actual-use
+metadata. Existing mounted App tests cover blocked publication, regeneration,
+file preview and approval through the production adapter with mocked native
+responses; they are not a live WebView-to-native E2E run.
+
+Verification: `cargo test --manifest-path src-tauri/Cargo.toml knowledge`
+passes all selected native unit and command/search/service integration tests,
+including labelled reuse interpretation and rejection→regeneration→publish/index.
+One existing synthetic timing test is ignored. `npm test` passes all 441 React
+tests and helper/provider/macOS/runtime/boundary checks. `npm run typecheck`,
+`npm run lint` and `git diff --check` pass. Initial concurrent UI budget failures
+passed the complete rerun; the native fixture .tmp directory was prepared.
+Packaged desktop E2E is skipped: exact-source provider fixtures, mounted App
+adapter publication flows, the new interpretation review test and native real
+SQLite/temp-vault publication/index integration cover the changed boundaries.
+Real WebView plus a real provider and the original failing data remain unverified.
+No release build, install, merge or push was performed.
+
+Original-case diagnosis still requires only: the affected Task ID, selected
+Knowledge revision, that version's `quality_state`, `model_error`, relevant
+`result_json` bindings/findings, and its referenced evidence snapshot entry
+(type/id/revision/locator/content plus generation snapshot hash). For a freshness
+error also provide current Task revision/completion ID and source hash. These
+can be redacted excerpts; no full user database is needed. Do not claim that
+the connected machine contains the user's failing data or that this synthetic
+repair proves all real model outputs will publish.
+
+### Spec review: applicability is not a direct quotation
+
+FR-004 requires use situations, questions, actual help and scope bounded by the
+body. The data model calls summary a concise use situation supported by the body,
+and the generation contract rule 6 forbids promises beyond supported body and
+bindings. None requires summary/helpsWith/conditions/exclusions to be substrings
+of source quotes. The existing validator's normalized source-quote substring
+check is stronger than this specification; it conflates semantic scope support
+with direct-quote fidelity. This can reject a supported paraphrase. The earlier extractive generation workaround has been removed. The current
+implementation distinguishes source-linked interpretations from factual claims.
+Do not claim the original user case was reproduced.
+
+Implemented minimal correction reuses existing assumptionBindings rather than
+adding a semantic-verifier service: exact citation checks still authenticate the
+source; labelled nonverbatim applicability remains an explicit source-linked
+interpretation. Factual statements about effects, observations, decisions or
+scope still need claimBindings and retain authoritative statement/state checks.
+Existing blocking qualityFindings remain blockers. This distinguishes reuse
+explanation from factual authority without pretending substring matching proves
+meaning. The UI and portable article explicitly identify reuse interpretations.
+
+Regression fixtures separately cover: supported nonverbatim interpretation;
+missing label/binding or fabricated source; contradictory factual claim;
+unobserved effectiveness; unsupported factual scope expansion; blocking
+unsupported-addition/overreach/omission findings; and rejection→regeneration→
+publication/index with an interpreted applicability summary. Negative factual
+fixtures exercise claim guards, and quality fixtures supply explicit findings.
+They are not an automatic detector of arbitrary contradictory natural-language
+interpretations. A model could misclassify an unsupported assertion as a labelled
+assumption; source/assumption visibility and explicit human review remain necessary.
+No existing independent semantic evaluator was found. No extra model calls or
+keyword heuristics were introduced, and qualityState=valid is publication
+eligibility after structural/evidence checks, not proof of every semantic claim.
+
+Prompt version is explicitly 5, with regression coverage for registry/build
+version and decoded catalog delivery; other prompt versions remain unchanged.
+Existing mock repair tests select their responses; they prove control-flow and
+storage boundaries, not measured behavior of a real model under old versus new
+contracts. No original-database read, install, merge or push was performed.
+
 ## Knowledge review integration verification (2026-10-21)
 
 Integrate only the approved Compass publication callbacks, Workbench wiring

@@ -490,3 +490,21 @@ export type TaskApplicationEvent = {
   revision: number;
   cause: "preview_adopted";
 };
+
+export interface KnowledgeRevisionDiagnostic {
+  kind: string; locator: string; statement: string; reason: string; direction: string;
+  evidence: KnowledgeSourceRef[];
+}
+export interface KnowledgeRevisionReply {
+  id: string; baseRevision: number; message: string; missingEvidence: string[];
+  candidate: KnowledgeVersion["result"] | null; qualityState?: string | null;
+  diagnostics: KnowledgeRevisionDiagnostic[];
+}
+export interface KnowledgeRevisionTurn {
+  id: string; userMessage: string; reply?: KnowledgeRevisionReply | null;
+  state: "running" | "proposed" | "needs_evidence" | "failed" | "cancelled" | "applied";
+  error?: string; appliedRevision?: number; createdAt: string;
+}
+export interface KnowledgeRevisionConversation {
+  baseRevision: number; diagnostics: KnowledgeRevisionDiagnostic[]; turns: KnowledgeRevisionTurn[];
+}

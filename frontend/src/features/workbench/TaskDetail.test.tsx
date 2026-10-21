@@ -2,7 +2,7 @@ import { act, createEvent, fireEvent, render, screen, waitFor } from "@testing-l
 import { describe, expect, it, vi } from "vitest";
 import { TaskDetail, type DetailSession } from "./TaskDetail";
 
-vi.mock("./RefinementPanel", () => ({ RefinementPanel: () => <section aria-label="Refinement fixture" /> }));
+vi.mock("./RefinementPanel", () => ({ RefinementPanel: ({taskDefinition}: {taskDefinition?: import("react").ReactNode}) => <section aria-label="Refinement fixture">{taskDefinition}</section> }));
 
 const execution = vi.hoisted(() => ({
   subscribe: vi.fn().mockResolvedValue({ runs: [], activeRunId: null, selectedRun: null }),

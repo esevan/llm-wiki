@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { taskOperation } from './taskOperation';
 
+it('binds Knowledge chat routes to URL identities', () => {
+  expect(taskOperation('POST', '/tasks/task/knowledge/versions/2/revision-chat', {taskId:'forged',baseRevision:9,message:'Fix',operationId:'turn'}, 'ko')).toEqual({name:'task-knowledge.revision-send',input:{taskId:'task',baseRevision:2,message:'Fix',operationId:'turn',locale:'ko'}});
+  expect(taskOperation('POST', '/tasks/task/knowledge/revision-chat/turn/apply', {turnId:'forged'}, 'en')).toEqual({name:'task-knowledge.revision-apply',input:{taskId:'task',turnId:'turn',locale:'en'}});
+});
+
 describe('Task contract routing', () => {
   it('binds review note task identity to the URL', () => {
     expect(taskOperation('POST', '/tasks/actual/knowledge/review-notes', { taskId: 'forged', knowledgeRevision: 2, expectedContentHash: 'hash', body: 'Review', operationId: 'note-op' }, 'en')).toEqual({ name: 'task-knowledge.review-note', input: { taskId: 'actual', knowledgeRevision: 2, expectedContentHash: 'hash', body: 'Review', operationId: 'note-op', locale: 'en' } });

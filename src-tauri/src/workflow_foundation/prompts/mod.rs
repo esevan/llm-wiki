@@ -2,11 +2,13 @@ use super::{PromptDefinition, PromptId};
 
 mod current;
 mod knowledge_archive;
+mod knowledge_revision_chat;
 mod reference_aware_workbench;
 mod foundation;
 
 pub fn prompt_definition(id: PromptId) -> &'static PromptDefinition {
     match id {
+        PromptId::KnowledgeRevisionChat => knowledge_revision_chat::definition(),
         PromptId::KnowledgeArchiveProposal => knowledge_archive::definition(),
         PromptId::WorkPreviewReply | PromptId::WorkPreviewPlanner | PromptId::WorkPreviewFinalizer | PromptId::WorkPreviewInvestigation => reference_aware_workbench::prompt_definition(id),
         PromptId::CaptureDistillation

@@ -54,3 +54,23 @@ A generation with a nonempty article body is retained as a private unverified dr
 Unverified versions show the validation issue and cannot prepare or publish an archive proposal. Editing or restoring a version does not silently grant verification. A user can add review notes to an exact immutable version and content hash; notes remain separate, append-only history and never upgrade claims or publication eligibility. Unsaved notes remain protected when switching versions or leaving the review. Saving a note performs only a local database write.
 
 Database schema 23 adds the review-note table without rewriting previous drafts, hashes, sources, or publications.
+
+## Exact citation selection during generation
+
+Generation receives a catalog pairing each nonempty decoded source string with its exact snapshot source identity. Quotes are copied together with their source; serialized JSON, neighboring fields, and text from a different source are not accepted. Applicability phrases occur in the reviewed body. They may explain source-bounded reuse in new words: such phrases retain an exact source-linked assumption binding and a visible “Reuse interpretation” label. They are suggestions for review and do not establish effectiveness or verified results. Factual claims keep their separate claim bindings and epistemic states. Blocking quality findings still prevent publication. Exact citations remain verbatim. Task completion alone does not create final decisions or verification evidence.
+
+A rejected citation, invalid finality, or unsupported applicability can trigger one repair against the same frozen evidence, with validation feedback and the same citation catalog. Repair never changes the evidence or grants publication authority. A failed repair retains a blocked private draft; regeneration captures current evidence. Existing versions and published content remain intact.
+
+## Diagnose and revise in chat
+
+The article remains the main reading surface on the left. **Revise Knowledge** on the right shows the affected sentence, a short original excerpt, the failure reason and a concrete correction direction. Ask to replace a citation, revise or remove an unsupported statement, or distinguish a bounded reuse interpretation. Private review notes remain a separate record; saving one does not send a message or change the article.
+
+The chat uses the selected immutable version, its diagnostics and current exact sources. **Revise published Knowledge** selects the published version when a newer private draft exists. A reply either requests missing original evidence or proposes a complete article with updated claim, assumption, applicability and citation bindings. It never treats a chat assertion as observed or verified evidence. A proposal with blocking findings cannot apply.
+
+Review changed sentences first; expand complete before/after bodies and the evidence-binding comparison when needed. **Apply and recheck private draft** checks the current private head and exact source snapshot, validates the complete candidate, and saves content and bindings together as a new private revision. It does not overwrite the published version or file. Publish that revision through the existing exact-file preview and explicit approval; externally changed destination files still cause a conflict.
+
+Cancel a proposal or pending request without changing the reviewed body. Provider errors keep the unsent message; persisted chat history remains separate from notes and older Knowledge versions. If a request was interrupted, cancel its pending turn before retrying. The chat can only cite captured sources: unavailable original records must be added through their existing Task/evidence workflow, not invented in a message. Manual body-only editing still does not update source bindings; use revision chat for a coordinated repair.
+
+These checks establish citation/structure/state consistency and publication eligibility. They do not prove every interpretation's meaning; inspect original records and proposed changes. Schema 25 adds one version-bound turn/proposal table without rewriting existing drafts, notes, publications or Vault files.
+
+Task preview and Knowledge revision chat share the same responsive support-column width (340–720 px on desktop). The article remains the primary reading area, the whole modal follows the window, and narrow windows stack chat below the content.

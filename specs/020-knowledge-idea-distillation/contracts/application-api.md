@@ -67,3 +67,26 @@ Existing `/tasks/{taskId}/knowledge/drafts` routes may adapt to this service dur
 - bounded shared provider/job failures
 
 Raw prompts, secrets, provider payloads, and unredacted stderr never cross this boundary.
+
+## Evidence-bound revision chat extension (2026-10-21)
+
+Explicitly requested extension: chat correction of a selected private or published
+version. It adds a proposal/apply step and preserves existing immutable revision
+and publication ownership rules; chat is distinct from review notes.
+
+- `GET /tasks/:taskId/knowledge/versions/:revision/revision-chat`: saved diagnostics and Task-level chat turns.
+- `POST` to the same path: `{operationId, expectedContentHash, message}`; one registered `knowledge_revision_chat` v1 provider call, returning missing original evidence or a complete proposed GenerationResult with deterministic diagnostics.
+- `POST /tasks/:taskId/knowledge/revision-chat/:turnId/apply`: only the server-stored exact candidate can apply; compare-and-swap the private head and recheck current evidence hash, validate, append content/bindings atomically, and record the source version. Published pointers/files remain unchanged.
+- `POST .../:turnId/cancel`: cancel a pending request or proposal; discard late model results and preserve drafts/files.
+
+Each durable turn stores its base version/hash, expected private head, exact input
+source snapshot, prompt version, message, response/proposal, disposition and
+applied revision. Provider failures preserve the message. Unchanged blocked
+content cannot gain eligibility merely by dropping findings. Material omission,
+authoritative claim state and exact source quote checks remain mandatory.
+Existing canonical idea IDs are retained only when owned by the same Task.
+
+Diagnostics are projections, not new evidence. Structural/evidence eligibility
+is not a guarantee of arbitrary semantic entailment. Unsupported chat assertions
+cannot supply missing observed evidence. No extra semantic verifier call, Task
+mutation, automatic publication or file approval is introduced.

@@ -5,7 +5,7 @@ use sha2::{Digest, Sha256};
 use serde_json::{json, Map, Value};
 use std::collections::BTreeMap;
 
-pub const CURRENT_SCHEMA_VERSION: i64 = 24;
+pub const CURRENT_SCHEMA_VERSION: i64 = 25;
 
 type MigrationFunction = for<'connection> fn(&Transaction<'connection>) -> Result<(), String>;
 type LegacyLocalizationRow = (String, String, String, String, String, String, String);
@@ -117,7 +117,21 @@ const MIGRATIONS: &[Migration] = &[
     Migration { version:22, name:"add Knowledge archive proposals and journal", run:add_knowledge_archive },
     Migration { version:23, name:"add version-bound Knowledge review notes", run:add_knowledge_review_notes },
     Migration { version:24, name:"add Task hold and execution backlog", run:add_task_hold },
+    Migration { version:25, name:"add evidence-bound Knowledge revision chat", run:add_knowledge_revision_chat },
 ];
+
+fn add_knowledge_revision_chat(tx: &Transaction<'_>) -> Result<(), String> {
+    tx.execute_batch("CREATE TABLE knowledge_revision_turns (
+      id TEXT PRIMARY KEY,task_id TEXT NOT NULL,base_revision INTEGER NOT NULL,
+      base_content_hash TEXT NOT NULL,expected_private_revision INTEGER,request_hash TEXT NOT NULL,
+      user_message TEXT NOT NULL,reply_json TEXT,prepared_json TEXT,
+      source_snapshot_json TEXT NOT NULL DEFAULT '{}',prompt_version INTEGER NOT NULL DEFAULT 1,
+      state TEXT NOT NULL CHECK(state IN ('running','proposed','needs_evidence','failed','cancelled','applied')),
+      error TEXT NOT NULL DEFAULT '',applied_revision INTEGER,created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY(task_id,base_revision) REFERENCES knowledge_draft_versions(task_id,revision)
+    ); CREATE INDEX knowledge_revision_turns_base ON knowledge_revision_turns(task_id,base_revision);")
+    .map_err(|e|e.to_string())
+}
 
 fn add_task_hold(tx: &Transaction<'_>) -> Result<(), String> {
     // Generalized ALTER: copy before dropping, never rename the referenced parent.

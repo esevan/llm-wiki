@@ -17,6 +17,7 @@ import type {
 } from "../../types/taskWorkbench";
 import { useTaskWorkbenchText } from "./taskWorkbenchText";
 import "./knowledge-review.css";
+import { KnowledgeRevisionChat } from "./KnowledgeRevisionChat";
 
 export interface KnowledgeArchivePrepareRequest {
   operationId: string;
@@ -154,6 +155,8 @@ export function KnowledgeReviewPanel({ taskId, completed, generationQueued, refr
 
   const [comparison, setComparison] = useState<PreviewComparison>();
   const [body, setBody] = useState("");
+  const [chatDirty, setChatDirty] = useState(false);
+  const [chatEpoch, setChatEpoch] = useState(0);
   const [savedBody, setSavedBody] = useState("");
   const [editing, setEditing] = useState(false);
   const [noteDrafts, setNoteDrafts] = useState<Record<string, string>>({});
@@ -161,7 +164,7 @@ export function KnowledgeReviewPanel({ taskId, completed, generationQueued, refr
   const [selectedIdeas, setSelectedIdeas] = useState<Set<string>>(new Set());
   const [source, setSource] = useState<ExactReferenceBinding>();
   const [loading, setLoading] = useState(true);
-  const [busy, setBusy] = useState<"generate" | "edit" | "restore" | "prepare" | "publish">();
+  const [busy, setBusy] = useState<"generate" | "edit" | "restore" | "prepare" | "publish" | "chat">();
   const [error, setError] = useState("");
   const [publicationError, setPublicationError] = useState("");
   const [canRegenerate, setCanRegenerate] = useState(false);
@@ -179,7 +182,8 @@ export function KnowledgeReviewPanel({ taskId, completed, generationQueued, refr
   const root = useRef<HTMLElement>(null);
   const bodyDirty = editing && body !== savedBody;
   const noteDirty = Object.entries(noteDrafts).some(([key, value]) => key.startsWith(`${taskId}:`) && Boolean(value.trim()));
-  const dirty = bodyDirty || noteDirty;
+  const dirty = bodyDirty || noteDirty || chatDirty;
+  const chatStateChange = useCallback((hasInput: boolean, pending: boolean) => { setChatDirty(hasInput); setBusy(current => pending ? "chat" : current === "chat" ? undefined : current); }, []);
   const dirtyRef = useRef(dirty);
   dirtyRef.current = dirty;
   useEffect(() => { onDirtyChange?.(dirty); return () => onDirtyChange?.(false); }, [dirty, onDirtyChange]);
@@ -344,6 +348,7 @@ export function KnowledgeReviewPanel({ taskId, completed, generationQueued, refr
   };
   const save = useCallback(async () => {
     if (savingCorrection.current || savedCorrectionRef.current?.taskId === taskId) return false;
+    if (chatDirty) { setStatus(text.unsavedRevisionChat); return false; }
     if (noteDirty) { setStatus(text.unsavedReviewNote); return false; }
     if (!version || version.revision !== currentRevision || !version.generationSnapshotHash || busy || !dirty) return !dirty;
     const correction = ++correctionSequence.current;
@@ -370,10 +375,10 @@ export function KnowledgeReviewPanel({ taskId, completed, generationQueued, refr
     } catch (cause) { if (currentTaskId.current === taskId && correction === correctionSequence.current) setError(`${text.saveFailed} ${String(cause instanceof Error ? cause.message : cause)}`); }
     finally { if (correction === correctionSequence.current) { savingCorrection.current = false; setBusy(undefined); } }
     return false;
-  }, [body, busy, currentRevision, dirty, load, noteDirty, taskId, text.edited, text.invalidResponse, text.saveFailed, text.saving, text.unsavedReviewNote, version]);
+  }, [body, busy, chatDirty, currentRevision, dirty, load, noteDirty, taskId, text.edited, text.invalidResponse, text.saveFailed, text.saving, text.unsavedReviewNote, text.unsavedRevisionChat, version]);
   useImperativeHandle(ref, () => ({
     save,
-    discard: () => { setNoteDrafts({}); setBody(savedBody); setEditing(false); setStatus(""); setError(""); },
+    discard: () => { setChatDirty(false); setChatEpoch(value => value + 1); setNoteDrafts({}); setBody(savedBody); setEditing(false); setStatus(""); setError(""); },
     focus: () => root.current?.focus({ preventScroll: true }),
   }), [savedBody, save]);
   const generate = async () => {
@@ -498,7 +503,7 @@ export function KnowledgeReviewPanel({ taskId, completed, generationQueued, refr
   const proposalConflict = proposal?.outcome === "conflict";
   return <section ref={root} className="knowledge-review" aria-label={text.title} data-content-hash={version.contentHash} tabIndex={-1}>
     <div className="knowledge-reading">
-    <header className="knowledge-review-header"><p className="knowledge-review-kicker">{text.privateDraft} · v{version.revision}</p>
+    <header className="knowledge-review-header"><p className="knowledge-review-kicker">{projection.pointers.publishedRevision === version.revision ? text.published : text.privateDraft} · v{version.revision}</p>
       <ContentRevisionTransition as="h3" entityKey={`knowledge:${taskId}`} revision={version.revision} cause={appliedTransition?.revision === version.revision ? appliedTransition.cause : undefined} historical={version.revision !== currentRevision} variant="title">{article?.title ?? version.title}</ContentRevisionTransition>
     </header>
     {status && <p role="status" className="knowledge-draft-status">{status}</p>}
@@ -511,10 +516,11 @@ export function KnowledgeReviewPanel({ taskId, completed, generationQueued, refr
     </section>
 
     {outcomes.length > 0 && <section className="knowledge-outcomes" aria-labelledby="knowledge-outcomes-title"><h4 id="knowledge-outcomes-title">{text.finalOutcomes}</h4>{outcomes.length ? <ol>{outcomes.map(outcome => <li key={outcome.topicKey}><p>{outcome.statement}</p></li>)}</ol> : <p>{text.noFinalOutcomes}</p>}</section>}
-    <section className="knowledge-applicability"><h4>{text.applicability}</h4><p className="knowledge-applicability-summary">{version.applicability.summary}</p><details className="knowledge-applicability-details" data-control="knowledge-applicability-details"><summary>{text.applicabilityDetails}</summary><div><ApplicabilityList title={text.questions} values={version.applicability.representativeQuestions} /><ApplicabilityList title={text.helpsWith} values={version.applicability.helpsWith} /><ApplicabilityList title={text.conditions} values={version.applicability.conditions} /><ApplicabilityList title={text.exclusions} values={version.applicability.exclusions} /></div></details></section>
+    <section className="knowledge-applicability"><h4>{text.applicability}</h4>{article?.assumptionBindings.some(binding => binding.assumptionId.startsWith("applicability:")) && <p role="note">{text.applicabilityReviewHint}</p>}<p className="knowledge-applicability-summary">{version.applicability.summary}</p><details className="knowledge-applicability-details" data-control="knowledge-applicability-details"><summary>{text.applicabilityDetails}</summary><div><ApplicabilityList title={text.questions} values={version.applicability.representativeQuestions} /><ApplicabilityList title={text.helpsWith} values={version.applicability.helpsWith} /><ApplicabilityList title={text.conditions} values={version.applicability.conditions} /><ApplicabilityList title={text.exclusions} values={version.applicability.exclusions} /></div></details></section>
     {references.length ? <details className="knowledge-provenance" data-control="knowledge-provenance"><summary>{text.provenance} · {references.length}</summary><div className="knowledge-source-list">{references.map(reference => <button type="button" data-control="knowledge-source-open" data-record-id={`${reference.documentId}:${reference.documentVersion}`} key={`${reference.documentId}:${reference.documentVersion}:${reference.section}:${reference.excerpt}`} onClick={() => setSource(reference)}><strong>{reference.title}</strong><span>{reference.section}</span><q>{reference.excerpt}</q><small>{text.openSource}</small></button>)}</div></details> : null}
     </div>
     <aside className="knowledge-controls">
+    <KnowledgeRevisionChat key={`${taskId}:${version.revision}:${chatEpoch}`} taskId={taskId} version={version} publishedRevision={projection.pointers.publishedRevision ?? undefined} onSelectPublished={projection.versions.some(item => item.revision === projection.pointers.publishedRevision) ? () => { if (projection.pointers.publishedRevision) selectVersion(projection.pointers.publishedRevision); } : undefined} disabled={bodyDirty || noteDirty || Boolean(busy && busy !== "chat")} onStateChange={chatStateChange} onApplied={async revision => { dirtyRef.current = false; setAppliedTransition({ revision, cause: "version_restore" }); setChatDirty(false); setBusy(undefined); await load(revision); }} />
     <section className="knowledge-review-notes" aria-label={text.reviewNotes}>
       <h4>{text.reviewNotes}</h4><p>{text.reviewNotesHint}</p>
       {reviewNotes.length ? <ol>{reviewNotes.map(note => <li key={note.id}><time dateTime={note.createdAt}>{note.createdAt}</time><p>{note.body}</p></li>)}</ol> : null}

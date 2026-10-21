@@ -61,12 +61,13 @@ const projection = (versions = [version(1), version(2)]) => ({
 
 
 describe('App Workbench publication review through the native adapter', () => {
-  it.each([false, true, "blocked"])('preserves review wiring after Workbench completion or recent reopen (already completed: %s)', async (alreadyCompleted) => {
+  it.each([false, true, "blocked", "chat"])('preserves review wiring after Workbench completion or recent reopen (already completed: %s)', async (alreadyCompleted) => {
     const task = { id: 'task-1', kind: 'task', title: 'Completed offline work', state: alreadyCompleted ? 'completed' : 'in_progress', taskRevision: 2, workLog: [], checklist: [], decisions: [], readinessEntries: [] };
     let published = false;
     let draftVersion = version(2);
     const notes: Array<{id:string;knowledgeRevision:number;contentHash:string;body:string;createdAt:string}> = [];
-    if (alreadyCompleted === "blocked") {
+    const revisionTurns: Array<Record<string, unknown>> = [];
+    if (alreadyCompleted === "blocked" || alreadyCompleted === "chat") {
       draftVersion.qualityState = "blocked_unsupported";
       draftVersion.modelError = "Rejected citation task_journey:5b722bbc-5fd8-4418-8f7d-ed77703ecbc6 quote absent";
       draftVersion.result.qualityFindings = [{ kind:"missing_reference",severity:"blocking",locator:"sourceRefs",message:draftVersion.modelError,sourceRefs:[] }];
@@ -81,6 +82,13 @@ describe('App Workbench publication review through the native adapter', () => {
         case 'task.completion.create': task.state = 'completed'; task.taskRevision++; body = task; break;
         case 'task.lineage': body = { nodes: [], edges: [], unresolved: [] }; break;
         case 'task-knowledge.get': body = { ...projection([draftVersion]), reviewNotes:notes }; break;
+        case 'task-knowledge.revision-get': body = {diagnostics:alreadyCompleted==='chat'?[{kind:'missing_reference',locator:'article.applicability',statement:'Review offline work',reason:'Quote does not match the selected source',direction:'Replace it with the exact saved quote',evidence:[source]}]:[],turns:revisionTurns};break;
+        case 'task-knowledge.revision-send': {
+          expect(operation.input).toMatchObject({taskId:'task-1',baseRevision:2,expectedContentHash:'content-2',message:'Replace the rejected citation and retain offline scope'});
+          const reply={id:operation.input.operationId,baseRevision:2,message:'Corrected citation proposal',missingEvidence:[],candidate:version(3).result,qualityState:'valid',diagnostics:[]};
+          revisionTurns.push({id:operation.input.operationId,userMessage:operation.input.message,reply,state:'proposed',createdAt:'now'});body=reply;break;
+        }
+        case 'task-knowledge.revision-apply': draftVersion=version(3);body={draftRevision:3};break;
         case 'task-knowledge.review-note': notes.push({id:'note-1',knowledgeRevision:draftVersion.revision,contentHash:draftVersion.contentHash,body:operation.input.body as string,createdAt:'2026-10-21'}); body={}; break;
         case 'jobs.enqueue': draftVersion=version(3);body={jobId:'regenerated-job',status:'queued'};break;
         case 'task-knowledge.archive-prepare':
@@ -118,6 +126,16 @@ describe('App Workbench publication review through the native adapter', () => {
     fireEvent.click(document.querySelector('[data-control=knowledge-review-note-save]')!);
     await screen.findByText('Review recorded privately.');
     fireEvent.click(prepare);
+    if (alreadyCompleted === 'chat') {
+      expect(await screen.findByRole('alert')).toHaveTextContent('Some statements or citations');
+      fireEvent.change(screen.getByRole('textbox',{name:'What should change?'}),{target:{value:'Replace the rejected citation and retain offline scope'}});
+      fireEvent.click(screen.getByRole('button',{name:'Propose revision'}));
+      expect(await screen.findByText('Corrected citation proposal')).toBeVisible();expect(published).toBe(false);
+      fireEvent.click(screen.getByRole('button',{name:'Apply and recheck private draft'}));
+      await waitFor(()=>expect(document.querySelector('.knowledge-review')).toHaveAttribute('data-content-hash','content-3'));
+      expect(published).toBe(false);
+      fireEvent.click(document.querySelector('[data-control=knowledge-archive-prepare]')!);
+    }
     if (alreadyCompleted === 'blocked') {
       expect(await screen.findByRole('alert')).toHaveTextContent('Some statements or citations');
       expect(document.querySelector('.knowledge-review')!.textContent).not.toContain('5b722bbc');

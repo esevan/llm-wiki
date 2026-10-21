@@ -34,7 +34,7 @@ const version = (revision = 2, bodyMarkdown = "# Offline use\n\nThe verified res
       bodyMarkdown,
       applicability: { summary: "Use this when work must remain local.", representativeQuestions: ["Can this run offline?"], helpsWith: ["Local review"], conditions: ["The local index is current"], exclusions: ["It does not prove remote availability"], sourceRefs: [source] },
       claimBindings: [{ claimId: "claim-1", statement: "The verified result is available offline.", epistemicState: "verified", sourceRefs: [source] }],
-      assumptionBindings: [],
+      assumptionBindings: [] as Array<{ assumptionId: string; bodyLocator: string; sourceRefs: typeof source[] }>,
     },
     ideas: [],
     qualityFindings: [{ kind: "source_note", severity: "info", locator: "claims/claim-1", message: "Exact source retained", sourceRefs: [source] }],
@@ -53,6 +53,16 @@ const projection = (versions = [version(1), version(2)]) => ({
 });
 
 describe("Knowledge review", () => {
+  it("identifies source-bound reuse interpretations as review suggestions", async () => {
+    const draft = version(2);
+    const interpreted = { ...draft, result: { ...draft.result, article: { ...draft.result.article,
+      assumptionBindings: [{ assumptionId: "applicability:local-review", bodyLocator: draft.applicability.summary, sourceRefs: [source] }],
+    } } };
+    window.llmWikiApplication = { request: vi.fn().mockResolvedValue(response(projection([interpreted]))) };
+    render(<KnowledgeReviewPanel taskId="task-1" completed onGenerate={vi.fn()} />);
+    expect(await screen.findByText("Reuse interpretations are source-linked suggestions for your review. They do not establish effectiveness or verified results.")).toBeVisible();
+    expect(screen.getByText("Use this when work must remain local.")).toBeVisible();
+  });
   it("offers an actionable fallback when publication is unavailable", async () => {
     window.llmWikiApplication = { request: vi.fn().mockResolvedValue(response(projection())) };
     render(<KnowledgeReviewPanel taskId="task-1" completed onGenerate={vi.fn()} />);
@@ -188,7 +198,7 @@ describe("Knowledge review", () => {
     if (!document.querySelector<HTMLDetailsElement>('[data-control="knowledge-history"]')!.open) fireEvent.click(screen.getByText("Versions and draft tools"));
     fireEvent.click(screen.getByText(/Ideas to revisit/));
     expect(screen.getByText("Try a reminder automation later.")).toBeVisible();
-    expect(request).toHaveBeenCalledTimes(1);
+    expect(request).toHaveBeenCalledTimes(2);
     expect(request).toHaveBeenCalledWith(expect.objectContaining({ path: "/tasks/task-1/knowledge", method: "GET" }));
   });
 
@@ -503,7 +513,7 @@ describe("Knowledge review", () => {
     expect(screen.queryByText("Older applied proposal")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Finish exact remaining steps" }));
     await waitFor(() => expect(recover).toHaveBeenCalledWith({ operationId: "saved-operation", choice: "finish" }));
-    await waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(request).toHaveBeenCalledTimes(3));
   });
 
   it("resumes status polling after retry and reloads the published pointer on completion", async () => {

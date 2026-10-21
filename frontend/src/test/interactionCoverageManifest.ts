@@ -10,6 +10,9 @@ const task = (id: string, family: `F${number}`, source: string, effect: string, 
 const existing = (id: string, family: `F${number}`, selector: string, source: string, evidence: string, effect: string, disabledReason?: string): ControlSpec => ({ id, family, kind: 'button', selector, source, sourceEvidence: evidence, scenario: 'designated-interactive-suite', effect, disabledReason });
 
 const manifest: readonly ControlSpec[] = [
+  ...['knowledge-chat-send','knowledge-chat-apply','knowledge-chat-cancel','knowledge-chat-use-issue','knowledge-chat-discard-input','knowledge-chat-diagnostics','knowledge-chat-bindings','knowledge-chat-full-compare','knowledge-chat-published'].map(id => task(id, 'F74', 'frontend/src/features/workbench/KnowledgeRevisionChat.tsx', 'Knowledge correction proposal is diagnosed, compared, applied as an immutable private version, or cancelled', 'pending operations, unsaved body or unresolved proposal findings protect the reviewed version')),
+  { ...task('knowledge-chat-input', 'F74', 'frontend/src/features/workbench/KnowledgeRevisionChat.tsx', 'revision request is preserved on provider failure', 'disabled while another edit or request is pending'), kind: 'textarea' },
+
   task("preview-evidence-open", "F74", "frontend/src/features/workbench/ReferenceAwarePreview.tsx", "opens the exact source from the supporting evidence rail"),
   task("preview-reference-tools", "F74", "frontend/src/features/workbench/ReferenceAwarePreview.tsx", "expands full source filters without displacing the preview"),
   task('reference-preview-more', 'F74', 'frontend/src/features/workbench/ReferenceAwarePreview.tsx', 'structured preview details expand without changing stored fields'),

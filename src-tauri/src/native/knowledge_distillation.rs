@@ -377,6 +377,41 @@ pub(crate) fn capture_snapshot_tx(
     )
 }
 
+/// Provider-only projection. Each citation keeps the identity of the exact
+/// manifest entry containing its decoded string, never a serialized JSON quote.
+/// This is derived from the frozen snapshot and does not enter its freshness hash.
+pub(crate) fn generation_context(snapshot: &Value) -> Value {
+    fn collect(value: &Value, source: &Value, path: String, entries: &mut Vec<Value>) {
+        match value {
+            Value::String(text) if !text.trim().is_empty() => entries.push(json!({
+                "contentPointer": path,
+                "sourceRef": {"type":source["type"],"id":source["id"],
+                    "revision":source["revision"],"locator":source["locator"],"quote":text}
+            })),
+            Value::Array(items) => for (index, item) in items.iter().enumerate() {
+                collect(item, source, format!("{path}/{index}"), entries);
+            },
+            Value::Object(items) => for (key, item) in items {
+                let key = key.replace('~', "~0").replace('/', "~1");
+                collect(item, source, format!("{path}/{key}"), entries);
+            },
+            _ => {}
+        }
+    }
+    let mut context = snapshot.clone();
+    let mut entries = Vec::new();
+    for source in snapshot["sourceManifest"].as_array().into_iter().flatten() {
+        collect(&source["content"], source, String::new(), &mut entries);
+    }
+    context["citationCatalog"] = json!(entries);
+    context["generationRules"] = json!({
+        "citationSelection": "Copy a citationCatalog sourceRef as a unit. Its quote is a decoded individual string, not JSON, adjacent fields, a paraphrase, or text borrowed from another manifest source. contentPointer is diagnostic only; preserve the sourceRef locator.",
+        "applicability": "Applicability explains source-bounded reuse, not new observed facts. Keep each phrase in bodyMarkdown. A nonverbatim explanation must have an assumptionBinding with assumptionId starting applicability:, bodyLocator equal to that phrase, exact supporting sourceRefs also present in applicability.sourceRefs, and a body line Reuse interpretation: <phrase> (or 활용 해석: <phrase>). Preserve source conditions and limits. Actual claims about decisions, observations, verification, effectiveness or scope require claimBindings and retain their epistemic state; do not disguise factual assertions as interpretations. Flag unsupported additions, contradictions and overreach as blocking qualityFindings.",
+        "finality": "Task completion records workflow state only. finalOutcomes may be empty even for a completed Task. Use reported source facts and preserve unresolved topics when no current adopted topic with an authoritative decided claim exists."
+    });
+    context
+}
+
 fn normalize(value: &str) -> String {
     value
         .split_whitespace()
@@ -484,14 +519,26 @@ pub(crate) fn validate_result(snapshot: &Value, result: &GenerationResult) -> Re
                 "applicability_overreach: applicability statement is absent from the article: {supported_text}"
             ));
         }
-        if !applicability
-            .source_refs
-            .iter()
-            .any(|source| normalize(&source.quote).contains(&normalize(supported_text)))
-        {
-            return Err(format!(
-                "applicability_overreach: applicability statement lacks exact quoted support: {supported_text}"
-            ));
+        let quoted = applicability.source_refs.iter()
+            .any(|source| normalize(&source.quote).contains(&normalize(supported_text)));
+        if !quoted {
+            // An explanation of possible reuse is not a direct quotation or a
+            // verified factual claim. Keep its explicit assumption provenance
+            // and visible label; exact citation validation still runs below.
+            let labelled = ["Reuse interpretation: ", "활용 해석: "].iter()
+                .any(|prefix| article_body.contains(&normalize(&format!("{prefix}{supported_text}"))));
+            let bound = result.article.assumption_bindings.iter().any(|binding| {
+                binding.assumption_id.starts_with("applicability:")
+                    && binding.body_locator == *supported_text
+                    && !binding.source_refs.is_empty()
+                    && binding.source_refs.iter().all(|source| applicability.source_refs.iter()
+                        .any(|reference| source_citation_key(reference) == source_citation_key(source)))
+            });
+            if !labelled || !bound {
+                return Err(format!(
+                    "applicability_overreach: reuse interpretation requires a labelled, source-bound assumption: {supported_text}"
+                ));
+            }
         }
     }
     let topics = snapshot["journey"]["topicStates"]
@@ -877,7 +924,10 @@ pub(crate) fn append_generated_tx(tx: &Transaction<'_>, prepared: &Value) -> Res
     quarantine_rejected_quotes(snapshot, &mut result)?;
     let (quality_state, quality_issue) = assess_candidate(snapshot, &result)?;
     for idea in &mut result.ideas {
-        idea.id = stored_idea_id(task_id, &idea.id);
+        // Revision chat returns existing canonical idea IDs; preserve their
+        // identity only when they already belong to this exact Task.
+        let existing: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM knowledge_idea_revisions WHERE id=? AND task_id=?)",params![idea.id,task_id],|row|row.get(0)).map_err(|e|e.to_string())?;
+        if !existing { idea.id = stored_idea_id(task_id, &idea.id); }
     }
     let revision: i64 = tx
         .query_row(
@@ -1190,6 +1240,88 @@ mod tests {
     fn minimal_snapshot() -> Value {
         json!({"journey":{"topicStates":[]},"sourceManifest":[{"type":"run_final_report","id":"run","revision":"1","locator":"final_report","contentHash":"hash","role":"primary","content":"Receipt recorded; approval remains required."}]})
     }
+    fn interpreted_article() -> GenerationResult {
+        let reference = SourceRef { source_type:"run_final_report".into(),id:"run".into(),
+            revision:"1".into(),locator:"final_report".into(),
+            quote:"Receipt recorded; approval remains required.".into() };
+        let mut result = article(reference.clone());
+        let interpretation = "Planning a receipt review while keeping approval separate";
+        result.article.applicability.summary = interpretation.into();
+        result.article.applicability.helps_with = vec![interpretation.into()];
+        result.article.body_markdown.push_str(&format!("\n\nReuse interpretation: {interpretation}"));
+        result.article.assumption_bindings.push(AssumptionBinding {
+            assumption_id:"applicability:review".into(),body_locator:interpretation.into(),source_refs:vec![reference]
+        });
+        result
+    }
+
+    #[test]
+    fn source_bound_reuse_interpretation_is_not_required_to_be_a_quote() {
+        let result = interpreted_article();
+        assert!(!result.article.applicability.source_refs[0].quote.contains(&result.article.applicability.summary));
+        validate_result(&minimal_snapshot(), &result).unwrap();
+        let mut unlabelled = result.clone();
+        unlabelled.article.body_markdown = unlabelled.article.body_markdown.replace("Reuse interpretation: ", "");
+        assert!(validate_result(&minimal_snapshot(), &unlabelled).unwrap_err().contains("source-bound assumption"));
+        let mut unbound = result.clone();
+        unbound.article.assumption_bindings.clear();
+        assert!(validate_result(&minimal_snapshot(), &unbound).is_err());
+        let mut fabricated = result;
+        fabricated.article.assumption_bindings[0].source_refs[0].quote = "Approval was granted".into();
+        assert!(validate_result(&minimal_snapshot(), &fabricated).is_err());
+    }
+
+    #[test]
+    fn reuse_interpretation_never_upgrades_facts_or_discards_quality_blockers() {
+        for (statement, state) in [("Approval is no longer required", "reported"),
+            ("The receipt workflow is proven effective", "verified"),
+            ("This works for every approval process", "reported")] {
+            let mut result = interpreted_article();
+            result.article.body_markdown.push_str(&format!("\n{statement}"));
+            result.article.claim_bindings.push(ClaimBinding { claim_id:"new-fact".into(),
+                statement:statement.into(),epistemic_state:state.into(),
+                source_refs:result.article.applicability.source_refs.clone() });
+            assert!(validate_result(&minimal_snapshot(), &result).unwrap_err().contains("invalid_verification"));
+        }
+        // Existing quality assessment findings remain authoritative blockers;
+        // this is not an automated natural-language contradiction detector.
+        for kind in ["applicability_overreach", "unsupported_addition", "material_omission"] {
+            let mut result = interpreted_article();
+            result.quality_findings.push(QualityFinding {kind:kind.into(),severity:"blocking".into(),
+                locator:"article.applicability.summary".into(),message:"Scope is unsupported".into(),
+                source_refs:result.article.applicability.source_refs.clone() });
+            assert!(validate_result(&minimal_snapshot(), &result).is_err());
+        }
+    }
+
+    #[test]
+    fn citation_catalog_preserves_decoded_strings_and_exact_source_mapping() {
+        let snapshot = json!({"generationSnapshotHash":"frozen","sourceManifest":[
+            {"type":"task_journey","id":"task","revision":"7","locator":"projection",
+             "content":{"a/b":{"~key":"한글 \"quote\"\nsecond line"},"adjacent":"different field"}},
+            {"type":"task_completion","id":"completion","revision":"3","locator":"completion",
+             "content":{"report":"Completed workflow; verification unresolved"}}
+        ]});
+        let context = generation_context(&snapshot);
+        assert_eq!(context["generationSnapshotHash"], snapshot["generationSnapshotHash"]);
+        assert!(snapshot.get("citationCatalog").is_none());
+        let entries = context["citationCatalog"].as_array().unwrap();
+        assert_eq!(entries.len(), 3);
+        let entry = entries.iter().find(|entry| entry["contentPointer"] == "/a~1b/~0key").unwrap();
+        assert_eq!(entry["sourceRef"]["quote"], "한글 \"quote\"\nsecond line");
+        assert_eq!(entry["sourceRef"]["locator"], "projection");
+        for entry in entries {
+            let reference: SourceRef = serde_json::from_value(entry["sourceRef"].clone()).unwrap();
+            let source = snapshot["sourceManifest"].as_array().unwrap().iter()
+                .find(|source| manifest_key(source) == source_key(&reference)).unwrap();
+            assert!(value_contains_quote(&source["content"], &reference.quote));
+        }
+        assert!(!value_contains_quote(&snapshot["sourceManifest"][0]["content"],
+            "Completed workflow; verification unresolved"));
+        assert!(!value_contains_quote(&snapshot["sourceManifest"][0]["content"],
+            "second line different field"));
+    }
+
     #[test]
     fn receipt_report_cannot_be_promoted_to_approval() {
         let source = SourceRef {

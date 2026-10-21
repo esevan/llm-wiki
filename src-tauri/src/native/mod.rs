@@ -4,6 +4,7 @@ pub(crate) mod conversation_context;
 pub(crate) mod database;
 mod job_results;
 pub(crate) mod knowledge_distillation;
+pub(crate) mod knowledge_revision_chat;
 pub mod jobs;
 pub(crate) mod lineage;
 pub(crate) mod localization;

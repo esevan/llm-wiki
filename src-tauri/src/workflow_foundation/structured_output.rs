@@ -265,6 +265,7 @@ pub(crate) fn schema(id: PromptId, context: &Value) -> Result<Value, String> {
                 ("referenceIds", strings()),
             ])),
         )]),
+        PromptId::KnowledgeRevisionChat => derive::<crate::native::knowledge_revision_chat::Reply>(),
         PromptId::KnowledgeDraft => {
             derive::<crate::native::knowledge_distillation::GenerationResult>()
         }

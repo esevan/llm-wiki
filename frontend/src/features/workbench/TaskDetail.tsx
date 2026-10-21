@@ -508,6 +508,29 @@ export function TaskDetail({
     { field: "nonGoals", label: text.nonGoals, control: "task-revision-non-goals", value: task.nonGoals ?? "" },
     { field: "validationCriteria", label: text.criteria, control: "task-revision-criteria", value: task.validationCriteria ?? "" },
   ];
+  const taskDefinition = (<section className="task-panel task-definition-panel reference-aware-preview task-definition-fallback" data-control="task-definition-fallback">
+        <h3>{text.previewTitle}</h3>
+        <div className="task-definition-actions">
+          <button type="button" data-control="task-definition-edit" onClick={() => setEditing(true)} hidden={editing}>{text.edit}</button>
+          {editing && <button type="button" data-control="task-definition-cancel" onClick={() => { setDetailState((current) => current && baseline(current.persisted)); setEditing(false); }}>{text.cancel}</button>}
+        </div>
+        {editing ? definitions.map(({ field, label, control, value }) => (
+          <label key={field}>{label}<textarea data-control={control} value={value} aria-label={label} aria-invalid={field === "title" && detailState.dirty.has("title") && !validTaskTitle(value)} onChange={(event) => editDefinition(field, event.target.value)} />{field === "title" && <small>{text.titleLengthError} ({taskTitleLength(value)}/70)</small>}</label>
+        )) : (
+          <dl className="task-definition-read">
+            {definitions.filter(({ field, value }) => field !== "title" && value.trim()).map(({ field, label, value }) => <div key={field}><dt>{label}</dt><dd>{value}</dd></div>)}
+          </dl>
+        )}
+        <button
+          type="button"
+          data-control="task-revision-save"
+          hidden={!editing}
+          disabled={!editing || !detailState.dirty.size || detailState.conflicts.length > 0 || mutationBusy || (detailState.dirty.has("title") && !validTaskTitle(detailState.draft.title))}
+          onClick={() => void saveDraft().then((saved) => saved && setEditing(false))}
+        >
+          {text.saveChanges}
+        </button>
+      </section>);
   const taskById = new Map((relatedTasks ?? []).map((candidate) => [candidate.id, candidate]));
   const taskSearch = relatedTaskSearch.trim().toLocaleLowerCase();
   const linkedTaskIds = new Set((task.relationships ?? []).map((link) => link.targetTaskId));
@@ -664,33 +687,12 @@ export function TaskDetail({
       <div id="task-tab-details" aria-labelledby="task-detail-tab-details" className="task-tab-panel" role="tabpanel" data-task-tab="details" hidden={tab !== "details"}>
       {(tab === "details") && <RefinementPanel
         embedded ref={refinementRef} kind="task" subjectId={task.id}
+        taskDefinition={taskDefinition} taskDefinitionEditing={editing || Boolean(detailState.dirty.size)}
         messageDrafts={messageDrafts ?? refinementMessages.current} imageDrafts={imageDrafts ?? refinementImages.current}
         onClose={() => requestLeave(onClose)}
         onApplied={(event) => { if (event) onTaskApplication?.(event); setTab("work"); onChanged(); void load(); }}
       />}
-      <section className="task-panel task-definition-panel">
-        <h3>{text.taskDetails}</h3>
-        <div className="task-definition-actions">
-          <button type="button" data-control="task-definition-edit" onClick={() => setEditing(true)} hidden={editing}>{text.edit}</button>
-          {editing && <button type="button" data-control="task-definition-cancel" onClick={() => { setDetailState((current) => current && baseline(current.persisted)); setEditing(false); }}>{text.cancel}</button>}
-        </div>
-        {editing ? definitions.map(({ field, label, control, value }) => (
-          <label key={field}>{label}<textarea data-control={control} value={value} aria-label={label} aria-invalid={field === "title" && detailState.dirty.has("title") && !validTaskTitle(value)} onChange={(event) => editDefinition(field, event.target.value)} />{field === "title" && <small>{text.titleLengthError} ({taskTitleLength(value)}/70)</small>}</label>
-        )) : (
-          <dl className="task-definition-read">
-            {definitions.filter(({ field, value }) => field !== "title" && value.trim()).map(({ field, label, value }) => <div key={field}><dt>{label}</dt><dd>{value}</dd></div>)}
-          </dl>
-        )}
-        <button
-          type="button"
-          data-control="task-revision-save"
-          hidden={!editing}
-          disabled={!editing || !detailState.dirty.size || detailState.conflicts.length > 0 || mutationBusy || (detailState.dirty.has("title") && !validTaskTitle(detailState.draft.title))}
-          onClick={() => void saveDraft().then((saved) => saved && setEditing(false))}
-        >
-          {text.saveChanges}
-        </button>
-      </section>
+
       </div>
       <div id="task-tab-work" aria-labelledby="task-detail-tab-work" className="task-tab-panel" role="tabpanel" data-task-tab="work" hidden={tab !== "work"}>
       <section className="task-panel">

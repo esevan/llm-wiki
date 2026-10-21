@@ -19,6 +19,7 @@ import {
   useRef,
   useState,
   type Ref,
+  type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
 import { taskClient } from "../../services/taskClient";
@@ -99,6 +100,8 @@ export function RefinementPanel({
   onApplied,
   subjectTitle,
   embedded = false,
+  taskDefinition,
+  taskDefinitionEditing = false,
   messageDrafts,
   imageDrafts,
   ref,
@@ -109,6 +112,8 @@ export function RefinementPanel({
   onApplied?: (application?: TaskApplicationEvent) => void;
   subjectTitle?: string;
   embedded?: boolean;
+  taskDefinition?: ReactNode;
+  taskDefinitionEditing?: boolean;
   messageDrafts?: Map<string, string>;
   imageDrafts?: Map<string, InputImage[]>;
   ref?: Ref<RefinementPanelHandle>;
@@ -1320,7 +1325,7 @@ export function RefinementPanel({
                   </button>
                 </p>
               )}
-              {referenceWorkspace && (
+              {referenceWorkspace && !taskDefinitionEditing && (referenceWorkspace.preview || !taskDefinition) && (
                 <ReferenceAwarePreview
                   workspace={referenceWorkspace}
                   referenceContainer={referenceContainer}
@@ -1346,13 +1351,13 @@ export function RefinementPanel({
                   onOpenReference={openReference}
                 />
               )}
-              {!referenceWorkspace?.preview && (
+              {(!referenceWorkspace?.preview || taskDefinitionEditing) && (
                 <>
                   {" "}
-                  <header>
+                  {taskDefinition && (taskDefinitionEditing || !proposals.length) ? taskDefinition : <header>
                     <h3>{text.previewTitle}</h3>
                     <small>{text.previewUnapplied}</small>
-                  </header>
+                  </header>}
                   {notice && <p role="status">{notice}</p>}
                   {previewBusy && (
                     <p role="status" className="region-empty">
@@ -1367,10 +1372,10 @@ export function RefinementPanel({
                         {text.previewQueueRecovery}
                       </p>
                     )}
-                  {!proposals.length && !previewBusy && (
+                  {!taskDefinition && !proposals.length && !previewBusy && (
                     <p className="region-empty">{text.previewEmpty}</p>
                   )}
-                  {proposals.map((proposal) => {
+                  {(taskDefinitionEditing ? [] : proposals).map((proposal) => {
                     const payload =
                       edits[proposal.id] ?? canonicalPayload(proposal);
                     const previewValues = meaningfulPayload(payload, proposal);

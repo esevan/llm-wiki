@@ -74,6 +74,8 @@ describe('App unified Task workspace', () => {
     expect(document.querySelector('.refinement-panel')).toHaveAttribute('role','region');
     expect(document.querySelector('[data-control="task-detail-refine"]')).toBeNull();
     expect(screen.getByRole('heading',{name:'Source work',level:2})).toBeVisible();
+    expect(document.querySelector(".task-definition-fallback")).toBeNull();
+    expect(document.querySelector("#task-tab-details > .task-definition-panel")).toBeNull();
     fireEvent.click(document.querySelector('[data-control="reference-preview-edit"]')!);
     fireEvent.change(document.querySelector('[data-control="reference-preview-field"]')!,{target:{value:'Unapplied proposal'}});
     fireEvent.keyDown(screen.getByRole('tab',{name:'Refine'}),{key:'Home'});

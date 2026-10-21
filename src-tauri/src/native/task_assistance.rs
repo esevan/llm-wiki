@@ -292,6 +292,10 @@ pub(crate) async fn execute_with_registry(
             crate::native::knowledge_archive::recover(db_path, vault_root, &semantic, input)
         }
         "task-knowledge.correction" => knowledge_correction(db_path, input),
+        "task-knowledge.revision-get" => crate::native::knowledge_revision_chat::get(db_path,input),
+        "task-knowledge.revision-send" => crate::native::knowledge_revision_chat::send_registered(db_path,settings_path,input,&registry).await,
+        "task-knowledge.revision-apply" => crate::native::knowledge_revision_chat::decide(db_path,input,true),
+        "task-knowledge.revision-cancel" => crate::native::knowledge_revision_chat::cancel_registered(db_path,input,&registry),
         "task-knowledge.regenerate" => knowledge_regenerate(db_path, settings_path, input).await,
         "task-knowledge.withdraw" => Err("archive_review_required: prepare a withdrawal proposal".into()),
         "task.lineage" => task_lineage_for_locale(db_path, required(input, "taskId")?, input.get("locale").and_then(Value::as_str).unwrap_or("en")),
@@ -2543,7 +2547,7 @@ async fn generate_knowledge_candidate(
     settings_path: &Path,
     snapshot: Value,
 ) -> Result<Value, String> {
-    let mut context = snapshot.clone();
+    let mut context = crate::native::knowledge_distillation::generation_context(&snapshot);
     let mut rejected: Option<Value> = None;
     for attempt in 0..2 {
         let response = match provider_json(
@@ -2587,7 +2591,7 @@ async fn generate_knowledge_candidate(
             })
             || candidate["modelError"]
                 .as_str()
-                .is_some_and(|issue| issue.contains("invalid_finality"));
+                .is_some_and(|issue| issue.contains("invalid_finality") || issue.contains("applicability_overreach"));
         if candidate["qualityState"] == "valid" || !repairable || attempt == 1 {
             return Ok(candidate);
         }
@@ -3243,7 +3247,7 @@ mod tests {
     #[tokio::test]
     async fn knowledge_generation_repairs_rejected_quotes_once_without_changing_evidence() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
-        for (repair_succeeds, retry_fails) in [(true, false), (false, false), (false, true)] {
+        for (repair_succeeds, retry_fails, applicability_only) in [(true, false, false), (false, false, false), (false, true, false), (true, false, true)] {
             let (_root, db, _vault, settings_path) = fixture();
             let task = completed_task(&db);
             let mut connection = database::open(&db).unwrap();
@@ -3258,6 +3262,11 @@ mod tests {
             let mut bad = good.clone();
             bad["article"]["applicability"]["sourceRefs"][0]["quote"] =
                 json!("Invented quote absent from the source");
+            if applicability_only {
+                bad = good.clone();
+                bad["article"]["applicability"]["summary"] = json!("Generalized unsupported use case");
+                bad["article"]["bodyMarkdown"] = json!(format!("{quote}\nGeneralized unsupported use case"));
+            }
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
             let address = listener.local_addr().unwrap();
             settings::save_provider(&settings_path, &json!({"base_url":format!("http://{address}"),"model":"fixture","api_key":"fixture-key"})).unwrap();
@@ -3313,6 +3322,7 @@ mod tests {
             let requests = server.await.unwrap();
             assert_eq!(requests.len(), 2);
             assert!(requests[1].contains("validationFeedback"));
+            assert!(requests.iter().all(|request| request.contains("citationCatalog") && request.contains("generationRules")));
             if retry_fails {
                 assert!(candidate["modelError"]
                     .as_str()
