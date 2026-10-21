@@ -34,10 +34,10 @@ try {
       await page.locator('[data-control="task-detail-tab-review"]').click();
       await page.locator('.knowledge-reading').waitFor();
       if (mode === 'preview') {
-        await page.locator('[data-control="task-detail-refine"]').click();
+        await page.locator('[data-control="task-detail-tab-details"]').click();
         await page.locator('.refinement-evidence-slot .preview-evidence-card').waitFor();
       }
-      const modal = mode === 'preview' ? '.refinement-panel[role="dialog"]' : '.task-detail';
+      const modal = '.task-detail';
       const main = mode === 'preview' ? '.reference-aware-preview' : '.knowledge-reading';
       const rail = mode === 'preview' ? '.refinement-support-rail' : '.knowledge-controls';
       let previous;
@@ -46,6 +46,10 @@ try {
         await page.locator(modal).evaluate(el=>{el.scrollTop=0;for(const child of el.querySelectorAll(".knowledge-reading,.knowledge-controls,.refinement-preview,.refinement-support-rail"))child.scrollTop=0;});
         const rect = async selector => page.locator(selector).evaluate(el => { const r=el.getBoundingClientRect(); return {x:r.x,y:r.y,width:r.width,height:r.height,right:r.right,bottom:r.bottom}; });
         const geometry = {mode,viewport:width,modal:await rect(modal),main:await rect(main),rail:await rect(rail)};
+        const actions = await rect('.task-actions');
+        const spacing = await page.locator('.task-detail').evaluate(el => parseFloat(getComputedStyle(el).getPropertyValue('--space-4')));
+        const firstPanelTop = await page.locator('.task-tab-panel:not([hidden])').evaluate(el => [...el.children].find(child => getComputedStyle(child).display !== 'none' && child.getBoundingClientRect().height > 0).getBoundingClientRect().top);
+        assert.ok(Math.abs(firstPanelTop - actions.bottom - spacing) <= 1, `${mode} content keeps one section gap after Task actions at ${width}px`);
         measurements.push(geometry);
         assert(geometry.modal.width >= width-64, `${mode} modal must follow ${width}px viewport`);
         assert.equal(await page.locator(modal).evaluate(el=>el.scrollWidth>el.clientWidth+1),false,'no horizontal modal overflow');

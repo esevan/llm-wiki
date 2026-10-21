@@ -34,10 +34,11 @@ function tabStops(root: HTMLElement) {
 }
 
 /** Own Escape and focus even when a disabled/removed control loses focus. */
-export function useModalInteraction(root: RefObject<HTMLElement | null>, priority: number, onEscape: () => void) {
+export function useModalInteraction(root: RefObject<HTMLElement | null>, priority: number, onEscape: () => void, enabled = true) {
   const escape = useRef(onEscape);
   useLayoutEffect(() => { escape.current = onEscape; }, [onEscape]);
   useEffect(() => {
+    if (!enabled) return;
     const modal = { root, priority };
     if (!modals.length) {
       const element = document.querySelector<HTMLElement>(".app");
@@ -101,5 +102,5 @@ export function useModalInteraction(root: RefObject<HTMLElement | null>, priorit
         background = undefined;
       }
     };
-  }, [root, priority]);
+  }, [root, priority, enabled]);
 }

@@ -167,8 +167,8 @@ describe('App Workbench publication review through the native adapter', () => {
     });
     window.llmWikiApplication=new TauriApplicationClient();render(<App/>);
     fireEvent.click(await screen.findByRole('button',{name:'Original work'}));
-    await waitFor(()=>expect(document.querySelector('[data-control="task-detail-refine"]')).not.toBeNull());
-    fireEvent.click(document.querySelector('[data-control="task-detail-refine"]')!);
+    await waitFor(()=>expect(document.querySelector('[data-control="task-detail-tab-details"]')).not.toBeNull());
+    fireEvent.click(document.querySelector('[data-control="task-detail-tab-details"]')!);
     await screen.findByText('Contract preview 2');
     expect(task.checklist).toHaveLength(1);
     expect(document.querySelector(".refinement-support-rail .refinement-conversation")).not.toBeNull();

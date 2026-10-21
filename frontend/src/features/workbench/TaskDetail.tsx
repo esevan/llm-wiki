@@ -6,10 +6,10 @@ import { useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, u
 import { createPortal } from "react-dom";
 import { taskClient } from "../../services/taskClient";
 import { formatSystemTime } from "../../services/systemTime";
-import type { LineageSnapshot, TaskAggregate, TaskApplicationEvent, TaskCard } from "../../types/taskWorkbench";
+import type { LineageSnapshot, TaskAggregate, TaskApplicationEvent, TaskCard, InputImage } from "../../types/taskWorkbench";
 import { ContentRevisionTransition } from "../../components/ContentRevisionTransition";
 import { KnowledgeReviewPanel, type KnowledgeArchiveOperation, type KnowledgeArchiveOrganizeRequest, type KnowledgeArchivePrepareRequest, type KnowledgeArchivePublishRequest, type KnowledgeArchiveRecoverRequest, type KnowledgeReviewPanelHandle } from "./KnowledgeReviewPanel";
-import { RefinementPanel } from "./RefinementPanel";
+import { RefinementPanel, type RefinementPanelHandle } from "./RefinementPanel";
 import { TaskJourneyGraph } from "./TaskJourneyGraph";
 import { WorkLogDistillation } from "./WorkLogDistillation";
 import { TaskWorkSessions, type WorkSessionDraft } from "./TaskWorkSessions";
@@ -84,7 +84,10 @@ export function TaskDetail({
   onClose,
   onChanged,
   onRequestDelete,
-  onRefine,
+  initialRefinement,
+  messageDrafts,
+  imageDrafts,
+  onTaskApplication,
   application,
   onOpenTask,
   refreshKey,
@@ -106,7 +109,10 @@ export function TaskDetail({
   onClose: () => void;
   onChanged: () => void;
   onRequestDelete?: (title: string) => void;
-  onRefine?: () => void;
+  initialRefinement?: boolean;
+  messageDrafts?: Map<string, string>;
+  imageDrafts?: Map<string, InputImage[]>;
+  onTaskApplication?: (application: TaskApplicationEvent) => void;
   application?: TaskApplicationEvent;
   refreshKey?: number;
   suppressInitialFocus?: boolean;
@@ -139,7 +145,9 @@ export function TaskDetail({
   const [decision, setDecision] = useState(session?.decision ?? "");
   const [attachment, setAttachment] = useState<File | undefined>(session?.attachment);
   const [comments, setComments] = useState<Record<string, string>>(session?.comments ?? {});
-  const [refining, setRefining] = useState(false);
+  const refinementRef = useRef<RefinementPanelHandle>(null);
+  const refinementMessages = useRef(new Map<string, string>());
+  const refinementImages = useRef(new Map<string, InputImage[]>());
   const [completionEvidence, setCompletionEvidence] = useState(session?.completionEvidence ?? "");
   const [relatedTaskId, setRelatedTaskId] = useState(session?.relatedTaskId ?? "");
   const [relatedTaskSearch, setRelatedTaskSearch] = useState(session?.relatedTaskSearch ?? "");
@@ -178,14 +186,19 @@ export function TaskDetail({
   const headingRef = useRef<HTMLHeadingElement>(null);
   const pendingTabFocus = useRef<string | undefined>(undefined);
   const focusInTab = (nextTab: DetailTab, selector: string) => {
-    if (tab === nextTab) panelRef.current?.querySelector<HTMLElement>(selector)?.focus();
-    else { pendingTabFocus.current = selector; setTab(nextTab); }
+    const proceed = () => {
+      if (tab === nextTab) panelRef.current?.querySelector<HTMLElement>(selector)?.focus();
+      else { pendingTabFocus.current = selector; setTab(nextTab); }
+    };
+    if (tab === "details" && nextTab !== tab && refinementRef.current) refinementRef.current.requestLeave(proceed);
+    else proceed();
   };
   useLayoutEffect(() => {
     if (!pendingTabFocus.current) return;
     panelRef.current?.querySelector<HTMLElement>(pendingTabFocus.current)?.focus();
     pendingTabFocus.current = undefined;
   }, [tab]);
+  useEffect(() => { if (initialRefinement) setTab("details"); }, [initialRefinement]);
   useEffect(() => { if (tab === "review") setKnowledgeReviewMounted(true); }, [tab]);
   const loadSequence = useRef(0);
   const mutationQueue = useRef<Promise<void>>(Promise.resolve());
@@ -225,7 +238,7 @@ export function TaskDetail({
           setKnowledgeDraft((current) => current ?? persistedDraft);
         }
         if (!hadSession.current) {
-          setTab(openJourney ? "details" : next.state === "completed" ? "review" : next.state === "task" ? "details" : "work");
+          setTab(initialRefinement || openJourney ? "details" : next.state === "completed" ? "review" : "work");
           hadSession.current = true;
         }
       }
@@ -233,7 +246,7 @@ export function TaskDetail({
       if (sequence === loadSequence.current)
         setError(String(e instanceof Error ? e.message : e));
     }
-  }, [openJourney, taskId]);
+  }, [initialRefinement, openJourney, taskId]);
   useEffect(() => {
     const sequences = loadSequence;
     void load();
@@ -334,16 +347,22 @@ export function TaskDetail({
     if (mutationBusyRef.current) return;
     setDetailState((current) => current && editDraft(current, field, value));
   };
-  const requestLeave = useCallback((proceed: () => void) => {
+  const requestTaskLeave = useCallback((proceed: () => void) => {
     if (mutationBusyRef.current) return;
     if (detailState?.dirty.size || knowledgeReviewDirty) {
       pendingLeave.current = proceed;
       setClosePrompt(true);
     } else proceed();
   }, [detailState, knowledgeReviewDirty]);
+  const requestLeave = useCallback((proceed: () => void) => {
+    requestTaskLeave(() => {
+      if (refinementRef.current) refinementRef.current.requestLeave(proceed);
+      else proceed();
+    });
+  }, [requestTaskLeave]);
   useImperativeHandle(ref, () => ({ requestLeave }), [requestLeave]);
   useModalInteraction(modalRef, 10, () => {
-    if (refining || mutationBusyRef.current) return;
+    if (mutationBusyRef.current) return;
     if (closePrompt) { pendingLeave.current = undefined; setClosePrompt(false); }
     else requestLeave(onClose);
   });
@@ -563,10 +582,10 @@ export function TaskDetail({
         const next = event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : event.key === "ArrowRight" ? (current + 1) % tabs.length : event.key === "ArrowLeft" ? (current + tabs.length - 1) % tabs.length : -1;
         if (next >= 0) { event.preventDefault(); focusInTab(tabs[next], `[data-control="task-detail-tab-${tabs[next]}"]`); }
       }}>
-        <button id="task-detail-tab-work" type="button" role="tab" tabIndex={tab === "work" ? 0 : -1} data-control="task-detail-tab-work" aria-controls="task-tab-work" aria-selected={tab === "work"} onClick={() => setTab("work")}>{text.work}</button>
-        <button id="task-detail-tab-sessions" type="button" role="tab" tabIndex={tab === "sessions" ? 0 : -1} data-control="task-detail-tab-sessions" aria-controls="task-tab-sessions" aria-selected={tab === "sessions"} onClick={() => setTab("sessions")}>{text.workSessionsTab}</button>
-        <button id="task-detail-tab-details" type="button" role="tab" tabIndex={tab === "details" ? 0 : -1} data-control="task-detail-tab-details" aria-controls="task-tab-details" aria-selected={tab === "details"} onClick={() => setTab("details")}>{text.detailsTab}</button>
-        <button id="task-detail-tab-review" type="button" role="tab" tabIndex={tab === "review" ? 0 : -1} data-control="task-detail-tab-review" aria-controls="task-tab-review" aria-selected={tab === "review"} onClick={() => setTab("review")}>{text.reviewTab}</button>
+        <button id="task-detail-tab-work" type="button" role="tab" tabIndex={tab === "work" ? 0 : -1} data-control="task-detail-tab-work" aria-controls="task-tab-work" aria-selected={tab === "work"} onClick={() => focusInTab("work", "[data-control=task-detail-tab-work]")}>{text.work}</button>
+        <button id="task-detail-tab-sessions" type="button" role="tab" tabIndex={tab === "sessions" ? 0 : -1} data-control="task-detail-tab-sessions" aria-controls="task-tab-sessions" aria-selected={tab === "sessions"} onClick={() => focusInTab("sessions", "[data-control=task-detail-tab-sessions]")}>{text.workSessionsTab}</button>
+        <button id="task-detail-tab-details" type="button" role="tab" tabIndex={tab === "details" ? 0 : -1} data-control="task-detail-tab-details" aria-controls="task-tab-details" aria-selected={tab === "details"} onClick={() => focusInTab("details", "[data-control=task-detail-tab-details]")}>{text.refine}</button>
+        <button id="task-detail-tab-review" type="button" role="tab" tabIndex={tab === "review" ? 0 : -1} data-control="task-detail-tab-review" aria-controls="task-tab-review" aria-selected={tab === "review"} onClick={() => focusInTab("review", "[data-control=task-detail-tab-review]")}>{text.reviewTab}</button>
       </nav></div>
       {error && <p role="alert">{error}</p>}
       {detailState.conflicts.length > 0 && (
@@ -598,9 +617,6 @@ export function TaskDetail({
         </section>
       )}
       <section className="task-actions">
-        <button type="button" data-control="task-detail-refine" onClick={() => onRefine ? onRefine() : setRefining(true)}>
-          {text.refine}
-        </button>
         {task.state === "task" && (
           <button
             type="button"
@@ -645,15 +661,13 @@ export function TaskDetail({
       <div id="task-tab-sessions" aria-labelledby="task-detail-tab-sessions" className="task-tab-panel" role="tabpanel" data-task-tab="sessions" hidden={tab !== "sessions"}>
         {tab === "sessions" && <TaskWorkSessions task={task} draftStore={workSessionDrafts} focusExecution={executionFocus} onOpenWorkLog={(entryId) => focusInTab("work", `#work-log-${entryId}`)} />}
       </div>
-      {refining && (
-        <RefinementPanel
-          kind="task"
-          subjectId={task.id}
-          onClose={() => setRefining(false)}
-          onApplied={() => { setRefining(false); onChanged(); void load(); }}
-        />
-      )}
       <div id="task-tab-details" aria-labelledby="task-detail-tab-details" className="task-tab-panel" role="tabpanel" data-task-tab="details" hidden={tab !== "details"}>
+      {(tab === "details") && <RefinementPanel
+        embedded ref={refinementRef} kind="task" subjectId={task.id}
+        messageDrafts={messageDrafts ?? refinementMessages.current} imageDrafts={imageDrafts ?? refinementImages.current}
+        onClose={() => requestLeave(onClose)}
+        onApplied={(event) => { if (event) onTaskApplication?.(event); setTab("work"); onChanged(); void load(); }}
+      />}
       <section className="task-panel task-definition-panel">
         <h3>{text.taskDetails}</h3>
         <div className="task-definition-actions">

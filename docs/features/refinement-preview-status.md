@@ -60,8 +60,8 @@ and is shown on its card and under **Original capture** in Task details. Reopeni
 the Task resumes the original Capture conversation. Tasks created with different IDs by earlier
 versions retain their IDs and use their existing Capture links. A provider response labelled “new Task”
 in an existing Task session is treated as a Task revision, so Apply does not create an unrelated copy.
-After Apply, **Work status** opens beside **Preview** and shows **Refined - Revision N**. Refinement
-is separate from execution state: **Start work** moves the Task to **In progress**. Applied sessions
+After Apply, the Task workspace shows **Refined - Revision N**. Applying a Task
+preview returns to **Work**. Refinement is separate from execution state: **Start work** moves the Task to **In progress**. Applied sessions
 leave the Refining shortcuts. Workbench places all in-progress Tasks immediately below Capture, with **Focus
 active work** to hide the other sections without losing selection or drafts.
 When an accepted preview replaces the canonical Task title, the mounted Workbench card and Task
@@ -168,3 +168,36 @@ Related Spec Kit: [012 — Task-centered Workbench](../../specs/012-task-centere
 Migrated Problem-only items retain their existing context and preview controls, but open as native modal dialogs above the current page. Their dialog is mounted outside the Workbench application container, so it does not depend on a Workbench grid column or participate in page flow. Background interaction stays blocked until dismissal; opening the same dialog again does not create another modal instance.
 
 Task and Capture refinement remain body-portal dialogs. Opening or restoring focus does not scroll the document, and refinement does not hide the underlying Task list as an inline workspace column. Closing restores the document scroll position and leaves unsent conversation input available on reopen.
+
+Workbench refreshes keep the newest requested board snapshot. A delayed read
+from before Apply cannot move an acknowledged refined Task back into refinement.
+Applying a preview preserves running and held execution states; rejected Apply
+requests leave the card in its existing lane.
+
+## One Task workspace
+
+Open a Task by its title, card, or Open Task action. Normal Tasks start on **Work**,
+completed Tasks on **Review**, and Refining entries on **Refine**, unless a
+remembered tab is restored. Opening Work does not start a refinement session.
+The **Refine** tab replaces
+separate Task refinement dialogs and the former Details tab. It shows the
+unapplied proposal beside the conversation and evidence; saved Task definition
+fields remain below the preview and can still be edited directly. **Work** keeps
+the checklist above the Work Log. **Sessions** and **Review** keep their existing
+execution and publication boundaries.
+
+A Capture has only refinement before its first Apply. Apply opens the resulting
+Task workspace. Existing directly registered and legacy Tasks keep all tabs,
+even when they have no refinement receipt. Running and held Tasks retain their
+execution state when refined again. Inbox and Refining cards keep a Refine entry;
+Task cards with Open Task do not show a duplicate Refine action. Other Task tabs
+also use the Refine tab instead of a duplicate button.
+
+Tab navigation and closing preserve unsent conversations and save workspace
+state. Unsaved preview edits block leaving until saved or canceled; canonical
+Task and Knowledge edits retain their save/discard guards. Returning to a Task
+restores its remembered tab and drafts without a second modal or focus trap.
+
+Task tabs own a shared section spacing rule: the first panel starts one spacing
+step below Task actions, and subsequent panels use the same spacing without
+adding their own top margin. This applies to Refine, Work, Sessions, and Review.

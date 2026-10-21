@@ -110,10 +110,13 @@ export function WorkbenchView({ active, taskApplication, onTaskApplication, onPr
     const leaveTask = () => { if (detailRef.current) detailRef.current.requestLeave(proceed); else proceed(); };
     if (refinementRef.current) refinementRef.current.requestLeave(leaveTask); else leaveTask();
   };
+  const boardLoadSequence = useRef(0);
   const load = useCallback(async () => {
+    const sequence = ++boardLoadSequence.current;
     try {
       setError("");
       const next = await taskClient.workbench();
+      if (sequence !== boardLoadSequence.current) return;
       setSnapshot({
         ...next,
         activeShortcuts: next.activeShortcuts ?? [],
@@ -121,7 +124,7 @@ export function WorkbenchView({ active, taskApplication, onTaskApplication, onPr
         categories: next.categories ?? [],
       });
     } catch (e) {
-      setError(String(e instanceof Error ? e.message : e));
+      if (sequence === boardLoadSequence.current) setError(String(e instanceof Error ? e.message : e));
     }
   }, []);
   useEffect(() => {
@@ -192,10 +195,6 @@ export function WorkbenchView({ active, taskApplication, onTaskApplication, onPr
       setBusy(false);
     }
   };
-  const taskFor = (id: string) =>
-    snapshot?.categories
-      .flatMap((group) => group.items)
-      .find((item): item is TaskCard => item.kind === "task" && item.id === id);
   const captureFor = (id: string) =>
     snapshot?.categories
       .flatMap((group) => group.items)
@@ -270,7 +269,7 @@ export function WorkbenchView({ active, taskApplication, onTaskApplication, onPr
     }); }
   };
   const openItem = (item: WorkbenchItem, trigger?: HTMLElement) => {
-    if (item.kind === "task") selectDetail(item.id, trigger);
+    if (item.kind === "task") { if (refiningIds.has(`task:${item.id}`) && !item.executionBacklog) openRefinement({kind:"task",id:item.id}, trigger); else selectDetail(item.id, trigger); }
     else if (item.kind === "capture") openRefinement({ kind: "capture", id: item.id }, trigger);
     else openLegacyRefinement(item.problemId, item.problemRevision, item.title);
   };
@@ -329,19 +328,9 @@ export function WorkbenchView({ active, taskApplication, onTaskApplication, onPr
               data-control="task-card-open"
               data-entity-id={item.id}
               type="button"
-              onClick={(event) => selectDetail(item.id, event.currentTarget)}
+              onClick={(event) => refiningIds.has(`task:${item.id}`) && !item.executionBacklog ? openRefinement({kind:"task",id:item.id}, event.currentTarget) : selectDetail(item.id, event.currentTarget)}
             >
-              {text.open}
-            </button>
-            <button
-              data-control={refiningIds.has(`${item.kind}:${item.id}`) ? "task-shortcut-refine" : "task-card-refine"}
-              data-entity-id={item.id}
-              type="button"
-              onClick={(event) =>
-                openRefinement({ kind: "task", id: item.id }, event.currentTarget)
-              }
-            >
-              {text.refine}
+              {refiningIds.has(`task:${item.id}`) && !item.executionBacklog ? text.refine : text.open}
             </button>
             <ItemActionsMenu title={item.title} state={item.state} activeExecution={item.hasActiveExecution} busy={movingTask === item.id} onMove={to => void moveTask(item, to)} onDelete={() => requestDelete("tasks", item.id, item.title)} />
           </>
@@ -528,13 +517,16 @@ export function WorkbenchView({ active, taskApplication, onTaskApplication, onPr
             if (refinementRef.current) refinementRef.current.requestLeave(leave); else leave();
           }}
           onOpenTask={(id) => selectDetail(id)}
-          onRefine={() => openRefinement({ kind: "task", id: detail })}
+          messageDrafts={refinementMessages.current}
+          imageDrafts={refinementImages.current}
+          initialRefinement={refining?.kind === "task" && refining.id === detail}
+          onTaskApplication={(event) => { setLocalTaskApplication(event); onTaskApplication?.(event); setRefining(undefined); }}
           application={appliedTask?.taskId === detail ? appliedTask : undefined}
           refreshKey={detailRefresh}
           queueImageSummary={queueImageSummary?.taskId === detail ? queueImageSummary : undefined}
           openJourney={queueJourneyTaskId === detail}
           queueKnowledgeDraft={queueKnowledgeDraft?.taskId === detail ? queueKnowledgeDraft : undefined}
-          suppressInitialFocus={Boolean(refining)}
+          suppressInitialFocus={false}
           onChanged={() => void load()}
           sessions={detailSessions.current}
           onRequestDelete={(title) => requestDelete("tasks", detail, title)}
@@ -555,13 +547,13 @@ export function WorkbenchView({ active, taskApplication, onTaskApplication, onPr
           onCancel={() => setDeleteTarget(undefined)}
         />
       )}
-      {refining && (
+      {refining?.kind === "capture" && (
         <RefinementPanel
           key={`${refining.kind}:${refining.id}`}
           ref={refinementRef}
           messageDrafts={refinementMessages.current}
           imageDrafts={refinementImages.current}
-          subjectTitle={refining.kind === "task" ? taskFor(refining.id)?.title : itemTitle(captureFor(refining.id) ?? { kind:"capture",id:refining.id,text:"" }) || text.imageCapture}
+          subjectTitle={itemTitle(captureFor(refining.id) ?? { kind:"capture",id:refining.id,text:"" }) || text.imageCapture}
           onApplied={(application) => {
             if (application) {
               setLocalTaskApplication(application);

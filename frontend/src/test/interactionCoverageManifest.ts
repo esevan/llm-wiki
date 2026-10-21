@@ -108,7 +108,6 @@ const manifest: readonly ControlSpec[] = [
   { ...existing('task-session-settings-details', 'F69', 'details.task-session-settings', 'frontend/src/features/workbench/TaskWorkSessions.tsx', 'className="task-session-settings"', 'Session configuration controls are disclosed without starting work'), kind: 'details' },
   ...['edit', 'cancel'].map(name => task(`task-definition-${name}`, 'F12', 'frontend/src/features/workbench/TaskDetail.tsx', 'definition editing is explicitly entered or cancelled')),
   ...['keep-mine', 'use-latest', 'guard-save', 'guard-discard', 'guard-keep-editing'].map(name => task(`task-draft-${name}`, 'F9', 'frontend/src/features/workbench/TaskDetail.tsx', 'dirty Task draft conflict or leave choice has an explicit effect')),
-  task('task-detail-refine', 'F10', 'frontend/src/features/workbench/TaskDetail.tsx', 'task refinement opens'),
   ...['item-actions-menu','task-menu-hold','task-menu-resume','task-menu-backlog'].map(id => task(id,'F8','frontend/src/features/workbench/ItemActionsMenu.tsx','applicable menu action opens or preserves Task lifecycle')),
   { ...task('item-title-open','F8','frontend/src/features/workbench/WorkbenchView.tsx','Capture or legacy refinement opens'), sourceEvidence: '"item-title-open"' },
   task('workbench-held','F8','frontend/src/features/workbench/WorkbenchView.tsx','shared held Tasks expand'),

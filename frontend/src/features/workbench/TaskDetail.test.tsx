@@ -2,6 +2,8 @@ import { act, createEvent, fireEvent, render, screen, waitFor } from "@testing-l
 import { describe, expect, it, vi } from "vitest";
 import { TaskDetail, type DetailSession } from "./TaskDetail";
 
+vi.mock("./RefinementPanel", () => ({ RefinementPanel: () => <section aria-label="Refinement fixture" /> }));
+
 const execution = vi.hoisted(() => ({
   subscribe: vi.fn().mockResolvedValue({ runs: [], activeRunId: null, selectedRun: null }),
 }));
@@ -77,7 +79,7 @@ describe("Task detail", () => {
     window.llmWikiApplication = { request: vi.fn(({ path }: { path: string }) => path === "/tasks/task-1/lineage" ? lineage() : Promise.resolve(response(task))) };
     render(<TaskDetail taskId="task-1" onClose={vi.fn()} onChanged={vi.fn()} openJourney />);
     await screen.findByText("Loading…");
-    await waitFor(() => expect(screen.getByRole("tab", { name: "Details" })).toHaveAttribute("aria-selected", "true"));
+    await waitFor(() => expect(screen.getByRole("tab", { name: "Refine" })).toHaveAttribute("aria-selected", "true"));
     expect(document.querySelector('[data-control="task-lineage-details"]')).toHaveAttribute("open");
     await waitFor(() => expect(lineage).toHaveBeenCalledTimes(3), { timeout: 3000 });
     expect(await screen.findByRole("button", { name: "Work log" })).toBeVisible();
@@ -134,7 +136,7 @@ describe("Task detail", () => {
     await screen.findByRole("tab", { name: "Review" });
     expect(screen.queryByText("This is the exact lineage snapshot used to create the current Knowledge draft.")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Exact draft decision" })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("tab", { name: "Details" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Refine" }));
     fireEvent.click(screen.getByText("Lineage"));
     expect(await screen.findByRole("button", { name: "Newer current lineage" })).toBeVisible();
     expect(screen.queryByRole("button", { name: "Exact draft decision" })).not.toBeInTheDocument();
@@ -153,7 +155,7 @@ describe("Task detail", () => {
     window.llmWikiApplication = { request };
     render(<TaskDetail taskId="task-1" onClose={vi.fn()} onChanged={vi.fn()} />);
 
-    fireEvent.click(await screen.findByRole("tab", { name: "Details" }));
+    fireEvent.click(await screen.findByRole("tab", { name: "Refine" }));
     fireEvent.click(screen.getByText("Connection details"));
     expect(await screen.findByRole("button", { name: /Recent work/ })).toBeVisible();
     expect(screen.getByRole("button", { name: /Completed design notes/ })).toBeVisible();
@@ -178,7 +180,7 @@ describe("Task detail", () => {
       await act(async () => { document.documentElement.lang = "en"; });
       expect(await screen.findByRole("heading", { name: "English Task" })).toBeInTheDocument();
       expect(taskReads()).toBe(count);
-      fireEvent.click(screen.getByRole("tab", { name: "Details" }));
+      fireEvent.click(screen.getByRole("tab", { name: "Refine" }));
       fireEvent.click(screen.getByRole("button", { name: "Edit" }));
       const titleInput = screen.getByLabelText("Title");
       expect(titleInput).toHaveValue("한국어 태스크");
@@ -391,7 +393,7 @@ describe("Task detail", () => {
     );
     await screen.findByText("Independent work");
     fireEvent.click(screen.getByRole("tab", { name: "Review" }));
-    fireEvent.click(screen.getByRole("tab", { name: "Details" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Refine" }));
     expect(screen.getAllByText("Scope")).toHaveLength(1);
     expect(screen.getAllByText("Validation criteria")).toHaveLength(1);
     expect(screen.getByText("Missing")).toBeVisible();
@@ -564,7 +566,7 @@ describe("Task detail", () => {
     );
     window.llmWikiApplication = { request };
     render(<TaskDetail taskId="task-1" onClose={vi.fn()} onChanged={vi.fn()} />);
-    fireEvent.click(await screen.findByRole("tab", { name: "Details" }));
+    fireEvent.click(await screen.findByRole("tab", { name: "Refine" }));
     fireEvent.click(screen.getByRole("button", { name: "Edit" }));
     const title = await screen.findByLabelText("Title");
     fireEvent.change(title, { target: { value: "Keep this edited title" } });
@@ -583,7 +585,7 @@ describe("Task detail", () => {
     const onClose = vi.fn();
     window.llmWikiApplication = { request: vi.fn().mockResolvedValue(response(task)) };
     render(<TaskDetail taskId="task-1" onClose={onClose} onChanged={vi.fn()} />);
-    fireEvent.click(await screen.findByRole("tab", { name: "Details" }));
+    fireEvent.click(await screen.findByRole("tab", { name: "Refine" }));
     fireEvent.click(screen.getByRole("button", { name: "Edit" }));
     fireEvent.change(await screen.findByLabelText("Title"), { target: { value: "Unsaved title" } });
     fireEvent.click(screen.getByRole("button", { name: "Close Task detail" }));
@@ -708,7 +710,7 @@ it("localizes calculated readiness text but preserves authored reasons", async (
       { key: "scope", status: "missing", reason: "User-authored rationale" },
     ] })) };
     render(<TaskDetail taskId={task.id} onClose={vi.fn()} onChanged={vi.fn()} />);
-    fireEvent.click(await screen.findByRole("tab", { name: "세부 정보" }));
+    fireEvent.click(await screen.findByRole("tab", { name: "다듬기" }));
     await screen.findByText("명시된 선행 조건 없음");
     expect(screen.getByText("User-authored rationale")).toBeVisible();
     expect(screen.queryByText("No explicit prerequisite")).not.toBeInTheDocument();
@@ -822,7 +824,7 @@ it("saves an unsaved Knowledge edit as a new version before closing", async () =
 
 describe("Task detail tabs and workbench sessions", () => {
   it.each([
-    ["task", "Details"],
+    ["task", "Work"],
     ["completed", "Review"],
   ] as const)("opens %s Tasks on the %s tab", async (state, tabName) => {
     window.llmWikiApplication = {
@@ -848,6 +850,7 @@ describe("Task detail tabs and workbench sessions", () => {
 
     render(<TaskDetail taskId={task.id} onClose={vi.fn()} onChanged={vi.fn()} />);
 
+    fireEvent.click(await screen.findByRole("tab", { name: "Refine" }));
     await screen.findByText("A concise definition for the work.");
     expect(screen.queryByLabelText("Title")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Detail")).not.toBeInTheDocument();
@@ -861,7 +864,7 @@ describe("Task detail tabs and workbench sessions", () => {
     window.llmWikiApplication = { request };
     render(<TaskDetail taskId={task.id} onClose={vi.fn()} onChanged={vi.fn()} />);
 
-    fireEvent.click(await screen.findByRole("tab", { name: "Details" }));
+    fireEvent.click(await screen.findByRole("tab", { name: "Refine" }));
     const reason = await screen.findByLabelText("Scope Reason");
     fireEvent.change(reason, { target: { value: "Not relevant to this discovery task" } });
     fireEvent.click(screen.getAllByRole("button", { name: "Not applicable" })[0]);
@@ -870,7 +873,7 @@ describe("Task detail tabs and workbench sessions", () => {
       expect(request).toHaveBeenCalledWith(expect.objectContaining({ method: "POST" })),
     );
     await waitFor(() =>
-      expect(screen.getByRole("tab", { name: "Details" })).toHaveAttribute("aria-selected", "true"),
+      expect(screen.getByRole("tab", { name: "Refine" })).toHaveAttribute("aria-selected", "true"),
     );
   });
 
@@ -914,7 +917,7 @@ describe("Task detail tabs and workbench sessions", () => {
     const close = vi.fn();
     window.llmWikiApplication = { request: vi.fn().mockResolvedValue(response({ ...task, detail: "Original detail" })) };
     const first = render(<TaskDetail taskId={task.id} onClose={close} onChanged={vi.fn()} sessions={sessions} />);
-    fireEvent.click(await screen.findByRole("tab", { name: "Details" }));
+    fireEvent.click(await screen.findByRole("tab", { name: "Refine" }));
     fireEvent.click(screen.getByRole("button", { name: "Edit" }));
     fireEvent.change(screen.getByLabelText("Detail"), { target: { value: "Discard this edit" } });
     fireEvent.click(screen.getByRole("button", { name: "Close Task detail" }));
@@ -937,8 +940,8 @@ describe("Task detail tabs and workbench sessions", () => {
     fireEvent.keyDown(work, { key: "ArrowRight" });
     await waitFor(() => expect(screen.getByRole("tab", { name: "Sessions" })).toHaveAttribute("aria-selected", "true"));
     fireEvent.keyDown(screen.getByRole("tab", { name: "Sessions" }), { key: "ArrowRight" });
-    await waitFor(() => expect(screen.getByRole("tab", { name: "Details" })).toHaveAttribute("aria-selected", "true"));
-    fireEvent.keyDown(screen.getByRole("tab", { name: "Details" }), { key: "End" });
+    await waitFor(() => expect(screen.getByRole("tab", { name: "Refine" })).toHaveAttribute("aria-selected", "true"));
+    fireEvent.keyDown(screen.getByRole("tab", { name: "Refine" }), { key: "End" });
     await waitFor(() => expect(screen.getByRole("tab", { name: "Review" })).toHaveAttribute("aria-selected", "true"));
     fireEvent.keyDown(screen.getByRole("tab", { name: "Review" }), { key: "Home" });
     await waitFor(() => expect(screen.getByRole("tab", { name: "Work" })).toHaveAttribute("aria-selected", "true"));

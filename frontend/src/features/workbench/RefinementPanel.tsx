@@ -98,6 +98,7 @@ export function RefinementPanel({
   onClose,
   onApplied,
   subjectTitle,
+  embedded = false,
   messageDrafts,
   imageDrafts,
   ref,
@@ -107,6 +108,7 @@ export function RefinementPanel({
   onClose: () => void;
   onApplied?: (application?: TaskApplicationEvent) => void;
   subjectTitle?: string;
+  embedded?: boolean;
   messageDrafts?: Map<string, string>;
   imageDrafts?: Map<string, InputImage[]>;
   ref?: Ref<RefinementPanelHandle>;
@@ -429,7 +431,7 @@ export function RefinementPanel({
       );
       setRevealingMessageIds(new Set());
       setSession(next);
-      if (next.state === "completed" && next.taskId) setResultTab("status");
+      if (!embedded && next.state === "completed" && next.taskId) setResultTab("status");
       setDraft(nextDraft);
       if (next.taskId) {
         const baseline = await taskClient
@@ -452,6 +454,7 @@ export function RefinementPanel({
         }
       });
       const nextProposals = await taskClient.proposals(next.id);
+      if (!Array.isArray(nextProposals)) throw new Error(text.assistantFailure);
       if (sequence === loadSequence.current) {
         setProposals(nextProposals);
         setResponding(activeStatus(next.responseStatus));
@@ -484,7 +487,7 @@ export function RefinementPanel({
         setLoading(false);
       }
     }
-  }, [kind, subjectId, text.assistantFailure, restoreImage]);
+  }, [embedded, kind, subjectId, text.assistantFailure, restoreImage]);
   useEffect(() => {
     hasLoadedSession.current = false;
     void load();
@@ -744,16 +747,16 @@ export function RefinementPanel({
   );
   useModalInteraction(panelRef, 20, () => {
     void close();
-  });
+  }, !embedded);
   useEffect(
     () => () => {
       // Wait for unmount to release the focus trap and background inert state.
       // Strict Mode's effect replay must not move focus out of a mounted panel.
       requestAnimationFrame(() => {
-        if (!panelRef.current?.isConnected) restoreFocus();
+        if (!embedded && !panelRef.current?.isConnected) restoreFocus();
       });
     },
-    [restoreFocus],
+    [restoreFocus, embedded],
   );
   useImperativeHandle(
     ref,
@@ -765,9 +768,10 @@ export function RefinementPanel({
     [close],
   );
   useEffect(() => {
-    headingRef.current?.focus({ preventScroll: true });
-  }, []);
+    if (!embedded) headingRef.current?.focus({ preventScroll: true });
+  }, [embedded]);
   useEffect(() => {
+    if (embedded) return;
     const root = document.documentElement;
     const body = document.body;
     if (refinementScrollLock) {
@@ -805,7 +809,7 @@ export function RefinementPanel({
       refinementScrollLock = undefined;
       if (lock.scrollY) window.scrollTo(0, lock.scrollY);
     };
-  }, []);
+  }, [embedded]);
   const decide = async (
     proposal: RefinementProposal,
     decision: "accept" | "reject",
@@ -1106,22 +1110,22 @@ export function RefinementPanel({
       problem_snapshot: text.previewProblem,
       task_problem_link: text.previewConnection,
     })[type] ?? text.proposedChange;
-  return createPortal(
-    <div className="refinement-modal-layer">
-      <div className="refinement-modal-backdrop" aria-hidden="true" />
+  const content = (
+    <div className={embedded ? "refinement-embedded" : "refinement-modal-layer"}>
+      {!embedded && <div className="refinement-modal-backdrop" aria-hidden="true" />}
       <section
         ref={panelRef}
         tabIndex={-1}
         className="refinement-panel"
-        role="dialog"
-        aria-modal="true"
+        role={embedded ? "region" : "dialog"}
+        aria-modal={embedded ? undefined : true}
         aria-label={text.refining}
         data-refinement-session={session?.id ?? ""}
         data-refinement-sending={String(saving)}
         data-refinement-polling={String(polling)}
         data-refinement-message-length={message.length}
       >
-        <header className="refinement-header">
+        <header className="refinement-header" hidden={embedded}>
           <div>
             <small>{text.optionalAssistance}</small>
             <h2 ref={headingRef} tabIndex={-1}>
@@ -1164,6 +1168,7 @@ export function RefinementPanel({
             aria-busy={previewBusy}
           >
             <nav
+              hidden={embedded}
               className="task-detail-tabs"
               role="tablist"
               aria-label={text.proposals}
@@ -1858,7 +1863,7 @@ export function RefinementPanel({
           </div>
         </div>
       </section>
-    </div>,
-    document.body,
+    </div>
   );
+  return embedded ? content : createPortal(content, document.body);
 }

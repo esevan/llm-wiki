@@ -3,11 +3,11 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { useModalInteraction } from "./useModalInteraction";
 
-function Modal({ name, priority = 10, onEscape, children }: {
-  name: string; priority?: number; onEscape: () => void; children?: ReactNode;
+function Modal({ name, priority = 10, onEscape, children, enabled = true }: {
+  name: string; priority?: number; onEscape: () => void; children?: ReactNode; enabled?: boolean;
 }) {
   const root = useRef<HTMLDivElement>(null);
-  useModalInteraction(root, priority, onEscape);
+  useModalInteraction(root, priority, onEscape, enabled);
   return <div ref={root} tabIndex={-1} role="dialog" aria-label={name}>
     <button>{name}</button>{children}
   </div>;
@@ -20,6 +20,15 @@ function escape(target: HTMLElement | Document = document.body, options: Keyboar
 }
 
 describe("modal keyboard and focus ownership", () => {
+  it("leaves focus and Escape with the Task when refinement is embedded", () => {
+    const task = vi.fn(), embedded = vi.fn();
+    render(<Modal name="Task" onEscape={task}>
+      <Modal name="Embedded" priority={20} onEscape={embedded} enabled={false}/>
+    </Modal>);
+    escape(screen.getByRole("button", { name: "Embedded" }));
+    expect(task).toHaveBeenCalledOnce();
+    expect(embedded).not.toHaveBeenCalled();
+  });
   it("consumes Escape outside the dialog and releases the listener on unmount", () => {
     const close = vi.fn();
     const view = render(<Modal name="Task" onEscape={close} />);

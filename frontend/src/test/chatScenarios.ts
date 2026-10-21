@@ -84,8 +84,10 @@ async function waitForTerminal(harness: ChatScenarioHarness, sessionPath: string
 const refinementPath = (captureId: string) => `/captures/${encodeURIComponent(captureId)}/refinement`;
 
 async function closeRefinement(harness: ChatScenarioHarness, label: string) {
-  const close = control<HTMLButtonElement>('[data-control="refinement-close"]', "refinement close");
-  coverInteract(harness, "refinement-close", () => harness.click(close, label));
+  const embedded = Boolean(document.querySelector(".refinement-embedded"));
+  const id = embedded ? "task-detail-tab-work" : "refinement-close";
+  const close = control<HTMLButtonElement>(`[data-control="${id}"]`, "leave refinement");
+  coverInteract(harness, id, () => harness.click(close, label));
 }
 
 async function send(harness: ChatScenarioHarness, message: string, keyboard = false) {
@@ -247,7 +249,7 @@ async function runHierarchyControls(harness: ChatScenarioHarness) {
     await harness.waitFor(() => element.open, `expanded ${id}`);
     coverEffect(harness, id, () => element.open);
   };
-  await click("task-detail-refine", "Refine the promoted Task");
+  await click("task-detail-tab-details", "Refine the promoted Task");
   await harness.waitFor(() => Boolean(document.querySelector('.refinement-panel[data-refinement-session]:not([data-refinement-session=""])')), "Task refinement loaded");
   await harness.api("/provider/config", "PUT", { base_url: harness.providerUrl, model: "deterministic-test-model", api_key: "desktop-e2e-key" });
   await send(harness, "Split a deterministic Subtask for an independent evidence check.");
@@ -279,7 +281,7 @@ async function runHierarchyControls(harness: ChatScenarioHarness) {
   await click("task-family-open", "Open child Task");
   await harness.waitFor(() => document.querySelector(".task-detail h2")?.textContent === "Deterministic child Task", "child Task opened");
   coverEffect(harness, "task-family-open", () => document.querySelector(".task-detail h2")?.textContent === "Deterministic child Task");
-  await click("task-detail-refine", "Review child Task boundaries");
+  await click("task-detail-tab-details", "Review child Task boundaries");
   await harness.waitFor(() => Boolean(document.querySelector('[data-control="refinement-boundaries"]')), "refinement family boundaries");
   await expand("refinement-boundaries");
   coverEffect(harness, "refinement-boundaries", () => document.querySelector('[data-control="refinement-boundaries"]')?.textContent?.includes("Edited deterministic Task") === true);

@@ -2,6 +2,8 @@
 
 **English** | [한국어](README.ko.md)
 
+Task details and refinement share one Task dialog. Use **Refine** for the preview, conversation, evidence, and saved definition; **Work**, **Sessions**, and **Review** remain available after Capture adoption and for existing Tasks.
+
 > **You talk. The work organizes itself.**
 
 LLM Wiki is an AI-centered, local-first workbench that turns conversation into organized work,

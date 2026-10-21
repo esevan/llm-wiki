@@ -4,7 +4,7 @@ import { WorkbenchView } from "./WorkbenchView";
 vi.mock("./RefinementPanel", () => ({ RefinementPanel: ({ onApplied }: { onApplied: (event: { taskId: string; revision: number; cause: string }) => void }) => <button onClick={() => onApplied({ taskId: "applied", revision: 2, cause: "preview_adopted" })}>Apply acknowledged preview</button> }));
 vi.mock("./TaskDetail", () => ({ TaskDetail: ({ taskId }: { taskId: string }) => <div data-testid="opened-task">{taskId}</div> }));
 describe("Workbench refinement application navigation", () => {
-  it.each(["capture", "task"] as const)("opens the acknowledged Task after %s Apply and moves it to refined work", async kind => {
+  it.each(["capture"] as const)("opens the acknowledged Task after %s Apply and moves it to refined work", async kind => {
     let applied = false;
     window.llmWikiApplication = { request: vi.fn().mockImplementation(() => Promise.resolve({ ok: true, status: 200, text: async () => "", body: null, json: async () => ({ revision: applied ? 2 : 1, activeShortcuts: [], refiningShortcuts: applied ? [] : [{ kind, id: "source", draftRevision: 1 }], categories: [{ id: "General", label: "General", items: applied ? [{ kind: "task", id: "applied", title: "Saved title", taskRevision: 2, refinedRevision: 2, state: "task" }] : [kind === "capture" ? { kind, id: "source", text: "Source work" } : { kind, id: "source", title: "Source work", state: "task", taskRevision: 1 }] }] }) })) };
     render(<WorkbenchView active onTaskApplication={() => { applied = true; }} />);

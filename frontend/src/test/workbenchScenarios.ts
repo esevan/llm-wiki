@@ -540,10 +540,10 @@ export async function runTaskControlMatrixScenario(h: WorkbenchScenarioHarness) 
   await h.waitForAsync(async () => (await h.task(revisedTitle)).state === "in_progress", "reopened Task readback");
   await h.waitFor(() => document.querySelector(".task-detail")?.getAttribute("data-task-state") === "in_progress", "rendered reopened Task");
   effect(h, ["task-transition-reopen"], () => document.querySelector(".task-detail")?.getAttribute("data-task-state") === "in_progress");
-  await clickControl(h, "task-detail-refine", "Open Task refinement from detail");
+  await clickControl(h, "task-detail-tab-details", "Open Task refinement from detail");
   await h.waitFor(() => Boolean(document.querySelector(".refinement-panel")), "Task refinement panel");
-  effect(h, ["task-detail-refine"], () => Boolean(document.querySelector(".refinement-panel")));
-  h.click(control("refinement-close"), "Close Task refinement");
+  effect(h, ["task-detail-tab-details"], () => Boolean(document.querySelector(".refinement-panel")));
+  h.click(control("task-detail-tab-work"), "Return to Task work");
   await h.waitFor(() => !document.querySelector(".refinement-panel") && Boolean(document.querySelector(".task-detail")), "restored Task detail");
   observe(h, "restored Task detail");
   await clickControl(h, "task-detail-close", "Close Task detail");

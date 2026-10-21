@@ -508,9 +508,9 @@ async function refinementModalLayout(step: Step) {
     if(kind==="task") {
       await detail(title);
       await taskDetailIdle("opening nested refinement");
-      click('[data-control="task-detail-refine"]',"Open refinement above Task detail");
+      click('[data-control="task-detail-tab-details"]',"Open refinement above Task detail");
       await waitFor(()=>Boolean(document.querySelector(".refinement-panel")),"nested refinement");
-      const close=document.querySelector<HTMLElement>('[data-control="refinement-close"]')!;
+      const close=document.querySelector<HTMLElement>('[data-control="task-detail-tab-work"]')!;
       const rect=close.getBoundingClientRect();
       if(document.elementFromPoint(rect.left+rect.width/2,rect.top+rect.height/2)!==close && !close.contains(document.elementFromPoint(rect.left+rect.width/2,rect.top+rect.height/2))) throw new Error("Task detail covered refinement");
       clickElement(close,"Return to Task detail");
@@ -642,7 +642,7 @@ async function refinement(step: Step) {
   await create(b);
   const originalTask = await task(a);
   await detail(a);
-  click('[data-control="task-detail-refine"]', "Refine A");
+  click('[data-control="task-detail-tab-details"]', "Refine A");
   await waitFor(
     () => !!document.querySelector(".refinement-panel"),
     "A refinement",
@@ -659,20 +659,20 @@ async function refinement(step: Step) {
   messages.scrollTop = 0;
   messages.dispatchEvent(new Event("scroll", { bubbles: true }));
   await pause(650);
-  click(".refinement-panel header button", "Close A refinement");
+  click('[data-control="task-detail-tab-work"]', "Close A refinement");
   await waitFor(() => !document.querySelector(".refinement-panel"), "closed A refinement");
   click('[aria-label="Close Task detail"]', "Close A detail");
   await detail(b);
-  click('[data-control="task-detail-refine"]', "Refine B");
+  click('[data-control="task-detail-tab-details"]', "Refine B");
   await waitFor(
     () => !!document.querySelector(".refinement-panel"),
     "B refinement",
   );
-  click(".refinement-panel header button", "Close B refinement");
+  click('[data-control="task-detail-tab-work"]', "Close B refinement");
   await waitFor(() => !document.querySelector(".refinement-panel"), "closed B refinement");
   click('[aria-label="Close Task detail"]', "Close B detail");
   await detail(a);
-  click('[data-control="task-detail-refine"]', "Resume A refinement");
+  click('[data-control="task-detail-tab-details"]', "Resume A refinement");
   await waitFor(
     () => Boolean(document.querySelector(".refinement-panel .refinement-messages")),
     "A refinement conversation restore",
@@ -707,10 +707,10 @@ async function refinement(step: Step) {
     return conversation.scrollHeight > conversation.clientHeight && conversation.scrollHeight - conversation.scrollTop - conversation.clientHeight < 5;
   }, "new messages scroll overflowing conversation to bottom");
   await step("Refinement diagnostic: overflowing conversation reached bottom; closing the saved conversation.");
-  click(".refinement-panel header button", "Close multi-image conversation");
+  click('[data-control="task-detail-tab-work"]', "Close multi-image conversation");
   await waitFor(() => !document.querySelector(".refinement-panel"), "closed multi-image conversation");
   await step("Refinement diagnostic: saved conversation closed; reopening exact session.");
-  click('[data-control="task-detail-refine"]', "Reopen multi-image conversation");
+  click('[data-control="task-detail-tab-details"]', "Reopen multi-image conversation");
   await waitFor(() => document.querySelectorAll(".refinement-messages .input-image-preview").length === 2, "both saved images restored after reopening");
   await step("Refinement diagnostic: both saved images restored; waiting for editable structured preview.");
   await waitFor(() => {
@@ -1364,7 +1364,7 @@ async function localization(step: Step) {
   await invoke("desktop_e2e_resize_window", { width: 1280, height: 820 });
   await taskDetailIdle("opening Task refinement dialog");
   const retainedTask = document.querySelector(".task-detail");
-  const refineTask = document.querySelector<HTMLElement>('[data-control="task-detail-refine"]');
+  const refineTask = document.querySelector<HTMLElement>('[data-control="task-detail-tab-details"]');
   if (!refineTask) throw new Error("Missing Task refinement action");
   await prepareClick(refineTask, "Open Task refinement dialog");
   clickElement(refineTask, "Open Task refinement dialog");
@@ -1373,30 +1373,22 @@ async function localization(step: Step) {
     const size = await invoke<{ windowWidth: number }>("desktop_e2e_resize_window", { width, height: 820 });
     await waitFor(() => Math.abs(window.innerWidth - size.windowWidth) < 3, "refinement window resized");
     await waitFor(() => {
-      const layer = document.querySelector<HTMLElement>(".refinement-modal-layer");
-      const backdrop = document.querySelector<HTMLElement>(".refinement-modal-backdrop");
-      const refinement = document.querySelector<HTMLElement>(".refinement-panel[role='dialog']");
-      const preview = document.querySelector<HTMLElement>(".refinement-preview");
-      const conversation = document.querySelector<HTMLElement>(".refinement-conversation");
-      const messages = document.querySelector<HTMLElement>(".refinement-messages");
-      const composer = document.querySelector<HTMLElement>(".refinement-composer");
-      const app = document.querySelector<HTMLElement>(".app");
-      if (!layer || !backdrop || !refinement || !preview || !conversation || !messages || !composer || !app || !app.inert) return false;
-      const panel = refinement.getBoundingClientRect(), left = preview.getBoundingClientRect(), right = conversation.getBoundingClientRect(), compose = composer.getBoundingClientRect();
-      const withinViewport = panel.left >= -1 && panel.top >= -1 && panel.right <= window.innerWidth + 1 && panel.bottom <= window.innerHeight + 1;
-      const columns = left.width > 0 && right.width > 0 && left.right <= right.left && compose.width > 0 && compose.height > 0 && Math.abs(compose.bottom - right.bottom) <= 1;
-      const scrollable = getComputedStyle(preview).overflowY !== "visible" && getComputedStyle(messages).overflowY !== "visible" && preview !== messages;
-      return getComputedStyle(layer).position === "fixed" && getComputedStyle(backdrop).position === "absolute" && withinViewport && columns && scrollable;
-    }, "bounded modal with side-by-side preview, visible composer, and independent scrolling panes");
+      const detail = document.querySelector<HTMLElement>(".task-detail");
+      const refinement = document.querySelector<HTMLElement>(".refinement-embedded .refinement-panel[role=region]");
+      if (!detail || !refinement || document.querySelectorAll('[role=dialog]').length !== 1) return false;
+      const rect = detail.getBoundingClientRect();
+      return detail === retainedTask && rect.width <= window.innerWidth && rect.height <= window.innerHeight
+        && Boolean(document.querySelector<HTMLElement>(".app")?.inert);
+    }, "one bounded Task dialog with embedded refinement");
   }
-  const closeRefinement = document.querySelector<HTMLElement>('[data-control="refinement-close"]');
+  const closeRefinement = document.querySelector<HTMLElement>('[data-control="task-detail-tab-work"]');
   if (!closeRefinement) throw new Error("Missing refinement return action");
-  await waitFor(() => closeRefinement.getAttribute("aria-label") === "Close refinement" && document.querySelector(".refinement-panel")?.getAttribute("data-refinement-polling") === "false", "ready to return from refinement");
+  await waitFor(() => document.querySelector(".refinement-panel")?.getAttribute("data-refinement-polling") === "false", "ready to return from refinement");
   await prepareClick(closeRefinement, "Return from refinement");
   clickElement(closeRefinement, "Return from refinement");
   await waitFor(() => !document.querySelector(".refinement-panel"), "returned from refinement");
   if (document.querySelector(".task-detail") !== retainedTask) throw new Error("Refinement remounted Task context");
-  await step("Task refinement opened as a bounded modal with an inert Workbench, side-by-side preview and chat panes, a visible composer, and independent scroll containers at 1200px and 900px; it retained the original Task context on return.");
+  await step("Task refinement used the same bounded Task dialog with an inert Workbench, side-by-side preview and chat panes at 1200px and 900px; returning to Work retained the Task context.");
   click('[data-control="task-detail-close"]', "Close responsive Task detail");
   await waitFor(() => !document.querySelector(".task-detail"), "returned to responsive Workbench");
   await step("Task detail remained a bounded, independently scrollable modal with an inert Workbench at 1200px and 900px.");
