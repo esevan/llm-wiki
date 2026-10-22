@@ -4,6 +4,34 @@ import { describe, expect, it, vi } from "vitest";
 import { RefinementPanel } from "./RefinementPanel";
 
 describe("Refinement panel", () => {
+  it("reads a completed definition without creating a missing refinement session", async () => {
+    const request = vi.fn(async () => ({ok:false,status:404,json:async <T,>()=>({detail:"Refinement session not found"}) as T,text:async()=>"",body:null}));
+    window.llmWikiApplication = {request};
+    render(<RefinementPanel readOnly kind="task" subjectId="no-history" taskDefinition={<p>Saved completed definition</p>} onClose={vi.fn()} />);
+    await act(async () => { await Promise.resolve(); });
+    expect(screen.getByText("Saved completed definition")).toBeVisible();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(request).toHaveBeenCalledWith(expect.objectContaining({method:"GET"}));
+  });
+  it("reads completed refinement history without generating or saving on open and close", async () => {
+    const result = (body:unknown) => ({ok:true,status:200,json:async <T,>()=>body as T,text:async()=>"",body:null});
+    const request = vi.fn(async ({path}:{path:string}) => {
+      if (path.endsWith("/reference-workspace")) return result({preview:null,references:[],investigations:[],findings:[]});
+      if (path.endsWith("/proposals")) return result([]);
+      if (path === "/tasks/frozen") return result({id:"frozen",title:"Frozen",taskRevision:1,state:"completed"});
+      return result({id:"past",taskId:"frozen",state:"completed",draftRevision:1,messages:[{id:"old",role:"user",body:"Past refinement"}]});
+    });
+    window.llmWikiApplication = {request};
+    const rendered = render(<RefinementPanel readOnly kind="task" subjectId="frozen" onClose={vi.fn()} />);
+    expect(await screen.findByText("Past refinement")).toBeVisible();
+    expect(document.querySelector('[data-control="refinement-send"]')).toBeDisabled();
+    expect(document.querySelector('[data-control="refinement-note"]')).toBeDisabled();
+    await waitFor(() => expect(request.mock.calls.some(([v])=>v.path.endsWith("/reference-workspace"))).toBe(true));
+    rendered.unmount();
+    expect(request.mock.calls.every(([v])=>!(v as {method?:string}).method || (v as {method?:string}).method === "GET")).toBe(true);
+  });
+
   it("retains the title editor and prevents navigation while its preview save is pending", async () => {
     let finish!: () => void;
     const pending = new Promise<void>(resolve => { finish = resolve; });

@@ -18,6 +18,14 @@ pub fn content_hash(fields: &[&str]) -> String {
     format!("{:x}", Sha256::digest(fields.join("\u{1f}").as_bytes()))
 }
 
+/// Only an explicit lifecycle reopen can permit further content changes.
+pub fn ensure_content_mutable(state: &str) -> Result<(), String> {
+    if state == "completed" {
+        return Err("task_completed: completed Task content and history are read-only".into());
+    }
+    Ok(())
+}
+
 pub fn validate_state_transition(from: &str, to: &str) -> Result<String, String> {
     match (from, to) {
         ("task", "in_progress") | ("in_progress", "completed") | ("in_progress", "on_hold") => Ok(to.into()),

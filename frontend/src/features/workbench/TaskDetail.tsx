@@ -511,11 +511,11 @@ export function TaskDetail({
   const taskDefinition = (<section className="task-panel task-definition-panel reference-aware-preview task-definition-fallback" data-control="task-definition-fallback">
         <h3>{text.previewTitle}</h3>
         <div className="task-definition-actions">
-          <button type="button" data-control="task-definition-edit" onClick={() => setEditing(true)} hidden={editing}>{text.edit}</button>
+          <button type="button" disabled={task.state === "completed"} data-control="task-definition-edit" onClick={() => setEditing(true)} hidden={editing}>{text.edit}</button>
           {editing && <button type="button" data-control="task-definition-cancel" onClick={() => { setDetailState((current) => current && baseline(current.persisted)); setEditing(false); }}>{text.cancel}</button>}
         </div>
         {editing ? definitions.map(({ field, label, control, value }) => (
-          <label key={field}>{label}<textarea data-control={control} value={value} aria-label={label} aria-invalid={field === "title" && detailState.dirty.has("title") && !validTaskTitle(value)} onChange={(event) => editDefinition(field, event.target.value)} />{field === "title" && <small>{text.titleLengthError} ({taskTitleLength(value)}/70)</small>}</label>
+          <label key={field}>{label}<textarea disabled={task.state === "completed"} data-control={control} value={value} aria-label={label} aria-invalid={field === "title" && detailState.dirty.has("title") && !validTaskTitle(value)} onChange={(event) => editDefinition(field, event.target.value)} />{field === "title" && <small>{text.titleLengthError} ({taskTitleLength(value)}/70)</small>}</label>
         )) : (
           <dl className="task-definition-read">
             {definitions.filter(({ field, value }) => field !== "title" && value.trim()).map(({ field, label, value }) => <div key={field}><dt>{label}</dt><dd>{value}</dd></div>)}
@@ -525,7 +525,7 @@ export function TaskDetail({
           type="button"
           data-control="task-revision-save"
           hidden={!editing}
-          disabled={!editing || !detailState.dirty.size || detailState.conflicts.length > 0 || mutationBusy || (detailState.dirty.has("title") && !validTaskTitle(detailState.draft.title))}
+          disabled={task.state === "completed" || !editing || !detailState.dirty.size || detailState.conflicts.length > 0 || mutationBusy || (detailState.dirty.has("title") && !validTaskTitle(detailState.draft.title))}
           onClick={() => void saveDraft().then((saved) => saved && setEditing(false))}
         >
           {text.saveChanges}
@@ -686,7 +686,7 @@ export function TaskDetail({
       </div>
       <div id="task-tab-details" aria-labelledby="task-detail-tab-details" className="task-tab-panel" role="tabpanel" data-task-tab="details" hidden={tab !== "details"}>
       {(tab === "details") && <RefinementPanel
-        embedded ref={refinementRef} kind="task" subjectId={task.id}
+        readOnly={task.state === "completed"} embedded ref={refinementRef} kind="task" subjectId={task.id}
         taskDefinition={taskDefinition} taskDefinitionEditing={editing || Boolean(detailState.dirty.size)}
         messageDrafts={messageDrafts ?? refinementMessages.current} imageDrafts={imageDrafts ?? refinementImages.current}
         onClose={() => requestLeave(onClose)}
@@ -701,7 +701,7 @@ export function TaskDetail({
           <label key={item.id}>
             <input
               type="checkbox"
-              data-control="task-checklist-toggle"
+              disabled={task.state === "completed"} data-control="task-checklist-toggle"
               data-record-id={item.id}
               checked={item.checked}
               onChange={(event) => {
@@ -723,7 +723,7 @@ export function TaskDetail({
         {(task.checklist?.some((item) => item.checked) || (task.checklist?.length ?? 0) > 5) && <button type="button" data-control="task-checklist-completed-toggle" aria-expanded={showCompletedChecklist} onClick={() => setShowCompletedChecklist((shown) => !shown)}>{(task.checklist?.length ?? 0) > 5 ? showCompletedChecklist ? text.collapseChecklist : text.showAllChecklist : showCompletedChecklist ? text.hideCompleted : text.showCompleted}</button>}
         <div className="inline-form">
           <input
-            data-control="task-checklist-text"
+            disabled={task.state === "completed"} data-control="task-checklist-text"
             aria-label={text.checklistItem}
             value={check}
             onChange={(event) => setCheck(event.target.value)}
@@ -737,7 +737,7 @@ export function TaskDetail({
           <button
             type="button"
             data-control="task-checklist-add"
-            disabled={!check.trim()}
+            disabled={task.state === "completed" || !check.trim()}
             onClick={() =>
               void update(() =>
                 taskClient.checklist(task.id, revision, check).then((next) => {
@@ -754,7 +754,7 @@ export function TaskDetail({
       <section className="task-panel">
         <h3>{text.worklog}</h3>
         <textarea
-          data-control="task-worklog-text"
+          disabled={task.state === "completed"} data-control="task-worklog-text"
           aria-label={text.worklogEntry}
           value={entry}
           onChange={(event) => setEntry(event.target.value)}
@@ -774,7 +774,7 @@ export function TaskDetail({
           }}
         />
         <input
-          data-control="task-worklog-file"
+          disabled={task.state === "completed"} data-control="task-worklog-file"
           aria-label={text.attach}
           type="file"
           onChange={(event) => setAttachment(event.currentTarget.files?.[0])}
@@ -783,7 +783,7 @@ export function TaskDetail({
         <button
           type="button"
           data-control="task-worklog-add"
-          disabled={!entry.trim() && !attachment}
+          disabled={task.state === "completed" || !entry.trim() && !attachment}
           onClick={addWorkLog}
         >
           {text.add}
@@ -793,7 +793,7 @@ export function TaskDetail({
           <article className="log-entry" id={`work-log-${log.id}`} key={log.id} data-work-log-entry={log.id} tabIndex={-1}>
             {log.createdAt && <time dateTime={log.createdAt}>{workLogTimestamp(log.createdAt)}</time>}
             {!log.distillation && !log.execution && <p>{log.bodyVersions?.[document.documentElement.lang.startsWith("ko") ? "ko" : "en"]?.body || log.body}</p>}
-            <WorkLogDistillation projection={log.distillation} execution={log.execution} busy={mutationBusy} onRetry={() => { void update(async () => { await taskClient.repairDistillation(task.id, "retry failed Distillation", log.execution?.runId); return task; }).catch(() => undefined); }} onRepair={() => { void update(async () => { await taskClient.repairDistillation(task.id, "repair requested by user", log.execution?.runId); return task; }).catch(() => undefined); }} onOpenOriginal={() => { if (log.execution) { setExecutionFocus({ sessionId: log.execution.sessionId, runId: log.execution.runId }); focusInTab("sessions", "[data-control=task-execution-heading]"); } }} />
+            <WorkLogDistillation projection={log.distillation} execution={log.execution} busy={mutationBusy || task.state === "completed"} onRetry={() => { void update(async () => { await taskClient.repairDistillation(task.id, "retry failed Distillation", log.execution?.runId); return task; }).catch(() => undefined); }} onRepair={() => { void update(async () => { await taskClient.repairDistillation(task.id, "repair requested by user", log.execution?.runId); return task; }).catch(() => undefined); }} onOpenOriginal={() => { if (log.execution) { setExecutionFocus({ sessionId: log.execution.sessionId, runId: log.execution.runId }); focusInTab("sessions", "[data-control=task-execution-heading]"); } }} />
             {log.execution && <details data-control="task-worklog-original-details" className="work-log-execution" aria-label="Codex execution"><summary>{displayLocale.startsWith("ko") ? "원본 실행 기록과 증거" : "Original execution and evidence"}</summary>
               {(() => {
                 const status = { queued: text.executionQueued, running: text.executionRunning, awaiting_response: text.executionAwaitingResponse, succeeded: text.executionSucceeded, failed: text.executionFailed, cancelled: text.executionCancelled, interrupted: text.executionInterrupted, needs_attention: text.executionNeedsAttention }[log.execution.status];
@@ -834,7 +834,7 @@ export function TaskDetail({
                 ) : (!log.imageSummaryVersions?.ko?.image_summary || !log.imageSummaryVersions?.en?.image_summary) && (
                   <>
                     {log.imageSummaryJob && ["failed", "cancelled", "stale"].includes(log.imageSummaryJob.status) && <p>{text.imageSummaryFailed}</p>}
-                    <button type="button" data-control="task-image-summary" data-record-id={log.id} disabled={mutationBusy} onClick={() => {
+                    <button type="button" data-control="task-image-summary" data-record-id={log.id} disabled={task.state === "completed" || mutationBusy} onClick={() => {
                       void update(async () => {
                         await taskClient.summarizeImage(log.id);
                         return task;
@@ -851,7 +851,7 @@ export function TaskDetail({
             ))}
             <div className="inline-form">
               <input
-                data-control="task-comment-text"
+                disabled={task.state === "completed"} data-control="task-comment-text"
                 data-record-id={log.id}
                 aria-label={`${text.comment} ${log.id}`}
                 value={comments[log.id] ?? ""}
@@ -869,7 +869,7 @@ export function TaskDetail({
                 type="button"
                 data-control="task-comment-add"
                 data-record-id={log.id}
-                disabled={!(comments[log.id] ?? "").trim()}
+                disabled={task.state === "completed" || !(comments[log.id] ?? "").trim()}
                 onClick={() =>
                   void taskClient
                     .comment(log.id, comments[log.id])
@@ -895,7 +895,7 @@ export function TaskDetail({
         <summary>{text.decisions}</summary>
         <div className="inline-form">
           <input
-            data-control="task-decision-text"
+            disabled={task.state === "completed"} data-control="task-decision-text"
             aria-label={text.decisionEntry}
             value={decision}
             onChange={(event) => setDecision(event.target.value)}
@@ -903,7 +903,7 @@ export function TaskDetail({
           <button
             type="button"
             data-control="task-decision-add"
-            disabled={!decision.trim()}
+            disabled={task.state === "completed" || !decision.trim()}
             onClick={() =>
               void update(() =>
                 taskClient
@@ -947,7 +947,7 @@ export function TaskDetail({
             {item.status === "missing" && (
               <div className="inline-form">
                 <input
-                  data-control="task-readiness-reason"
+                  disabled={task.state === "completed"} data-control="task-readiness-reason"
                   data-record-id={item.key}
                   aria-label={`${{ outcome: text.readinessOutcome, scope: text.readinessScope, validationCriteria: text.readinessCriteria, prerequisites: text.readinessPrerequisites }[item.key] ?? item.key} ${text.readinessReason}`}
                   value={readinessReasons[item.key] ?? ""}
@@ -962,7 +962,7 @@ export function TaskDetail({
                   type="button"
                   data-control="task-readiness-not-applicable"
                   data-record-id={item.key}
-                  disabled={!(readinessReasons[item.key] ?? "").trim()}
+                  disabled={task.state === "completed" || !(readinessReasons[item.key] ?? "").trim()}
                   onClick={() =>
                     void update(() =>
                       taskClient.readinessDecision(
@@ -993,7 +993,7 @@ export function TaskDetail({
             <span> · {{ related: text.related, prerequisite: text.prerequisite, split_from: text.splitFrom }[link.kind]}</span>
             <button
               type="button"
-              data-control="task-relationship-unlink"
+              disabled={task.state === "completed"} data-control="task-relationship-unlink"
               data-record-id={link.id}
               onClick={() =>
                 void update(() =>
@@ -1011,7 +1011,7 @@ export function TaskDetail({
           <label className="task-connection-search">
             <span>{text.searchTasks}</span>
             <input
-              data-control="task-relationship-search"
+              disabled={task.state === "completed"} data-control="task-relationship-search"
               aria-label={text.searchTasks}
               placeholder={text.searchTasksPlaceholder}
               value={relatedTaskSearch}
@@ -1027,7 +1027,7 @@ export function TaskDetail({
                 key={candidate.id}
                 type="button"
                 aria-pressed={candidate.id === relatedTaskId}
-                data-control="task-relationship-select"
+                disabled={task.state === "completed" || candidate.state === "completed"} data-control="task-relationship-select"
                 data-record-id={candidate.id}
                 onClick={() => setRelatedTaskId(candidate.id)}
               >
@@ -1039,7 +1039,7 @@ export function TaskDetail({
           </div>}
           <div className="inline-form task-connection-actions">
             <select
-              data-control="task-relationship-kind"
+              disabled={task.state === "completed"} data-control="task-relationship-kind"
               aria-label={text.relationshipKind}
               value={relationshipKind}
               onChange={(event) =>
@@ -1053,7 +1053,7 @@ export function TaskDetail({
             <button
               type="button"
               data-control="task-relationship-link"
-              disabled={!relatedTaskId.trim()}
+              disabled={task.state === "completed" || !relatedTaskId.trim()}
               onClick={() =>
                 void update(() =>
                   taskClient.relationship(

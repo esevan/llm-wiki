@@ -40,6 +40,7 @@ const arrayFields = new Set<string>([
 const busy = (status?: string) =>
   ["queued", "running", "retryable"].includes(status ?? "");
 export interface ReferenceAwarePreviewProps {
+  readOnly?: boolean;
   workspace?: ReferenceWorkspace;
   referenceContainer?: HTMLElement | null;
   onGenerate: () => Promise<void>;
@@ -219,7 +220,7 @@ export function ReferenceAwarePreview(props: ReferenceAwarePreviewProps) {
               setViewer({ binding, references, version: chosen.version })
             }
             onUsage={
-              !isHistorical && props.onUsage
+              !props.readOnly && !isHistorical && props.onUsage
                 ? (reference, kind) =>
                     void act(() => props.onUsage!(reference, kind))
                 : undefined
@@ -230,7 +231,7 @@ export function ReferenceAwarePreview(props: ReferenceAwarePreviewProps) {
           <button
             data-control="reference-preview-generate"
             type="button"
-            disabled={pending || generationBusy}
+            disabled={Boolean(props.readOnly) || pending || generationBusy}
             onClick={() => void act(props.onGenerate)}
           >
             {text.generate}
@@ -239,7 +240,7 @@ export function ReferenceAwarePreview(props: ReferenceAwarePreviewProps) {
             <button
               data-control="reference-preview-investigate"
               type="button"
-              disabled={pending || busy(investigation?.state)}
+              disabled={Boolean(props.readOnly) || pending || busy(investigation?.state)}
               onClick={() => void act(props.onInvestigate)}
             >
               {text.investigate}
@@ -342,7 +343,7 @@ export function ReferenceAwarePreview(props: ReferenceAwarePreviewProps) {
                 <button
                   data-control="reference-preview-save"
                   type="button"
-                  disabled={pending || titleInvalid}
+                  disabled={Boolean(props.readOnly) || pending || titleInvalid}
                   onClick={() =>
                     void act(async () => {
                       await props.onSave(edit.base, edit.fields);
@@ -369,7 +370,7 @@ export function ReferenceAwarePreview(props: ReferenceAwarePreviewProps) {
                   <button
                     data-control="reference-preview-edit"
                     type="button"
-                    disabled={pending || loadingVersion}
+                    disabled={Boolean(props.readOnly) || pending || loadingVersion}
                     onClick={() => {
                       setEdit({
                         base: chosen,
@@ -384,7 +385,7 @@ export function ReferenceAwarePreview(props: ReferenceAwarePreviewProps) {
                     data-control="reference-preview-apply"
                     className="primary"
                     type="button"
-                    disabled={pending || generationBusy || loadingVersion || titleInvalid}
+                    disabled={Boolean(props.readOnly) || pending || generationBusy || loadingVersion || titleInvalid}
                     onClick={() =>
                       void act(async () => {
                         await props.onApply(chosen);
@@ -400,6 +401,7 @@ export function ReferenceAwarePreview(props: ReferenceAwarePreviewProps) {
           </div>
           <DraftVersionControls
             versions={workspace?.preview?.versions ?? []}
+            restoreDisabled={props.readOnly}
             currentVersion={workspace?.preview?.currentVersion}
             selected={chosen.version}
             comparison={comparison}

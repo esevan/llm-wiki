@@ -322,7 +322,7 @@ async fn queue_reference_preview(
     let mut connection = database::open(db_path)?;
     let tx = database::immediate_transaction(&mut connection)?;
     if let Some(result)=operation_replay(&tx,input)? {return Ok(result)}
-    ensure_refinement_subject_visible(&tx,session_id)?;
+    ensure_refinement_mutable(&tx,session_id)?;
     let context=refinement_context(&tx,session_id)?;
     let context_revision=context["draftRevision"].as_i64().unwrap_or(0);
     if input["expectedContextRevision"].as_str().is_some_and(|v|v!=format!("refinement:{context_revision}")) || input["expectedTaskRevision"].as_i64().is_some_and(|v|Some(v)!=context["taskSnapshot"]["taskRevision"].as_i64()) {return Err("context_revision_conflict".into())}
@@ -350,6 +350,7 @@ async fn queue_reference_investigation(
 ) -> Result<Value, String> {
     let session_id = required(input, "sessionId")?;
     let connection = database::open(db_path)?;
+    ensure_refinement_mutable(&connection, session_id)?;
     let context = refinement_context(&connection, session_id)?;
     let (preview_id, version, fields): (String, i64, String) = connection.query_row(
         "SELECT p.id,p.current_version,v.fields_json FROM work_previews p JOIN work_preview_versions v ON v.preview_id=p.id AND v.version=p.current_version WHERE p.session_id=?",
@@ -384,6 +385,24 @@ fn subject(input: &Value) -> Result<(&'static str, &str), String> {
 
 /// Refinement sessions retain their drafts for auditability, but a deleted subject must not
 /// remain usable as a path to create or modify Workbench entities.
+/// End pending refinement work in the same transaction that freezes its Task.
+/// A later explicit reopen cannot revive a result queued before completion.
+pub(crate) fn freeze_task_refinement_tx(tx: &Transaction<'_>, task: &str) -> Result<(), String> {
+    let sessions = "SELECT s.id FROM refinement_sessions s WHERE s.task_id=?1 OR (s.task_id IS NULL AND EXISTS(SELECT 1 FROM refinement_proposal_decisions d WHERE d.session_id=s.id AND d.decision!='reject' AND json_extract(d.result_json,'$.id')=?1 AND json_extract(d.result_json,'$.taskRevision') IS NOT NULL))";
+    tx.execute(&format!("UPDATE task_assistance_jobs SET status='cancelled',finished_at=CURRENT_TIMESTAMP WHERE kind='refinement_response' AND status IN ('queued','running') AND subject_id IN ({sessions})"), [task]).map_err(|e|e.to_string())?;
+    tx.execute(&format!("UPDATE ai_jobs_v2 SET status='stale',execution_outcome='cancelled',application_disposition='superseded',finished_at=CURRENT_TIMESTAMP WHERE task_kind='refinement_preview' AND status IN ('queued','running','retryable') AND entity_id IN ({sessions})"), [task]).map_err(|e|e.to_string())?;
+    tx.execute(&format!("UPDATE work_preview_investigations SET state='changed_context',finished_at=CURRENT_TIMESTAMP WHERE state IN ('queued','running') AND preview_id IN (SELECT id FROM work_previews WHERE session_id IN ({sessions}))"), [task]).map_err(|e|e.to_string())?;
+    Ok(())
+}
+
+pub(crate) fn ensure_refinement_mutable(c: &Connection, session: &str) -> Result<(), String> {
+    ensure_refinement_subject_visible(c, session)?;
+    // Capture sessions can remain bound to an applied Task through provenance.
+    let completed: bool = c.query_row("SELECT EXISTS(SELECT 1 FROM refinement_sessions s JOIN tasks t ON t.id=s.task_id OR (s.task_id IS NULL AND EXISTS(SELECT 1 FROM refinement_proposal_decisions d WHERE d.session_id=s.id AND d.decision!='reject' AND json_extract(d.result_json,'$.id')=t.id AND json_extract(d.result_json,'$.taskRevision') IS NOT NULL)) WHERE s.id=? AND t.state='completed')", [session], |r|r.get(0)).map_err(|e|e.to_string())?;
+    if completed { return Err("task_completed: completed Task refinement is read-only".into()); }
+    Ok(())
+}
+
 pub(crate) fn ensure_refinement_subject_visible(connection: &Connection, session_id: &str) -> Result<(), String> {
     let visible: bool = connection
         .query_row(
@@ -456,6 +475,9 @@ fn refinement_open(db_path: &Path, input: &Value) -> Result<Value, String> {
         .optional()
         .map_err(|error| error.to_string())?
         .unwrap_or_else(id);
+    if kind == "task" && crate::application::task_service::ensure_task_mutable(&tx, subject_id).is_err() {
+        return session_value(&tx, &session_id);
+    }
     let initial_draft = if kind == "capture" {
         tx.query_row(
             "SELECT text FROM captures WHERE id=?",
@@ -473,7 +495,6 @@ fn refinement_open(db_path: &Path, input: &Value) -> Result<Value, String> {
         params![session_id, subject_id, initial_draft],
     )
     .map_err(|error| error.to_string())?;
-    tx.execute("UPDATE refinement_sessions SET state='active' WHERE id=?", [&session_id]).map_err(|e|e.to_string())?;
     let result = session_value(&tx, &session_id)?;
     record_operation(&tx, input, &result)?;
     tx.commit().map_err(|error| error.to_string())?;
@@ -602,7 +623,7 @@ pub(crate) fn refinement_context(
     if let Some(task_id) = session.get("taskId").and_then(Value::as_str) {
         let task = connection
             .query_row(
-                "SELECT t.current_revision,r.title,r.detail,r.outcome,r.scope,r.non_goals,r.validation_criteria FROM tasks t JOIN task_revisions r ON r.task_id=t.id AND r.revision=t.current_revision WHERE t.id=?",
+                "SELECT t.current_revision,r.title,r.detail,r.outcome,r.scope,r.non_goals,r.validation_criteria,t.state,t.completed_at,t.reopened_at FROM tasks t JOIN task_revisions r ON r.task_id=t.id AND r.revision=t.current_revision WHERE t.id=?",
                 [task_id],
                 |row| Ok(json!({
                     "id": task_id,
@@ -613,6 +634,9 @@ pub(crate) fn refinement_context(
                     "scope": row.get::<_, String>(4)?,
                     "nonGoals": row.get::<_, String>(5)?,
                     "validationCriteria": row.get::<_, String>(6)?,
+                    "state": row.get::<_, String>(7)?,
+                    "completedAt": row.get::<_, Option<String>>(8)?,
+                    "reopenedAt": row.get::<_, Option<String>>(9)?,
                 })),
             )
             .optional()
@@ -645,7 +669,7 @@ fn refinement_workspace(db_path: &Path, input: &Value) -> Result<Value, String> 
     if let Some(result) = operation_replay(&tx, input)? {
         return Ok(result);
     }
-    ensure_refinement_subject_visible(&tx, session_id)?;
+    ensure_refinement_mutable(&tx, session_id)?;
     let current: i64 = tx
         .query_row(
             "SELECT current_draft_revision FROM refinement_sessions WHERE id=?",
@@ -741,7 +765,7 @@ async fn refinement_message(
     .optional()
     .map_err(|error| error.to_string())?
     .ok_or("Refinement session not found")?;
-    ensure_refinement_subject_visible(&tx, session_id)?;
+    ensure_refinement_mutable(&tx, session_id)?;
     let active: bool = tx.query_row(
         "SELECT EXISTS(SELECT 1 FROM task_assistance_jobs WHERE kind='refinement_response' AND subject_id=? AND status IN ('queued','running'))",
         [session_id], |row| row.get(0),
@@ -889,7 +913,7 @@ async fn run_refinement_response(
     {
         let mut connection = database::open(db_path)?;
         let tx = database::immediate_transaction(&mut connection)?;
-        ensure_refinement_subject_visible(&tx, session_id)?;
+        ensure_refinement_mutable(&tx, session_id)?;
         let running: bool = tx
             .query_row(
                 "SELECT status='running' FROM task_assistance_jobs WHERE id=?",
@@ -1018,7 +1042,7 @@ pub(crate) fn finalize_refinement_preview(
         tx.commit().map_err(|error| error.to_string())?;
         return Ok(None);
     }
-    ensure_refinement_subject_visible(&tx, session_id)?;
+    ensure_refinement_mutable(&tx, session_id)?;
     if input["referenceAware"] == true && !super::reference_aware_workbench::is_current(&tx, input, payload)? {
         tx.execute("UPDATE ai_jobs_v2 SET status='stale',execution_outcome='succeeded',application_disposition='superseded',finished_at=CURRENT_TIMESTAMP WHERE id=?",[job_id]).map_err(|e|e.to_string())?;
         tx.commit().map_err(|e|e.to_string())?;
@@ -1200,7 +1224,7 @@ pub(crate) fn refinement_decision_tx(tx: &Transaction<'_>, input: &Value) -> Res
     if let Some(result) = operation_replay(tx, input)? {
         return Ok(result);
     }
-    ensure_refinement_subject_visible(tx, session_id)?;
+    ensure_refinement_mutable(tx, session_id)?;
     let current: i64 = tx
         .query_row(
             "SELECT current_draft_revision FROM refinement_sessions WHERE id=?",
@@ -1386,6 +1410,7 @@ pub(crate) fn apply_proposal_tx(
                 .and_then(Value::as_str)
                 .or(session_task_id)
                 .ok_or("task_problem_link requires taskId")?;
+            crate::adapters::sqlite::task_repository::ensure_task_mutable(tx, task_id)?;
             let problem_id = required(payload, "problemId")?;
             let problem_revision = payload
                 .get("problemRevision")
@@ -1416,6 +1441,7 @@ fn revise_task_tx(
     payload: &Value,
     timestamp: &str,
 ) -> Result<Value, String> {
+    crate::adapters::sqlite::task_repository::ensure_task_mutable(tx, task_id)?;
     let current: i64 = tx
         .query_row(
             "SELECT current_revision FROM tasks WHERE id=?",
@@ -3240,6 +3266,44 @@ mod tests {
         assert_eq!(active["refiningShortcuts"][0]["id"], task["id"]);
     }
 
+    #[tokio::test]
+    async fn refinement_open_preserves_lifecycle_and_completed_results_are_rejected() {
+        let (_root, db, vault, settings) = fixture();
+        let service = crate::application::task_service::TaskApplicationService::new(&db);
+        let task = service.execute("task.create", &json!({"operationId":"create","inputText":"Original","title":"Lifecycle"})).unwrap();
+        let task_id = task["id"].as_str().unwrap();
+        let opened = refinement_open(&db, &json!({"operationId":"open","taskId":task_id})).unwrap();
+        let sid = opened["id"].as_str().unwrap();
+        let board = || service.execute("workbench.get", &json!({})).unwrap();
+        assert!(board()["refiningShortcuts"].as_array().unwrap().iter().any(|v|v["id"]==task_id));
+        let c = database::open(&db).unwrap();
+        c.execute("INSERT INTO task_refinements(task_id,revision) VALUES(?,1)", [task_id]).unwrap();
+        c.execute("UPDATE refinement_sessions SET state='completed' WHERE id=?", [sid]).unwrap();
+        let reopened = refinement_open(&db, &json!({"operationId":"open-again","taskId":task_id})).unwrap();
+        assert_eq!(reopened["state"], "completed");
+        assert!(board()["refiningShortcuts"].as_array().unwrap().is_empty());
+        // Even an active second conversation must not demote an applied refinement.
+        c.execute("UPDATE refinement_sessions SET state='active' WHERE id=?", [sid]).unwrap();
+        assert!(board()["refiningShortcuts"].as_array().unwrap().is_empty());
+        assert_eq!(service.execute("task.get", &json!({"taskId":task_id})).unwrap()["state"], "task");
+        service.execute("task.transition", &json!({"operationId":"start","taskId":task_id,"expectedTaskRevision":1,"to":"in_progress"})).unwrap();
+        service.execute("task.completion.create", &json!({"operationId":"complete","taskId":task_id,"expectedTaskRevision":1,"evidence":"Done"})).unwrap();
+        let before = session_value(&c, sid).unwrap();
+        let history = refinement_open(&db, &json!({"operationId":"read-completed","taskId":task_id})).unwrap();
+        assert_eq!(history, before);
+        for name in ["task-refinement.message", "task-refinement.workspace", "task-refinement.reference-generate", "task-refinement.decision"] {
+            let input = json!({"operationId":name,"sessionId":sid,"message":"Late edit","proposalId":"patch","draftRevision":0,"decision":"accept","inputDraft":"Changed"});
+            let error = execute(&db,&settings,&vault,SemanticEngine::new(None),name,&input).await.unwrap_err();
+            assert!(error.contains("task_completed"), "{name}: {error}");
+        }
+        c.execute("INSERT INTO task_assistance_jobs(id,kind,subject_id,status,input_json,created_at) VALUES('response','refinement_response',?,'completed','{}',CURRENT_TIMESTAMP)", [sid]).unwrap();
+        c.execute("INSERT INTO ai_jobs_v2(id,task_kind,entity_type,entity_id,status,input_json,execution_mode,idempotency_key,available_at,created_at,attempt) VALUES('late','refinement_preview','refinement_sessions',?,'running','{}','native','late',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,1)", [sid]).unwrap();
+        let input = json!({"sessionId":sid,"responseJobId":"response"});
+        assert!(finalize_refinement_preview(&db,"late",1,&input,&json!({"proposals":[]})).unwrap_err().contains("task_completed"));
+        assert_eq!(session_value(&c,sid).unwrap()["draftRevision"], before["draftRevision"]);
+        assert!(board()["refiningShortcuts"].as_array().unwrap().is_empty());
+    }
+
     fn fixture() -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf) {
         let root = tempfile::tempdir().unwrap();
         let db = root.path().join("app.sqlite3");
@@ -3657,6 +3721,7 @@ mod tests {
         }
 
         let task_id = completed_task(&db);
+        crate::application::task_service::TaskApplicationService::new(&db).execute("task.reopen", &json!({"operationId":"fixture-reopen","taskId":task_id,"expectedTaskRevision":1})).unwrap();
         let task_session = refinement_open(
             &db,
             &json!({"operationId":"prompt-task-open","taskId":task_id}),
@@ -3739,6 +3804,7 @@ mod tests {
         let capture_payload = json!({"proposals":[{"id":"capture-new-task","type":"new_task","payload":{"title":"Must not be created"}}]});
 
         let task_id = completed_task(&db);
+        crate::application::task_service::TaskApplicationService::new(&db).execute("task.reopen", &json!({"operationId":"fixture-reopen","taskId":task_id,"expectedTaskRevision":1})).unwrap();
         let task_session = execute(
             &db,
             &settings,

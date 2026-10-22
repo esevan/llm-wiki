@@ -19,6 +19,7 @@ pub fn terminal_run_for_repair(
     task_id: &str,
     run_id: Option<&str>,
 ) -> Result<String, String> {
+    crate::application::task_service::ensure_task_mutable(connection, task_id)?;
     if run_id.is_some_and(|id| id.trim().is_empty()) {
         return Err("runId must not be empty".into());
     }
@@ -314,6 +315,7 @@ fn publish_inner(
     let tx = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|error| error.to_string())?;
+    if owner_type == "work_log" { crate::application::task_service::ensure_task_mutable(&tx, &input.owner.task_id)?; }
     if let Some(revision)=tx.query_row("SELECT revision FROM task_distillation_revisions WHERE job_id=? AND owner_type=? AND owner_id=?",params![job_id,owner_type,&owner_id],|row|row.get::<_,i64>(0)).optional().map_err(|error|error.to_string())? {
         return Ok(json!({"ownerType":owner_type,"ownerId":owner_id,"revision":revision,"freshness":"current","applicationDisposition":"applied","replayed":true}));
     }

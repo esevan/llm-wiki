@@ -972,3 +972,28 @@ describe("Task work sessions", () => {
     expect(p95).toBeLessThan(100);
   });
 });
+
+it("keeps completed sessions readable and saves new notes without running or editing settings", async () => {
+  const saved = session("past", "Past work");
+  const entries = [{id:"old",sessionId:"past",author:"user",kind:"note",body:"Original note",createdAt:"2026-09-21T10:00:00Z"}];
+  const request = vi.fn(async ({path,method,body}:{path:string;method?:string;body?:string}) => {
+    if (path.endsWith("/entries") && method === "POST") {
+      entries.push({id:"new",sessionId:"past",author:"user",kind:"note",body:JSON.parse(body!).body,createdAt:"2026-10-22T11:00:00Z"});
+      return response(entries[1]);
+    }
+    if (path.endsWith("work-sessions")) return response({sessions:[saved]});
+    return response({session:saved,entries:[...entries]});
+  });
+  window.llmWikiApplication = {request:request as never};
+  render(<TaskWorkSessions task={{...task,state:"completed",completedAt:"2026-10-22T10:00:00Z"}} />);
+  expect(await screen.findByText("Original note")).toBeVisible();
+  const composer = await screen.findByLabelText("Instruction or note");
+  fireEvent.change(composer,{target:{value:"Additional observation"}});
+  expect(screen.getByRole("button",{name:"Run with Codex"})).toBeDisabled();
+  expect(screen.getByRole("button",{name:"Save note"})).toBeEnabled();
+  fireEvent.keyDown(composer,{key:"Enter"});
+  expect(await screen.findByText("Additional observation")).toBeVisible();
+  expect(screen.getByText("Original note")).toBeVisible();
+  expect(screen.getByText("Post-completion note")).toBeVisible();
+  expect(request.mock.calls.filter(([v])=>v.method === "POST")).toHaveLength(1);
+});

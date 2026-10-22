@@ -217,6 +217,7 @@ pub(crate) fn is_current(
     payload: &Value,
 ) -> Result<bool, String> {
     let session = string(input, "sessionId")?;
+    if assistance::ensure_refinement_mutable(tx, session).is_err() { return Ok(false); }
     if head(tx, session)? != number(input, "expectedPreviewVersion")?
         || context_key(&assistance::image_context(&assistance::refinement_context(tx, session)?).0)
             != context_key(&input["promptContext"])
@@ -391,6 +392,7 @@ pub(super) fn apply_completion_checklist(
     task: &str,
     fields: &Value,
 ) -> Result<(), String> {
+    crate::adapters::sqlite::task_repository::ensure_task_mutable(tx, task)?;
     for body in fields["completionCriteria"]
         .as_array()
         .into_iter()
@@ -597,6 +599,7 @@ async fn investigate(
     };
     let mut c = database::open(db)?;
     let tx = database::immediate_transaction(&mut c)?;
+    assistance::ensure_refinement_mutable(&tx, string(input, "sessionId")?)?;
     let current:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM work_preview_investigations i JOIN work_previews p ON p.id=i.preview_id JOIN refinement_sessions s ON s.id=p.session_id WHERE i.id=? AND i.state='running' AND p.context_revision=? AND s.current_draft_revision=?)",params![investigation,context,context],|r|r.get(0)).map_err(|e|e.to_string())?;
     let now_context = assistance::refinement_context(&tx, string(input, "sessionId")?)?;
     let conversation_current = now_context["messages"] == input["promptContext"]["messages"]
@@ -650,6 +653,9 @@ pub(crate) fn execute(
     let session = string(input, "sessionId")?;
     let mut c = database::open(db)?;
     assistance::ensure_refinement_subject_visible(&c, session)?;
+    if !matches!(name, "task-refinement.reference-workspace" | "task-refinement.reference-list" | "task-refinement.reference-version" | "task-refinement.reference-compare" | "task-refinement.reference-open") {
+        assistance::ensure_refinement_mutable(&c, session)?;
+    }
     let owner = c
         .query_row(
             "SELECT id,current_version,context_revision FROM work_previews WHERE session_id=?",
@@ -737,10 +743,13 @@ pub(crate) fn execute(
         if exact["source_hash"] != r["documentVersion"] {
             return Err("reference_version_unavailable".into());
         }
-        record_use(db, &preview, context, r, "viewed", "")?;
+        if assistance::ensure_refinement_mutable(&c, session).is_ok() {
+            record_use(db, &preview, context, r, "viewed", "")?;
+        }
         return Ok(json!({"reference":r,"source":exact}));
     }
     let tx = database::immediate_transaction(&mut c)?;
+    assistance::ensure_refinement_mutable(&tx, session)?;
     assistance::ensure_refinement_subject_visible(&tx, session)?;
     let mut operation = input.clone();
     operation["operationName"] = json!(name);
@@ -962,7 +971,7 @@ fn validate_mentions(c:&Connection,mentions:&Value)->Result<(),String>{
 pub(crate) fn save_mention_draft(db:&Path,input:&Value)->Result<Value,String>{
     let mut c=database::open(db)?;let tx=database::immediate_transaction(&mut c)?;
     if let Some(result)=assistance::operation_replay(&tx,input)? {return Ok(result)}
-    let session=string(input,"sessionId")?;assistance::ensure_refinement_subject_visible(&tx,session)?;
+    let session=string(input,"sessionId")?;assistance::ensure_refinement_mutable(&tx,session)?;
     let revision:i64=tx.query_row("SELECT current_draft_revision FROM refinement_sessions WHERE id=?",[session],|r|r.get(0)).map_err(|e|e.to_string())?;
     if input["expectedDraftRevision"].as_i64().is_some_and(|v|v!=revision){return Err("draft_conflict".into())}
     validate_mentions(&tx,&input["mentions"])?;

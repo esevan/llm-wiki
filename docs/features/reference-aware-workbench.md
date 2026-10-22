@@ -119,3 +119,9 @@ The wide Refinement screen keeps the preview in a large reading card on the left
 The preview modal and main reading card expand with the window, including ultrawide displays. Prose line length is constrained inside the fluid surface; the existing chat and evidence remain in the supporting column.
 
 Preview keeps the main reading area and gives the existing chat/evidence rail a responsive width (340–720 px on desktop), stacking below the preview on narrow windows. Task Refine shows one generated preview instead of repeating the saved definition below it. If no generated preview is available, the existing Task definition remains editable in that same preview position. An already-open legacy definition edit stays recoverable until saved or discarded.
+
+## Task lifecycle and completed history
+
+Opening Refine reads the existing session without reactivating an applied refinement. Preview generation and later refinement conversations have their own lifecycle: a Task with an applied refinement stays in Refined Tasks until an explicit Task lifecycle action changes its placement. A received Task can still enter the initial refining flow.
+
+Completed Tasks expose past refinement, saved preview versions, comparisons, references and sessions for reading. They reject new refinement messages, preview generation, edits, restoration and application, including results that finish after completion. Task definitions, checklist state, decisions, links and existing Work Log evidence are read-only. Knowledge draft correction, review and publication remain separate and available. An explicit reopen preserves the original completion record before allowing new work.

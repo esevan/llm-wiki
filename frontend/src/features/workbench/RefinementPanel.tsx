@@ -100,6 +100,7 @@ export function RefinementPanel({
   onApplied,
   subjectTitle,
   embedded = false,
+  readOnly = false,
   taskDefinition,
   taskDefinitionEditing = false,
   messageDrafts,
@@ -112,6 +113,7 @@ export function RefinementPanel({
   onApplied?: (application?: TaskApplicationEvent) => void;
   subjectTitle?: string;
   embedded?: boolean;
+  readOnly?: boolean;
   taskDefinition?: ReactNode;
   taskDefinitionEditing?: boolean;
   messageDrafts?: Map<string, string>;
@@ -139,7 +141,7 @@ export function RefinementPanel({
   useEffect(() => {
     setSelectedMentionOptions([]);
     setMentionOptions([]);
-  }, [kind, subjectId]);
+  }, [readOnly, kind, subjectId]);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const mentionRef = useRef<DocumentMention[]>([]);
   const mentionDirty = useRef(false);
@@ -268,6 +270,7 @@ export function RefinementPanel({
   }, [session?.id, refreshReferences, referenceText.actionFailed]);
   useEffect(() => {
     if (
+      readOnly ||
       !session ||
       (session.taskId && !taskBaseline) ||
       !referenceWorkspace ||
@@ -289,6 +292,7 @@ export function RefinementPanel({
       .then(() => setPolling(true))
       .catch(() => setReferenceError(referenceText.actionFailed));
   }, [
+    readOnly,
     session,
     referenceWorkspace,
     taskBaseline,
@@ -415,7 +419,7 @@ export function RefinementPanel({
     setTaskBaseline(undefined);
     const sequence = ++loadSequence.current;
     try {
-      const next = await (latest.current.session
+      const next = await (readOnly || latest.current.session
         ? taskClient.refinementStatus(kind, subjectId)
         : taskClient.refinement(kind, subjectId));
       if (sequence !== loadSequence.current) return;
@@ -484,15 +488,16 @@ export function RefinementPanel({
         }
       }
     } catch (e) {
-      if (sequence === loadSequence.current)
-        setLoadError(String(e instanceof Error ? e.message : e));
+      const message = String(e instanceof Error ? e.message : e);
+      if (sequence === loadSequence.current && !(readOnly && message === "Refinement session not found"))
+        setLoadError(message);
     } finally {
       if (sequence === loadSequence.current) {
         loadingRef.current = false;
         setLoading(false);
       }
     }
-  }, [embedded, kind, subjectId, text.assistantFailure, restoreImage]);
+  }, [readOnly, embedded, kind, subjectId, text.assistantFailure, restoreImage]);
   useEffect(() => {
     hasLoadedSession.current = false;
     void load();
@@ -501,7 +506,7 @@ export function RefinementPanel({
       if (timer.current) window.clearTimeout(timer.current);
       if (pollTimer.current) window.clearInterval(pollTimer.current);
       const current = latest.current;
-      if (current.session && !skipCleanupFlush.current)
+      if (!readOnly && current.session && !skipCleanupFlush.current)
         void taskClient
           .saveWorkspace(current.session.id, {
             inputDraft: current.draft,
@@ -511,7 +516,7 @@ export function RefinementPanel({
           })
           .catch(() => undefined);
     };
-  }, [cancelLoad, kind, subjectId, load]);
+  }, [readOnly, cancelLoad, kind, subjectId, load]);
   useEffect(() => {
     const onQueueChanged = (event: Event) => {
       const jobs = (
@@ -664,6 +669,7 @@ export function RefinementPanel({
       : proposal.payload;
   };
   const persistCurrent = useCallback(() => {
+    if (readOnly) return Promise.resolve(undefined);
     const pending = workspaceQueue.current.then(async () => {
       const current = latest.current;
       if (!current.session) return;
@@ -701,7 +707,7 @@ export function RefinementPanel({
     });
     workspaceQueue.current = pending.catch(() => undefined);
     return pending;
-  }, [kind, subjectId]);
+  }, [readOnly, kind, subjectId]);
   const scheduleSave = () => {
     if (timer.current) window.clearTimeout(timer.current);
     timer.current = window.setTimeout(
@@ -1272,7 +1278,7 @@ export function RefinementPanel({
                   <button
                     type="button"
                     className="primary"
-                    disabled={statusBusy}
+                    disabled={readOnly || statusBusy}
                     data-control="refinement-start-work"
                     onClick={() => {
                       setStatusBusy(true);
@@ -1327,6 +1333,7 @@ export function RefinementPanel({
               )}
               {referenceWorkspace && !taskDefinitionEditing && (referenceWorkspace.preview || !taskDefinition) && (
                 <ReferenceAwarePreview
+                  readOnly={readOnly}
                   workspace={referenceWorkspace}
                   referenceContainer={referenceContainer}
                   onGenerate={generateReferencePreview}
@@ -1404,7 +1411,7 @@ export function RefinementPanel({
                               <label key={key}>
                                 {labels[key]}
                                 <textarea
-                                  data-control="refinement-proposal-editor"
+                                  disabled={readOnly} data-control="refinement-proposal-editor"
                                   aria-label={`${text.edit} ${labels[key]}`}
                                   value={String(value)}
                                   onChange={(event) =>
@@ -1430,7 +1437,7 @@ export function RefinementPanel({
                           <button
                             type="button"
                             data-control="refinement-proposal-edit"
-                            disabled={Boolean(deciding)}
+                            disabled={readOnly || Boolean(deciding)}
                             onClick={() =>
                               setEditing(isEditing ? undefined : proposal.id)
                             }
@@ -1440,7 +1447,7 @@ export function RefinementPanel({
                           <button
                             type="button"
                             data-control="refinement-proposal-reject"
-                            disabled={Boolean(deciding)}
+                            disabled={readOnly || Boolean(deciding)}
                             onClick={() => void decide(proposal, "reject")}
                           >
                             {text.reject}
@@ -1449,7 +1456,7 @@ export function RefinementPanel({
                             type="button"
                             className="primary"
                             data-control="refinement-proposal-accept"
-                            disabled={
+                            disabled={readOnly ||
                               Boolean(deciding) ||
                               previewBusy ||
                               Boolean(
@@ -1576,7 +1583,7 @@ export function RefinementPanel({
                 {session.captureDistillation.distillation?.retryAllowed && (
                   <button
                     type="button"
-                    disabled={saving}
+                    disabled={readOnly || saving}
                     data-control="capture-distillation-retry"
                     onClick={() => {
                       setSaving(true);
@@ -1604,7 +1611,7 @@ export function RefinementPanel({
               <summary>{text.savedRefinementNote}</summary>
               <textarea
                 aria-label={text.savedRefinementNote}
-                data-control="refinement-note"
+                disabled={readOnly} data-control="refinement-note"
                 value={draft}
                 onChange={(event) => save(event.target.value)}
                 placeholder={text.savedRefinementPlaceholder}
@@ -1760,7 +1767,7 @@ export function RefinementPanel({
                 )}
                 <textarea
                   ref={composerRef}
-                  disabled={saving}
+                  disabled={readOnly || saving}
                   onPaste={
                     !saving && !responding ? attachment.paste : undefined
                   }
@@ -1841,13 +1848,13 @@ export function RefinementPanel({
                 </small>
                 <InputImageAttachment
                   attachment={attachment}
-                  disabled={saving || responding}
+                  disabled={readOnly || saving || responding}
                 />
               </div>
               <button
                 type="button"
                 className="primary"
-                disabled={
+                disabled={readOnly ||
                   !session ||
                   saving ||
                   responding ||

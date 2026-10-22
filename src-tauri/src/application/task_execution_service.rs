@@ -76,6 +76,11 @@ fn redact_text(text: &str, max: usize) -> String {
     }
 }
 
+fn ensure_run_mutable(c: &rusqlite::Connection, run: &str) -> Result<(), String> {
+    let task: String = c.query_row("SELECT task_id FROM task_work_session_runs WHERE id=?", [run], |r|r.get(0)).map_err(|e|e.to_string())?;
+    super::task_service::ensure_task_mutable(c, &task)
+}
+
 impl TaskExecutionApplicationService {
     pub(crate) fn new(path: impl AsRef<Path>) -> Self {
         Self {
@@ -168,6 +173,7 @@ impl TaskExecutionApplicationService {
         let cwd = canonical.to_string_lossy().into_owned();
         let mut connection = database::open(&self.db_path)?;
         let tx = database::immediate_transaction(&mut connection)?;
+        super::task_service::ensure_task_mutable(&tx, task_id)?;
         let task_exists: bool = tx
             .query_row(
                 "SELECT EXISTS(SELECT 1 FROM tasks t WHERE t.id=? AND NOT EXISTS(SELECT 1 FROM deleted_entities d WHERE d.entity_type='tasks' AND d.entity_id=t.id))",
@@ -407,7 +413,9 @@ impl TaskExecutionApplicationService {
                     .into(),
             );
         }
-        let connection = database::open(&self.db_path)?;
+        let mut c = database::open(&self.db_path)?;
+        let connection = database::immediate_transaction(&mut c)?;
+        super::task_service::ensure_task_mutable(&connection, &prepared.task_id)?;
         let sent_context = if prepared.thread_id.is_none() {
             Some(prepared.context_hash.as_str())
         } else {
@@ -417,6 +425,7 @@ impl TaskExecutionApplicationService {
         if updated != 1 {
             return Err("ownership_failure: conversation belongs to another session".into());
         }
+        connection.commit().map_err(|e|e.to_string())?;
         Ok(
             json!({"model":model,"cwd":cwd,"approvalPolicy":approval,"approvalsReviewer":prepared.approvals_reviewer,"sandbox":sandbox,"provenance":"bound_thread","settingsRevision":prepared.settings_revision,"ready":true,"capabilities":{"structuredUserInput":capability}}),
         )
@@ -450,6 +459,7 @@ impl TaskExecutionApplicationService {
         ]);
         let mut connection = database::open(&self.db_path)?;
         let tx = database::immediate_transaction(&mut connection)?;
+        super::task_service::ensure_task_mutable(&tx, task_id)?;
         if let Some((stored,run_id))=tx.query_row("SELECT payload_hash,id FROM task_work_session_runs WHERE session_id=? AND submission_key=?",params![session_id,operation_id],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?))).optional().map_err(|e|e.to_string())? {
             if stored!=payload_hash { return Err("operation_conflict: the submission key was already used with different content".into()); }
             tx.commit().map_err(|e|e.to_string())?; return Ok((self.snapshot(task_id,session_id,Some(&run_id))?,true));
@@ -490,21 +500,26 @@ impl TaskExecutionApplicationService {
         session_id: &str,
         context_hash: &str,
     ) -> Result<(), String> {
-        let c = database::open(&self.db_path)?;
+        let mut connection = database::open(&self.db_path)?;
+        let c = database::immediate_transaction(&mut connection)?;
+        let task: String = c.query_row("SELECT task_id FROM task_work_sessions WHERE id=?",[session_id],|r|r.get(0)).map_err(|e|e.to_string())?;
+        super::task_service::ensure_task_mutable(&c, &task)?;
         let changed=c.execute("UPDATE task_work_sessions SET context_hash=?,execution_revision=execution_revision+1 WHERE id=? AND EXISTS(SELECT 1 FROM task_work_session_runs r WHERE r.session_id=task_work_sessions.id AND r.context_hash=?)",params![context_hash,session_id,context_hash]).map_err(|e|e.to_string())?;
         if changed != 1 {
             return Err("ownership_failure: context does not belong to this session".into());
         }
-        Ok(())
+        c.commit().map_err(|e|e.to_string())
     }
     pub(crate) fn mark_dispatch_uncertain(
         &self,
         run_id: &str,
         message: &str,
     ) -> Result<(), String> {
-        let c = database::open(&self.db_path)?;
+        let mut connection = database::open(&self.db_path)?;
+        let c = database::immediate_transaction(&mut connection)?;
+        ensure_run_mutable(&c, run_id)?;
         c.execute("UPDATE task_work_session_runs SET dispatch_state='uncertain',status='needs_attention',error_code='uncertain_dispatch',error_message=?,finished_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP,revision=revision+1 WHERE id=? AND status IN ('queued','running')",params![redact_text(message,1000),run_id]).map_err(|e|e.to_string())?;
-        Ok(())
+        c.commit().map_err(|e|e.to_string())
     }
     pub(crate) fn accept_turn(
         &self,
@@ -512,19 +527,23 @@ impl TaskExecutionApplicationService {
         thread_id: &str,
         turn_id: &str,
     ) -> Result<(), String> {
-        let c = database::open(&self.db_path)?;
+        let mut connection = database::open(&self.db_path)?;
+        let c = database::immediate_transaction(&mut connection)?;
+        ensure_run_mutable(&c, run_id)?;
         let n=c.execute("UPDATE task_work_session_runs SET dispatch_state='accepted',provider_thread_id=?,provider_turn_id=?,status='running',updated_at=CURRENT_TIMESTAMP,revision=revision+1 WHERE id=? AND status IN ('queued','running') AND (provider_thread_id IS NULL OR provider_thread_id=?)",params![thread_id,turn_id,run_id,thread_id]).map_err(|e|e.to_string())?;
         if n != 1 {
             return Err("stale_run: turn was not accepted for this Run".into());
         }
-        Ok(())
+        c.commit().map_err(|e|e.to_string())
     }
     fn update_owned(&self, run_id: &str, sql: &str) -> Result<(), String> {
-        let c = database::open(&self.db_path)?;
+        let mut connection = database::open(&self.db_path)?;
+        let c = database::immediate_transaction(&mut connection)?;
+        ensure_run_mutable(&c, run_id)?;
         if c.execute(sql, [run_id]).map_err(|e| e.to_string())? != 1 {
             return Err("stale_run".into());
         }
-        Ok(())
+        c.commit().map_err(|e|e.to_string())
     }
 
     pub(crate) fn run_identity_for_event(
@@ -570,6 +589,7 @@ impl TaskExecutionApplicationService {
         let safe = sanitize_completed_item(item);
         let mut c = database::open(&self.db_path)?;
         let tx = database::immediate_transaction(&mut c)?;
+        ensure_run_mutable(&tx, run_id)?;
         let replay:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM task_work_session_run_items WHERE run_id=? AND provider_item_id=?)",params![run_id,id],|r|r.get(0)).map_err(|e|e.to_string())?;
         if replay {
             tx.commit().map_err(|e| e.to_string())?;
@@ -605,6 +625,7 @@ impl TaskExecutionApplicationService {
             .map(|v| redact_text(&v.to_string(), 2000));
         let mut c = database::open(&self.db_path)?;
         let tx = database::immediate_transaction(&mut c)?;
+        ensure_run_mutable(&tx, run_id)?;
         let changed=tx.execute("UPDATE task_work_session_runs SET status=?,error_code=CASE WHEN ?='failed' THEN 'turn_failed' ELSE error_code END,error_message=COALESCE(?,error_message),finished_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP,revision=revision+1 WHERE id=? AND status IN ('queued','running','awaiting_response')",params![status,status,error,run_id]).map_err(|e|e.to_string())?;
         if changed == 0 {
             return Ok(());
@@ -614,17 +635,15 @@ impl TaskExecutionApplicationService {
             [run_id],
         )
         .map_err(|e| e.to_string())?;
-        tx.commit().map_err(|e| e.to_string())?;
-        self.capture_final_report(run_id)?;
-        if let Err(sync_error) = self.sync_work_log_by_run(run_id) {
-            let _=c.execute("UPDATE task_work_session_runs SET work_log_sync_state='failed',work_log_sync_error=? WHERE id=?",params![redact_text(&sync_error,1000),run_id]);
-            let _=c.execute("UPDATE task_work_session_run_logs SET sync_state='failed',sync_error=?,updated_at=CURRENT_TIMESTAMP WHERE run_id=?",params![redact_text(&sync_error,1000),run_id]);
+        Self::capture_final_report(&tx, run_id)?;
+        if let Err(sync_error) = Self::sync_work_log_on(&tx, run_id) {
+            let _=tx.execute("UPDATE task_work_session_runs SET work_log_sync_state='failed',work_log_sync_error=? WHERE id=?",params![redact_text(&sync_error,1000),run_id]);
+            let _=tx.execute("UPDATE task_work_session_run_logs SET sync_state='failed',sync_error=?,updated_at=CURRENT_TIMESTAMP WHERE run_id=?",params![redact_text(&sync_error,1000),run_id]);
         }
-        Ok(())
+        tx.commit().map_err(|e|e.to_string())
     }
 
-    fn capture_final_report(&self, run_id: &str) -> Result<(), String> {
-        let c = database::open(&self.db_path)?;
+    fn capture_final_report(c: &rusqlite::Connection, run_id: &str) -> Result<(), String> {
         let report:Option<String>=c.query_row("SELECT json_extract(content_json,'$.text') FROM task_work_session_run_items WHERE run_id=? AND kind='agentMessage' AND json_extract(content_json,'$.phase')='final_answer' ORDER BY provider_order DESC LIMIT 1",[run_id],|r|r.get(0)).optional().map_err(|e|e.to_string())?.flatten();
         if let Some(report) = report {
             c.execute(
@@ -806,11 +825,14 @@ impl TaskExecutionApplicationService {
         let provider_id = rpc_id.to_string();
         let safe = sanitize_formal_request(kind, params_value);
         let at = task_repository::now();
-        let c = database::open(&self.db_path)?;
+        let mut connection = database::open(&self.db_path)?;
+        let c = database::immediate_transaction(&mut connection)?;
+        ensure_run_mutable(&c, &run)?;
         let inserted=c.execute("INSERT OR IGNORE INTO task_work_session_formal_requests(id,run_id,task_id,session_id,provider_thread_id,provider_turn_id,connection_generation,provider_request_id,kind,is_blocking,request_json,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,'pending',?,?)",params![id,run,task,session,thread,turn,generation,provider_id,kind,i64::from(is_blocking),safe.to_string(),at,at]).map_err(|e|e.to_string())?;
         if inserted == 1 && is_blocking {
             c.execute("UPDATE task_work_session_runs SET status='awaiting_response',updated_at=CURRENT_TIMESTAMP,revision=revision+1 WHERE id=? AND status='running'",[&run]).map_err(|e|e.to_string())?;
         }
+        c.commit().map_err(|e|e.to_string())?;
         Ok(Some((run, task, session)))
     }
 
@@ -829,6 +851,7 @@ impl TaskExecutionApplicationService {
             .ok_or("invalid_input: response is required")?;
         let mut c = database::open(&self.db_path)?;
         let tx = database::immediate_transaction(&mut c)?;
+        ensure_run_mutable(&tx, run)?;
         let row=tx.query_row("SELECT f.provider_request_id,f.connection_generation,f.kind,f.request_json,f.status,r.status FROM task_work_session_formal_requests f JOIN task_work_session_runs r ON r.id=f.run_id WHERE f.id=? AND f.run_id=? AND f.task_id=? AND f.session_id=?",params![request,run,task,session],|r|Ok((r.get::<_,String>(0)?,r.get::<_,i64>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?,r.get::<_,String>(4)?,r.get::<_,String>(5)?))).optional().map_err(|e|e.to_string())?.ok_or("ownership_failure: formal request not found")?;
         if row.1 != current_generation {
             return Err("stale_request: provider connection changed".into());
@@ -869,6 +892,7 @@ impl TaskExecutionApplicationService {
             .optional()
             .map_err(|e| e.to_string())?;
         let run = run.ok_or("ownership_failure: formal request not found")?;
+        ensure_run_mutable(&tx, &run)?;
         let changed=if accepted{tx.execute("UPDATE task_work_session_formal_requests SET status='answered',response_json=proposed_response_json,answered_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=? AND status='submitting'",[request])}else{tx.execute("UPDATE task_work_session_formal_requests SET status='error',error_message=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND status='submitting'",params![error.map(|e|redact_text(e,1000)),request])}.map_err(|e|e.to_string())?;
         if changed != 1 {
             return Err("stale_request: response state changed".into());
@@ -1011,15 +1035,26 @@ impl TaskExecutionApplicationService {
         run: &str,
     ) -> Result<Value, String> {
         self.run_identity(task, session, run)?;
+        super::task_service::ensure_task_mutable(&database::open(&self.db_path)?, task)?;
         if let Err(error) = self.sync_work_log_by_run(run) {
-            let c = database::open(&self.db_path)?;
+            let mut connection = database::open(&self.db_path)?;
+            let c = database::immediate_transaction(&mut connection)?;
+            ensure_run_mutable(&c, run)?;
             c.execute("UPDATE task_work_session_runs SET work_log_sync_state='failed',work_log_sync_error=?,revision=revision+1,updated_at=CURRENT_TIMESTAMP WHERE id=?",params![redact_text(&error,1000),run]).map_err(|e|e.to_string())?;
+            c.commit().map_err(|e|e.to_string())?;
             return self.snapshot(task, session, Some(run));
         }
         self.snapshot(task, session, Some(run))
     }
     fn sync_work_log_by_run(&self, run: &str) -> Result<(), String> {
-        let c = database::open(&self.db_path)?;
+        let mut c = database::open(&self.db_path)?;
+        let tx = database::immediate_transaction(&mut c)?;
+        ensure_run_mutable(&tx, run)?;
+        Self::sync_work_log_on(&tx, run)?;
+        tx.commit().map_err(|e|e.to_string())
+    }
+
+    fn sync_work_log_on(c: &rusqlite::Connection, run: &str) -> Result<(), String> {
         c.execute("UPDATE task_work_session_run_logs SET projection_revision=projection_revision+1,sync_state='synced',sync_error=NULL,updated_at=CURRENT_TIMESTAMP WHERE run_id=?",[run]).map_err(|e|e.to_string())?;
         c.execute("UPDATE task_work_session_runs SET work_log_sync_state='synced',work_log_sync_error=NULL WHERE id=?",[run]).map_err(|e|e.to_string())?;
         Ok(())
@@ -1314,6 +1349,26 @@ mod tests {
 
     fn run_input(f: &Fixture, key: &str, instruction: &str) -> Value {
         json!({"taskId":f.task,"sessionId":f.session,"operationId":key,"instruction":instruction,"settingsRevision":f.settings_revision})
+    }
+
+    #[test]
+    fn completion_rejects_active_execution_and_late_results_cannot_mutate_completed_history() {
+        let f = fixture();
+        let tasks = TaskApplicationService::new(&f.db);
+        tasks.execute("task.transition", &json!({"operationId":"start","taskId":f.task,"expectedTaskRevision":1,"to":"in_progress"})).unwrap();
+        let (run, _) = f.service.create_run(&run_input(&f,"run","Inspect safely")).unwrap();
+        let rid = run["selectedRun"]["id"].as_str().unwrap();
+        let complete = json!({"operationId":"complete","taskId":f.task,"expectedTaskRevision":1,"evidence":"Done"});
+        assert!(tasks.execute("task.completion.create", &complete).unwrap_err().contains("active_task_execution"));
+        f.service.finish_turn(rid, &json!({"status":"completed"})).unwrap();
+        tasks.execute("task.completion.create", &complete).unwrap();
+        let c = database::open(&f.db).unwrap();
+        let before: String = c.query_row("SELECT body FROM task_work_log_entries WHERE id=(SELECT work_log_entry_id FROM task_work_session_runs WHERE id=?)", [rid], |r|r.get(0)).unwrap();
+        assert!(f.service.create_run(&run_input(&f,"late-run","Rewrite work")).unwrap_err().contains("task_completed"));
+        assert!(f.service.complete_item(rid, &json!({"id":"late","type":"agentMessage","phase":"final_answer","text":"Overwritten"}), 0).unwrap_err().contains("task_completed"));
+        assert!(f.service.finish_turn(rid, &json!({"status":"failed"})).unwrap_err().contains("task_completed"));
+        assert_eq!(c.query_row("SELECT body FROM task_work_log_entries WHERE id=(SELECT work_log_entry_id FROM task_work_session_runs WHERE id=?)", [rid], |r|r.get::<_,String>(0)).unwrap(), before);
+        assert_eq!(tasks.execute("task.get", &json!({"taskId":f.task})).unwrap()["state"], "completed");
     }
 
     #[test]

@@ -71,6 +71,8 @@ const copy = {
     placeholder: "Record what you tried, decided, or want to continue…",
     attach: "Attach file",
     send: "Save note",
+    completedNotes: "Completed Task: past work is read-only. New notes are saved separately in this session.",
+    postCompletionNote: "Post-completion note",
     messageMode: "While Codex is running",
     noteMode: "Save as note",
     queueMode: "Queue for next Run",
@@ -170,6 +172,8 @@ const copy = {
     placeholder: "시도한 내용, 결정, 다음에 이어갈 내용을 기록하세요…",
     attach: "파일 첨부",
     send: "메모 저장",
+    completedNotes: "완료된 Task의 기존 작업 기록은 읽기 전용입니다. 새 메모는 이 세션에 별도로 추가됩니다.",
+    postCompletionNote: "완료 후 메모",
     messageMode: "Codex 실행 중 입력",
     noteMode: "메모로 저장",
     queueMode: "다음 실행에 Queue",
@@ -705,6 +709,7 @@ export function TaskWorkSessions({
     }
   };
   const run = async () => {
+    if (task.state === "completed") return;
     if (task.state === "on_hold") { setError(workbenchText.taskHeldGuard); return; }
     if (!record || runSubmitting || retrySubmittingKeys.current.size > 0 || execution?.activeRunId || !draft.trim() || !record.session.workspacePath.trim()) {
       if (record && !record.session.workspacePath.trim()) setError(t.runUnavailable);
@@ -910,7 +915,7 @@ export function TaskWorkSessions({
           <p>{t.workspaceHint}</p>
         </div>
         <div className="task-session-toolbar-actions">
-          <button type="button" data-control="task-session-link" disabled={busy} aria-expanded={showCodexSessions} onClick={toggleCodexSessions}>{showCodexSessions ? t.closePicker : t.link}</button>
+          <button type="button" data-control="task-session-link" disabled={task.state === "completed" || busy} aria-expanded={showCodexSessions} onClick={toggleCodexSessions}>{showCodexSessions ? t.closePicker : t.link}</button>
           <button
             type="button"
             data-control="task-session-create"
@@ -939,7 +944,7 @@ export function TaskWorkSessions({
                     {thread.preview && thread.preview !== thread.title && <p>{thread.preview}</p>}
                     <span>{thread.source} · {thread.cwd || t.workspace} · {formatSystemTime(thread.updatedAt, document.documentElement.lang || navigator.language, { dateStyle: "medium", timeStyle: "short" })}</span>
                   </div>
-                  <button type="button" data-control="task-session-link-choice" disabled={Boolean(linkingThreadId) || linkedHere} onClick={() => void linkCodexSession(thread)}>{linkedHere ? t.alreadyLinked : t.linkAction}</button>
+                  <button type="button" data-control="task-session-link-choice" disabled={task.state === "completed" || Boolean(linkingThreadId) || linkedHere} onClick={() => void linkCodexSession(thread)}>{linkedHere ? t.alreadyLinked : t.linkAction}</button>
                 </li>;
               })}
             </ol>
@@ -1031,7 +1036,7 @@ export function TaskWorkSessions({
                           {item.entry.author === "user" ? t.user : item.entry.author}
                         </strong>
                         <span>
-                          {item.entry.kind === "note" ? t.note : item.entry.kind}
+                          {item.entry.kind === "note" ? (task.completedAt && Date.parse(item.entry.createdAt) >= Date.parse(task.completedAt) ? t.postCompletionNote : t.note) : item.entry.kind}
                         </span>
                         <time>
                           {formatSystemTime(
@@ -1136,11 +1141,12 @@ export function TaskWorkSessions({
                     {activeRun.workLogEntryId && <button type="button" data-control="task-session-worklog-open" onClick={() => onOpenWorkLog?.(activeRun.workLogEntryId!)}>{t.workLog}</button>}
                     {activeRun.workLogSyncState === "synced" && <p className="task-execution-meta">{t.syncSucceeded}</p>}
                     {activeRun.workLogSyncState === "pending" && <p role="status">{t.syncPending}</p>}
-                    {activeRun.workLogSyncState === "failed" && <><p role="alert">{t.syncFailed} {syncError[activeRun.id] || activeRun.workLogSyncError}</p><button type="button" data-control="task-session-worklog-sync" disabled={syncBusy === activeRun.id} onClick={() => void syncWorkLog(activeRun)}>{t.syncWorkLog}</button></>}
-                    {["failed", "cancelled", "interrupted", "needs_attention"].includes(activeRun.status) && <><button type="button" data-control="task-session-run-reuse" disabled={busy || Boolean(draft.trim())} onClick={() => { setDraft(activeRun.instruction); setRetryOfRunId(activeRun.id); }}>{t.reuseInstruction}</button>{draft.trim() && <p>{t.retryDraftHint}</p>}</>}
+                    {activeRun.workLogSyncState === "failed" && <><p role="alert">{t.syncFailed} {syncError[activeRun.id] || activeRun.workLogSyncError}</p><button type="button" data-control="task-session-worklog-sync" disabled={task.state === "completed" || syncBusy === activeRun.id} onClick={() => void syncWorkLog(activeRun)}>{t.syncWorkLog}</button></>}
+                    {["failed", "cancelled", "interrupted", "needs_attention"].includes(activeRun.status) && <><button type="button" data-control="task-session-run-reuse" disabled={task.state === "completed" || busy || Boolean(draft.trim())} onClick={() => { setDraft(activeRun.instruction); setRetryOfRunId(activeRun.id); }}>{t.reuseInstruction}</button>{draft.trim() && <p>{t.retryDraftHint}</p>}</>}
                   </section>
                 )}
-                {execution?.effectiveConfig && <section className="task-execution-effective"><h5>{execution.effectiveConfig.provenance === "bound_thread" ? t.effective : t.prepare}</h5><dl><dt>{t.model}</dt><dd>{execution.effectiveConfig.model}</dd><dt>{t.workspace}</dt><dd>{execution.effectiveConfig.cwd}</dd><dt>{t.approval}</dt><dd>{execution.effectiveConfig.approvalPolicy} · {execution.effectiveConfig.approvalsReviewer}</dd><dt>Sandbox</dt><dd>{execution.effectiveConfig.sandbox}</dd></dl>{execution.effectiveConfig.readinessError && <p role="alert">{execution.effectiveConfig.readinessError.message}</p>}<button type="button" data-control="task-session-settings-edit" onClick={() => { setEditingSettings(true); setSettingsExpanded(true); }}>{t.editSettings}</button></section>}
+                {execution?.effectiveConfig && <section className="task-execution-effective"><h5>{execution.effectiveConfig.provenance === "bound_thread" ? t.effective : t.prepare}</h5><dl><dt>{t.model}</dt><dd>{execution.effectiveConfig.model}</dd><dt>{t.workspace}</dt><dd>{execution.effectiveConfig.cwd}</dd><dt>{t.approval}</dt><dd>{execution.effectiveConfig.approvalPolicy} · {execution.effectiveConfig.approvalsReviewer}</dd><dt>Sandbox</dt><dd>{execution.effectiveConfig.sandbox}</dd></dl>{execution.effectiveConfig.readinessError && <p role="alert">{execution.effectiveConfig.readinessError.message}</p>}<button type="button" disabled={task.state === "completed"} data-control="task-session-settings-edit" onClick={() => { setEditingSettings(true); setSettingsExpanded(true); }}>{t.editSettings}</button></section>}
+                {task.state === "completed" && <p role="note">{t.completedNotes}</p>}
                 <label>
                   {t.message}
                   <textarea
@@ -1152,7 +1158,8 @@ export function TaskWorkSessions({
                     onKeyDown={(event) => {
                       if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229) {
                         event.preventDefault();
-                        void run();
+                        if (task.state === "completed") void send();
+                        else void run();
                       }
                     }}
                     onPaste={(event) => {
@@ -1208,7 +1215,7 @@ export function TaskWorkSessions({
                   >
                     {t.send}
                   </button>
-                  <button className="primary" type="button" data-control="task-session-run" disabled={task.state === "on_hold" || runSubmitting || Boolean(retrySubmittingRunId) || !draft.trim() || !record.session.workspacePath.trim() || Boolean(execution?.activeRunId) || !execution?.effectiveConfig?.ready} onClick={() => void run()}>{t.run}</button>
+                  <button className="primary" type="button" data-control="task-session-run" disabled={task.state === "completed" || task.state === "on_hold" || runSubmitting || Boolean(retrySubmittingRunId) || !draft.trim() || !record.session.workspacePath.trim() || Boolean(execution?.activeRunId) || !execution?.effectiveConfig?.ready} onClick={() => void run()}>{t.run}</button>
                 </footer>
               </div>
               <aside className="task-session-sidebar">
@@ -1236,9 +1243,9 @@ export function TaskWorkSessions({
                 <details className="task-session-settings" open={settingsExpanded} onToggle={(event) => setSettingsExpanded(event.currentTarget.open)}>
                   <summary>{t.effective}</summary>
                   <div className="task-session-settings-body">
-                  <button type="button" data-control="task-session-prepare" disabled={busy} onClick={() => void prepare()}>{execution?.effectiveConfig ? t.checkSettings : t.prepare}</button>
+                  <button type="button" data-control="task-session-prepare" disabled={task.state === "completed" || busy} onClick={() => void prepare()}>{execution?.effectiveConfig ? t.checkSettings : t.prepare}</button>
                   <p>{t.prepareHint}</p>
-                  {editingSettings && <>
+                  {editingSettings && task.state !== "completed" && <>
                   <label>
                     {t.sessionTitle}
                     <input

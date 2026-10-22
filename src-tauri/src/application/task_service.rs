@@ -18,6 +18,8 @@ fn req<'a>(v: &'a Value, k: &str) -> Result<&'a str, String> {
         .ok_or_else(|| format!("invalid_input: {k} is required"))
 }
 
+pub(crate) use crate::adapters::sqlite::task_repository::ensure_task_mutable;
+
 impl TaskApplicationService {
     pub(crate) fn new(path: impl AsRef<Path>) -> Self {
         Self {
@@ -95,6 +97,10 @@ impl TaskApplicationService {
         input: &Value,
         at: &str,
     ) -> Result<Value, String> {
+        if name != "task.reopen" && !(name == "task.transition" && input["to"] == "reopen") {
+            if let Some(id) = input["taskId"].as_str() { ensure_task_mutable(tx, id)?; }
+            if let Some(id) = input["targetTaskId"].as_str() { ensure_task_mutable(tx, id)?; }
+        }
         match name {
             "task.create" => self.task_create_mutation_tx(tx, input, at),
             "task.revision" => self.task_revision_tx(tx, req(input, "taskId")?, input, at),
@@ -250,7 +256,7 @@ impl TaskApplicationService {
         )
     }
 
-    fn has_active_execution(c: &rusqlite::Connection, id: &str) -> Result<bool, String> {
+    pub(crate) fn has_active_execution(c: &rusqlite::Connection, id: &str) -> Result<bool, String> {
         c.query_row("SELECT EXISTS(SELECT 1 FROM task_work_session_runs WHERE task_id=? AND (status IN ('queued','running','awaiting_response') OR (status='needs_attention' AND dispatch_state IN ('uncertain','accepted','dispatch_recorded'))))", [id], |r| r.get(0)).map_err(|e|e.to_string())
     }
 
@@ -365,6 +371,8 @@ impl TaskApplicationService {
     ) -> Result<Value, String> {
         let endpoints: Option<(String, String)> = tx.query_row("SELECT source_task_id,target_task_id FROM task_relationships WHERE id=? AND (source_task_id=? OR target_task_id=?) AND unlinked_at IS NULL", params![id, task, task], |row| Ok((row.get(0)?, row.get(1)?))).optional().map_err(|e| e.to_string())?;
         let (source, target) = endpoints.ok_or("Link not found")?;
+        ensure_task_mutable(tx, &source)?;
+        ensure_task_mutable(tx, &target)?;
         tx.execute(
             "UPDATE task_relationships SET unlinked_at=? WHERE id=? AND unlinked_at IS NULL",
             params![at, id],
@@ -430,6 +438,7 @@ impl TaskApplicationService {
             .optional()
             .map_err(|e| e.to_string())?
             .ok_or("Work log entry not found")?;
+        ensure_task_mutable(tx, &task)?;
         let id = task_repository::new_id();
         tx.execute(
             "INSERT INTO task_work_log_comments(id,entry_id,body,created_at) VALUES(?,?,?,?)",
@@ -498,6 +507,7 @@ impl TaskApplicationService {
         if state != "in_progress" {
             return Err("transition_invalid: task must be in_progress before completion".into());
         }
+        if Self::has_active_execution(tx, task)? { return Err("active_task_execution: finish or stop the active execution before completing this Task".into()); }
         crate::native::task_hierarchy::ensure_children_completed(tx, task)?;
         let id = task_repository::new_id();
         tx.execute("INSERT INTO task_completions(id,task_id,task_revision,evidence,report,operation_id,created_at) VALUES(?,?,?,?,?,?,?)", params![id, task, revision, req(input, "evidence")?, input.get("report").and_then(Value::as_str).unwrap_or(""), req(input, "operationId")?, at]).map_err(|e| e.to_string())?;
@@ -506,6 +516,7 @@ impl TaskApplicationService {
             params![at, task],
         )
         .map_err(|e| e.to_string())?;
+        crate::native::task_assistance::freeze_task_refinement_tx(tx, task)?;
         tx.execute("INSERT INTO task_state_transitions(id,task_id,from_state,to_state,action,operation_id,created_at) VALUES(?,?,'in_progress','completed','completed',?,?)", params![task_repository::new_id(),task,req(input,"operationId")?,at]).map_err(|e|e.to_string())?;
         self.record_task_activity(tx, task, "completed", input, at)?;
         crate::native::task_hierarchy::child_completed(
@@ -867,6 +878,7 @@ impl TaskApplicationService {
         self.repo.transaction(|tx| {
             if let Some(result)=self.op(tx,input,"task.work-session.update")? { return Ok(result); }
             let task_id=req(input,"taskId")?; let session_id=req(input,"sessionId")?; Self::task_exists(tx,task_id)?;
+            ensure_task_mutable(tx,task_id)?;
             let approval=input.get("approvalMode").and_then(Value::as_str).unwrap_or("ask");
             if !["ask","auto"].contains(&approval) { return Err("invalid_input: approvalMode".into()); }
             let title=req(input,"title")?; let provider=input.get("provider").and_then(Value::as_str).unwrap_or("").trim();
@@ -893,6 +905,7 @@ impl TaskApplicationService {
             let author=input.get("author").and_then(Value::as_str).unwrap_or("user");
             let kind=input.get("kind").and_then(Value::as_str).unwrap_or("note");
             if !["user","assistant","system"].contains(&author) || !["note","ai_output","execution_result"].contains(&kind) { return Err("invalid_input: entry type".into()); }
+            if author != "user" || kind != "note" { ensure_task_mutable(tx,task_id)?; }
             let body=input.get("body").and_then(Value::as_str).unwrap_or("").trim();
             let attachment=input.get("attachment").filter(|value|!value.is_null());
             if body.is_empty() && attachment.is_none() { return Err("invalid_input: body or attachment is required".into()); }
@@ -1068,7 +1081,7 @@ impl TaskApplicationService {
         if let Ok(mut sessions) = c.prepare("SELECT s.capture_id,COALESCE(s.task_id,(SELECT json_extract(d.result_json,'$.id') FROM refinement_proposal_decisions d WHERE d.session_id=s.id AND d.decision!='reject' AND json_extract(d.result_json,'$.taskRevision') IS NOT NULL AND NOT EXISTS(SELECT 1 FROM task_subtasks h WHERE h.child_task_id=json_extract(d.result_json,'$.id')) ORDER BY d.created_at DESC,d.rowid DESC LIMIT 1)),s.current_draft_revision FROM refinement_sessions s WHERE (s.capture_id IS NOT NULL OR s.task_id IS NOT NULL) AND s.state!='completed' AND NOT EXISTS(SELECT 1 FROM deleted_entities d WHERE d.entity_type='captures' AND d.entity_id=s.capture_id) AND NOT EXISTS(SELECT 1 FROM deleted_entities d WHERE d.entity_type='tasks' AND d.entity_id=s.task_id) ORDER BY s.last_user_activity_at DESC") {
             let subjects = sessions.query_map([], |row| Ok((row.get::<_,Option<String>>(0)?, row.get::<_,Option<String>>(1)?, row.get::<_,i64>(2)?))).map_err(|error| error.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|error| error.to_string())?;
             refining.extend(subjects.into_iter().filter_map(|(capture_id,task_id,revision)| {
-                let (kind,id) = if let Some(id) = task_id { if active_ids.contains(&id.as_str()) || rows.iter().any(|item| item["id"] == id && (item["state"] == "on_hold" || item["executionBacklog"] == true)) { return None; } ("task",id) } else { ("capture",capture_id?) };
+                let (kind,id) = if let Some(id) = task_id { if active_ids.contains(&id.as_str()) || rows.iter().any(|item| item["id"] == id && (item["state"] == "on_hold" || item["state"] == "completed" || item["refinedRevision"].is_number() || item["executionBacklog"] == true)) { return None; } ("task",id) } else { ("capture",capture_id?) };
                 Some(json!({"kind":kind,"id":id,"draftRevision":revision}))
             }));
         }
@@ -1337,6 +1350,8 @@ mod tests {
             .query_row("SELECT state FROM problems WHERE id=?", [pid], |r| r.get(0))
             .unwrap();
         assert_eq!(state, "open");
+        assert!(service.execute("task.revision",&json!({"operationId":"frozen-revise","taskId":id,"expectedTaskRevision":1,"patch":{"title":"Shipped"}})).unwrap_err().contains("task_completed"));
+        service.execute("task.reopen",&json!({"operationId":"reopen","taskId":id,"expectedTaskRevision":1})).unwrap();
         service.execute("task.revision",&json!({"operationId":"revise","taskId":id,"expectedTaskRevision":1,"patch":{"title":"Shipped"}})).unwrap();
         assert!(service.execute("task.revision",&json!({"operationId":"stale","taskId":id,"expectedTaskRevision":1,"patch":{"title":"Again"}})).unwrap_err().contains("head_conflict"));
     }
@@ -1872,4 +1887,52 @@ mod tests {
             .unwrap_err()
             .contains("Task not found"));
     }
+    #[test]
+    fn completed_task_freezes_content_and_accepts_only_append_only_user_notes() {
+        let root = tempdir().unwrap();
+        let db = root.path().join("frozen.db");
+        crate::native::database::initialize(&db).unwrap();
+        let service = TaskApplicationService::new(&db);
+        let task = service.execute("task.create", &json!({"operationId":"create","inputText":"Original","title":"Frozen"})).unwrap();
+        let id = task["id"].as_str().unwrap();
+        let session = service.execute("task.work-session.create", &json!({"operationId":"session","taskId":id,"title":"History"})).unwrap();
+        let sid = session["id"].as_str().unwrap();
+        service.execute("task.work-session.entry.create", &json!({"operationId":"old-note","taskId":id,"sessionId":sid,"body":"Original note"})).unwrap();
+        let log = service.execute("task.work-log.create", &json!({"operationId":"log","taskId":id,"expectedTaskRevision":1,"body":"Original evidence"})).unwrap();
+        let check = service.execute("task.checklist.create", &json!({"operationId":"check","taskId":id,"expectedTaskRevision":1,"body":"Verify"})).unwrap();
+        service.execute("task.transition", &json!({"operationId":"start","taskId":id,"expectedTaskRevision":1,"to":"in_progress"})).unwrap();
+        service.execute("task.completion.create", &json!({"operationId":"complete","taskId":id,"expectedTaskRevision":1,"evidence":"Done"})).unwrap();
+        let before = service.execute("task.get", &json!({"taskId":id})).unwrap();
+        let old_session = service.execute("task.work-session.get", &json!({"taskId":id,"sessionId":sid})).unwrap();
+        for (name, extra) in [
+            ("task.revision", json!({"patch":{"title":"Overwritten"}})),
+            ("task.work-log.create", json!({"body":"Rewrite work"})),
+            ("task.checklist.create", json!({"body":"New criterion"})),
+            ("task.checklist.update", json!({"itemId":check["id"],"checked":true,"body":"Changed"})),
+            ("task.decision.create", json!({"body":"Changed decision"})),
+            ("task.readiness.decision", json!({"key":"scope","reason":"Changed"})),
+            ("task.work-session.update", json!({"sessionId":sid,"title":"Changed history"})),
+            ("task.work-session.entry.create", json!({"sessionId":sid,"author":"assistant","kind":"execution_result","body":"Late result"})),
+            ("work-log.comment.create", json!({"entryId":log["id"],"body":"Changed evidence"})),
+        ] {
+            let mut input = extra;
+            input["taskId"] = json!(id);
+            input["operationId"] = json!(format!("blocked-{name}"));
+            input["expectedTaskRevision"] = json!(1);
+            assert!(service.execute(name, &input).unwrap_err().contains("task_completed"), "{name}");
+        }
+        assert!(service.execute("work-log.comment.create", &json!({"operationId":"comment-without-task","entryId":log["id"],"body":"Late history edit"})).unwrap_err().contains("task_completed"));
+        let note = json!({"operationId":"post-note","taskId":id,"sessionId":sid,"author":"user","kind":"note","body":"Additional observation"});
+        let added = service.execute("task.work-session.entry.create", &note).unwrap();
+        assert_eq!(added, service.execute("task.work-session.entry.create", &note).unwrap());
+        let after_session = service.execute("task.work-session.get", &json!({"taskId":id,"sessionId":sid})).unwrap();
+        assert_eq!(after_session["entries"][0], old_session["entries"][0]);
+        assert_eq!(after_session["entries"].as_array().unwrap().len(), 2);
+        assert_eq!(service.execute("task.get", &json!({"taskId":id})).unwrap(), before);
+        // A completed Task without a prior session can also collect new notes.
+        let notes = service.execute("task.work-session.create", &json!({"operationId":"post-session","taskId":id,"title":"Post-completion notes"})).unwrap();
+        service.execute("task.work-session.entry.create", &json!({"operationId":"new-note","taskId":id,"sessionId":notes["id"],"body":"New note"})).unwrap();
+        assert_eq!(service.execute("task.get", &json!({"taskId":id})).unwrap(), before);
+    }
+
 }

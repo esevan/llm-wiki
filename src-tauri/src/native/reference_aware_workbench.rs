@@ -92,6 +92,7 @@ pub(crate) fn append_generated(
     let tx = c
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|e| e.to_string())?;
+    super::task_assistance::ensure_refinement_mutable(&tx, session_id)?;
     let actual: i64 = tx
         .query_row(
             "SELECT current_draft_revision FROM refinement_sessions WHERE id=?",
@@ -162,7 +163,8 @@ pub(crate) fn restore(
     expected: i64,
 ) -> Result<Value, String> {
     let mut c = super::database::open(db)?;
-    let tx = c.transaction().map_err(|e| e.to_string())?;
+    let tx = super::database::immediate_transaction(&mut c)?;
+    ensure_preview_mutable(&tx, preview_id)?;
     let current: i64 = tx
         .query_row(
             "SELECT current_version FROM work_previews WHERE id=?",
@@ -183,6 +185,11 @@ pub(crate) fn restore(
     tx.commit().map_err(|e| e.to_string())?;
     Ok(json!({"version":next,"derivedFromVersion":source}))
 }
+fn ensure_preview_mutable(c: &rusqlite::Connection, preview: &str) -> Result<(), String> {
+    let session: String = c.query_row("SELECT session_id FROM work_previews WHERE id=?",[preview],|r|r.get(0)).map_err(|e|e.to_string())?;
+    super::task_assistance::ensure_refinement_mutable(c, &session)
+}
+
 pub(crate) fn start_investigation(
     db: &Path,
     preview_id: &str,
@@ -190,10 +197,13 @@ pub(crate) fn start_investigation(
     kind: &str,
     request: &Value,
 ) -> Result<String, String> {
-    let c = super::database::open(db)?;
+    let mut connection = super::database::open(db)?;
+    let c = super::database::immediate_transaction(&mut connection)?;
+    ensure_preview_mutable(&c, preview_id)?;
     c.execute("UPDATE work_preview_investigations SET state='changed_context',finished_at=CURRENT_TIMESTAMP WHERE preview_id=? AND kind=? AND state IN ('queued','running')",params![preview_id,kind]).map_err(|e|e.to_string())?;
     let investigation = id();
     c.execute("INSERT INTO work_preview_investigations(id,preview_id,context_revision,kind,state,request_json) VALUES(?,?,?,?,'queued',?)",params![investigation,preview_id,context,kind,request.to_string()]).map_err(|e|e.to_string())?;
+    c.commit().map_err(|e|e.to_string())?;
     Ok(investigation)
 }
 pub(crate) fn record_use(
@@ -207,8 +217,14 @@ pub(crate) fn record_use(
     if !matches!(kind, "viewed" | "mentioned" | "used" | "excluded") {
         return Err("invalid reference interaction".into());
     }
-    super::database::open(db)?.execute("INSERT INTO reference_interactions(id,preview_id,context_revision,document_id,document_version,section,kind,reason) VALUES(?,?,?,?,?,?,?,?)",params![id(),preview_id,context,reference["documentId"].as_str().unwrap_or(""),reference["documentVersion"].as_str().unwrap_or(""),reference["section"].as_str().unwrap_or(""),kind,reason]).map_err(|e|e.to_string())?;
-    Ok(())
+    let mut connection = super::database::open(db)?;
+    let c = super::database::immediate_transaction(&mut connection)?;
+    if let Err(error) = ensure_preview_mutable(&c, preview_id) {
+        if kind == "viewed" { return Ok(()); }
+        return Err(error);
+    }
+    c.execute("INSERT INTO reference_interactions(id,preview_id,context_revision,document_id,document_version,section,kind,reason) VALUES(?,?,?,?,?,?,?,?)",params![id(),preview_id,context,reference["documentId"].as_str().unwrap_or(""),reference["documentVersion"].as_str().unwrap_or(""),reference["section"].as_str().unwrap_or(""),kind,reason]).map_err(|e|e.to_string())?;
+    c.commit().map_err(|e|e.to_string())
 }
 
 #[cfg(test)]

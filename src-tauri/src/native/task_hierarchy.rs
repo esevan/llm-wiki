@@ -64,6 +64,7 @@ pub(crate) fn metadata(c: &Connection, task: &str) -> Result<Value, String> {
 }
 
 pub(crate) fn mark_refined(tx: &Transaction<'_>, task: &str, revision: i64) -> Result<(), String> {
+    crate::adapters::sqlite::task_repository::ensure_task_mutable(tx, task)?;
     tx.execute("INSERT INTO task_refinements(task_id,revision) VALUES(?,?) ON CONFLICT(task_id) DO UPDATE SET revision=excluded.revision", params![task,revision]).map_err(|e| e.to_string())?;
     Ok(())
 }
@@ -132,6 +133,9 @@ pub(crate) fn child_completed(
     let summary = sections.join("\n\n");
     let mut parent_completion = None;
     if all_done && parent_snapshot["state"] != "completed" {
+        if crate::application::task_service::TaskApplicationService::has_active_execution(tx, &parent_id)? {
+            return Err("active_task_execution: finish the parent execution before completing its final Subtask".into());
+        }
         let id = new_id();
         tx.execute("INSERT INTO task_completions(id,task_id,task_revision,evidence,report,operation_id,created_at) VALUES(?,?,?,?,?,?,?)",params![id,parent_id,revision,summary,"All Subtasks completed",format!("{operation}:parent:{parent_id}"),at]).map_err(|e| e.to_string())?;
         tx.execute(
@@ -139,6 +143,7 @@ pub(crate) fn child_completed(
             params![at, parent_id],
         )
         .map_err(|e| e.to_string())?;
+        super::task_assistance::freeze_task_refinement_tx(tx, &parent_id)?;
         parent_completion = Some(id);
     }
     let source = json!({"kind":"subtask_aggregate","parent":snapshot(tx,&parent_id)?,"children":child_snapshots,"triggerTaskId":task,"triggerCompletionId":completion_id,"allSubtasksCompleted":all_done});

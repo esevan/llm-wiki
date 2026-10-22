@@ -856,3 +856,45 @@ async fn preview_completion_checks_preserve_checked_manual_and_reordered_items()
     );
     tx.commit().unwrap();
 }
+
+#[tokio::test]
+async fn rerefinement_keeps_applied_task_refined_and_completion_rejects_late_preview() {
+    use crate::application::task_service::TaskApplicationService;
+    let f = Fixture::new().await;
+    let (_, ready, release, server) = provider(&f, 2, true, false);
+    f.message("first-refinement").await;
+    f.wait_jobs(1).await;
+    let current = f.op("task-refinement.reference-version", json!({"version":1})).unwrap();
+    let applied = f.op("task-refinement.reference-apply", json!({"operationId":"apply-first","version":1,"expectedCurrentPreviewVersion":1,"expectedContentHash":current["contentHash"],"expectedTaskRevision":1})).unwrap();
+    let revision = applied["task"]["taskRevision"].as_i64().unwrap();
+    let tasks = TaskApplicationService::new(&f.db);
+    let board = || tasks.execute("workbench.get", &json!({})).unwrap();
+    task_assistance::execute(&f.db,&f.settings,&f.vault,SemanticEngine::new(None),"task-refinement.open",&json!({"operationId":"open-again","taskId":f.task})).await.unwrap();
+    assert!(board()["refiningShortcuts"].as_array().unwrap().is_empty());
+    f.message("second-refinement").await;
+    let mut waiting = false;
+    for _ in 0..300 {
+        if ready.try_recv().is_ok() { waiting = true; break; }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(waiting, "second preview did not reach the delayed provider");
+    let before = tasks.execute("task.get", &json!({"taskId":f.task})).unwrap();
+    assert_eq!(before["state"], "task");
+    assert_eq!(before["refinedRevision"], revision);
+    assert!(board()["refiningShortcuts"].as_array().unwrap().is_empty());
+    tasks.execute("task.transition", &json!({"operationId":"start","taskId":f.task,"expectedTaskRevision":revision,"to":"in_progress"})).unwrap();
+    tasks.execute("task.completion.create", &json!({"operationId":"complete","taskId":f.task,"expectedTaskRevision":revision,"evidence":"Finished before the second preview"})).unwrap();
+    let completed = tasks.execute("task.get", &json!({"taskId":f.task})).unwrap();
+    for name in ["task-refinement.reference-edit", "task-refinement.reference-restore", "task-refinement.reference-apply", "task-refinement.reference-usage"] {
+        assert!(f.op(name,json!({"operationId":name})).unwrap_err().contains("task_completed"), "{name}");
+    }
+    release.send(()).unwrap();
+    f.wait_jobs(2).await;
+    server.join().unwrap();
+    assert_eq!(tasks.execute("task.get", &json!({"taskId":f.task})).unwrap(), completed);
+    let workspace = f.op("task-refinement.reference-workspace",json!({})).unwrap();
+    assert_eq!(workspace["preview"]["currentVersion"],1);
+    assert_eq!(f.op("task-refinement.reference-version",json!({"version":1})).unwrap(),current);
+    assert!(f.op("task-refinement.reference-compare",json!({"left":1,"right":1})).is_ok());
+    assert!(board()["refiningShortcuts"].as_array().unwrap().is_empty());
+}

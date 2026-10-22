@@ -568,8 +568,11 @@ mod tests {
     #[tokio::test]
     async fn knowledge_work_log_pixels_reach_generation_and_revision_requests() {
         let (root,db,_,data)=fixture(false);
+        // Seed the screenshot as pre-completion evidence, then freeze the fixture.
+        database::open(&db).unwrap().execute("UPDATE tasks SET state='in_progress' WHERE id='task'", []).unwrap();
         let png="iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
         crate::application::task_service::TaskApplicationService::new(&db).execute("task.work-log.create",&json!({"operationId":"image-log","taskId":"task","expectedTaskRevision":1,"body":"My screenshot","attachment":{"name":"pixel.png","mediaType":"image/png","data":png}})).unwrap();
+        database::open(&db).unwrap().execute("UPDATE tasks SET state='completed' WHERE id='task'", []).unwrap();
         let settings=root.path().join("settings.json");
         let server=provider(&settings,data["good"].clone()).await;
         let generated=task_assistance::prepare_knowledge_draft(&db,&settings,&json!({"taskId":"task","expectedTaskRevision":1,"locale":"en"})).await.unwrap();

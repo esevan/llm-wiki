@@ -248,3 +248,17 @@ describe("Reference-aware preview", () => {
     expect(screen.getByText("Recorded condition")).toBeVisible();
   });
 });
+
+it("allows completed preview history inspection while disabling changes", async () => {
+  const props = callbacks();
+  render(<ReferenceAwarePreview {...props} readOnly />);
+  for (const control of ["reference-preview-generate", "reference-preview-edit", "reference-preview-apply"]) {
+    const button = document.querySelector(`[data-control="${control}"]`);
+    if (button) expect(button).toBeDisabled();
+  }
+  const selector = document.querySelector('[data-control="draft-version-select"]')!;
+  expect(selector).toBeEnabled();
+  fireEvent.change(selector, {target:{value:"1"}});
+  await waitFor(() => expect(props.onSelect).toHaveBeenCalledWith(1));
+  expect(document.querySelector('[data-control="draft-version-restore"]')).toBeDisabled();
+});

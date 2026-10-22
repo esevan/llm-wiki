@@ -316,12 +316,14 @@ async fn capture_adoption_exports_exact_scoped_use_through_knowledge_and_archive
             .as_str()
             .is_some_and(|body| body.contains("[[counter#Approval]]"))));
     assert!(!wiki.join("Knowledge/deterministic.md").exists());
-    // A later explicit exclusion changes the exact generation snapshot and
-    // blocks both an old append and a newly requested archive preparation.
+    // Completed reference history is frozen. Explicit reopening permits a new
+    // exclusion, making the former generation snapshot stale.
     let mut later = counter.clone();
     later["sessionId"] = json!(session);
     later["kind"] = json!("excluded");
     later["reason"] = json!("Reconsidered after review");
+    assert!(task_assistance::execute(&db,&settings_path,&wiki,SemanticEngine::new(None),"task-refinement.reference-usage",&later).await.unwrap_err().contains("task_completed"));
+    service.execute("task.reopen", &json!({"operationId":"reopen-for-new-exclusion","taskId":task,"expectedTaskRevision":revision})).unwrap();
     refinement(
         &db,
         &settings_path,
@@ -330,6 +332,7 @@ async fn capture_adoption_exports_exact_scoped_use_through_knowledge_and_archive
         later,
     )
     .await;
+    service.execute("task.completion.create", &json!({"operationId":"complete-new-reference-decision","taskId":task,"expectedTaskRevision":revision,"evidence":"Reviewed the changed reference decision"})).unwrap();
     let tx = c.transaction().unwrap();
     assert!(knowledge_distillation::append_generated_tx(&tx, &generated)
         .unwrap_err()

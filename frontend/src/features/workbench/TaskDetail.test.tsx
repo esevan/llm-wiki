@@ -32,6 +32,21 @@ const response = (body: unknown) => ({
 });
 
 describe("Task detail", () => {
+  it("renders completed checklist, work evidence and definition as read-only", async () => {
+    const completed = { ...task, state:"completed", checklist:[{id:"check",body:"Saved criterion",checked:true}], workLog:[{id:"log",body:"Saved evidence",comments:[]}] };
+    window.llmWikiApplication = {request:vi.fn(async () => response(completed)) as never};
+    render(<TaskDetail taskId="task-1" onClose={vi.fn()} onChanged={vi.fn()} />);
+    await screen.findByRole("heading", {name:"Independent work"});
+    fireEvent.click(screen.getByRole("tab", {name:"Work"}));
+    fireEvent.click(screen.getByRole("button", {name:/Show completed|Show all/}));
+    expect(document.querySelector('[data-control="task-checklist-toggle"]')).toBeDisabled();
+    expect(document.querySelector('[data-control="task-worklog-text"]')).toBeDisabled();
+    expect(document.querySelector('[data-control="task-comment-text"]')).toBeDisabled();
+    fireEvent.click(screen.getByRole("tab", {name:"Refine"}));
+    expect(document.querySelector('[data-control="task-definition-edit"]')).toBeDisabled();
+    expect(document.querySelector('[data-control="task-transition-reopen"]')).toBeEnabled();
+  });
+
   it("does not load saved sessions until the Sessions tab is opened", async () => {
     const request = vi.fn(({ path }: { path: string }) => path === "/tasks/task-1/work-sessions"
       ? Promise.resolve(response({ sessions: [] }))
@@ -141,14 +156,14 @@ describe("Task detail", () => {
     expect(await screen.findByRole("button", { name: "Newer current lineage" })).toBeVisible();
     expect(screen.queryByRole("button", { name: "Exact draft decision" })).not.toBeInTheDocument();
   });
-  it("finds recent and completed Tasks by title instead of asking for an internal ID", async () => {
+  it("finds Tasks by title while keeping completed relationship targets read-only", async () => {
     const request = vi.fn().mockImplementation(({ path, method, body }: { path: string; method?: string; body?: string }) => {
       if (path === "/workbench") return Promise.resolve(response({ categories: [{ id: "General", label: "General", items: [
         { ...task, id: "recent-task", title: "Recent work", state: "in_progress" },
         { ...task, id: "completed-task", title: "Completed design notes", state: "completed" },
       ] }] }));
       if (path === "/tasks/task-1/relationships" && method === "POST") {
-        expect(JSON.parse(body ?? "{}")).toMatchObject({ targetTaskId: "completed-task", kind: "related" });
+        expect(JSON.parse(body ?? "{}")).toMatchObject({ targetTaskId: "recent-task", kind: "related" });
       }
       return Promise.resolve(response(task));
     });
@@ -162,9 +177,11 @@ describe("Task detail", () => {
     expect(screen.queryByLabelText("Related Task ID")).not.toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("Search Tasks"), { target: { value: "completed" } });
     expect(screen.queryByRole("button", { name: /Recent work/ })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: /Completed design notes/ }));
+    expect(screen.getByRole("button", { name: /Completed design notes/ })).toBeDisabled();
+    fireEvent.change(screen.getByLabelText("Search Tasks"), { target: { value: "recent" } });
+    fireEvent.click(screen.getByRole("button", { name: /Recent work/ }));
     fireEvent.click(screen.getByRole("button", { name: "Link Task" }));
-    await waitFor(() => expect(request).toHaveBeenCalledWith(expect.objectContaining({ path: "/tasks/task-1/relationships", method: "POST", body: expect.stringContaining("completed-task") })));
+    await waitFor(() => expect(request).toHaveBeenCalledWith(expect.objectContaining({ path: "/tasks/task-1/relationships", method: "POST", body: expect.stringContaining("recent-task") })));
   });
 
   it("switches stored Task translations without fetching or overwriting canonical content", async () => {

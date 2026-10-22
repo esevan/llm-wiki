@@ -83,6 +83,7 @@ pub(super) fn prepare_result(context: JobContext<'_>, result: Value) -> Result<V
             .collect::<Result<serde_json::Map<_, _>, String>>()?;
         let entity_type = input.get("entityType").and_then(Value::as_str).unwrap_or("solution_progress_entries");
         let (owner_id, current_image, media_type) = crate::native::jobs::image_source(connection, entity_type, entity_id)?;
+        if entity_type == "task_work_log_entries" { crate::application::task_service::ensure_task_mutable(connection, &owner_id)?; }
         if crate::native::jobs::image_source_hash(&current_image, &media_type) != expected_source_hash {
             return Err("Work Log image changed while its summary was running".into());
         }

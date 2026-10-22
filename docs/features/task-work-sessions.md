@@ -49,3 +49,9 @@ All actions preserve content, refinement revisions, work records, sessions and t
 The server rejects hold/backlog moves while any session of the Task has a queued, running or awaiting-response execution, or an uncertain dispatched execution needing attention. Finish the execution or explicitly stop it and confirm its end before retrying. This menu currently has no action to reconcile an uncertain execution or override that guard. Holding a Task never silently cancels an agent. Starting a new execution while held is also rejected; resume the Task first.
 
 The collapsed hold area is a compact title/count row, including when empty. Expanding it shows one horizontal row of fixed-width cards, with horizontal scrolling and keyboard focus; it does not wrap into vertical lanes or extend behind the category board.
+
+## Completed Tasks and new notes
+
+Completion freezes the Task definition, checklist, prior Work Log evidence and saved execution history. Existing session settings cannot be edited and new Codex Runs cannot start on a completed Task. Late provider results, image summaries and Work Log distillations cannot overwrite completed evidence. Finish or stop an active or uncertain execution and confirm its end before completing its Task; the same rule applies when the final Subtask would complete its parent. Terminal status and the saved final report commit together.
+
+New user notes remain available through **Save note**, including attachments. On completed Tasks, Enter saves a note and never starts Codex. They append to the existing session-entry path without replacing previous entries, changing Task state or rewriting Work Logs. A new session can hold notes when no session exists. Notes dated at or after completion are labeled **Post-completion note**. The saved execution history remains readable, and the separate Knowledge editing, review and publication flow remains available.

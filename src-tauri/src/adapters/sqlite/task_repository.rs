@@ -9,6 +9,11 @@ use uuid::Uuid;
 pub struct SqliteTaskRepository {
     path: PathBuf,
 }
+pub(crate) fn ensure_task_mutable(c: &rusqlite::Connection, id: &str) -> Result<(), String> {
+    let state: String = c.query_row("SELECT state FROM tasks WHERE id=? AND NOT EXISTS(SELECT 1 FROM deleted_entities d WHERE d.entity_type='tasks' AND d.entity_id=tasks.id)", [id], |r| r.get(0)).optional().map_err(|e|e.to_string())?.ok_or("Task not found")?;
+    crate::domain::task::ensure_content_mutable(&state)
+}
+
 pub(crate) fn now() -> String {
     Utc::now().to_rfc3339_opts(SecondsFormat::Nanos, true)
 }
@@ -292,6 +297,8 @@ pub(crate) fn add_relationship_tx(
     at: &str,
 ) -> Result<Value, String> {
     let target = required(input, "targetTaskId")?;
+    ensure_task_mutable(tx, source)?;
+    ensure_task_mutable(tx, target)?;
     let kind = required(input, "kind")?;
     validate_relationship(source, target, kind)?;
     let (a, b) = if kind == "related" && source > target {
