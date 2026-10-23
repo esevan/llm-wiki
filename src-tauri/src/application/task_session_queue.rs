@@ -464,16 +464,25 @@ mod tests {
     }
     #[test]
     fn task_projection_refresh_hint_covers_runnable_queue_between_runs_only() {
-        let f=fixture();
-        let tasks=crate::application::task_service::TaskApplicationService::new(&f.service.db_path);
-        f.enqueue("pending","Later work");
-        let read=||tasks.execute("task.get",&json!({"taskId":f.task})).unwrap();
-        assert_eq!(read()["workLogRefreshPending"],true);
+        let f = fixture();
+        let tasks =
+            crate::application::task_service::TaskApplicationService::new(&f.service.db_path);
+        f.enqueue("pending", "Later work");
+        let read = || {
+            tasks
+                .execute("task.get", &json!({"taskId":f.task}))
+                .unwrap()
+        };
+        assert_eq!(read()["workLogRefreshPending"], true);
         assert!(read()["workLog"].as_array().unwrap().is_empty());
-        f.service.queue_mutate(&json!({"taskId":f.task,"sessionId":f.session,"action":"pause"})).unwrap();
-        assert_eq!(read()["workLogRefreshPending"],false);
-        f.service.queue_mutate(&json!({"taskId":f.task,"sessionId":f.session,"action":"resume"})).unwrap();
-        assert_eq!(read()["workLogRefreshPending"],true);
+        f.service
+            .queue_mutate(&json!({"taskId":f.task,"sessionId":f.session,"action":"pause"}))
+            .unwrap();
+        assert_eq!(read()["workLogRefreshPending"], false);
+        f.service
+            .queue_mutate(&json!({"taskId":f.task,"sessionId":f.session,"action":"resume"}))
+            .unwrap();
+        assert_eq!(read()["workLogRefreshPending"], true);
     }
 
     #[test]
