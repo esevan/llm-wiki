@@ -16,6 +16,6 @@ The local view remains available during provider failure so people can retain di
 
 Related Spec Kit: [004 — Direction Dashboard](../../specs/004-direction-dashboard/spec.md)
 
-Compass has Direction and Completed tasks tabs. Completed tasks lists every completed Task, including Subtasks, newest completion first. Select a row to open its details. Workbench shows only the five latest completions in a compact list beside active Tasks; categories without pending cards are hidden.
+Compass has Direction and Completed tasks tabs. Completed tasks lists every completed Task, including Subtasks, newest completion first. Select a row to open the shared Task modal on Work, with saved Work Log history and Sessions available alongside linked Knowledge in Review. Escape or Close returns focus to that row; clicking the backdrop keeps the modal open. Completed Task evidence remains read-only, while new notes and the separate Knowledge workflow remain available. If the Task is unavailable, the modal shows the load error with retry and close controls rather than guessing another Task. Workbench shows only the five latest completions in a compact list beside active Tasks; categories without pending cards are hidden.
 
 The recent-completion panel matches the adjacent active Tasks panel’s height. On narrow screens, it appears below active Tasks at a height of 320px. Its heading remains visible while the list scrolls vertically, with the newest completion at the top.

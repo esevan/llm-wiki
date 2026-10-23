@@ -85,6 +85,7 @@ export function TaskDetail({
   onChanged,
   onRequestDelete,
   initialRefinement,
+  initialTab,
   messageDrafts,
   imageDrafts,
   onTaskApplication,
@@ -110,6 +111,7 @@ export function TaskDetail({
   onChanged: () => void;
   onRequestDelete?: (title: string) => void;
   initialRefinement?: boolean;
+  initialTab?: DetailTab;
   messageDrafts?: Map<string, string>;
   imageDrafts?: Map<string, InputImage[]>;
   onTaskApplication?: (application: TaskApplicationEvent) => void;
@@ -238,7 +240,7 @@ export function TaskDetail({
           setKnowledgeDraft((current) => current ?? persistedDraft);
         }
         if (!hadSession.current) {
-          setTab(initialRefinement || openJourney ? "details" : next.state === "completed" ? "review" : "work");
+          setTab(initialRefinement || openJourney ? "details" : initialTab ?? (next.state === "completed" ? "review" : "work"));
           hadSession.current = true;
         }
       }
@@ -246,7 +248,7 @@ export function TaskDetail({
       if (sequence === loadSequence.current)
         setError(String(e instanceof Error ? e.message : e));
     }
-  }, [initialRefinement, openJourney, taskId]);
+  }, [initialRefinement, initialTab, openJourney, taskId]);
   useEffect(() => {
     const sequences = loadSequence;
     void load();

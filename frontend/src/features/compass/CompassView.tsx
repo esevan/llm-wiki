@@ -14,6 +14,21 @@ export function CompassView({ active }: { active: boolean }) {
   const [error, setError] = useState('');
   const [selected, setSelected] = useState<string>();
   const detail = useRef<TaskDetailHandle>(null);
+  const detailTrigger = useRef<HTMLElement | null>(null);
+  const closeDetail = () => {
+    setSelected(undefined);
+    requestAnimationFrame(() => {
+      const trigger = detailTrigger.current;
+      if (trigger?.isConnected && !trigger.closest('.view:not(.active), [hidden]')) trigger.focus({ preventScroll: true });
+    });
+  };
+  const openDetail = (id: string, trigger?: HTMLElement) => {
+    if (selected === id) return;
+    leaveDetail(() => {
+      if (trigger) detailTrigger.current = trigger;
+      setSelected(id);
+    });
+  };
   const load = useCallback(async () => {
     setLoading(true);
     setError('');
@@ -55,18 +70,18 @@ export function CompassView({ active }: { active: boolean }) {
         {error && <div role="alert">{error}<button type="button" data-control="compass-completed-retry" onClick={() => void load()}>{text.retry}</button></div>}
         {!loading && !error && !tasks.length && <p>{text.noCompleted}</p>}
         <ol className="completed-task-list">{tasks.map(task => <li key={task.id}>
-          <button type="button" data-control="compass-completed-open" onClick={() => leaveDetail(() => setSelected(task.id))}>
+          <button type="button" data-control="compass-completed-open" onClick={event => openDetail(task.id, event.currentTarget)}>
             {task.title}<small>{task.category}{task.completedAt && ` · ${new Date(task.completedAt).toLocaleDateString(document.documentElement.lang || 'en')}`}</small>
           </button>
         </li>)}</ol>
-        {selected && <TaskDetail key={selected} ref={detail} taskId={selected}
+        {selected && <TaskDetail key={selected} ref={detail} taskId={selected} initialTab="work"
           onPrepareKnowledgeArchive={taskClient.prepareKnowledgeArchive}
           onOrganizeKnowledgeArchive={taskClient.organizeKnowledgeArchive}
           onPublishKnowledgeArchive={taskClient.publishKnowledgeArchive}
           onKnowledgeArchiveStatus={taskClient.knowledgeArchiveStatus}
           onRetryKnowledgeArchive={taskClient.retryKnowledgeArchive}
           onRecoverKnowledgeArchive={taskClient.recoverKnowledgeArchive}
-          onClose={() => leaveDetail(() => setSelected(undefined))} onOpenTask={id => leaveDetail(() => setSelected(id))} onChanged={() => { window.dispatchEvent(new Event('llm-wiki:task-workbench-refresh')); }} />}
+          onClose={closeDetail} onOpenTask={id => openDetail(id)} onChanged={() => { window.dispatchEvent(new Event('llm-wiki:task-workbench-refresh')); }} />}
       </section>}
     </section>
   );
