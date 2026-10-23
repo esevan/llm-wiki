@@ -1,3 +1,4 @@
+import { useVaultText } from '../features/search/vaultText';
 import type { ViewId } from './App';
 
 interface SidebarProps {
@@ -13,11 +14,14 @@ const navigation: ReadonlyArray<[ViewId, string]> = [
 ];
 
 export function Sidebar({ activeView, onSelectView }: SidebarProps) {
+  const text = useVaultText();
+  const items = activeView === 'search' ? [navigation[0], navigation[2], navigation[1], navigation[3]] : navigation;
+  const vaultLabels: Partial<Record<ViewId, string>> = { workbench: '◫ ' + text.shellWorkbench, compass: '⌁ ' + text.shellCompass, search: '▤ ' + text.title, 'ai-setup': '⚙ ' + text.shellSettings };
   return (
     <aside className="side">
       <div className="brand">llm wiki<i /></div>
       <nav className="nav">
-        {navigation.map(([view, label]) => (
+        {items.map(([view, label]) => (
           <button
             className={activeView === view ? 'active' : undefined}
             aria-current={activeView === view ? 'page' : undefined}
@@ -27,7 +31,7 @@ export function Sidebar({ activeView, onSelectView }: SidebarProps) {
             onClick={() => onSelectView(view)}
             type="button"
           >
-            {label}
+            {activeView === 'search' ? vaultLabels[view] : label}
           </button>
         ))}
       </nav>

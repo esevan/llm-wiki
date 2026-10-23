@@ -65,6 +65,8 @@ const operationFor = (request: ApplicationRequest): NativeOperation => {
   if (method === 'GET' && path === '/settings/vault') return { name: 'settings.vault.get', input: {} };
   if (method === 'GET' && path === '/settings/codex-home') return { name: 'settings.codex_home.get', input: {} };
   if (method === 'PUT' && path === '/settings/codex-home') return { name: 'settings.codex_home.save', input: body };
+  if (method === 'GET' && path === '/vault/browse') return { name: 'vault.browse', input: {} };
+  if (method === 'GET' && path === '/vault/image') return { name: 'vault.image', input: { path: url.searchParams.get('path') ?? '', source: url.searchParams.get('source') ?? '' } };
   if (method === 'GET' && path === '/search') return { name: 'vault.search', input: { query: url.searchParams.get('q') ?? '', limit: Number(url.searchParams.get('limit') ?? 20), offset: Number(url.searchParams.get('offset') ?? 0), semantic: url.searchParams.get('semantic') === 'true' } };
   if (method === 'GET' && path === '/settings/locale') return { name: 'locale.get', input: { browserLocale: url.searchParams.get('browser_locale') ?? 'en' } };
   if (method === 'PUT' && path === '/settings/locale') return { name: 'locale.save', input: body };

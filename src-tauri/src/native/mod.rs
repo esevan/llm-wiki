@@ -24,6 +24,7 @@ pub(crate) mod task_execution_runtime;
 pub(crate) mod task_hierarchy;
 pub(crate) mod task_journey;
 pub(crate) mod vault;
+mod vault_navigation;
 pub(crate) mod work_tracking;
 pub(crate) mod work_tracking_projector;
 mod workbench;
@@ -337,7 +338,7 @@ impl NativeApplication {
             "system" => operation.name == "health.get",
             "vault" => matches!(
                 operation.name.as_str(),
-                "vault.index" | "vault.search" | "knowledge.read"
+                "vault.index" | "vault.search" | "vault.browse" | "vault.image" | "knowledge.read"
             ),
             "settings" => {
                 operation.name.starts_with("locale.")
@@ -681,6 +682,8 @@ impl NativeApplication {
                     .and_then(Value::as_bool)
                     .unwrap_or(false),
             )?,
+            "vault.browse" => vault_navigation::browse(&self.vault)?,
+            "vault.image" => vault_navigation::image(&self.vault, id("path")?, id("source")?)?,
             "knowledge.read" => vault::read(
                 &self.vault,
                 id("path")?,

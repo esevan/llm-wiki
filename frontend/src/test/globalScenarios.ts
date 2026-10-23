@@ -69,8 +69,9 @@ export async function runSearchScenario(harness: GlobalScenarioHarness, seededTe
   harness.coverage.assertEffect('search-more', () => document.querySelectorAll('[data-knowledge-path]').length > before);
   const result = required<HTMLElement>('[data-knowledge-path]', 'search result');
   harness.coverage.interact('search-result-open', () => harness.click(result, 'open seeded knowledge result'));
-  await harness.waitFor(() => document.getElementById('item-detail-modal')?.hasAttribute('open') ?? false, 'knowledge reader');
-  harness.coverage.assertEffect('search-result-open', () => Boolean(document.getElementById('item-detail-title')?.textContent));
+  const embedded = Boolean(document.querySelector('[data-react-vault]'));
+  await harness.waitFor(() => embedded ? Boolean(document.querySelector('.vault-reader[aria-busy]')) : document.getElementById('item-detail-modal')?.hasAttribute('open') ?? false, 'knowledge reader');
+  harness.coverage.assertEffect('search-result-open', () => embedded ? Boolean(document.querySelector('.vault-breadcrumb')?.textContent) : Boolean(document.getElementById('item-detail-title')?.textContent));
   await harness.waitFor(() => Boolean(document.querySelector('[data-retry-knowledge]')), 'knowledge reader failure');
   const retry = required<HTMLElement>('[data-retry-knowledge]', 'knowledge reader retry');
   harness.coverage.observe(document, 'global-search-reader-failure');

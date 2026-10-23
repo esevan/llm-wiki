@@ -23,6 +23,9 @@ export const legacyReachability = {
 
 /** Exact source signatures reviewed as old-board-only. Broad wildcard exemptions are forbidden. */
 export const legacyReviewedUnreachableSourceEvidence: Readonly<Record<string, readonly string[]>> = {
+  // The React Vault form has data-react-vault; legacy result/pagination callbacks
+  // are retained for standalone runtime regression tests and never own this view.
+  'frontend/public/runtime/search-settings.js': ['data-knowledge-path', 'id="more-results"'],
   'frontend/src/features/overlays/OverlayLayer.tsx': [
     'id="feature-title"', 'id="feature-outcome"', 'id="feature-nongoals"', 'data-control="feature-save"',
     'id="feature-cancel"',

@@ -10,6 +10,10 @@ const task = (id: string, family: `F${number}`, source: string, effect: string, 
 const existing = (id: string, family: `F${number}`, selector: string, source: string, evidence: string, effect: string, disabledReason?: string): ControlSpec => ({ id, family, kind: 'button', selector, source, sourceEvidence: evidence, scenario: 'designated-interactive-suite', effect, disabledReason });
 
 const manifest: readonly ControlSpec[] = [
+
+  ...['vault-folder-disclose','vault-folder-select','vault-note-open','vault-tab','vault-refresh','vault-browse-retry','vault-moc-open','vault-search-retry','vault-list-back','vault-source','vault-read-cancel','vault-history-back','vault-filter'].map(id => task(id, 'F36', 'frontend/src/features/search/SearchView.tsx', 'Vault navigation, filtering, read-only source, selection and recovery update the visible reader', 'pending reads and refreshes disable actions that require their result')),
+  ...['vault-diagram-details','vault-diagram-source','vault-image-close','vault-image-retry','vault-image-open','vault-note-link'].map(id => task(id, 'F36', 'frontend/src/features/search/VaultMarkdown.tsx', 'diagram source, local image detail or Vault note link becomes visible')),
+
   ...['knowledge-chat-send','knowledge-chat-apply','knowledge-chat-cancel','knowledge-chat-use-issue','knowledge-chat-discard-input','knowledge-chat-diagnostics','knowledge-chat-bindings','knowledge-chat-full-compare','knowledge-chat-published','knowledge-chat-review-proposal','knowledge-chat-update-proposal'].map(id => task(id, 'F74', 'frontend/src/features/workbench/KnowledgeRevisionChat.tsx', 'Knowledge correction proposal is diagnosed, compared, applied as an immutable private version, or cancelled', 'pending operations, unsaved body or unresolved proposal findings protect the reviewed version')),
   { ...task('knowledge-chat-input', 'F74', 'frontend/src/features/workbench/KnowledgeRevisionChat.tsx', 'revision request is preserved on provider failure', 'disabled while another edit or request is pending'), kind: 'textarea' },
 
@@ -50,9 +54,9 @@ const manifest: readonly ControlSpec[] = [
   task('vault-setup-choose', 'F58', 'frontend/src/features/vault-setup/VaultSetupView.tsx', 'native picker request starts'),
   task('vault-setup-retry', 'F58', 'frontend/src/features/vault-setup/VaultSetupView.tsx', 'vault status retries'),
   task('search-submit', 'F36', 'frontend/src/features/search/SearchView.tsx', 'results, loading, or error changes'),
-  existing('search-more', 'F37', '#more-results', 'frontend/public/runtime/search-settings.js', 'more-results', 'next page appends'),
-  existing('search-result-open', 'F37', '[data-knowledge-path]', 'frontend/public/runtime/search-settings.js', 'data-knowledge-path', 'exact knowledge reader opens'),
-  existing('search-knowledge-retry', 'F37', '[data-retry-knowledge]', 'frontend/public/runtime/search-settings.js', 'data-retry-knowledge', 'reader error retries'),
+  existing('search-more', 'F37', '#more-results', 'frontend/src/features/search/SearchView.tsx', 'more-results', 'next page appends'),
+  existing('search-result-open', 'F37', '[data-knowledge-path]', 'frontend/src/features/search/SearchView.tsx', 'data-knowledge-path', 'exact knowledge reader opens'),
+  existing('search-knowledge-retry', 'F37', '[data-retry-knowledge]', 'frontend/src/features/search/SearchView.tsx', 'data-retry-knowledge', 'reader error retries'),
   task('compass-goal-save', 'F38', 'frontend/src/features/compass/CompassView.tsx', 'goal persists and dashboard refreshes'),
   ...['url', 'model', 'advanced-model', 'advanced-options', 'key', 'save'].map(name => task(`provider-${name}`, 'F39', 'frontend/src/features/settings/SettingsView.tsx', 'configuration field and selected routing persist')),
   ...['capture_assistance', 'problem_drafting', 'problem_assistance', 'workbench_organization', 'solution_drafting', 'solution_assistance', 'completed_solution_chat', 'conflict_review', 'image_summary', 'completion_review', 'completion_report', 'lineage_inference', 'problem_enrichment'].map(name => existing(`provider-advanced-${name}`, 'F39', `[data-control="provider-advanced-${name}"]`, 'frontend/src/features/settings/SettingsView.tsx', name, 'individual advanced-model route persists')),

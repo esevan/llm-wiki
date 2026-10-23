@@ -14,10 +14,10 @@ describe('Sidebar navigation', () => {
   it('selects each of the four destinations and marks the selected route current', () => {
     render(<SidebarHarness />);
 
-    for (const [label, view] of [['✦ Workbench', 'workbench'], ['⌕ Search vault', 'search'], ['◒ Compass', 'compass'], ['⚙ AI setup', 'ai-setup']] as const) {
-      fireEvent.click(screen.getByRole('button', { name: label }));
+    for (const [, view] of [['✦ Workbench', 'workbench'], ['⌕ Search vault', 'search'], ['◒ Compass', 'compass'], ['⚙ AI setup', 'ai-setup']] as const) {
+      fireEvent.click(document.querySelector<HTMLButtonElement>(`[data-view="${view}"]`)!);
       expect(screen.getByRole('status')).toHaveTextContent(view);
-      expect(screen.getByRole('button', { name: label })).toHaveAttribute('aria-current', 'page');
+      expect(document.querySelector(`[data-view="${view}"]`)).toHaveAttribute('aria-current', 'page');
     }
   });
 });

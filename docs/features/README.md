@@ -25,7 +25,7 @@ Start with [Product Spirit](../product-spirit.md), or use the
 
 ## Find and validate evidence
 
-- [Fast vault search](fast-vault-search.md) resumes work from existing Knowledge and evidence.
+- [Vault search, MOC and folders](fast-vault-search.md) find existing Knowledge and read Markdown, diagrams and local images in one white note reader.
 - [Evidence-rich Vault conflict review](vault-conflict-evidence.md) explains search coverage,
   citations, progress, and cautious result meanings.
 - [Task conflict review](conflict-resolution-workflow.md) shows revision-bound advisory evidence,

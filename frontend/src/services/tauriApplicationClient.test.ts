@@ -107,3 +107,12 @@ describe('Tauri domain command adapter', () => {
     expect(invoke).toHaveBeenNthCalledWith(2,'work_tracking_command',{operation:{name:'work_tracking.knowledge.defer',input:{sessionId:'s',completionRevision:4}}});
   });
 });
+
+it('routes Vault browsing and relative image reads through the Vault domain only',async()=>{
+  vi.mocked(invoke).mockResolvedValue({status:200,body:{}});
+  const client=new TauriApplicationClient();
+  await client.request({path:'/vault/browse'});
+  expect(invoke).toHaveBeenLastCalledWith('vault_command',{operation:{name:'vault.browse',input:{}}});
+  await client.request({path:'/vault/image?path=Guides%2Fnote.md&source=..%2Fassets%2Fimage.png'});
+  expect(invoke).toHaveBeenLastCalledWith('vault_command',{operation:{name:'vault.image',input:{path:'Guides/note.md',source:'../assets/image.png'}}});
+});

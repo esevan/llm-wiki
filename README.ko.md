@@ -117,7 +117,7 @@ Markdown으로 유지하고, 한국어 열람본은 휴대 가능한 원본을 �
 
 - [Product Spirit과 제품 결정](docs/product-spirit.ko.md)
 - [현재 인터페이스 안내](docs/features/visual-guide.ko.md)
-- [빠른 Vault 검색](docs/features/fast-vault-search.ko.md)
+- [Vault 검색·MOC·폴더 탐색](docs/features/fast-vault-search.ko.md) — 흰 노트 리더에서 Markdown, Mermaid 다이어그램과 로컬 이미지를 읽습니다.
 - [Codex·ChatGPT 데스크톱 작업 추적](docs/features/mcp-workbench-bridge.ko.md)
 - [Task 중심 Workbench](docs/features/conflict-gated-workflow.ko.md)
 - [완료·Knowledge·아카이브](docs/features/completion-writeback-archive.ko.md)

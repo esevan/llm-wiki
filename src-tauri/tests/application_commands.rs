@@ -509,3 +509,56 @@ async fn image_work_log_save_queues_bilingual_summary_once_even_when_replayed() 
     let data = get(&h, created.body["id"].as_str().unwrap());
     assert!(data.body["workLog"][0]["imageSummaryJob"]["id"].is_string());
 }
+
+#[test]
+fn vault_navigation_reads_live_notes_and_bounded_local_images_without_crossing_domains() {
+    let h = Harness::new();
+    let vault = h.root.path().join("vault");
+    std::fs::create_dir_all(vault.join("Guides")).unwrap();
+    std::fs::create_dir_all(vault.join("MOCs")).unwrap();
+    std::fs::write(vault.join("Guides/read.md"), "# Reader\n\n```mermaid\nflowchart LR\nA-->B\n```\n\n![Pixel](../pixel.png)").unwrap();
+    std::fs::write(vault.join("MOCs/map.md"), "# Map\n\n[[Guides/read|Read this]]").unwrap();
+    let png = b"\x89PNG\r\n\x1a\nfixture";
+    std::fs::write(vault.join("pixel.png"), png).unwrap();
+    let listing = h.call("vault", "vault.browse", json!({}));
+    assert_eq!(listing.status, 200);
+    assert!(listing.body["notes"].as_array().unwrap().iter().any(|note| note["path"] == "MOCs/map.md" && note["isMoc"] == true));
+    let note = h.call("vault", "knowledge.read", json!({"path":"Guides/read.md", "locale":"en"}));
+    assert_eq!(note.status, 200);
+    assert!(note.body["markdown"].as_str().unwrap().contains("flowchart LR"));
+    let image = h.call("vault", "vault.image", json!({"path":"Guides/read.md", "source":"../pixel.png"}));
+    assert_eq!(image.status, 200);
+    assert!(image.body["dataUrl"].as_str().unwrap().starts_with("data:image/png;base64,"));
+    assert_ne!(h.call("vault", "vault.image", json!({"path":"Guides/read.md", "source":"../../outside.png"})).status, 200);
+    assert_ne!(h.call("settings", "vault.browse", json!({})).status, 200);
+    std::fs::write(vault.join("Guides/large.md"), "x".repeat(10 * 1024 * 1024 + 1)).unwrap();
+    assert_ne!(h.call("vault", "knowledge.read", json!({"path":"Guides/large.md"})).status, 200);
+}
+
+
+#[test]
+fn vault_note_read_limit_accepts_below_and_exactly_ten_mib_and_rejects_over() {
+    let h = Harness::new();
+    let vault = h.root.path().join("vault");
+    const LIMIT: usize = 10 * 1024 * 1024;
+    for (name, size) in [("below.md", LIMIT - 1), ("exact.md", LIMIT), ("over.md", LIMIT + 1)] {
+        std::fs::write(vault.join(name), "x".repeat(size)).unwrap();
+        let response = h.call("vault", "knowledge.read", json!({"path":name,"locale":"en"}));
+        if size <= LIMIT {
+            assert_eq!(response.status, 200, "{name}: {}", response.body);
+            assert_eq!(response.body["markdown"].as_str().unwrap().len(), size);
+            assert_eq!(response.body["content"].as_str().unwrap().len(), size);
+        } else {
+            assert_ne!(response.status, 200);
+            assert!(response.body["detail"].as_str().unwrap().contains("10 MiB"));
+        }
+        assert_eq!(std::fs::metadata(vault.join(name)).unwrap().len(), size as u64);
+    }
+    let listing = h.call("vault", "vault.browse", json!({}));
+    assert_eq!(listing.status, 200);
+    let notes = listing.body["notes"].as_array().unwrap();
+    for name in ["below.md", "exact.md"] {
+        assert_eq!(notes.iter().find(|note| note["path"] == name).unwrap()["readable"], true);
+    }
+    assert_eq!(notes.iter().find(|note| note["path"] == "over.md").unwrap()["readable"], false);
+}

@@ -733,3 +733,13 @@ Main has not yet been merged. A/B/C/D and F native contracts are integrated; E c
 F review UI, G journaled archive completion and final cross-feature/packaged verification remain.
 Keep every existing worktree and uncommitted edit. Cargo builds share a target and require one
 explicit lane owner. Do not interpret checkpoint commits or old frontend test passes as completion.
+
+### Vault navigation and note reader (separate worktree)
+
+Approved mockups were implemented on `design/vault-navigation-mockups` in `.worktrees/vault-navigation-design`; no merge/push. See `design/vault-navigation/IMPLEMENTATION.md` for actual rendered comparisons, verified Library screenshot IDs, scope and validation. Frontend checks pass; 14 native command tests and the 3 focused Vault checks pass. The full native library run has an unresolved unchanged structural-index timing budget failure (about 4.03s against 3s); two other timing failures passed isolated reruns. Packaged E2E was assessed and skipped in favor of native boundary integration and real Mermaid/image rendering under production CSP. No personal Vault or installed-app capture was used; merge/push remains a separate user decision.
+
+The Vault follow-up fixed confirmed stale selected backgrounds in WKWebView by removing scoped selection transitions and adding search-result aria-current. All three tabs now pass actual computed-color/content assertions before screenshots are saved. Frontend verification is now 496 tests; the screenshot manifest includes new Library versions and a Search capture.
+
+User explicitly authorized a follow-up raising the common Vault note-read cap to 10 MiB (10,485,760 bytes), shared with navigation metadata reads. Image size policy remains a separate unchanged 10 MiB cap, and automatic translation behavior is unchanged. Native boundary checks cover below/exact/over sizes; large-Markdown UI rendering performance remains unmeasured. The previous 2 MiB value was a pre-read data-budget guard, not a web-standard or benchmark-derived limit.
+
+Vault main integration and normal push were explicitly approved after the 10 MiB follow-up. The dedicated Vault branch rebased onto `9940d91` without conflicts, preserving Compass and excluding pending notification/session work. Integration verification passed 498 frontend tests, runtime checks, lint, typecheck, build and 15 native command tests. Rust formatting still fails on both the integration tree and archived remote-main baseline; no broad unrelated cleanup was made. The existing native index timing limitation remains documented in the Vault handoff.

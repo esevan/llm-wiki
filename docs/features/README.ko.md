@@ -24,7 +24,7 @@
 
 ## 근거를 찾고 검증하기
 
-- [빠른 Vault 검색](fast-vault-search.ko.md)은 기존 Knowledge와 근거에서 바로 이어가게 합니다.
+- [Vault 검색·MOC·폴더 탐색](fast-vault-search.ko.md)은 기존 Knowledge를 찾고 흰 Markdown 리더에서 다이어그램과 이미지를 읽게 합니다.
 - [근거 중심 Vault 충돌 검토](vault-conflict-evidence.ko.md)는 검색 coverage, 인용, 진행률,
   보수적인 판정 의미를 설명합니다.
 - [Task 충돌 검토](conflict-resolution-workflow.ko.md)는 발견 사항을 Task Gate로 바꾸지 않고

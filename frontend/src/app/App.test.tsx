@@ -7,7 +7,7 @@ describe('React shell behavior', () => {
     render(<App />);
 
     expect(screen.getByRole('heading', { name: 'Your workbench' })).toBeVisible();
-    expect(screen.getByRole('heading', { name: 'Find context' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Search vault' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Your Compass' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'AI setup' })).toBeInTheDocument();
   });

@@ -5,6 +5,7 @@ import compass from '../features/compass/CompassView.tsx?raw';
 import intro from '../features/first-run-intro/FirstRunIntro.tsx?raw';
 import overlays from '../features/overlays/OverlayLayer.tsx?raw';
 import search from '../features/search/SearchView.tsx?raw';
+import vaultMarkdown from '../features/search/VaultMarkdown.tsx?raw';
 import mcp from '../features/settings/McpConnections.tsx?raw';
 import settings from '../features/settings/SettingsView.tsx?raw';
 import migration from '../features/vault-setup/MigrationRecoveryView.tsx?raw';
@@ -51,6 +52,7 @@ export const productionInteractiveSources = new Map<string, string>([
   ['frontend/src/features/first-run-intro/FirstRunIntro.tsx', intro],
   ['frontend/src/features/overlays/OverlayLayer.tsx', overlays],
   ['frontend/src/features/search/SearchView.tsx', search],
+  ['frontend/src/features/search/VaultMarkdown.tsx', vaultMarkdown],
   ['frontend/src/features/settings/McpConnections.tsx', mcp],
   ['frontend/src/features/settings/SettingsView.tsx', settings],
   ['frontend/src/features/vault-setup/MigrationRecoveryView.tsx', migration],

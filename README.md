@@ -129,7 +129,7 @@ default. Every choice remains user-configurable in Advanced options.
 
 - [Product Spirit and product decisions](docs/product-spirit.md)
 - [Current interface guide](docs/features/visual-guide.md)
-- [Fast vault search](docs/features/fast-vault-search.md)
+- [Vault search, MOC and folder browsing](docs/features/fast-vault-search.md) — read Markdown, Mermaid diagrams and local images in the white note reader.
 - [Work tracking from Codex and ChatGPT desktop](docs/features/mcp-workbench-bridge.md)
 - [Task-centered Workbench](docs/features/conflict-gated-workflow.md)
 - [Completion, Knowledge, and archive](docs/features/completion-writeback-archive.md)

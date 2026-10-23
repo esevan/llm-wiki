@@ -10,6 +10,9 @@ use std::time::Instant;
 use std::time::UNIX_EPOCH;
 use walkdir::WalkDir;
 
+/// Byte budget shared by note reads and navigation metadata reads.
+pub(crate) const NOTE_READ_LIMIT: u64 = 10 * 1024 * 1024;
+
 #[cfg(windows)]
 pub(crate) fn replace_file(temporary: &Path, target: &Path) -> Result<(), std::io::Error> {
     use std::os::windows::ffi::OsStrExt;
@@ -312,6 +315,9 @@ pub fn read(vault: &Path, relative: &str, requested_locale: &str) -> Result<Valu
         || canonical.extension().and_then(|value| value.to_str()) != Some("md")
     {
         return Err("Knowledge path is outside the Vault".into());
+    }
+    if fs::metadata(&canonical).map_err(|_| "Knowledge document is unavailable")?.len() > NOTE_READ_LIMIT {
+        return Err("Knowledge document exceeds the 10 MiB reader size limit".into());
     }
     let content = fs::read_to_string(&canonical).map_err(|error| error.to_string())?;
     let managed =
