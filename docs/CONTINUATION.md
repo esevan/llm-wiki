@@ -764,3 +764,46 @@ User authorized session follow-up integration after disclosure of unresolved fre
 ## Open-modal session Work Log refresh correction (2026-10-23)
 
 Dedicated `.worktrees/session-worklog-recording-audit` on `a9b3f35` reproduces saved session logs missing from an already-open Task snapshot until reopen. Parent TaskDetail refresh/wiring and native terminal/sync functions are identical to pre-redesign `f3ede45`; this is an existing gap, now explicitly authorized for a narrow fix. Persisted Run revision changes invalidate the parent Task, related reads coalesce with a trailing pass for intervening changes, and exact log-open waits for reread before focus. Pointer/keyboard Work-tab entry rereads data; active execution/runnable Queue/distillation job metadata drives scoped polling, preserving old image/translation behavior. A read-only Task refresh hint covers the between-Run Queue gap and excludes paused Queue/uncertain terminal execution; it is separate from transition guards. Native storage/dispatch/Queue logic is unchanged; Task projection adds read-only distillation job status. Regression coverage includes no per-token reads, coalescing, stale Task identity, retained drafts, summary completion and stopping refresh. Native fake verifies three linked logs and terminal reports in Task projection. Initial first-Prepare incident and locked-Mac visual acceptance remain unresolved. No merge/push is authorized for this correction.
+
+## Navigation visual consistency — 2026-10-23
+
+Task branch `task/navigation-consistency` in `.worktrees/task-navigation-consistency`
+reuses the existing Vault rail appearance in the shared sidebar stylesheet:
+cream surface, flat 15px menu buttons, regular inactive labels, bold pink current
+view, smaller brand and separated settings entry. Existing menu markup, order,
+labels, current-view semantics, locale controls and focus treatment are preserved.
+Workbench/Compass/AI setup retain their 248px desktop rail and narrow horizontal
+navigation; Vault retains its 176px/76px rail and existing mobile reader layout.
+The existing guidance card remains available outside Vault.
+
+Rendered comparison remains pending: computer-use inventory reported that the
+Mac is locked. No unlocking, security-setting change, installed-app mutation or
+production-data access was attempted. After manual unlock, compare Workbench,
+Compass, AI setup and Vault at wide/narrow widths in English and Korean, including
+hover, current selection and keyboard focus. No screenshots from this task have
+been verified. Existing screenshots describe their earlier revisions.
+
+Packaged E2E is skipped: this is a shared CSS-only appearance change, with no
+routing, native boundary, persistence, lifecycle or packaging changes. Existing
+Sidebar/App/Workbench/Vault navigation tests cover destination and current-view
+behavior; lint/typecheck and the normal test command cover regressions. Pixel
+layout, wrapping and real keyboard focus visibility remain the visual-review gap.
+
+Verification: all 65 Vitest files / 498 tests passed, including Sidebar, App,
+WorkbenchNavigation and SearchView navigation. Desktop helper tests (6), provider
+fixture tests (4), macOS signing/runtime/icon tests (7), runtime/native-only/work
+tracking boundary checks, lint, typecheck, production build/font verification and
+whitespace validation passed. The initial `npm test` wrapper stalled at the
+provider fixture under restricted loopback access; that stage passed separately
+with loopback permission, and all remaining wrapper checks passed separately.
+No Rust tests or release build were needed for the CSS-only change.
+
+
+Approved navigation integration: the user authorized main merge and normal push.
+The sidebar-only commit was rebased onto `9534092`; the only conflict was this
+handoff file, resolved by preserving both sections. Integration verification
+passed all 66 frontend files / 513 tests, the complete `npm test` wrapper, lint,
+typecheck, production build/fonts and whitespace checks. Existing unrelated
+Rustfmt/performance baselines were not altered. The Mac remained locked when
+checked again, so wide/narrow/focus pixel review remains unverified. Local
+packaged E2E remains skipped for the CSS-only risk assessment above.

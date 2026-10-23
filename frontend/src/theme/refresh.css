@@ -15,13 +15,14 @@ input, textarea, select { border-color: var(--color-border-strong); color: var(-
 input::placeholder, textarea::placeholder { color: var(--color-text-subtle); opacity: 1; }
 
 .app { min-height: 100dvh; grid-template-columns: 248px minmax(0, 1fr); }
-.side { position: sticky; top: 0; height: 100dvh; padding: 28px 18px 20px; color: var(--color-text-primary); background: var(--color-bg-sidebar); border-right: var(--border-default); }
-.brand { margin: 0 10px 42px; color: var(--color-text-primary); font-size: 25px; letter-spacing: -1.3px; }
+.side { position: sticky; top: 0; height: 100dvh; padding: 30px 16px; color: var(--color-text-primary); background: var(--color-bg-primary); border-right: var(--border-default); }
+.brand { margin: 0 0 36px 12px; color: var(--color-text-primary); font-size: 21px; letter-spacing: 0; }
 .brand i { width: 10px; height: 10px; background: var(--color-accent-primary); }
+/* Reuse the Vault rail treatment without changing each view's layout. */
 .nav { gap: var(--space-1); }
-.nav button { min-height: 42px; color: var(--color-text-secondary); padding: 10px 12px; border: 1px solid transparent; border-radius: var(--radius-control); }
-.nav button.active { color: var(--color-accent-strong); background: var(--color-bg-surface); border-color: var(--color-border-accent-muted); box-shadow: var(--shadow-card); }
-.nav button:hover { color: var(--color-text-primary); background: rgb(255 255 255 / 72%); }
+.nav button { min-height: 42px; color: var(--color-text-secondary); font-size: 15px; font-weight: 400; padding: 12px; border: 0; border-radius: var(--radius-control); box-shadow: none; background: transparent; }
+.nav button.active { color: #b91860; background: var(--color-bg-accent-subtle); font-weight: 800; }
+.nav button:hover:not(.active) { color: var(--color-text-primary); background: rgb(255 255 255 / 72%); }
 .locale-switch { margin: 22px 10px 12px; color: var(--color-text-secondary); }
 .locale-switch select { border-color: var(--color-border-default); color: var(--color-text-primary); background: var(--color-bg-surface); }
 .tip { padding: 14px; color: var(--color-text-secondary); border-color: var(--color-border-default); background: rgb(255 255 255 / 60%); }
@@ -166,6 +167,10 @@ dialog::backdrop { background: rgb(39 36 42 / 44%); backdrop-filter: blur(4px); 
 .queue-panel, .alert-panel { border-color: var(--color-border-default); box-shadow: var(--shadow-raised); }
 .queue-toggle, .alert-toggle { border-color: var(--color-border-default); box-shadow: var(--shadow-raised); }
 .queue-toast { box-shadow: var(--shadow-raised); }
+
+@media (min-width: 901px) {
+  .side [data-view="ai-setup"] { margin-top: 36px; }
+}
 
 @media (max-width: 900px) {
   .app { grid-template-columns: 1fr; }

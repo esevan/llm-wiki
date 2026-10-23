@@ -2,6 +2,8 @@
 
 [English](fast-vault-search.md) | **한국어**
 
+Workbench, Compass, AI setup의 기본 내비게이션에도 Vault와 같은 크림색 배경, 평면 메뉴 버튼, 분홍색 현재 화면 강조를 적용합니다. 각 화면의 기존 메뉴 이름·순서와 반응형 레이아웃 너비는 유지합니다.
+
 > **Resume where you left off.** 검색은 이전 Knowledge를 현재 결정으로 다시 가져옵니다.
 
 ![실제 Mermaid 다이어그램을 표시하는 폴더 목록과 흰 Knowledge 노트 리더](../../design/vault-navigation/implementation/folders-wide.png)
