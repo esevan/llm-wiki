@@ -11,9 +11,11 @@ keeps enough context to resume, and publishes only completed outcomes as portabl
 
 ![The current Workbench shows lightweight Capture and Task entry with saved work](docs/features/images/integrated-workbench.en.jpg)
 
-> Screenshot: full App rendered in an isolated nonpersistent WKWebView on 2026-10-21 with synthetic data, shared CSS/fonts and production runtime. This is browser fixture evidence. [Capture audit](docs/testing/documentation-image-audit.md).
+> Screenshot: full App rendered in an isolated nonpersistent WKWebView on 2026-10-21 with synthetic data, shared CSS/fonts and production runtime. This is browser fixture evidence. [Capture audit](docs/testing/documentation-image-audit.md). The navigation shown predates the shared-rail correction; updated wide/compact screenshots remain pending visual review.
 
 Compass includes a Completed tasks tab for the full completion history. Workbench keeps only the latest five completions beside active Tasks and hides empty categories.
+
+All main views share one left navigation rail in the same order: Workbench, Compass, Search vault and AI setup. English/Korean labels follow the global language setting; compact windows keep the same menu as an accessible icon rail.
 
 Refinement preserves the existing Task identity and shows **Refined - Revision N**. Focus active work at the top of Workbench. Explicit Subtasks form an expandable tree; completing each child updates and publishes the parent Knowledge revision, and finishing all children closes the parent.
 Knowledge publication uses one explicit button. Quality/citation notes do not block publishing; user experience is a primary source and external citations are optional. [Publication behavior](docs/features/knowledge-archive.md).

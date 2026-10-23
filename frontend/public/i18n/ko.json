@@ -122,6 +122,7 @@
   "language.original_fallback": "원문 언어로 표시 중",
   "language.save_version_only": "이 언어 버전으로만 저장",
   "error.refinement_preview": "정제 미리보기를 표시할 수 없습니다. 다시 시도해 주세요.",
+  "nav.label": "기본 탐색",
   "nav.workbench": "워크벤치",
   "nav.search_vault": "Vault 검색",
   "nav.compass": "나침반",

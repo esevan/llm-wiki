@@ -11,9 +11,11 @@ LLM Wiki는 대화를 구조화된 일로 바꾸고, 언제든 이어갈 수 있
 
 ![가벼운 Capture·Task 입력과 저장된 작업을 보여 주는 최신 Workbench](docs/features/images/integrated-workbench.ko.jpg)
 
-> 화면 캡처: 2026-10-21 전체 App·공통 CSS·글꼴·실제 runtime을 비영구 WKWebView에서 합성 데이터로 렌더링했습니다. 설치 앱 캡처가 아닙니다. [캡처 조사](docs/testing/documentation-image-audit.md)를 참고하세요.
+> 화면 캡처: 2026-10-21 전체 App·공통 CSS·글꼴·실제 runtime을 비영구 WKWebView에서 합성 데이터로 렌더링했습니다. 설치 앱 캡처가 아닙니다. [캡처 조사](docs/testing/documentation-image-audit.md)를 참고하세요. 이미지의 내비게이션은 공통 세로 메뉴 수정 이전 상태이며, 수정 후 넓은 창·좁은 창 캡처는 시각 확인을 기다리고 있습니다.
 
 Compass의 완료 목록 탭에서 전체 완료 작업을 확인합니다. Workbench는 진행 중인 Task 옆에 최근 완료 5개만 표시하고 빈 카테고리는 숨깁니다.
+
+모든 주요 화면은 왼쪽 세로 메뉴 하나를 공유하며 워크벤치, 나침반, Vault 검색, AI 설정 순서를 유지합니다. 한영 메뉴 이름은 전역 언어 설정을 따르고, 좁은 창에서도 접근 가능한 아이콘 메뉴로 같은 순서를 유지합니다.
 
 정제는 기존 Task ID를 유지하고 **Refined - Revision N**을 표시합니다. Workbench 최상단에서 진행 중인 작업에 Focus할 수 있습니다. 명시적인 Subtask는 펼칠 수 있는 계층으로 연결되며, 자식 완료마다 부모 Knowledge를 갱신·발행하고 모든 자식이 끝나면 부모도 완료합니다.
 Knowledge는 명시적인 발행 버튼 한 번으로 발행합니다. 품질·인용 확인 사항은 발행을 막지 않으며 사용자 경험 자체가 출처이고 외부 인용은 선택 사항입니다. [발행 동작](docs/features/knowledge-archive.ko.md)을 참고하세요.

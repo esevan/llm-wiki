@@ -807,3 +807,52 @@ typecheck, production build/fonts and whitespace checks. Existing unrelated
 Rustfmt/performance baselines were not altered. The Mac remained locked when
 checked again, so wide/narrow/focus pixel review remains unverified. Local
 packaged E2E remains skipped for the CSS-only risk assessment above.
+
+
+## Shared vertical navigation correction — local only, 2026-10-23
+
+The preceding `57822d4` / integrated `c8e6a43` change only shared appearance.
+It left `Sidebar`'s active-Vault branch reordering menus and swapping hardcoded
+English labels/icons for a separate `vaultText` translation path. Vault-only CSS
+also changed rail width, compact placement and visibility; other views switched
+to top navigation. The user explicitly rejected those remaining differences.
+
+Follow-up `.worktrees/task-shared-navigation`, branch `fix/shared-navigation`,
+starts at `c8e6a43`. One unconditional menu definition in the existing Sidebar
+uses the Vault icon/order treatment (Workbench, Compass, Search vault, AI setup)
+and existing app `nav.*` keys from both public i18n dictionaries. The separate
+Vault shell translations are removed. The component remains mounted once before
+`main`; active view affects only current class/ARIA, never menu content/order.
+Global locale initialization, persistence and rollback still use the existing
+runtime. A translated navigation landmark names the shared menu.
+
+One shared shell layout uses a 176px vertical rail or a 76px compact rail at
+<=900px across all routes. Page CSS no longer styles or hides the shell rail.
+The compact rail keeps visually hidden accessible labels, real native buttons,
+the same focus styling, and a reachable language selector. Vault's <=650px
+list/reader back behavior remains within page content. This intentionally
+replaces the previous mixed 248px/top-navigation and Vault-only rail layouts.
+Within-page tabs, route IDs, native operations and user data are unchanged.
+
+Tests cover stable DOM node identity/placement before main, order/icons/labels,
+current-view exclusivity and focus retention for all four actual App routes;
+English/Korean round trips also use production locale bootstrap/change/API code
+with isolated bridge fixtures. These are DOM/runtime assertions, not pixel or
+real keyboard Tab/Enter validation. Computer Use again reported a locked Mac;
+no unlock/bypass was attempted and no new screenshot is verified. After manual
+unlock, compare wide/compact/<=650px views, keyboard focus, language switcher,
+and real text wrapping before claiming visual acceptance.
+
+No merge or push is authorized for this follow-up. Documentation guide reviewed;
+English/Korean READMEs and the affected Vault guide describe the common rail.
+Packaged E2E is skipped: existing route and locale runtime integration tests
+cover behavior; source/CSS review covers removal of per-view layout overrides.
+Actual pixel layout remains pending, and packaged E2E cannot substitute for the
+locked visual review. No native boundary, persistence or packaging changes need
+a release build, Cargo tests or unrelated Rustfmt/performance-baseline edits.
+
+Verification: 66 frontend files / 516 tests and the complete `npm test` command
+passed, including the shared-menu and production locale-runtime regressions.
+Lint, typecheck, production build/font verification and whitespace checks passed.
+The first test fixture omitted production `api` and was corrected; no runtime
+logic change was needed. Screenshots are explicitly marked as earlier revisions.

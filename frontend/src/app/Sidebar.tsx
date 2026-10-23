@@ -1,4 +1,6 @@
-import { useVaultText } from '../features/search/vaultText';
+import { useSyncExternalStore } from 'react';
+import english from '../../public/i18n/en.json';
+import korean from '../../public/i18n/ko.json';
 import type { ViewId } from './App';
 
 interface SidebarProps {
@@ -6,22 +8,28 @@ interface SidebarProps {
   onSelectView: (view: ViewId) => void;
 }
 
-const navigation: ReadonlyArray<[ViewId, string]> = [
-  ['workbench', '✦ Workbench'],
-  ['search', '⌕ Search vault'],
-  ['compass', '◒ Compass'],
-  ['ai-setup', '⚙ AI setup'],
-];
+const navigation = [
+  { view: 'workbench', icon: '◫', label: 'nav.workbench' },
+  { view: 'compass', icon: '⌁', label: 'nav.compass' },
+  { view: 'search', icon: '▤', label: 'nav.search_vault' },
+  { view: 'ai-setup', icon: '⚙', label: 'nav.ai_setup' },
+] as const;
+
+function subscribeLocale(changed: () => void) {
+  const observer = new MutationObserver(changed);
+  observer.observe(document.documentElement, { attributes: true, attributeFilter: ['lang'] });
+  return () => observer.disconnect();
+}
 
 export function Sidebar({ activeView, onSelectView }: SidebarProps) {
-  const text = useVaultText();
-  const items = activeView === 'search' ? [navigation[0], navigation[2], navigation[1], navigation[3]] : navigation;
-  const vaultLabels: Partial<Record<ViewId, string>> = { workbench: '◫ ' + text.shellWorkbench, compass: '⌁ ' + text.shellCompass, search: '▤ ' + text.title, 'ai-setup': '⚙ ' + text.shellSettings };
+  const locale = useSyncExternalStore(subscribeLocale,
+    () => document.documentElement.lang.startsWith('ko') ? 'ko' : 'en', () => 'en');
+  const text = locale === 'ko' ? korean : english;
   return (
     <aside className="side">
       <div className="brand">llm wiki<i /></div>
-      <nav className="nav">
-        {items.map(([view, label]) => (
+      <nav className="nav" aria-label={text['nav.label']}>
+        {navigation.map(({ view, icon, label }) => (
           <button
             className={activeView === view ? 'active' : undefined}
             aria-current={activeView === view ? 'page' : undefined}
@@ -31,18 +39,19 @@ export function Sidebar({ activeView, onSelectView }: SidebarProps) {
             onClick={() => onSelectView(view)}
             type="button"
           >
-            {activeView === 'search' ? vaultLabels[view] : label}
+            <span className="nav-icon" aria-hidden="true">{icon}</span>
+            <span className="nav-label">{text[label]}</span>
           </button>
         ))}
       </nav>
       <label className="locale-switch">
-        <span>Language</span>
-        <select id="locale-select" data-control="locale-select" aria-label="Language" defaultValue="en">
+        <span>{text['language.label']}</span>
+        <select id="locale-select" data-control="locale-select" aria-label={text['language.label']} defaultValue={locale}>
           <option value="en">English</option>
           <option value="ko">한국어</option>
         </select>
       </label>
-      <div className="tip"><b>You’re in control.</b>Nothing is approved or moved forward until you choose it.</div>
+      <div className="tip"><b>{text['app.control_title']}</b>{text['app.control_body']}</div>
     </aside>
   );
 }

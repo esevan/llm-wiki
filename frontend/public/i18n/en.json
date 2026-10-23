@@ -122,6 +122,7 @@
   "language.original_fallback": "Showing original language",
   "language.save_version_only": "Save as this language version only",
   "error.refinement_preview": "Refinement preview is unavailable. Please try again.",
+  "nav.label": "Main navigation",
   "nav.workbench": "Workbench",
   "nav.search_vault": "Search vault",
   "nav.compass": "Compass",

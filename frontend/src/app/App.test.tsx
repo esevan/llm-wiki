@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { App } from './App';
 
@@ -39,4 +39,29 @@ describe('React shell behavior', () => {
     expect(document.querySelector('#workbench')).not.toHaveClass('active');
     expect(searchNavigation).toHaveClass('active');
   });
+
+  it('keeps one main navigation before the page content across all actual App routes', () => {
+    render(<App />);
+    const shell = document.querySelector('.app')!;
+    const rail = shell.firstElementChild!;
+    const main = rail.nextElementSibling!;
+    const nav = within(rail as HTMLElement).getByRole('navigation');
+    const controls = within(nav).getAllByRole('button');
+    const menu = controls.map(button => button.textContent);
+    for (const route of ['workbench', 'compass', 'search', 'ai-setup']) {
+      const control = controls.find(button => button.dataset.view === route)!;
+      control.focus();
+      fireEvent.click(control);
+      expect(document.querySelector(`#${route}`)).toHaveClass('active');
+      expect(shell.firstElementChild).toBe(rail);
+      expect(rail.nextElementSibling).toBe(main);
+      expect(main.tagName).toBe('MAIN');
+      expect(within(rail as HTMLElement).getByRole('navigation')).toBe(nav);
+      expect(within(nav).getAllByRole('button').map(button => button.textContent)).toEqual(menu);
+      expect(control).toHaveFocus();
+      expect(nav.querySelectorAll('[aria-current="page"]')).toHaveLength(1);
+      expect(control).toHaveAttribute('aria-current', 'page');
+    }
+  });
+
 });

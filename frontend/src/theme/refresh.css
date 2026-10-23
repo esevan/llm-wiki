@@ -14,17 +14,19 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 input, textarea, select { border-color: var(--color-border-strong); color: var(--color-text-primary); }
 input::placeholder, textarea::placeholder { color: var(--color-text-subtle); opacity: 1; }
 
-.app { min-height: 100dvh; grid-template-columns: 248px minmax(0, 1fr); }
-.side { position: sticky; top: 0; height: 100dvh; padding: 30px 16px; color: var(--color-text-primary); background: var(--color-bg-primary); border-right: var(--border-default); }
+.app { min-height: 100dvh; grid-template-columns: 176px minmax(0, 1fr); }
+.side { position: sticky; top: 0; display: flex; flex-direction: column; align-items: stretch; height: 100dvh; overflow-y: auto; padding: 30px 16px; color: var(--color-text-primary); background: var(--color-bg-primary); border-right: var(--border-default); }
 .brand { margin: 0 0 36px 12px; color: var(--color-text-primary); font-size: 21px; letter-spacing: 0; }
 .brand i { width: 10px; height: 10px; background: var(--color-accent-primary); }
-/* Reuse the Vault rail treatment without changing each view's layout. */
+/* One vertical rail for every main view; page CSS owns only page content. */
 .nav { gap: var(--space-1); }
-.nav button { min-height: 42px; color: var(--color-text-secondary); font-size: 15px; font-weight: 400; padding: 12px; border: 0; border-radius: var(--radius-control); box-shadow: none; background: transparent; }
+.nav button { display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; min-height: 42px; color: var(--color-text-secondary); font-size: 15px; font-weight: 400; padding: 12px; border: 0; border-radius: var(--radius-control); box-shadow: none; background: transparent; }
+.nav-icon { flex: 0 0 18px; text-align: center; }
+.nav-label { min-width: 0; overflow-wrap: anywhere; }
 .nav button.active { color: #b91860; background: var(--color-bg-accent-subtle); font-weight: 800; }
 .nav button:hover:not(.active) { color: var(--color-text-primary); background: rgb(255 255 255 / 72%); }
-.locale-switch { margin: 22px 10px 12px; color: var(--color-text-secondary); }
-.locale-switch select { border-color: var(--color-border-default); color: var(--color-text-primary); background: var(--color-bg-surface); }
+.locale-switch { flex-direction: column; align-items: stretch; margin: 22px 0 12px; color: var(--color-text-secondary); }
+.locale-switch select { width: 100%; margin-left: 0; border-color: var(--color-border-default); color: var(--color-text-primary); background: var(--color-bg-surface); }
 .tip { padding: 14px; color: var(--color-text-secondary); border-color: var(--color-border-default); background: rgb(255 255 255 / 60%); }
 .tip b { color: var(--color-text-primary); }
 
@@ -168,17 +170,18 @@ dialog::backdrop { background: rgb(39 36 42 / 44%); backdrop-filter: blur(4px); 
 .queue-toggle, .alert-toggle { border-color: var(--color-border-default); box-shadow: var(--shadow-raised); }
 .queue-toast { box-shadow: var(--shadow-raised); }
 
-@media (min-width: 901px) {
-  .side [data-view="ai-setup"] { margin-top: 36px; }
-}
+.side [data-view="ai-setup"] { margin-top: 36px; }
 
 @media (max-width: 900px) {
-  .app { grid-template-columns: 1fr; }
-  .side { position: static; height: auto; flex-wrap: wrap; gap: 8px 16px; padding: 14px 18px; }
-  .brand { margin: 0 auto 0 0; }
-  .nav { min-width: 0; flex-wrap: wrap; }
-  .nav button { width: auto; min-width: 116px; }
-  .locale-switch { margin: 0 0 0 auto; }
+  .app { grid-template-columns: 76px minmax(0, 1fr); }
+  .side { padding: 24px 8px; }
+  .brand { font-size: 14px; margin-left: 3px; }
+  .nav { display: grid; min-width: 0; }
+  .nav button { justify-content: center; padding: 12px; }
+  .nav-icon { font-size: 20px; }
+  .nav-label, .locale-switch > span { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  .locale-switch select { padding-inline: 2px; font-size: 11px; }
+  .side .tip { display: none; }
   .alert-dock { inset: auto 18px 74px auto; }
   .alert-panel { top: auto; bottom: 52px; }
 }
