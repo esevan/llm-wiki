@@ -408,15 +408,23 @@ pub(crate) fn schema(id: PromptId, context: &Value) -> Result<Value, String> {
             ("report_body_markdown", text()),
         ]),
         PromptId::CaptureDistillation => {
-            use crate::native::capture_distillation::{TITLE_LIMIT, CONTENT_LIMIT, CONTEXT_LIMIT, REQUEST_LIMIT, REQUEST_COUNT_LIMIT};
+            use crate::native::capture_distillation::{
+                CONTENT_LIMIT, CONTEXT_LIMIT, REQUEST_COUNT_LIMIT, REQUEST_LIMIT, TITLE_LIMIT,
+            };
             object(&[
                 ("schemaVersion", json!({"type":"integer","enum":[1]})),
                 ("title", capture_text(TITLE_LIMIT)),
                 ("content", capture_text(CONTENT_LIMIT)),
                 ("context", capture_text(CONTEXT_LIMIT)),
-                ("explicitRequests", json!({"type":"array","maxItems":REQUEST_COUNT_LIMIT,
-                    "description":format!("At most {REQUEST_COUNT_LIMIT} explicitly supported requests."),"items":capture_text(REQUEST_LIMIT)})),
-                ("grounding", list(object(&[("field", text()), ("sourceRefs", strings())]))),
+                (
+                    "explicitRequests",
+                    json!({"type":"array","maxItems":REQUEST_COUNT_LIMIT,
+                    "description":format!("At most {REQUEST_COUNT_LIMIT} explicitly supported requests."),"items":capture_text(REQUEST_LIMIT)}),
+                ),
+                (
+                    "grounding",
+                    list(object(&[("field", text()), ("sourceRefs", strings())])),
+                ),
             ])
         }
         PromptId::RefinementPreview => legacy_proposals(),
@@ -512,9 +520,15 @@ fn capture_wire_schema(schema: &mut Value) {
         Value::Object(object) => {
             object.remove("maxLength");
             object.remove("maxItems");
-            for value in object.values_mut() { capture_wire_schema(value); }
+            for value in object.values_mut() {
+                capture_wire_schema(value);
+            }
         }
-        Value::Array(array) => for value in array { capture_wire_schema(value); },
+        Value::Array(array) => {
+            for value in array {
+                capture_wire_schema(value);
+            }
+        }
         _ => (),
     }
 }
@@ -539,7 +553,9 @@ pub(crate) fn request_body(
         }
     }
     let mut response_schema = schema(id, context)?;
-    if id == PromptId::CaptureDistillation { capture_wire_schema(&mut response_schema); }
+    if id == PromptId::CaptureDistillation {
+        capture_wire_schema(&mut response_schema);
+    }
     Ok(
         json!({"model":model,"messages":[{"role":"user","content":content}],"stream":false,
  "response_format":{"type":"json_schema","json_schema":{"name":id.as_str(),"strict":true,"schema":response_schema}}}),
@@ -626,7 +642,9 @@ pub(crate) fn parse_completion(
     // an otherwise valid boundary value solely for surrounding whitespace.
     let parsed = if id == PromptId::CaptureDistillation {
         crate::native::capture_distillation::validate_result(&parsed, usize::MAX, usize::MAX)?
-    } else { parsed };
+    } else {
+        parsed
+    };
     let schema = schema(id, context)?;
     validate_shape(&schema, &schema, &parsed, "", true).map_err(|error| {
         if id == PromptId::WorkPreviewFinalizer {
@@ -891,21 +909,48 @@ mod tests {
     }
     #[test]
     fn capture_schema_limits_match_runtime_without_unsupported_wire_keywords() {
-        use crate::native::capture_distillation::{CONTENT_LIMIT, CONTEXT_LIMIT, TITLE_LIMIT, REQUEST_LIMIT, REQUEST_COUNT_LIMIT};
+        use crate::native::capture_distillation::{
+            CONTENT_LIMIT, CONTEXT_LIMIT, REQUEST_COUNT_LIMIT, REQUEST_LIMIT, TITLE_LIMIT,
+        };
         let local = schema(PromptId::CaptureDistillation, &Value::Null).unwrap();
-        for (field, limit) in [("title", TITLE_LIMIT), ("content", CONTENT_LIMIT), ("context", CONTEXT_LIMIT)] {
+        for (field, limit) in [
+            ("title", TITLE_LIMIT),
+            ("content", CONTENT_LIMIT),
+            ("context", CONTEXT_LIMIT),
+        ] {
             assert_eq!(local["properties"][field]["maxLength"], limit);
         }
-        assert_eq!(local["properties"]["explicitRequests"]["maxItems"], REQUEST_COUNT_LIMIT);
-        assert_eq!(local["properties"]["explicitRequests"]["items"]["maxLength"], REQUEST_LIMIT);
-        let request = request_body(PromptId::CaptureDistillation, &Value::Null, "fixture", json!("prompt")).unwrap();
+        assert_eq!(
+            local["properties"]["explicitRequests"]["maxItems"],
+            REQUEST_COUNT_LIMIT
+        );
+        assert_eq!(
+            local["properties"]["explicitRequests"]["items"]["maxLength"],
+            REQUEST_LIMIT
+        );
+        let request = request_body(
+            PromptId::CaptureDistillation,
+            &Value::Null,
+            "fixture",
+            json!("prompt"),
+        )
+        .unwrap();
         let wire = &request["response_format"]["json_schema"]["schema"];
         assert!(!wire.to_string().contains("maxLength"));
         assert!(!wire.to_string().contains("maxItems"));
-        assert!(wire["properties"]["content"]["description"].as_str().unwrap().contains("20000"));
-        assert!(wire["properties"]["context"]["description"].as_str().unwrap().contains("10000"));
+        assert!(wire["properties"]["content"]["description"]
+            .as_str()
+            .unwrap()
+            .contains("20000"));
+        assert!(wire["properties"]["context"]["description"]
+            .as_str()
+            .unwrap()
+            .contains("10000"));
         assert_eq!(request["response_format"]["json_schema"]["strict"], true);
-        let prompt = super::super::build_prompt(PromptId::CaptureDistillation, &json!({"context":{}})).unwrap().content;
+        let prompt =
+            super::super::build_prompt(PromptId::CaptureDistillation, &json!({"context":{}}))
+                .unwrap()
+                .content;
         assert!(prompt.contains("20000 Unicode scalar values"));
         assert!(prompt.contains("10000 Unicode scalar values"));
         assert!(prompt.contains("exclusive end"));
@@ -913,13 +958,36 @@ mod tests {
         let valid = json!({"schemaVersion":1,"title":"test","content":"","context":"","explicitRequests":[],"grounding":[{"field":"title","sourceRefs":["text:0-4"]}]});
         let mut boundary = valid.clone();
         boundary["content"] = json!(format!("  {}\n", "한😀".repeat(CONTENT_LIMIT / 2)));
-        boundary["grounding"].as_array_mut().unwrap().push(json!({"field":"content","sourceRefs":["text:0-4"]}));
-        let parsed = parse_completion(PromptId::CaptureDistillation, &Value::Null, &completion(boundary)).unwrap();
-        assert_eq!(parsed["content"].as_str().unwrap().chars().count(), CONTENT_LIMIT);
+        boundary["grounding"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"field":"content","sourceRefs":["text:0-4"]}));
+        let parsed = parse_completion(
+            PromptId::CaptureDistillation,
+            &Value::Null,
+            &completion(boundary),
+        )
+        .unwrap();
+        assert_eq!(
+            parsed["content"].as_str().unwrap().chars().count(),
+            CONTENT_LIMIT
+        );
         let mut too_long = valid.clone();
         too_long["content"] = json!("가".repeat(CONTENT_LIMIT + 1));
-        assert!(parse_completion(PromptId::CaptureDistillation, &Value::Null, &completion(too_long)).unwrap_err().contains("content is too long"));
-        assert!(parse_completion(PromptId::CaptureDistillation, &Value::Null, &json!({"choices":[{"finish_reason":"length","message":{"content":valid.to_string()}}]})).unwrap_err().contains("structured_output_incomplete"));
+        assert!(parse_completion(
+            PromptId::CaptureDistillation,
+            &Value::Null,
+            &completion(too_long)
+        )
+        .unwrap_err()
+        .contains("content is too long"));
+        assert!(parse_completion(
+            PromptId::CaptureDistillation,
+            &Value::Null,
+            &json!({"choices":[{"finish_reason":"length","message":{"content":valid.to_string()}}]})
+        )
+        .unwrap_err()
+        .contains("structured_output_incomplete"));
     }
 
     #[test]

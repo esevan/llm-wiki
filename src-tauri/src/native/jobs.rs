@@ -509,8 +509,13 @@ async fn run(
             if let Some(raw) = pending {
                 let input = serde_json::from_str(&raw).unwrap_or(Value::Null);
                 crate::native::capture_distillation::record_failure(
-                    &connection, &job_id, &generation, &input,
-                    &crate::native::capture_distillation::ResponseDiagnostics::default(), "dispatch", error,
+                    &connection,
+                    &job_id,
+                    &generation,
+                    &input,
+                    &crate::native::capture_distillation::ResponseDiagnostics::default(),
+                    "dispatch",
+                    error,
                 )?;
             }
         }
@@ -842,7 +847,8 @@ async fn run_inner(
         .map_err(|e| e.to_string())
         .and_then(|body| {
             if task == "capture_distillation" {
-                capture_response = crate::native::capture_distillation::ResponseDiagnostics::from_payload(&body);
+                capture_response =
+                    crate::native::capture_distillation::ResponseDiagnostics::from_payload(&body);
             }
             crate::workflow_foundation::structured_output::parse_completion(prompt_id.ok_or("No registered structured prompt")?, &context, &body)
         }),
@@ -898,7 +904,13 @@ async fn run_inner(
         Err(error) => {
             if task == "capture_distillation" {
                 crate::native::capture_distillation::record_failure(
-                    &connection, job_id, generation, &input, &capture_response, capture_failure_stage, &error,
+                    &connection,
+                    job_id,
+                    generation,
+                    &input,
+                    &capture_response,
+                    capture_failure_stage,
+                    &error,
                 )?;
             }
             return Err(error);
@@ -1750,14 +1762,18 @@ mod capture_diagnostics_tests {
     use super::*;
 
     fn fixture() -> (tempfile::TempDir, PathBuf, PathBuf, String) {
-        let temp_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../.tmp/capture-distillation-tests");
+        let temp_root =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../.tmp/capture-distillation-tests");
         std::fs::create_dir_all(&temp_root).unwrap();
         let root = tempfile::tempdir_in(temp_root).unwrap();
         let db = root.path().join("state.sqlite3");
         database::initialize(&db).unwrap();
         let service = crate::application::task_service::TaskApplicationService::new(&db);
         let created = service.execute("capture.create", &json!({"operationId":"synthetic-capture","text":"가😀source-private-marker","locale":"ko"})).unwrap();
-        let job_id = created["distillation"]["jobId"].as_str().unwrap().to_owned();
+        let job_id = created["distillation"]["jobId"]
+            .as_str()
+            .unwrap()
+            .to_owned();
         let settings = root.path().join("settings.json");
         (root, db, settings, job_id)
     }
@@ -1766,7 +1782,8 @@ mod capture_diagnostics_tests {
     async fn capture_failures_store_bounded_diagnostics_without_rejected_text() {
         let base_result = json!({"schemaVersion":1,"title":"private-output-marker","content":"","context":"","explicitRequests":[],"grounding":[]});
         let mut too_long = base_result.clone();
-        too_long["content"] = json!("가".repeat(crate::native::capture_distillation::CONTENT_LIMIT + 1));
+        too_long["content"] =
+            json!("가".repeat(crate::native::capture_distillation::CONTENT_LIMIT + 1));
         let empty = json!({"schemaVersion":1,"title":"","content":"","context":"","explicitRequests":[],"grounding":[]});
         let unsupported = json!({"schemaVersion":1,"title":"private-output-marker","content":"","context":"","explicitRequests":[],"grounding":[{"field":"title","sourceRefs":["text:0-1"],"private-property-marker":"private-output-marker"}]});
         for (candidate, field, rule, state) in [
@@ -1774,26 +1791,59 @@ mod capture_diagnostics_tests {
             (too_long, "content", "is too long", "object"),
             (empty, "result", "is empty", "object"),
             (json!({}), "schemaVersion", "is required", "empty_object"),
-            (unsupported, "grounding.0", "contains unsupported fields", "object"),
+            (
+                unsupported,
+                "grounding.0",
+                "contains unsupported fields",
+                "object",
+            ),
         ] {
             let (root, db, settings, job_id) = fixture();
-            let (base, server) = crate::workflow_foundation::structured_output::test_server::serve(candidate, 200).await;
-            crate::native::settings::save_provider(&settings, &json!({"base_url":base,"model":"fixture","api_key":"fixture-key"})).unwrap();
-            let error = run(db.clone(), settings, root.path().into(), JobRegistry::default(),
-                crate::native::semantic::SemanticEngine::new(None), CancellationToken::new(), "capture-worker".into(), job_id.clone()).await.unwrap_err();
+            let (base, server) =
+                crate::workflow_foundation::structured_output::test_server::serve(candidate, 200)
+                    .await;
+            crate::native::settings::save_provider(
+                &settings,
+                &json!({"base_url":base,"model":"fixture","api_key":"fixture-key"}),
+            )
+            .unwrap();
+            let error = run(
+                db.clone(),
+                settings,
+                root.path().into(),
+                JobRegistry::default(),
+                crate::native::semantic::SemanticEngine::new(None),
+                CancellationToken::new(),
+                "capture-worker".into(),
+                job_id.clone(),
+            )
+            .await
+            .unwrap_err();
             server.await.unwrap();
             assert!(error.contains("invalid_"), "{error}");
             let stored = result(&db, &job_id).unwrap();
             assert_eq!(stored["status"], "failed");
-            assert_eq!(get(&db, &job_id).unwrap()["error"]["code"], "invalid_result");
+            assert_eq!(
+                get(&db, &job_id).unwrap()["error"]["code"],
+                "invalid_result"
+            );
             let saved_error = get(&db, &job_id).unwrap();
-            assert!(saved_error["error"]["message"].as_str().unwrap().contains(&format!("{field} {rule}")));
+            assert!(saved_error["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains(&format!("{field} {rule}")));
             let diagnostics = &stored["result"]["failureDiagnostics"];
             assert_eq!(diagnostics["failure"]["field"], field);
             assert_eq!(diagnostics["failure"]["rule"], rule);
-            assert_eq!(diagnostics["candidate"], json!({"state":state,"received":true,"saved":false}));
+            assert_eq!(
+                diagnostics["candidate"],
+                json!({"state":state,"received":true,"saved":false})
+            );
             assert_eq!(diagnostics["finishReason"], "stop");
-            assert_eq!(diagnostics["source"]["textCharacterCount"], "가😀source-private-marker".chars().count());
+            assert_eq!(
+                diagnostics["source"]["textCharacterCount"],
+                "가😀source-private-marker".chars().count()
+            );
             assert_eq!(diagnostics["source"]["imageCount"], 0);
             assert!(!stored.to_string().contains("private-marker"));
             assert!(!stored.to_string().contains("private-output-marker"));
@@ -1811,13 +1861,32 @@ mod capture_diagnostics_tests {
     async fn capture_transport_failure_records_absent_candidate() {
         let (root, db, settings, job_id) = fixture();
         // Loopback only; no real provider or credential is used.
-        crate::native::settings::save_provider(&settings, &json!({"base_url":"http://127.0.0.1:1","model":"fixture","api_key":"fixture-key"})).unwrap();
-        run(db.clone(), settings, root.path().into(), JobRegistry::default(),
-            crate::native::semantic::SemanticEngine::new(None), CancellationToken::new(), "capture-worker".into(), job_id.clone()).await.unwrap_err();
+        crate::native::settings::save_provider(
+            &settings,
+            &json!({"base_url":"http://127.0.0.1:1","model":"fixture","api_key":"fixture-key"}),
+        )
+        .unwrap();
+        run(
+            db.clone(),
+            settings,
+            root.path().into(),
+            JobRegistry::default(),
+            crate::native::semantic::SemanticEngine::new(None),
+            CancellationToken::new(),
+            "capture-worker".into(),
+            job_id.clone(),
+        )
+        .await
+        .unwrap_err();
         let stored = result(&db, &job_id).unwrap();
         assert_eq!(stored["status"], "failed");
-        assert_eq!(stored["result"]["failureDiagnostics"]["candidate"],
-            json!({"state":"response_absent","received":false,"saved":false}));
-        assert_eq!(stored["result"]["failureDiagnostics"]["finishReason"], Value::Null);
+        assert_eq!(
+            stored["result"]["failureDiagnostics"]["candidate"],
+            json!({"state":"response_absent","received":false,"saved":false})
+        );
+        assert_eq!(
+            stored["result"]["failureDiagnostics"]["finishReason"],
+            Value::Null
+        );
     }
 }
