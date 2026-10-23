@@ -6,7 +6,7 @@ use serde_json::{json, Value};
 use std::{
     collections::{HashMap, VecDeque},
     sync::{
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, Mutex as StdMutex,
     },
 };
@@ -32,6 +32,8 @@ struct Inner {
     active_threads: Mutex<HashMap<String, ActiveThread>>,
     live_status: StdMutex<HashMap<String, Value>>,
     live_revision: AtomicU64,
+    queue_worker_started: AtomicBool,
+    queue_shutdown: AtomicBool,
     distillation_scheduler: Option<crate::native::NativeApplication>,
 }
 
@@ -83,6 +85,8 @@ impl TaskExecutionRuntime {
                 active_threads: Mutex::new(HashMap::new()),
                 live_status: StdMutex::new(HashMap::new()),
                 live_revision: AtomicU64::new(0),
+                queue_worker_started: AtomicBool::new(false),
+                queue_shutdown: AtomicBool::new(false),
                 distillation_scheduler,
             }),
         }
@@ -94,6 +98,57 @@ impl TaskExecutionRuntime {
         executable: std::path::PathBuf,
     ) -> Self {
         Self::with_app_server(service, CodexAppServer::from_test_executable(executable))
+    }
+
+
+    pub(crate) async fn model_catalog(&self) -> Result<Value,String> {self.model_catalog_for(None).await}
+    async fn model_catalog_for(&self,cwd:Option<&str>) -> Result<Value,String> {
+        self.ensure_started().await?;
+        let mut models=Vec::new();let mut cursor=Value::Null;
+        for _ in 0..10 {
+            let response=tokio::time::timeout(std::time::Duration::from_secs(5),self.inner.server.request("model/list",json!({"cursor":cursor,"limit":100}))).await.map_err(|_|"provider_config_unavailable: model capability request timed out")??.1;
+            let rows=response.get("data").and_then(Value::as_array).ok_or("provider_config_unavailable: model capabilities unavailable")?;
+            models.extend(rows.iter().filter(|m|m["hidden"]!=true).map(|m|json!({"model":m["model"],"displayName":m["displayName"],"supportedReasoningEfforts":m["supportedReasoningEfforts"],"defaultReasoningEffort":m["defaultReasoningEffort"]})));
+            cursor=response["nextCursor"].clone();if cursor.is_null(){break;}
+        }
+        let config=tokio::time::timeout(std::time::Duration::from_secs(5),self.inner.server.request("config/read",json!({"includeLayers":false,"cwd":cwd}))).await.ok().and_then(Result::ok).map(|r|r.1);
+        // Only resolve inheritance when the provider confirmed configuration access.
+        let confirmed=config.as_ref().and_then(|v|v.get("config")).is_some();
+        let configured=config.as_ref().and_then(|v|v["config"]["model_reasoning_effort"].as_str()).map(str::to_owned);
+        Ok(json!({"models":models,"configuredEffort":configured,"configConfirmed":confirmed}))
+    }
+    pub(crate) async fn queue_action(&self,input:&Value)->Result<Value,String>{
+        let snapshot={let _operation=self.inner.operation.lock().await;self.inner.service.queue_mutate(input)?};
+        if input["action"]=="stop_then_drain" {
+            let mut stop=input.clone();stop["drainQueue"]=json!(true);
+            // Persist intent before sending the interrupt. ACK never releases the queue.
+            let result=self.interrupt(&stop).await;
+            self.start_queue_worker();
+            result?;
+        }else {self.start_queue_worker();}
+        let _=self.inner.signals.send(ExecutionSignal{task_id:required(input,"taskId")?.into(),session_id:required(input,"sessionId")?.into(),run_id:String::new()});
+        Ok(self.enrich_snapshot(snapshot))
+    }
+    fn start_queue_worker(&self){
+        if self.inner.queue_worker_started.swap(true,Ordering::SeqCst){return;}
+        let runtime=self.clone();
+        tauri::async_runtime::spawn(async move {
+            loop {
+                if runtime.inner.queue_shutdown.load(Ordering::SeqCst){break;}
+                if let Ok(sessions)=runtime.inner.service.queue_sessions(){
+                    for (task,session) in sessions {
+                        let result=match runtime.inner.service.queue_next(&task,&session){
+                            Ok(Some(input))=>runtime.execute(&input).await.map(|_|()),
+                            Ok(None)=>continue,
+                            Err(e)=>Err(e),
+                        };
+                        if let Err(reason)=result {let _=runtime.inner.service.pause_queue(&session,&reason);}
+                        let _=runtime.inner.signals.send(ExecutionSignal{task_id:task,session_id:session,run_id:String::new()});
+                    }
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+            }
+        });
     }
 
     pub(crate) async fn prepare(&self, input: &Value) -> Result<Value, String> {
@@ -357,7 +412,7 @@ impl TaskExecutionRuntime {
         let generation = self.inner.server.generation().await?;
         if let Some(thread_id) = prepared.thread_id.as_deref() {
             let active = self.inner.active_threads.lock().await;
-            if active.get(session_id).is_some_and(|active| {
+            if input.get("queueItemId").is_none() && input["resolveReasoning"]!=true && active.get(session_id).is_some_and(|active| {
                 active.thread_id == thread_id
                     && active.generation == generation
                     && active.settings_revision == prepared.settings_revision
@@ -394,16 +449,27 @@ impl TaskExecutionRuntime {
                 .1
         };
         let normalized = normalize_thread_response(&response)?;
+        let catalogue = if prepared.reasoning_effort.is_some() || input["resolveReasoning"]==true || input.get("queueItemId").is_some() {self.model_catalog_for(Some(&prepared.cwd)).await.unwrap_or(json!({"models":[]}))}else{json!({"models":[]})};
+        let selected = catalogue["models"].as_array().and_then(|models|models.iter().find(|m|m["model"].as_str()==Some(prepared.model.as_str())));
+        if let Some(effort)=prepared.reasoning_effort.as_deref() {
+            let supported=selected.and_then(|m|m["supportedReasoningEfforts"].as_array()).is_some_and(|levels|levels.iter().any(|v|v["reasoningEffort"].as_str()==Some(effort)));
+            if !supported { return Err("unsupported_reasoning_effort: refresh model capabilities and choose a supported level".into()); }
+        }
+        let inherited = if catalogue["configConfirmed"]==true {catalogue["configuredEffort"].as_str().or_else(||selected.and_then(|m|m["defaultReasoningEffort"].as_str()))}else{None};
+        let resolved=prepared.reasoning_effort.as_deref().or(inherited).filter(|effort|selected.and_then(|m|m["supportedReasoningEfforts"].as_array()).is_some_and(|levels|levels.iter().any(|v|v["reasoningEffort"].as_str()==Some(*effort))));
         if normalized["approvalsReviewer"].as_str() != Some(&prepared.approvals_reviewer) {
             return Err(
                 "provider_config_unavailable: Codex returned a different approvals reviewer".into(),
             );
         }
-        let effective = self.inner.service.bind_thread(
+        let mut effective = self.inner.service.bind_thread(
             &prepared,
             &normalized,
             self.inner.server.structured_input_supported(),
         )?;
+        self.inner.service.save_effective_effort(&prepared.task_id,&prepared.session_id,resolved)?;
+        effective["reasoningEffort"] = resolved.map(Value::from).unwrap_or(Value::Null);
+        effective["models"] = catalogue["models"].clone();
         let thread_id = normalized["id"]
             .as_str()
             .ok_or("provider_config_unavailable: normalized conversation id is missing")?;
@@ -426,7 +492,12 @@ impl TaskExecutionRuntime {
 
     pub(crate) async fn execute(&self, input: &Value) -> Result<Value, String> {
         let _operation = self.inner.operation.lock().await;
-        let (_, prepared) = self.prepare_inner(input).await?;
+        let (effective_snapshot, prepared) = self.prepare_inner(input).await?;
+        let mut effective_input=input.clone();
+        if input.get("queueItemId").is_none() {
+            effective_input["resolvedEffort"]=effective_snapshot["effectiveConfig"]["reasoningEffort"].clone();
+        }
+        let input=&effective_input;
         let (created, replayed) = self.inner.service.create_run(input)?;
         if replayed {
             return Ok(created);
@@ -469,12 +540,14 @@ impl TaskExecutionRuntime {
                 turn_input.push(json!({"type":"image","url":format!("data:{media_type};base64,{data}")}));
             }
         }
+        let mut turn_params=json!({"threadId":thread_id,"input":turn_input});
+        if let Some(effort)=input.get("resolvedEffort").and_then(Value::as_str).or(prepared.reasoning_effort.as_deref()) { turn_params["effort"]=json!(effort); }
         let response = match self
             .inner
             .server
             .request_with_event_barrier(
                 "turn/start",
-                json!({"threadId":thread_id,"input":turn_input}),
+                turn_params,
             )
             .await
         {
@@ -537,6 +610,9 @@ impl TaskExecutionRuntime {
         let task = required(input, "taskId")?;
         let session = required(input, "sessionId")?;
         let run = required(input, "runId")?;
+        if input.get("drainQueue").and_then(Value::as_bool)!=Some(true) {
+            self.inner.service.pause_queue(session,"Stopped by user")?;
+        }
         let (thread, turn) = self.inner.service.request_interrupt(task, session, run)?;
         self.inner
             .server
@@ -995,6 +1071,7 @@ impl TaskExecutionRuntime {
     }
 
     pub(crate) async fn shutdown(&self) {
+        self.inner.queue_shutdown.store(true,Ordering::SeqCst);
         self.inner.server.shutdown().await;
     }
 }
@@ -1677,6 +1754,53 @@ mod tests {
             .is_empty());
         assert!(runtime.inner.early_events.lock().await.is_empty());
         assert!(runtime.inner.server.generation().await.is_ok());
+        runtime.shutdown().await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn queued_followups_wait_for_confirmed_stop_and_preserve_effort_and_logs() {
+        use std::os::unix::fs::PermissionsExt;
+        let root=tempdir().unwrap();let db=root.path().join("state.sqlite3");crate::native::database::initialize(&db).unwrap();
+        let tasks=TaskApplicationService::new(&db);
+        let task=tasks.execute("task.create",&json!({"operationId":"task","inputText":"Keep context","title":"Queue integration"})).unwrap()["id"].as_str().unwrap().to_owned();
+        let session=tasks.execute("task.work-session.create",&json!({"operationId":"session","taskId":task,"title":"Work"})).unwrap()["id"].as_str().unwrap().to_owned();
+        tasks.execute("task.work-session.update",&json!({"operationId":"settings","taskId":task,"sessionId":session,"title":"Work","provider":"codex","model":"gpt-5.6-sol","reasoningEffort":"high","workspacePath":root.path()})).unwrap();
+        let fake=std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../tests/fakes/codex_app_server.mjs").canonicalize().unwrap();
+        let log=root.path().join("efforts.log");let wrapper=root.path().join("fake-queue");
+        std::fs::write(&wrapper,format!("#!/bin/sh\nexport LLM_WIKI_FAKE_CODEX_INTERRUPT_DELAY=700\nexport LLM_WIKI_FAKE_CODEX_EFFORT_LOG='{}'\nexec '{}'\n",log.display(),fake.display())).unwrap();
+        std::fs::set_permissions(&wrapper,std::fs::Permissions::from_mode(0o700)).unwrap();
+        let runtime=TaskExecutionRuntime::with_test_server(TaskExecutionApplicationService::new(&db),wrapper);
+        let prepared=runtime.prepare(&json!({"taskId":task,"sessionId":session,"resolveReasoning":true})).await.unwrap();
+        assert_eq!(prepared["effectiveConfig"]["reasoningEffort"],"high");
+        let started=runtime.execute(&json!({"taskId":task,"sessionId":session,"operationId":"first","instruction":"Current work","settingsRevision":prepared["effectiveConfig"]["settingsRevision"]})).await.unwrap();
+        let first=started["selectedRun"]["id"].as_str().unwrap().to_owned();
+        // Wait for the real fake-provider approval event, not a fabricated Run status.
+        tokio::time::timeout(std::time::Duration::from_secs(5),async{loop{let s=runtime.snapshot(&json!({"taskId":task,"sessionId":session})).unwrap();if s["selectedRun"]["status"]=="awaiting_response"{break;}tokio::time::sleep(std::time::Duration::from_millis(10)).await;}}).await.unwrap();
+        for (id,body) in [("second","Follow up one"),("third","Follow up two")] {
+            runtime.queue_action(&json!({"taskId":task,"sessionId":session,"action":"enqueue","operationId":id,"instruction":body})).await.unwrap();
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(450)).await;
+        assert_eq!(std::fs::read_to_string(&log).unwrap().lines().count(),1,"approval wait must retain current execution");
+        runtime.queue_action(&json!({"taskId":task,"sessionId":session,"action":"stop_then_drain","runId":first})).await.unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        assert_eq!(std::fs::read_to_string(&log).unwrap().lines().count(),1,"interrupt ACK must not release pending work");
+        let final_snapshot=tokio::time::timeout(std::time::Duration::from_secs(8),async{loop{let s=runtime.snapshot(&json!({"taskId":task,"sessionId":session})).unwrap();if s["runs"].as_array().unwrap().len()==3&&s["activeRunId"].is_null()&&s["queue"]["items"].as_array().unwrap().is_empty(){break s;}tokio::time::sleep(std::time::Duration::from_millis(30)).await;}}).await.unwrap();
+        assert_eq!(std::fs::read_to_string(&log).unwrap(),"high\nhigh\nhigh\n");
+        assert_eq!(final_snapshot["runs"].as_array().unwrap().iter().filter(|r|r["status"]=="succeeded").count(),2);
+        let c=crate::native::database::open(&db).unwrap();assert_eq!(c.query_row("SELECT count(*) FROM task_work_session_runs WHERE reasoning_effort='high'",[],|r|r.get::<_,i64>(0)).unwrap(),3);
+        assert_eq!(c.query_row("SELECT count(*) FROM task_work_log_entries",[],|r|r.get::<_,i64>(0)).unwrap(),3);
+        tasks.execute("task.work-session.update",&json!({"operationId":"inherit-settings","taskId":task,"sessionId":session,"title":"Work","provider":"codex","model":"gpt-5.6-luna","reasoningEffort":null,"workspacePath":root.path()})).unwrap();
+        let inherited=runtime.prepare(&json!({"taskId":task,"sessionId":session,"resolveReasoning":true})).await.unwrap();
+        assert_eq!(inherited["effectiveConfig"]["reasoningEffort"],"medium");
+        let reset=runtime.execute(&json!({"taskId":task,"sessionId":session,"operationId":"inherit-run","instruction":"Use inherited default","settingsRevision":inherited["effectiveConfig"]["settingsRevision"]})).await.unwrap();
+        assert_eq!(reset["selectedRun"]["reasoningEffort"],"medium");
+        assert_eq!(std::fs::read_to_string(&log).unwrap(),"high\nhigh\nhigh\nmedium\n","inherit must explicitly reset a prior sticky turn effort");
+        let reset_id=reset["selectedRun"]["id"].as_str().unwrap();
+        wait_for_terminal(&runtime,&task,&session,reset_id).await;
+        tasks.execute("task.work-session.update",&json!({"operationId":"unsupported-settings","taskId":task,"sessionId":session,"title":"Work","provider":"codex","model":"gpt-5.6-luna","reasoningEffort":"ultra","workspacePath":root.path()})).unwrap();
+        assert!(runtime.prepare(&json!({"taskId":task,"sessionId":session})).await.unwrap_err().contains("unsupported_reasoning_effort"));
+        assert_eq!(std::fs::read_to_string(&log).unwrap().lines().count(),4);
         runtime.shutdown().await;
     }
 

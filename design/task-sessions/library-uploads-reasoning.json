@@ -1,0 +1,86 @@
+{
+  "results": [
+    {
+      "operation": "create_library_file",
+      "status": "succeeded",
+      "path": "/15-reasoning-wide.png",
+      "file_id": "file_000000004d4081f596871b1e2a477b66",
+      "library_file_id": "libfile_e54d7824c1a88191af93bb19abb7c83a",
+      "file_name": "15-reasoning-wide.png",
+      "current_version_number": 0,
+      "restored_from_version_number": null,
+      "xattrs": [
+        {
+          "name": "user.library-file-version",
+          "value": "0"
+        }
+      ],
+      "directory_id": "libdir_03bc7328893c8191b47814881750bfbd",
+      "mime_type": "image/png",
+      "library_artifact_type": "image",
+      "file_size_bytes": 172042
+    },
+    {
+      "operation": "create_library_file",
+      "status": "succeeded",
+      "path": "/16-reasoning-narrow-model-change.png",
+      "file_id": "file_00000000c69481f5a53874a58d160d83",
+      "library_file_id": "libfile_f3914ae41d688191817ef97f390edf45",
+      "file_name": "16-reasoning-narrow-model-change.png",
+      "current_version_number": 0,
+      "restored_from_version_number": null,
+      "xattrs": [
+        {
+          "name": "user.library-file-version",
+          "value": "0"
+        }
+      ],
+      "directory_id": "libdir_03bc7328893c8191b47814881750bfbd",
+      "mime_type": "image/png",
+      "library_artifact_type": "image",
+      "file_size_bytes": 137443
+    },
+    {
+      "operation": "create_library_file",
+      "status": "succeeded",
+      "path": "/17-reasoning-supported-levels.png",
+      "file_id": "file_00000000a47081f5bed665ddd2aa8619",
+      "library_file_id": "libfile_98a161037e6c8191b8406f5a7776dd95",
+      "file_name": "17-reasoning-supported-levels.png",
+      "current_version_number": 0,
+      "restored_from_version_number": null,
+      "xattrs": [
+        {
+          "name": "user.library-file-version",
+          "value": "0"
+        }
+      ],
+      "directory_id": "libdir_03bc7328893c8191b47814881750bfbd",
+      "mime_type": "image/png",
+      "library_artifact_type": "image",
+      "file_size_bytes": 130411
+    },
+    {
+      "operation": "create_library_file",
+      "status": "succeeded",
+      "path": "/18-queue-applied-reasoning.png",
+      "file_id": "file_000000001b8c81f5bed9cc79fab39ea8",
+      "library_file_id": "libfile_47c131cf5ec48191b00f9b31a3f6b063",
+      "file_name": "18-queue-applied-reasoning.png",
+      "current_version_number": 0,
+      "restored_from_version_number": null,
+      "xattrs": [
+        {
+          "name": "user.library-file-version",
+          "value": "0"
+        }
+      ],
+      "directory_id": "libdir_03bc7328893c8191b47814881750bfbd",
+      "mime_type": "image/png",
+      "library_artifact_type": "image",
+      "file_size_bytes": 165528
+    }
+  ],
+  "warnings": [],
+  "external_connectors_accessed": false
+}

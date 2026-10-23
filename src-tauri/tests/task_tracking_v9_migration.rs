@@ -68,9 +68,13 @@ fn make_v8_session_fixture(db: &std::path::Path, vault: &std::path::Path) {
         .unwrap();
     let db_conn = Connection::open(db).unwrap();
     // Remove post-v8 additions before replaying migrations from the historical fixture.
+    // Migration 26 adds queue children of the Run/session tables dropped below.
+    // Keep historical-row, FK, custom-object and recovery assertions unchanged.
     db_conn
         .execute_batch(
-            "DROP TABLE task_state_transitions;
+            "DROP TABLE task_session_queue_items;
+        DROP TABLE task_session_queue_control;
+        DROP TABLE task_state_transitions;
         DROP TABLE knowledge_review_notes;
         DROP TABLE knowledge_archive_links;
         DROP TABLE knowledge_archive_current;

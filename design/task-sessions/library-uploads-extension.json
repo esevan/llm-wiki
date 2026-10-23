@@ -1,0 +1,166 @@
+{
+  "results": [
+    {
+      "operation": "create_library_file",
+      "status": "succeeded",
+      "path": "/07-environment-wide.png",
+      "file_id": "file_00000000063481f59bbe14d16bc3b988",
+      "library_file_id": "libfile_ee5471c8524481918f19e5f0c3d2a7cf",
+      "file_name": "07-environment-wide.png",
+      "current_version_number": 0,
+      "restored_from_version_number": null,
+      "xattrs": [
+        {
+          "name": "user.library-file-version",
+          "value": "0"
+        }
+      ],
+      "directory_id": "libdir_03bc7328893c8191b47814881750bfbd",
+      "mime_type": "image/png",
+      "library_artifact_type": "image",
+      "file_size_bytes": 168480
+    },
+    {
+      "operation": "create_library_file",
+      "status": "succeeded",
+      "path": "/08-environment-wide-footer.png",
+      "file_id": "file_000000006cc881f5ab56bf9c7aaeb0d3",
+      "library_file_id": "libfile_2f4e9fffc4bc8191812f76a806765ef6",
+      "file_name": "08-environment-wide-footer.png",
+      "current_version_number": 0,
+      "restored_from_version_number": null,
+      "xattrs": [
+        {
+          "name": "user.library-file-version",
+          "value": "0"
+        }
+      ],
+      "directory_id": "libdir_03bc7328893c8191b47814881750bfbd",
+      "mime_type": "image/png",
+      "library_artifact_type": "image",
+      "file_size_bytes": 160104
+    },
+    {
+      "operation": "create_library_file",
+      "status": "succeeded",
+      "path": "/09-environment-narrow-error.png",
+      "file_id": "file_00000000b45081f59c91ec667f17b9e9",
+      "library_file_id": "libfile_0d8d297ac1908191a2651bcc442aeef5",
+      "file_name": "09-environment-narrow-error.png",
+      "current_version_number": 0,
+      "restored_from_version_number": null,
+      "xattrs": [
+        {
+          "name": "user.library-file-version",
+          "value": "0"
+        }
+      ],
+      "directory_id": "libdir_03bc7328893c8191b47814881750bfbd",
+      "mime_type": "image/png",
+      "library_artifact_type": "image",
+      "file_size_bytes": 128090
+    },
+    {
+      "operation": "create_library_file",
+      "status": "succeeded",
+      "path": "/10-environment-narrow-footer.png",
+      "file_id": "file_000000006eb881f584b539df2d076e64",
+      "library_file_id": "libfile_05d1ed0367208191a31e14d6689b0cb5",
+      "file_name": "10-environment-narrow-footer.png",
+      "current_version_number": 0,
+      "restored_from_version_number": null,
+      "xattrs": [
+        {
+          "name": "user.library-file-version",
+          "value": "0"
+        }
+      ],
+      "directory_id": "libdir_03bc7328893c8191b47814881750bfbd",
+      "mime_type": "image/png",
+      "library_artifact_type": "image",
+      "file_size_bytes": 120365
+    },
+    {
+      "operation": "create_library_file",
+      "status": "succeeded",
+      "path": "/11-queue-wide.png",
+      "file_id": "file_000000003af481f58443a089965eff60",
+      "library_file_id": "libfile_2d4ec4c3d3988191bd4be428e98dfb8f",
+      "file_name": "11-queue-wide.png",
+      "current_version_number": 0,
+      "restored_from_version_number": null,
+      "xattrs": [
+        {
+          "name": "user.library-file-version",
+          "value": "0"
+        }
+      ],
+      "directory_id": "libdir_03bc7328893c8191b47814881750bfbd",
+      "mime_type": "image/png",
+      "library_artifact_type": "image",
+      "file_size_bytes": 166306
+    },
+    {
+      "operation": "create_library_file",
+      "status": "succeeded",
+      "path": "/12-queue-stop-confirmation.png",
+      "file_id": "file_00000000181c81f59f08206ac170c75b",
+      "library_file_id": "libfile_f1d0d82661408191a39dc8b04bca8b7a",
+      "file_name": "12-queue-stop-confirmation.png",
+      "current_version_number": 0,
+      "restored_from_version_number": null,
+      "xattrs": [
+        {
+          "name": "user.library-file-version",
+          "value": "0"
+        }
+      ],
+      "directory_id": "libdir_03bc7328893c8191b47814881750bfbd",
+      "mime_type": "image/png",
+      "library_artifact_type": "image",
+      "file_size_bytes": 160860
+    },
+    {
+      "operation": "create_library_file",
+      "status": "succeeded",
+      "path": "/13-queue-narrow.png",
+      "file_id": "file_000000003f7c81f592e1c98288f3dab1",
+      "library_file_id": "libfile_32dedbc22a7c819189b128f803020997",
+      "file_name": "13-queue-narrow.png",
+      "current_version_number": 0,
+      "restored_from_version_number": null,
+      "xattrs": [
+        {
+          "name": "user.library-file-version",
+          "value": "0"
+        }
+      ],
+      "directory_id": "libdir_03bc7328893c8191b47814881750bfbd",
+      "mime_type": "image/png",
+      "library_artifact_type": "image",
+      "file_size_bytes": 127994
+    },
+    {
+      "operation": "create_library_file",
+      "status": "succeeded",
+      "path": "/14-environment-change-bound-folder.png",
+      "file_id": "file_00000000a62081f5a6d2024eb262d1e5",
+      "library_file_id": "libfile_f20017028f3c81918c433c09f90d5969",
+      "file_name": "14-environment-change-bound-folder.png",
+      "current_version_number": 0,
+      "restored_from_version_number": null,
+      "xattrs": [
+        {
+          "name": "user.library-file-version",
+          "value": "0"
+        }
+      ],
+      "directory_id": "libdir_03bc7328893c8191b47814881750bfbd",
+      "mime_type": "image/png",
+      "library_artifact_type": "image",
+      "file_size_bytes": 169442
+    }
+  ],
+  "warnings": [],
+  "external_connectors_accessed": false
+}

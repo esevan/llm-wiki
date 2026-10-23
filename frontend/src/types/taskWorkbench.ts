@@ -444,7 +444,11 @@ export type TaskExecutionFormalRequest = {
   response?: { decision?: string; answers?: Record<string, { answers: string[] }> };
   error?: string;
 };
+export type CodexModelCapability = { model: string; displayName: string; supportedReasoningEfforts: Array<{ reasoningEffort: string; description?: string }>; defaultReasoningEffort?: string };
+export type TaskQueueItem = { id: string; instruction: string; revision: number; position: number; attachment?: {name: string}; settings: { model: string; cwd: string; reasoningEffort?: string | null; resolvedEffort: string; approvalsReviewer: string } };
+export type TaskQueue = { control: {mode: "active" | "paused" | "stop_then_drain" | "reconcile_needed"; reason: string; revision: number; stopRunId?: string}; items: TaskQueueItem[] };
 export type TaskExecutionEffectiveConfig = {
+  reasoningEffort?: string | null; models?: CodexModelCapability[];
   model: string; cwd: string; approvalPolicy: string; approvalsReviewer: "user" | "auto_review"; sandbox: string;
   provenance: "preflight" | "bound_thread"; settingsRevision: string; ready: boolean;
   capabilities: { structuredUserInput: boolean }; readinessError?: { code: string; message: string };
@@ -452,16 +456,16 @@ export type TaskExecutionEffectiveConfig = {
 export type TaskExecutionRun = {
   id: string; taskId: string; sessionId: string; instruction: string; status: TaskExecutionStatus; stopRequested: boolean;
   provider: "codex"; model: string; workspacePath: string; threadId?: string; turnId?: string; startedAt?: string; finishedAt?: string;
-  userEntryId?: string;
+  userEntryId?: string; reasoningEffort?: string | null;
   finalReport?: string; error?: { code: string; message: string }; evidence: TaskExecutionEvidence[];
   liveStatus?: { kind: string; status: "running" | "completed"; itemId?: string; command?: string; text?: string; output?: string };
   formalRequests: TaskExecutionFormalRequest[]; workLogEntryId?: string; workLogSyncState: "pending" | "synced" | "failed";
   workLogSyncError?: string; retryOfRunId?: string; revision: number;
 };
-export type TaskExecutionSnapshot = { revision?: number; runs: TaskExecutionRun[]; activeRunId: string | null; selectedRun: TaskExecutionRun | null; effectiveConfig?: TaskExecutionEffectiveConfig };
+export type TaskExecutionSnapshot = { sessionLabel?: string | null; queue?: TaskQueue; revision?: number; runs: TaskExecutionRun[]; activeRunId: string | null; selectedRun: TaskExecutionRun | null; effectiveConfig?: TaskExecutionEffectiveConfig };
 export type TaskExecutionWorkLogLink = { instruction?: string; runId: string; sessionId: string; status: TaskExecutionStatus; provider: "codex"; model: string; reportExcerpt?: string; evidence: TaskExecutionEvidence[]; artifacts: string[]; limitations: string[]; syncState: "pending" | "synced" | "failed" };
 export type TaskWorkSession = {
-  id: string; taskId: string; title: string; provider: "codex"; model: string;
+  id: string; taskId: string; title: string; threadId?: string; displayLabel?: string; reasoningEffort?: string | null; provider: "codex"; model: string;
   approvalMode: "ask" | "auto"; approvalsReviewer?: "user" | "auto_review"; workspacePath: string; createdAt: string; updatedAt: string;
 };
 export type TaskWorkSessionRecord = { session: TaskWorkSession; entries: TaskWorkSessionEntry[] };

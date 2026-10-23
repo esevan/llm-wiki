@@ -1,3 +1,5 @@
+import { SessionQueue } from "./SessionQueue";
+import "./task-sessions.css";
 import { useTaskWorkbenchText } from "./taskWorkbenchText";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import Markdown from "react-markdown";
@@ -15,12 +17,14 @@ import type {
   TaskExecutionRun,
   TaskExecutionFormalRequest,
   TaskExecutionEvidence,
+  CodexModelCapability,
   CodexThreadSummary,
   CodexThreadTranscript,
 } from "../../types/taskWorkbench";
 
 export type WorkSessionDraft = {
   body: string;
+  queueEditor?: {id:string;body:string};
   attachment?: TaskWorkSessionAttachment;
   operationId: string;
   attemptedPayload?: string;
@@ -38,6 +42,8 @@ const models = [
 const copy = {
   en: {
     title: "Work sessions",
+    connectionTitle: "Codex connection", connectionHint: "Uses Codex on this computer. A different Codex home is configured in AI setup and requires restarting the app.", saveBeforePrepare: "Save changed settings before preparing or starting work.",
+    environment: "Execution environment", reasoning: "Reasoning effort", inherit: "Inherit default · Codex settings", refreshModels: "Refresh supported models", modelChanged: "The previous reasoning level is unsupported for this model. Default inheritance is selected; review and save before preparing.", enqueue: "Add to pending requests", queueHint: "Pending requests do not steer current work. Closing Task detail keeps work and pending requests intact.", boundFolder: "This conversation is bound to its project folder. Create a new session to use another folder.",
     create: "New session",
     link: "Link Codex session",
     linkTitle: "Available Codex sessions",
@@ -139,6 +145,8 @@ const copy = {
   },
   ko: {
     title: "작업 세션",
+    connectionTitle: "Codex 연결", connectionHint: "이 컴퓨터의 Codex를 사용합니다. 별도 Codex home은 AI 설정에서 변경하며 앱 재시작이 필요합니다.", saveBeforePrepare: "변경한 설정을 먼저 저장한 뒤 대화를 준비하거나 실행하세요.",
+    environment: "실행 환경", reasoning: "추론 레벨", inherit: "기본값 상속 · Codex 설정 사용", refreshModels: "지원 모델 새로 확인", modelChanged: "이전 추론 레벨은 이 모델에서 지원하지 않습니다. 기본값 상속으로 전환했습니다. 확인 후 저장하고 대화를 준비하세요.", enqueue: "대기 요청에 추가", queueHint: "대기 요청은 현재 작업에 끼어들지 않습니다. Task를 닫아도 실행과 대기 목록은 유지됩니다.", boundFolder: "연결된 대화의 폴더입니다. 다른 폴더를 쓰려면 새 세션을 만드세요.",
     create: "새 세션",
     link: "Codex 세션 연결",
     linkTitle: "사용 가능한 Codex 세션",
@@ -327,6 +335,12 @@ export function TaskWorkSessions({
   );
   const [answers, setAnswers] = useState<Record<string, string[]>>({});
   const [requestBusy, setRequestBusy] = useState("");
+  const [modelCatalogue, setModelCatalogue] = useState<CodexModelCapability[]>([]);
+  const [settingsDirty, setSettingsDirty] = useState(false);
+  const [codexHome, setCodexHome] = useState("");
+  const [modelWarning, setModelWarning] = useState("");
+  const [catalogueLoading, setCatalogueLoading] = useState(false);
+  const [queueBusy, setQueueBusy] = useState(false);
   const [editingSettings, setEditingSettings] = useState(true);
   const [settingsExpanded, setSettingsExpanded] = useState(false);
   const [selectedRunId, setSelectedRunId] = useState("");
@@ -455,6 +469,7 @@ export function TaskWorkSessions({
     setActiveId(id);
     setRecord(undefined);
     setExecution(undefined);
+    setSettingsDirty(false);
     setExternalTranscript(undefined);
     setSelectedRunId("");
     setRetryOfRunId(undefined);
@@ -500,6 +515,7 @@ export function TaskWorkSessions({
     setStatus("");
     setError("");
     setExecution(undefined);
+    setSettingsDirty(false);
     setAnswers({});
     setRequestBusy("");
     setEditingSettings(true);
@@ -593,11 +609,43 @@ export function TaskWorkSessions({
       setLinkingThreadId("");
     }
   };
-  const updateSession = (patch: Partial<TaskWorkSession>) =>
+  const loadModels = async () => {
+    const expected = generation.current;
+    setCatalogueLoading(true);
+    void window.llmWikiApplication?.request({path:"/settings/codex-home"}).then(async response=>{
+      if(!response.ok)return;const home=await response.json<{mode:string;defaultPath:string;alternatePath?:string}>();
+      if(generation.current===expected)setCodexHome(home.mode==="alternate"?home.alternatePath??"":home.defaultPath??"");
+    }).catch(()=>{});
+    try { const result = await taskExecutionClient.models(); if (generation.current === expected) setModelCatalogue(result.models); }
+    catch (cause) { if (generation.current === expected) setError(String(cause)); }
+    finally { if (generation.current === expected) setCatalogueLoading(false); }
+  };
+  const changeModel = (model: string) => {
+    const effort = record?.session.reasoningEffort;
+    const supported = modelCatalogue.find(value => value.model === model)?.supportedReasoningEfforts ?? [];
+    const invalid = Boolean(effort && !supported.some(value => value.reasoningEffort === effort));
+    updateSession({model, ...(invalid ? {reasoningEffort: null} : {})});
+    setModelWarning(invalid ? t.modelChanged : "");
+  };
+  const queueAction = async (input: Parameters<typeof taskExecutionClient.queue>[0]) => {
+    const expected = generation.current; const id = activeRef.current;
+    setQueueBusy(true); setError("");
+    try { const snapshot = await taskExecutionClient.queue(input); if (generation.current === expected && activeRef.current === id) receiveExecution(snapshot); }
+    catch (cause) { if (generation.current === expected) setError(String(cause)); throw cause; }
+    finally { if (generation.current === expected) setQueueBusy(false); }
+  };
+  const boundFolder = Boolean(record?.session.threadId || execution?.effectiveConfig?.provenance === "bound_thread");
+  const queueMode = Boolean(execution?.activeRunId || execution?.queue?.items.length);
+  const automaticLabel = (session: TaskWorkSession) => {
+    return Array.from((session.displayLabel || (session.id===record?.session.id ? execution?.sessionLabel : undefined) || session.title).replace(/\s+/g, " ").trim()).slice(0,36).join("");
+  };
+  const updateSession = (patch: Partial<TaskWorkSession>) => {
+    setSettingsDirty(true);
     setRecord(
       (current) =>
         current && { ...current, session: { ...current.session, ...patch } },
     );
+  };
   const saveSettings = async () => {
     if (!record || busy) return;
     const id = record.session.id;
@@ -625,6 +673,7 @@ export function TaskWorkSessions({
           localStorage.setItem("llm-wiki:recent-project-folders", JSON.stringify(next));
         }
         setStatus(t.saved);
+        setSettingsDirty(false);
         setExecution(undefined);
         setEditingSettings(false);
       }
@@ -640,7 +689,7 @@ export function TaskWorkSessions({
     const expected = generation.current;
     setBusy(true); setError("");
     try {
-      const snapshot = await taskExecutionClient.prepare({ taskId: task.id, sessionId: id }, (next) => {
+      const snapshot = await taskExecutionClient.prepare({ taskId: task.id, sessionId: id, resolveReasoning: true }, (next) => {
         if (generation.current === expected && activeRef.current === id) receiveExecution(next);
       });
       if (generation.current === expected && activeRef.current === id) receiveExecution(snapshot);
@@ -711,10 +760,11 @@ export function TaskWorkSessions({
   const run = async () => {
     if (task.state === "completed") return;
     if (task.state === "on_hold") { setError(workbenchText.taskHeldGuard); return; }
-    if (!record || runSubmitting || retrySubmittingKeys.current.size > 0 || execution?.activeRunId || !draft.trim() || !record.session.workspacePath.trim()) {
+    if (!record || runSubmitting || retrySubmittingKeys.current.size > 0 || !draft.trim() || !record.session.workspacePath.trim()) {
       if (record && !record.session.workspacePath.trim()) setError(t.runUnavailable);
       return;
     }
+    if (settingsDirty) { setError(t.saveBeforePrepare); return; }
     if (!execution?.effectiveConfig?.ready) {
       setError(t.prepareHint);
       return;
@@ -723,7 +773,7 @@ export function TaskWorkSessions({
     const expected = generation.current;
     const submittedInstruction = draft;
     const submittedAttachment = attachment;
-    const payload = JSON.stringify({ instruction: submittedInstruction, settingsRevision: execution.effectiveConfig.settingsRevision, retryOfRunId, attachment: submittedAttachment });
+    const payload = JSON.stringify({ queue: queueMode, instruction: submittedInstruction, settingsRevision: execution.effectiveConfig.settingsRevision, retryOfRunId, attachment: submittedAttachment });
     const savedDraft = drafts.get(id);
     const attempt = savedDraft?.executionAttempt?.payload === payload
       ? savedDraft.executionAttempt
@@ -731,9 +781,11 @@ export function TaskWorkSessions({
     drafts.set(id, { ...savedDraft, body: draft, attachment, operationId: savedDraft?.operationId ?? operationId(), formalAnswers: answers, executionAttempt: attempt });
     setRunSubmitting(true); setError("");
     try {
-      const snapshot = await taskExecutionClient.execute({ taskId: task.id, sessionId: id, operationId: attempt.operationId, instruction: submittedInstruction, settingsRevision: execution.effectiveConfig.settingsRevision, retryOfRunId: attempt.retryOfRunId, attachment: submittedAttachment }, (next) => {
-        if (generation.current === expected && activeRef.current === id) receiveExecution(next);
-      });
+      const snapshot = queueMode
+        ? await taskExecutionClient.queue({action: "enqueue", taskId: task.id, sessionId: id, operationId: attempt.operationId, instruction: submittedInstruction, attachment: submittedAttachment})
+        : await taskExecutionClient.execute({ taskId: task.id, sessionId: id, operationId: attempt.operationId, instruction: submittedInstruction, settingsRevision: execution.effectiveConfig.settingsRevision, retryOfRunId: attempt.retryOfRunId, attachment: submittedAttachment }, (next) => {
+          if (generation.current === expected && activeRef.current === id) receiveExecution(next);
+        });
       if (generation.current === expected && activeRef.current === id) {
         receiveExecution(snapshot);
         const submittedInstructionStillCurrent = draftRef.current === submittedInstruction;
@@ -912,10 +964,10 @@ export function TaskWorkSessions({
       <header className="task-session-toolbar">
         <div>
           <h3>{t.title}</h3>
-          <p>{t.workspaceHint}</p>
+
         </div>
         <div className="task-session-toolbar-actions">
-          <button type="button" data-control="task-session-link" disabled={task.state === "completed" || busy} aria-expanded={showCodexSessions} onClick={toggleCodexSessions}>{showCodexSessions ? t.closePicker : t.link}</button>
+          {task.state !== "completed" && <button type="button" data-control="task-session-link" disabled={busy} aria-expanded={showCodexSessions} onClick={toggleCodexSessions}>{showCodexSessions ? t.closePicker : t.link}</button>}
           <button
             type="button"
             data-control="task-session-create"
@@ -971,7 +1023,7 @@ export function TaskWorkSessions({
               <option value="">—</option>
               {sessions.map((session) => (
                 <option key={session.id} value={session.id}>
-                  {session.title}
+                  {automaticLabel(session)}
                 </option>
               ))}
             </select>
@@ -987,7 +1039,7 @@ export function TaskWorkSessions({
                         aria-current={activeId === session.id ? "page" : undefined}
                         onClick={() => void open(session.id)}
                       >
-                        <strong>{session.title}</strong>
+                        <strong>{automaticLabel(session)}</strong>
                         <span>{formatSystemTime(session.updatedAt ?? session.createdAt ?? "", document.documentElement.lang || navigator.language, { dateStyle: "medium" })}</span>
                       </button>
                     </li>
@@ -998,11 +1050,32 @@ export function TaskWorkSessions({
               <div className="task-session-chat">
                 <header className="task-session-chat-header">
                   <div>
-                    <h4>{record.session.title}</h4>
+                    <small>{formatSystemTime(record.session.createdAt ?? "", document.documentElement.lang || navigator.language, {dateStyle:"medium"})}</small><h4 title={automaticLabel(record.session)}>{automaticLabel(record.session)}</h4>
                     <p>{record.session.model} · {record.session.workspacePath || t.workspace}</p>
                   </div>
                   {currentRun && <span className="task-session-running" data-status={currentRun.status}><i aria-hidden="true" />{t.status[currentRun.status]}</span>}
                 </header>
+                <details className="task-session-context">
+                  <summary>{t.context}</summary>
+                  <div>
+                  {task.detail && <p>{task.detail}</p>}
+                  {task.outcome && (
+                    <p>
+                      <strong>{t.outcome}:</strong> {task.outcome}
+                    </p>
+                  )}
+                  <h4>{t.references}</h4>
+                  {references.length ? (
+                    <ul>
+                      {references.map((value) => (
+                        <li key={value}>{value}</li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p>{t.noReferences}</p>
+                  )}
+                  </div>
+                </details>
                 <ol
                   className="task-session-entries"
                   ref={timelineRef}
@@ -1099,10 +1172,10 @@ export function TaskWorkSessions({
                     </li>
                   ))}
                 </ol>
-                {execution?.runs.length ? <section className="task-execution-history" aria-label={t.runHistory}>
-                  <h4>{t.runHistory}</h4>
+                {execution?.runs.length ? <details data-control="task-session-history-details" className="task-execution-history" aria-label={t.runHistory}>
+                  <summary>{t.runHistory} · {execution.runs.length}</summary>
                   <ol>{execution.runs.map((run) => <li key={run.id}><button type="button" data-control="task-session-run-open" aria-pressed={activeRun?.id === run.id} onClick={() => setSelectedRunId(run.id)}>{run.id === execution.activeRunId ? `${t.activeRun} · ` : ""}{t.status[run.status]} · {run.instruction}</button></li>)}</ol>
-                </section> : null}
+                </details> : null}
                 {activeRun && (
                   <section className="task-execution" aria-label={t.runStatus}>
                     <header>
@@ -1145,9 +1218,11 @@ export function TaskWorkSessions({
                     {["failed", "cancelled", "interrupted", "needs_attention"].includes(activeRun.status) && <><button type="button" data-control="task-session-run-reuse" disabled={task.state === "completed" || busy || Boolean(draft.trim())} onClick={() => { setDraft(activeRun.instruction); setRetryOfRunId(activeRun.id); }}>{t.reuseInstruction}</button>{draft.trim() && <p>{t.retryDraftHint}</p>}</>}
                   </section>
                 )}
-                {execution?.effectiveConfig && <section className="task-execution-effective"><h5>{execution.effectiveConfig.provenance === "bound_thread" ? t.effective : t.prepare}</h5><dl><dt>{t.model}</dt><dd>{execution.effectiveConfig.model}</dd><dt>{t.workspace}</dt><dd>{execution.effectiveConfig.cwd}</dd><dt>{t.approval}</dt><dd>{execution.effectiveConfig.approvalPolicy} · {execution.effectiveConfig.approvalsReviewer}</dd><dt>Sandbox</dt><dd>{execution.effectiveConfig.sandbox}</dd></dl>{execution.effectiveConfig.readinessError && <p role="alert">{execution.effectiveConfig.readinessError.message}</p>}<button type="button" disabled={task.state === "completed"} data-control="task-session-settings-edit" onClick={() => { setEditingSettings(true); setSettingsExpanded(true); }}>{t.editSettings}</button></section>}
+                <SessionQueue key={record.session.id} queue={execution?.queue} currentRun={currentRun} readOnly={task.state === "completed" || task.state === "on_hold"} busy={queueBusy} taskId={task.id} sessionId={record.session.id} onAction={queueAction} editorDraft={drafts.get(record.session.id)?.queueEditor} onEditorChange={value=>{const saved=drafts.get(record.session.id);if(saved)drafts.set(record.session.id,{...saved,queueEditor:value});}} />
                 {task.state === "completed" && <p role="note">{t.completedNotes}</p>}
-                <label>
+                <details data-control="task-session-composer-details" className="session-note-composer" open={task.state !== "completed"}>
+                  <summary>{task.state === "completed" ? t.postCompletionNote : t.message}</summary>
+                <label className="session-composer-label">
                   {t.message}
                   <textarea
                     data-control="task-session-message"
@@ -1194,7 +1269,7 @@ export function TaskWorkSessions({
                   </div>
                 )}
                 {task.state === "on_hold" && <p role="status">{workbenchText.taskHeldGuard}</p>}
-                <footer>
+                <footer className="session-composer-footer">
                   <label className="task-session-attach">
                     {t.attach}
                     <input
@@ -1215,71 +1290,31 @@ export function TaskWorkSessions({
                   >
                     {t.send}
                   </button>
-                  <button className="primary" type="button" data-control="task-session-run" disabled={task.state === "completed" || task.state === "on_hold" || runSubmitting || Boolean(retrySubmittingRunId) || !draft.trim() || !record.session.workspacePath.trim() || Boolean(execution?.activeRunId) || !execution?.effectiveConfig?.ready} onClick={() => void run()}>{t.run}</button>
+                  {task.state !== "completed" && <button className="primary" type="button" data-control="task-session-run" disabled={task.state === "on_hold" || runSubmitting || Boolean(retrySubmittingRunId) || !draft.trim() || !record.session.workspacePath.trim() || queueBusy || settingsDirty || !execution?.effectiveConfig?.ready} onClick={() => void run()}>{queueMode ? t.enqueue : t.run}</button>}
                 </footer>
-              </div>
-              <aside className="task-session-sidebar">
-                <details className="task-session-context">
-                  <summary>{t.context}</summary>
-                  <div>
-                  {task.detail && <p>{task.detail}</p>}
-                  {task.outcome && (
-                    <p>
-                      <strong>{t.outcome}:</strong> {task.outcome}
-                    </p>
-                  )}
-                  <h4>{t.references}</h4>
-                  {references.length ? (
-                    <ul>
-                      {references.map((value) => (
-                        <li key={value}>{value}</li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <p>{t.noReferences}</p>
-                  )}
-                  </div>
                 </details>
-                <details className="task-session-settings" open={settingsExpanded} onToggle={(event) => setSettingsExpanded(event.currentTarget.open)}>
-                  <summary>{t.effective}</summary>
+                {queueMode && <p className="task-execution-meta">{t.queueHint}</p>}
+              <aside className="task-session-sidebar">
+                <details className="task-session-settings" open={settingsExpanded} onToggle={(event) => {const open=event.currentTarget.open;setSettingsExpanded(open);if(open && !settingsExpanded && !modelCatalogue.length && !catalogueLoading && task.state !== "completed")void loadModels();}}>
+                  <summary>{t.environment} · {record.session.model} · {record.session.reasoningEffort ?? t.inherit}</summary>
                   <div className="task-session-settings-body">
-                  <button type="button" data-control="task-session-prepare" disabled={task.state === "completed" || busy} onClick={() => void prepare()}>{execution?.effectiveConfig ? t.checkSettings : t.prepare}</button>
+                  {task.state !== "completed" && <button type="button" data-control="task-session-prepare" disabled={busy || settingsDirty || Boolean(currentRun)} onClick={() => void prepare()}>{execution?.effectiveConfig ? t.checkSettings : t.prepare}</button>}
                   <p>{t.prepareHint}</p>
+                {execution?.effectiveConfig && <section className="task-execution-effective"><h5>{execution.effectiveConfig.provenance === "bound_thread" ? t.effective : t.prepare}</h5><dl><dt>{t.model}</dt><dd>{execution.effectiveConfig.model} · {execution.effectiveConfig.reasoningEffort ?? t.inherit}</dd><dt>{t.workspace}</dt><dd>{execution.effectiveConfig.cwd}</dd><dt>{t.approval}</dt><dd>{execution.effectiveConfig.approvalPolicy} · {execution.effectiveConfig.approvalsReviewer}</dd><dt>Sandbox</dt><dd>{execution.effectiveConfig.sandbox}</dd></dl>{execution.effectiveConfig.readinessError && <p role="alert">{execution.effectiveConfig.readinessError.message}</p>}{task.state !== "completed" && <button type="button" disabled={Boolean(currentRun)} data-control="task-session-settings-edit" onClick={() => { setEditingSettings(true); setSettingsExpanded(true); }}>{t.editSettings}</button>}</section>}
                   {editingSettings && task.state !== "completed" && <>
-                  <label>
-                    {t.sessionTitle}
-                    <input
-                      data-control="task-session-title"
-                      disabled={busy}
-                      value={record.session.title}
-                      onChange={(e) => updateSession({ title: e.target.value })}
-                    />
-                  </label>
-                  <label>
-                    {t.provider}
-                    <select
-                      data-control="task-session-provider"
-                      disabled={busy}
-                      value={record.session.provider}
-                      onChange={(e) =>
-                        updateSession({ provider: e.target.value as "codex" })
-                      }
-                    >
-                      <option value="codex">Codex</option>
-                    </select>
-                  </label>
+                  <div className="session-environment-fields">
                   <label>
                     {t.model}
                     <select
                       data-control="task-session-model"
-                      disabled={busy}
+                      disabled={busy || Boolean(currentRun)}
                       value={record.session.model}
-                      onChange={(e) => updateSession({ model: e.target.value })}
+                      onChange={(e) => changeModel(e.target.value)}
                     >
-                      {!models.some(([id]) => id === record.session.model) && (
+                      {!(modelCatalogue.length ? modelCatalogue.some(value=>value.model===record.session.model) : models.some(([id]) => id === record.session.model)) && (
                         <option value={record.session.model}>{record.session.model}</option>
                       )}
-                      {models.map(([id, label]) => (
+                      {(modelCatalogue.length ? modelCatalogue.map(value => [value.model, value.displayName] as const) : models).map(([id, label]) => (
                         <option key={id} value={id}>
                           {label}
                         </option>
@@ -1287,29 +1322,42 @@ export function TaskWorkSessions({
                     </select>
                   </label>
                   <label>
+                    {t.reasoning}
+                    <select data-control="task-session-reasoning" disabled={busy || Boolean(currentRun)} value={record.session.reasoningEffort ?? ""} onChange={event => updateSession({reasoningEffort:event.target.value || null})}>
+                      <option value="">{t.inherit}</option>
+                      {record.session.reasoningEffort && !(modelCatalogue.find(value=>value.model===record.session.model)?.supportedReasoningEfforts ?? []).some(value=>value.reasoningEffort===record.session.reasoningEffort) && <option value={record.session.reasoningEffort} disabled>{record.session.reasoningEffort} · {t.checkSettings}</option>}
+                      {(modelCatalogue.find(value=>value.model===record.session.model)?.supportedReasoningEfforts ?? []).map(value=><option key={value.reasoningEffort} value={value.reasoningEffort}>{value.reasoningEffort}</option>)}
+                    </select>
+                  </label>
+                  <button type="button" data-control="task-session-model-refresh" disabled={catalogueLoading || Boolean(currentRun)} onClick={()=>void loadModels()}>{t.refreshModels}</button>
+                  {modelWarning && <p role="status">{modelWarning}</p>}
+                  <label>
                     {t.workspace}
                     <div className="task-session-workspace-picker">
                       <input
                         data-control="task-session-workspace"
                         disabled={busy}
+                        readOnly={boundFolder}
                         value={record.session.workspacePath}
                         placeholder="/path/to/project"
                         onChange={(e) => updateSession({ workspacePath: e.target.value })}
                       />
-                      <button type="button" data-control="task-session-workspace-browse" disabled={busy} onClick={() => void browseProjectFolder()}>{t.browse}</button>
+                      <button type="button" data-control="task-session-workspace-browse" disabled={busy || Boolean(currentRun) || boundFolder} onClick={() => void browseProjectFolder()}>{t.browse}</button>
                     </div>
                   </label>
-                  {recentFolders.length > 0 && <label className="task-session-recent-folders">
+                  {boundFolder && <p className="task-execution-meta">{t.boundFolder}</p>}
+                  {recentFolders.length > 0 && !execution?.effectiveConfig && <label className="task-session-recent-folders">
                     {t.recentFolders}
                     <select data-control="task-session-workspace-recent" disabled={busy} value="" onChange={(e) => e.target.value && updateSession({ workspacePath: e.target.value })}>
                       <option value="">—</option>
                       {recentFolders.map((path) => <option key={path} value={path}>{path}</option>)}
                     </select>
                   </label>}
+                  <details className="session-environment-advanced" data-control="task-session-advanced"><summary>{t.approval} · {record.session.approvalsReviewer === "auto_review" ? t.automaticReview : t.askMe}</summary>
                   <label className="task-session-approval">
                     <select
                       data-control="task-session-approval"
-                      disabled={busy}
+                      disabled={busy || Boolean(currentRun)}
                       value={record.session.approvalsReviewer ?? "user"}
                       onChange={(e) =>
                         updateSession({
@@ -1322,19 +1370,23 @@ export function TaskWorkSessions({
                       <small>{t.approvalHint}</small>
                     </span>
                   </label>
+                  </details>
                   <button
                     type="button"
                     data-control="task-session-settings-save"
-                    disabled={busy || !record.session.title.trim()}
+                    disabled={busy || Boolean(currentRun)}
                     onClick={() => void saveSettings()}
                   >
                     {t.settings}
                   </button>
+                  </div><section className="session-connection"><h4>{t.connectionTitle}</h4><p>{t.connectionHint}</p>{codexHome && <code>{codexHome}</code>}</section>
                   </>}
+                  {settingsDirty && <p role="status">{t.saveBeforePrepare}</p>}
                   {status && <p role="status">{status}</p>}
                   </div>
                 </details>
               </aside>
+              </div>
               </> : <div className="task-session-empty"><p>{t.loading}</p></div>}
             </div>
         </>

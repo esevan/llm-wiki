@@ -5,7 +5,7 @@ use sha2::{Digest, Sha256};
 use serde_json::{json, Map, Value};
 use std::collections::BTreeMap;
 
-pub const CURRENT_SCHEMA_VERSION: i64 = 25;
+pub const CURRENT_SCHEMA_VERSION: i64 = 26;
 
 type MigrationFunction = for<'connection> fn(&Transaction<'connection>) -> Result<(), String>;
 type LegacyLocalizationRow = (String, String, String, String, String, String, String);
@@ -118,7 +118,12 @@ const MIGRATIONS: &[Migration] = &[
     Migration { version:23, name:"add version-bound Knowledge review notes", run:add_knowledge_review_notes },
     Migration { version:24, name:"add Task hold and execution backlog", run:add_task_hold },
     Migration { version:25, name:"add evidence-bound Knowledge revision chat", run:add_knowledge_revision_chat },
+    Migration { version:26, name:"add session reasoning and follow-up queues", run:add_session_queue },
 ];
+
+fn add_session_queue(tx: &Transaction<'_>) -> Result<(), String> {
+    tx.execute_batch(include_str!("task_session_queue_schema.sql")).map_err(|e|e.to_string())
+}
 
 fn add_knowledge_revision_chat(tx: &Transaction<'_>) -> Result<(), String> {
     tx.execute_batch("CREATE TABLE knowledge_revision_turns (
@@ -2377,4 +2382,24 @@ fn add_task_hierarchy(tx: &Transaction<'_>) -> Result<(), String> {
     }
     tx.execute_batch(include_str!("task_hierarchy_schema.sql"))
         .map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+#[test]
+fn session_queue_upgrade_preserves_v25_history_and_rolls_back_atomically() {
+    let mut c=Connection::open_in_memory().unwrap();apply_plan(&mut c,&MIGRATIONS[..25],25).unwrap();
+    c.execute("INSERT INTO tasks(id,state,created_at,last_user_activity_at) VALUES('task','in_progress','created','activity')",[]).unwrap();
+    c.execute("INSERT INTO task_work_sessions(id,task_id,title,created_at,updated_at,effective_settings_revision) VALUES('session','task','Legacy title','created','updated','old-preparation')",[]).unwrap();
+    c.execute("INSERT INTO task_work_session_entries(id,session_id,author,kind,body,created_at) VALUES('entry','session','user','note','Saved evidence','created')",[]).unwrap();
+    apply(&mut c).unwrap();
+    assert_eq!(c.query_row("SELECT title FROM task_work_sessions WHERE id='session'",[],|r|r.get::<_,String>(0)).unwrap(),"Legacy title");
+    assert_eq!(c.query_row("SELECT body FROM task_work_session_entries",[],|r|r.get::<_,String>(0)).unwrap(),"Saved evidence");
+    assert!(c.query_row("SELECT reasoning_effort FROM task_work_sessions",[],|r|r.get::<_,Option<String>>(0)).unwrap().is_none());
+    assert!(c.query_row("SELECT effective_settings_revision FROM task_work_sessions",[],|r|r.get::<_,Option<String>>(0)).unwrap().is_none());
+    assert_eq!(c.query_row("SELECT count(*) FROM pragma_foreign_key_check",[],|r|r.get::<_,i64>(0)).unwrap(),0);
+    apply(&mut c).unwrap();
+    let mut failed=Connection::open_in_memory().unwrap();apply_plan(&mut failed,&MIGRATIONS[..25],25).unwrap();
+    failed.execute("CREATE TABLE task_session_queue_items(dummy INTEGER)",[]).unwrap();assert!(apply(&mut failed).is_err());
+    assert_eq!(schema_version(&failed).unwrap(),25);
+    assert_eq!(failed.query_row("SELECT count(*) FROM pragma_table_info('task_work_sessions') WHERE name='reasoning_effort'",[],|r|r.get::<_,i64>(0)).unwrap(),0);
 }

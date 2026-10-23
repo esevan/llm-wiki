@@ -1,0 +1,126 @@
+{
+  "results": [
+    {
+      "operation": "create_library_file",
+      "status": "succeeded",
+      "path": "/01-running.png",
+      "file_id": "file_00000000d82481f5a0f003cff655a8d0",
+      "library_file_id": "libfile_dd7e368d006481919641fec499465839",
+      "file_name": "01-running.png",
+      "current_version_number": 0,
+      "restored_from_version_number": null,
+      "xattrs": [
+        {
+          "name": "user.library-file-version",
+          "value": "0"
+        }
+      ],
+      "directory_id": "libdir_03bc7328893c8191b47814881750bfbd",
+      "mime_type": "image/png",
+      "library_artifact_type": "image",
+      "file_size_bytes": 149945
+    },
+    {
+      "operation": "create_library_file",
+      "status": "succeeded",
+      "path": "/02-approval.png",
+      "file_id": "file_000000005ed081f59467426a303d8a6f",
+      "library_file_id": "libfile_12c1a83cbefc819189b3d8c81d604ad6",
+      "file_name": "02-approval.png",
+      "current_version_number": 0,
+      "restored_from_version_number": null,
+      "xattrs": [
+        {
+          "name": "user.library-file-version",
+          "value": "0"
+        }
+      ],
+      "directory_id": "libdir_03bc7328893c8191b47814881750bfbd",
+      "mime_type": "image/png",
+      "library_artifact_type": "image",
+      "file_size_bytes": 155027
+    },
+    {
+      "operation": "create_library_file",
+      "status": "succeeded",
+      "path": "/03-request.png",
+      "file_id": "file_00000000d85081f583ac0f57c7973adb",
+      "library_file_id": "libfile_b941c8d1698c81918207e05f9f2bf40b",
+      "file_name": "03-request.png",
+      "current_version_number": 0,
+      "restored_from_version_number": null,
+      "xattrs": [
+        {
+          "name": "user.library-file-version",
+          "value": "0"
+        }
+      ],
+      "directory_id": "libdir_03bc7328893c8191b47814881750bfbd",
+      "mime_type": "image/png",
+      "library_artifact_type": "image",
+      "file_size_bytes": 138050
+    },
+    {
+      "operation": "create_library_file",
+      "status": "succeeded",
+      "path": "/04-completed.png",
+      "file_id": "file_00000000195481f58a42d0f33a3161a8",
+      "library_file_id": "libfile_2e449a67af8c8191ba541167154b2a64",
+      "file_name": "04-completed.png",
+      "current_version_number": 0,
+      "restored_from_version_number": null,
+      "xattrs": [
+        {
+          "name": "user.library-file-version",
+          "value": "0"
+        }
+      ],
+      "directory_id": "libdir_03bc7328893c8191b47814881750bfbd",
+      "mime_type": "image/png",
+      "library_artifact_type": "image",
+      "file_size_bytes": 164414
+    },
+    {
+      "operation": "create_library_file",
+      "status": "succeeded",
+      "path": "/05-narrow-input.png",
+      "file_id": "file_00000000fa8081f59f3b1ce7eb0dba89",
+      "library_file_id": "libfile_843cf0da76cc8191a445ec46fb230f7b",
+      "file_name": "05-narrow-input.png",
+      "current_version_number": 0,
+      "restored_from_version_number": null,
+      "xattrs": [
+        {
+          "name": "user.library-file-version",
+          "value": "0"
+        }
+      ],
+      "directory_id": "libdir_03bc7328893c8191b47814881750bfbd",
+      "mime_type": "image/png",
+      "library_artifact_type": "image",
+      "file_size_bytes": 140860
+    },
+    {
+      "operation": "create_library_file",
+      "status": "succeeded",
+      "path": "/06-narrow-input-footer.png",
+      "file_id": "file_00000000dd4081f5a4e21651497d108b",
+      "library_file_id": "libfile_534696b6c4d481918e9685297cbb0e0c",
+      "file_name": "06-narrow-input-footer.png",
+      "current_version_number": 0,
+      "restored_from_version_number": null,
+      "xattrs": [
+        {
+          "name": "user.library-file-version",
+          "value": "0"
+        }
+      ],
+      "directory_id": "libdir_03bc7328893c8191b47814881750bfbd",
+      "mime_type": "image/png",
+      "library_artifact_type": "image",
+      "file_size_bytes": 124877
+    }
+  ],
+  "warnings": [],
+  "external_connectors_accessed": false
+}

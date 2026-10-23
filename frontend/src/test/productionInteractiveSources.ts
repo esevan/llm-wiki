@@ -17,6 +17,7 @@ import deleteDialog from '../features/workbench/DeleteItemDialog.tsx?raw';
 import itemActions from '../features/workbench/ItemActionsMenu.tsx?raw';
 import taskDetail from '../features/workbench/TaskDetail.tsx?raw';
 import taskJourney from '../features/workbench/TaskJourneyGraph.tsx?raw';
+import sessionQueue from '../features/workbench/SessionQueue.tsx?raw';
 import taskWorkSessions from '../features/workbench/TaskWorkSessions.tsx?raw';
 import workLogDistillation from '../features/workbench/WorkLogDistillation.tsx?raw';
 import workbench from '../features/workbench/WorkbenchView.tsx?raw';
@@ -64,6 +65,7 @@ export const productionInteractiveSources = new Map<string, string>([
   ['frontend/src/features/workbench/TaskDetail.tsx', taskDetail],
   ['frontend/src/features/workbench/TaskJourneyGraph.tsx', taskJourney],
   ['frontend/src/features/workbench/TaskWorkSessions.tsx', taskWorkSessions],
+  ['frontend/src/features/workbench/SessionQueue.tsx', sessionQueue],
   ['frontend/src/features/workbench/WorkLogDistillation.tsx', workLogDistillation],
   ['frontend/src/features/workbench/DeleteItemDialog.tsx', deleteDialog],
   ['frontend/src/features/workbench/WorkbenchView.tsx', workbench],

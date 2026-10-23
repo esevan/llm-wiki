@@ -1,5 +1,5 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
-import type { CodexThreadLinkResult, CodexThreadList, CodexThreadTranscript, TaskExecutionSnapshot, TaskWorkSessionAttachment } from "../types/taskWorkbench";
+import type { CodexModelCapability, CodexThreadLinkResult, CodexThreadList, CodexThreadTranscript, TaskExecutionSnapshot, TaskWorkSessionAttachment } from "../types/taskWorkbench";
 
 type NativeResponse<T> = { status: number; body: T };
 type ExecutionInput = { taskId: string; sessionId: string; runId?: string };
@@ -17,7 +17,9 @@ const request = async <T>(command: string, input: Record<string, unknown>) => {
 };
 
 export const taskExecutionClient = {
-  prepare: (input: ExecutionInput, onSnapshot?: (snapshot: TaskExecutionSnapshot) => void) => unwrap<TaskExecutionSnapshot>("task_session_prepare", input, onSnapshot),
+  models: () => request<{ models: CodexModelCapability[] }>("task_session_models", {}),
+  queue: (input: ExecutionInput & { action: "enqueue" | "edit" | "remove" | "move" | "pause" | "resume" | "cancel_drain" | "stop_then_drain"; operationId?: string; instruction?: string; attachment?: TaskWorkSessionAttachment; itemId?: string; expectedRevision?: number; direction?: "up" | "down" }) => request<TaskExecutionSnapshot>("task_session_queue", input),
+  prepare: (input: ExecutionInput & {resolveReasoning?:boolean}, onSnapshot?: (snapshot: TaskExecutionSnapshot) => void) => unwrap<TaskExecutionSnapshot>("task_session_prepare", input, onSnapshot),
   execute: (input: ExecutionInput & { operationId: string; instruction: string; settingsRevision: string; retryOfRunId?: string; attachment?: TaskWorkSessionAttachment }, onSnapshot?: (snapshot: TaskExecutionSnapshot) => void) => unwrap<TaskExecutionSnapshot>("task_session_execute", input, onSnapshot),
   subscribe: (input: ExecutionInput, onSnapshot?: (snapshot: TaskExecutionSnapshot) => void) => unwrap<TaskExecutionSnapshot>("task_session_execution_subscribe", input, onSnapshot),
   interrupt: (input: Required<ExecutionInput>) => unwrap<TaskExecutionSnapshot>("task_session_interrupt", input),

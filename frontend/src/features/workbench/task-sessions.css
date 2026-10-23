@@ -1,0 +1,77 @@
+/* Approved session mockup: shared cream/ink/pink tokens, one conversation surface. */
+.task-session-space .task-session-toolbar{border:0;border-radius:0;padding:12px 0;box-shadow:none;background:transparent}
+.task-session-space .task-session-layout{grid-template-columns:224px minmax(0,1fr);gap:0;border:var(--border-default);border-radius:var(--radius-panel);overflow:clip;background:var(--color-bg-surface)}
+.task-session-space .task-session-rail{border:0;border-right:var(--border-default);border-radius:0;background:var(--color-bg-positive-subtle);padding:20px 12px;height:100%;position:static}
+.task-session-space .task-session-rail button strong{white-space:normal;overflow-wrap:anywhere;font-size:14px;line-height:1.6}
+.task-session-space .task-session-rail button[aria-current]{background:var(--color-bg-surface);border-color:var(--color-border-positive)}
+.task-session-space .task-session-chat{border:0;border-radius:0;padding:24px 36px;min-width:0;box-shadow:none}
+.task-session-space .task-session-chat-header{padding:0 0 16px;border:0;gap:16px;align-items:flex-start}
+.task-session-space .task-session-chat-header h4{font-size:20px;line-height:1.5;margin:4px 0;overflow-wrap:anywhere}
+.task-session-space .task-session-chat-header small,.task-session-space .task-session-chat-header p{font-size:12px;color:var(--color-text-secondary)}
+.task-session-space .task-session-context{font-size:13px;color:var(--color-text-secondary);border-bottom:var(--border-default);padding:0 0 12px;margin:0 0 24px}
+.task-session-space .task-session-entries{padding:0;min-height:120px;max-height:52vh;gap:24px;border:0;background:transparent}
+.task-session-space .task-session-entries>li{border:0;border-radius:0;padding:0;background:transparent;box-shadow:none}
+.task-session-space .task-session-entries>li[data-entry-author="user"]{border-left:3px solid var(--color-border-strong);padding-left:16px}
+.task-session-space button,.task-session-space .task-session-attach{min-height:36px;border-radius:var(--radius-control)}
+.task-session-space button.primary{background:var(--color-accent-strong);border-color:var(--color-accent-strong);color:var(--color-bg-surface)}
+.task-session-space button:active:not(:disabled){transform:translateY(1px)}
+.task-session-space .task-execution{border:0;border-radius:0;padding:16px 0;background:transparent;margin:0}
+.task-session-space .task-execution-request{padding:24px;background:var(--color-bg-primary);border:1px solid var(--color-border-strong);border-radius:13px;margin:20px 0}
+.task-session-space .task-execution-history{margin:12px 0}
+.task-session-space .task-execution-history h4{font-size:13px}
+.task-session-space .task-execution-history ol{max-height:104px;overflow:auto}
+.task-session-space .task-session-chat>label{display:grid;gap:8px;margin-top:24px;font-size:13px;font-weight:700;border:1px solid var(--color-border-strong);border-bottom:0;border-radius:13px 13px 0 0;padding:16px 16px 0}
+.task-session-space .task-session-chat>label textarea{border:0;min-height:72px;background:transparent;padding:8px 0;font-size:15px;line-height:1.65;resize:vertical}
+.task-session-space .task-session-chat>footer{padding:0 16px 16px;border:1px solid var(--color-border-strong);border-top:0;border-radius:0 0 13px 13px;gap:8px;display:flex;align-items:center;flex-wrap:wrap}
+.task-session-space .task-session-chat>footer .primary{margin-left:auto}
+.task-session-space .task-session-sidebar{display:block;grid-column:auto;margin-top:16px;border:0;padding:0}
+.task-session-space .task-session-sidebar>details{border:0;border-radius:0;background:transparent}
+.task-session-space .task-session-settings summary{font-size:13px;color:var(--color-text-secondary)}
+.task-session-space .task-session-settings-body{padding:20px;border:var(--border-default);border-radius:13px;margin-top:16px;display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:start}
+.task-session-space .task-session-settings-body>p,.task-session-space .task-session-settings-body>.task-execution-effective,.task-session-space .task-session-settings-body>.task-session-approval{grid-column:1/-1}
+.task-session-space .task-session-settings-body>label{min-width:0;display:grid;gap:8px;font-size:13px}
+.task-session-space .task-session-settings-body input,.task-session-space .task-session-settings-body select{min-height:40px;font-size:14px}
+.session-queue{border:var(--border-default);border-radius:13px;padding:16px;margin-top:20px;background:var(--color-bg-surface)}
+.session-queue header{display:flex;justify-content:space-between;align-items:center;gap:12px}
+.session-queue h4{font-size:16px;margin:0}.session-queue header span,.session-queue small,.session-queue-meta{font-size:12px;color:var(--color-text-secondary)}
+.session-queue ol{list-style:none;padding:0;margin:8px 0 0;display:block}
+.session-queue li{display:grid;grid-template-columns:24px minmax(0,1fr) auto;gap:8px;padding:12px 0;border-bottom:var(--border-default);align-items:start}
+.session-queue li p{margin:0 0 4px;font-size:14px;white-space:pre-wrap;overflow-wrap:anywhere}
+.session-queue small{display:block;overflow-wrap:anywhere}
+.session-queue-number{border-radius:50%;background:var(--color-bg-muted);width:24px;height:24px;display:grid;place-items:center;font:12px var(--font-family-mono)}
+.session-queue-controls{display:flex;gap:4px;flex-wrap:wrap}.task-session-space .session-queue-controls button{padding:4px 8px;font-size:12px}
+.session-queue footer{display:flex;flex-wrap:wrap;justify-content:space-between;gap:8px;padding-top:12px}
+.session-queue textarea{min-height:72px}.session-queue [role="status"]{padding:12px 16px;background:var(--color-bg-primary);border-radius:9px;font-size:13px}
+@container(max-width:760px){
+ .task-session-space .task-session-layout{grid-template-columns:1fr}
+ .task-session-space .task-session-rail{border-right:0;border-bottom:var(--border-default);padding:12px;height:auto}
+ .task-session-space .task-session-rail ol{display:flex;overflow:auto;max-height:none}.task-session-space .task-session-rail li{flex:0 0 180px}
+ .task-session-space .task-session-picker{position:absolute;width:1px;height:1px;clip-path:inset(50%)}
+ .task-session-space .task-session-chat{padding:20px}.task-session-space .task-session-chat-header h4{font-size:18px}
+ .task-session-space .task-session-chat>footer{flex-direction:row;align-items:center}.task-session-space .task-session-chat>footer .task-session-attach{margin:0}
+ .task-session-space .task-session-settings-body{grid-template-columns:1fr;padding:16px}
+ .task-session-space .task-execution-request{padding:16px}
+ .session-queue{padding:12px}.session-queue li{grid-template-columns:24px minmax(0,1fr)}.session-queue-controls{grid-column:2}
+ .session-queue header{align-items:flex-start}.session-queue footer button{white-space:normal;text-align:left}
+}
+.task-session-space .task-session-chat>*{order:0}
+.task-session-space .task-session-chat>.task-session-entries{order:0}
+.task-session-space .task-session-entries>li:not(.task-session-external-turn){max-width:100%;justify-self:stretch}
+.task-session-space .task-session-run-turn article,.task-session-space .task-session-external-turn article{max-width:100%;padding:0;border:0;border-radius:0;background:transparent;justify-self:stretch}
+.task-session-space .task-session-run-turn article[data-entry-author="user"]{border-left:3px solid var(--color-border-strong);padding-left:16px}
+@media(prefers-reduced-motion:reduce){.task-session-space .task-session-running i{animation:none}}
+.task-session-space .session-composer-label{display:grid;gap:8px;margin-top:24px;font-size:13px;font-weight:700;border:1px solid var(--color-border-strong);border-bottom:0;border-radius:13px 13px 0 0;padding:16px 16px 0}
+.task-session-space .session-composer-label textarea{border:0;min-height:72px;background:transparent;padding:8px 0;font-size:15px;line-height:1.65}
+.task-session-space .session-composer-footer{padding:0 16px 16px;border:1px solid var(--color-border-strong);border-top:0;border-radius:0 0 13px 13px;gap:8px;display:flex;align-items:center;flex-wrap:wrap}
+.task-session-space .session-composer-footer .primary{margin-left:auto}
+.task-session-space .session-note-composer[open]>summary{display:none}
+.task-session-space .session-note-composer>summary{cursor:pointer;font-size:13px;color:var(--color-text-secondary);padding:12px 0}
+.task-session-space .session-environment-advanced{grid-column:1/-1;font-size:13px}
+.session-environment-fields{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px;align-items:start;min-width:0}
+.session-environment-fields>label{display:grid;gap:8px;font-size:13px;min-width:0}
+.session-environment-fields>.task-session-workspace-picker,.session-environment-fields>p,.session-environment-fields>.task-session-recent-folders,.session-environment-fields>.session-environment-advanced{grid-column:1/-1}
+.session-connection{border-left:var(--border-default);padding:20px;min-width:0;background:var(--color-bg-positive-subtle);font-size:13px}
+.session-connection h4{font-size:16px}.session-connection code{display:block;overflow-wrap:anywhere;font:12px var(--font-family-mono)}
+@container(max-width:760px){.session-environment-fields{grid-template-columns:1fr}.session-connection{border-left:0;border-top:var(--border-default);padding:20px 0}}
+.task-session-space .task-session-chat>.task-execution-history{order:0}
+.task-session-space .task-session-settings-body .session-environment-fields>label:has([data-control="task-session-workspace"]){grid-column:1/-1}

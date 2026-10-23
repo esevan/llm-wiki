@@ -257,7 +257,9 @@ impl TaskApplicationService {
     }
 
     pub(crate) fn has_active_execution(c: &rusqlite::Connection, id: &str) -> Result<bool, String> {
-        c.query_row("SELECT EXISTS(SELECT 1 FROM task_work_session_runs WHERE task_id=? AND (status IN ('queued','running','awaiting_response') OR (status='needs_attention' AND dispatch_state IN ('uncertain','accepted','dispatch_recorded'))))", [id], |r| r.get(0)).map_err(|e|e.to_string())
+        let active:bool=c.query_row("SELECT EXISTS(SELECT 1 FROM task_work_session_runs WHERE task_id=? AND (status IN ('queued','running','awaiting_response') OR (status='needs_attention' AND dispatch_state IN ('uncertain','accepted','dispatch_recorded'))))", [id], |r| r.get(0)).map_err(|e|e.to_string())?;
+        if active { return Ok(true); }
+        c.query_row("SELECT EXISTS(SELECT 1 FROM task_session_queue_items WHERE task_id=? AND state='pending')",[id],|r|r.get(0)).map_err(|e|e.to_string())
     }
 
     fn task_transition_tx(
@@ -279,7 +281,7 @@ impl TaskApplicationService {
         let state = validate_state_transition(&from, requested_state)?;
         if matches!(requested_state, "on_hold" | "backlog") {
             let active = Self::has_active_execution(tx, id)?;
-            if active { return Err("active_task_execution: finish or stop the active execution and confirm its end before moving this Task".into()); }
+            if active { return Err("active_task_execution: finish or stop the active execution, confirm its end, and cancel pending requests before moving this Task".into()); }
         }
         if state == "completed" {
             return self.complete_tx(tx, id, input, at);
@@ -507,7 +509,7 @@ impl TaskApplicationService {
         if state != "in_progress" {
             return Err("transition_invalid: task must be in_progress before completion".into());
         }
-        if Self::has_active_execution(tx, task)? { return Err("active_task_execution: finish or stop the active execution before completing this Task".into()); }
+        if Self::has_active_execution(tx, task)? { return Err("active_task_execution: finish or stop the active execution and cancel pending requests before completing this Task".into()); }
         crate::native::task_hierarchy::ensure_children_completed(tx, task)?;
         let id = task_repository::new_id();
         tx.execute("INSERT INTO task_completions(id,task_id,task_revision,evidence,report,operation_id,created_at) VALUES(?,?,?,?,?,?,?)", params![id, task, revision, req(input, "evidence")?, input.get("report").and_then(Value::as_str).unwrap_or(""), req(input, "operationId")?, at]).map_err(|e| e.to_string())?;
@@ -813,7 +815,7 @@ impl TaskApplicationService {
             .unchecked_transaction()
             .map_err(|error| error.to_string())?;
         Self::task_exists(&tx, task_id)?;
-        let mut statement = tx.prepare("SELECT id,title,provider,model,approval_mode,workspace_path,created_at,updated_at,approvals_reviewer FROM task_work_sessions WHERE task_id=? ORDER BY updated_at DESC,id")
+        let mut statement = tx.prepare("SELECT id,title,provider,model,approval_mode,workspace_path,created_at,updated_at,approvals_reviewer,reasoning_effort,(SELECT substr(body,1,160) FROM task_work_session_entries e WHERE e.session_id=task_work_sessions.id AND e.author='user' AND trim(body)!='' ORDER BY created_at,id LIMIT 1),codex_thread_id FROM task_work_sessions WHERE task_id=? ORDER BY updated_at DESC,id")
             .map_err(|error| error.to_string())?;
         let sessions = statement
             .query_map([task_id], |row| {
@@ -822,7 +824,7 @@ impl TaskApplicationService {
                     "provider":row.get::<_,String>(2)?, "model":row.get::<_,String>(3)?,
                     "approvalMode":row.get::<_,String>(4)?, "workspacePath":row.get::<_,String>(5)?,
                     "createdAt":row.get::<_,String>(6)?, "updatedAt":row.get::<_,String>(7)?,
-                    "approvalsReviewer":row.get::<_,String>(8)?
+                    "approvalsReviewer":row.get::<_,String>(8)?, "reasoningEffort":row.get::<_,Option<String>>(9)?, "displayLabel":row.get::<_,Option<String>>(10)?,"threadId":row.get::<_,Option<String>>(11)?
                 }))
             })
             .map_err(|error| error.to_string())?
@@ -843,13 +845,13 @@ impl TaskApplicationService {
             return Err("Task not found".into());
         }
         let session = connection.query_row(
-            "SELECT title,provider,model,approval_mode,workspace_path,created_at,updated_at,approvals_reviewer FROM task_work_sessions WHERE id=? AND task_id=?",
+            "SELECT title,provider,model,approval_mode,workspace_path,created_at,updated_at,approvals_reviewer,reasoning_effort,(SELECT substr(body,1,160) FROM task_work_session_entries e WHERE e.session_id=task_work_sessions.id AND e.author='user' AND trim(body)!='' ORDER BY created_at,id LIMIT 1),codex_thread_id FROM task_work_sessions WHERE id=? AND task_id=?",
             params![session_id,task_id], |row| Ok(json!({
                 "id":session_id,"taskId":task_id,"title":row.get::<_,String>(0)?,
                 "provider":row.get::<_,String>(1)?,"model":row.get::<_,String>(2)?,
                 "approvalMode":row.get::<_,String>(3)?,"workspacePath":row.get::<_,String>(4)?,
                 "createdAt":row.get::<_,String>(5)?,"updatedAt":row.get::<_,String>(6)?,
-                "approvalsReviewer":row.get::<_,String>(7)?
+                "approvalsReviewer":row.get::<_,String>(7)?, "reasoningEffort":row.get::<_,Option<String>>(8)?, "displayLabel":row.get::<_,Option<String>>(9)?,"threadId":row.get::<_,Option<String>>(10)?
             })),
         ).optional().map_err(|error| error.to_string())?.ok_or("Work session not found")?;
         let mut statement = connection.prepare("SELECT id,author,kind,body,attachment_json,created_at FROM task_work_session_entries WHERE session_id=? ORDER BY created_at,id")
@@ -887,11 +889,16 @@ impl TaskApplicationService {
             let reviewer=input.get("approvalsReviewer").and_then(Value::as_str).unwrap_or("user");
             if !["user","auto_review"].contains(&reviewer) { return Err("invalid_input: approvalsReviewer".into()); }
             if title.len()>200 || provider.len()>200 || model.len()>200 || workspace.len()>4096 { return Err("invalid_input: work session setting is too long".into()); }
-            if provider != "codex" || !["gpt-6-astra","gpt-5.6-sol","gpt-5.6-terra","gpt-5.6-luna","gpt-5.5"].contains(&model) { return Err("invalid_input: unsupported provider or model".into()); }
+            if provider != "codex" || model.is_empty() { return Err("invalid_input: unsupported provider or model".into()); }
+            let prior_effort:Option<String>=tx.query_row("SELECT reasoning_effort FROM task_work_sessions WHERE id=? AND task_id=?",params![session_id,task_id],|r|r.get(0)).optional().map_err(|e|e.to_string())?.flatten();
+            let effort=if input.get("reasoningEffort").is_some(){input.get("reasoningEffort").and_then(Value::as_str).filter(|v|!v.is_empty())}else{prior_effort.as_deref()};
+            if effort.is_some_and(|v| v.len()>40) { return Err("invalid_input: reasoning effort too long".into()); }
+            let active:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM task_work_session_runs WHERE session_id=? AND status IN ('queued','running','awaiting_response'))",[session_id],|r|r.get(0)).map_err(|e|e.to_string())?;
+            if active { return Err("active_run_conflict: settings are read-only during execution".into()); }
             let at=task_repository::now();
-            let changed=tx.execute("UPDATE task_work_sessions SET title=?,provider=?,model=?,approval_mode=?,approvals_reviewer=?,workspace_path=?,effective_settings_revision=NULL,updated_at=? WHERE id=? AND task_id=?",params![title,provider,model,approval,reviewer,workspace,at,session_id,task_id]).map_err(|error|error.to_string())?;
+            let changed=tx.execute("UPDATE task_work_sessions SET title=?,provider=?,model=?,approval_mode=?,approvals_reviewer=?,workspace_path=?,reasoning_effort=?,settings_epoch=settings_epoch+1,effective_reasoning_effort=NULL,effective_settings_revision=NULL,updated_at=? WHERE id=? AND task_id=?",params![title,provider,model,approval,reviewer,workspace,effort,at,session_id,task_id]).map_err(|error|error.to_string())?;
             if changed!=1 { return Err("Work session not found".into()); }
-            let result=json!({"id":session_id,"taskId":task_id,"title":title,"provider":provider,"model":model,"approvalMode":approval,"approvalsReviewer":reviewer,"workspacePath":workspace,"updatedAt":at});
+            let result=json!({"id":session_id,"taskId":task_id,"title":title,"provider":provider,"model":model,"approvalMode":approval,"approvalsReviewer":reviewer,"workspacePath":workspace,"reasoningEffort":effort,"updatedAt":at});
             self.finish(tx,input,"task.work-session.update",&result)?; Ok(result)
         })
     }

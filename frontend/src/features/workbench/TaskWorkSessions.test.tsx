@@ -7,6 +7,7 @@ import type { TaskAggregate, TaskWorkSession, TaskExecutionSnapshot } from "../.
 const execution = vi.hoisted(() => ({
   prepare: vi.fn(),
   subscribe: vi.fn().mockResolvedValue({ runs: [], activeRunId: null, selectedRun: null }),
+  queue: vi.fn(), models: vi.fn().mockResolvedValue({models:[]}),
   execute: vi.fn(), interrupt: vi.fn(), respond: vi.fn(), syncWorkLog: vi.fn(),
   externalThreads: vi.fn().mockResolvedValue({ threads: [] }),
   externalThread: vi.fn(), linkExternalThread: vi.fn(),
@@ -188,7 +189,7 @@ describe("Task work sessions", () => {
     fireEvent.change(await screen.findByLabelText("Session"), { target: { value: "one" } });
     fireEvent.change(await screen.findByLabelText("Instruction or note"), { target: { value: "Run the focused check" } });
     fireEvent.click(screen.getByRole("button", { name: "Prepare conversation" }));
-    await waitFor(() => expect(execution.prepare).toHaveBeenCalledWith({ taskId: "task-a", sessionId: "one" }, expect.any(Function)));
+    await waitFor(() => expect(execution.prepare).toHaveBeenCalledWith({ taskId: "task-a", sessionId: "one", resolveReasoning: true }, expect.any(Function)));
     fireEvent.click(screen.getByRole("button", { name: "Run with Codex" }));
     await waitFor(() => expect(execution.execute).toHaveBeenCalledWith(expect.objectContaining({ taskId: "task-a", sessionId: "one", instruction: "Run the focused check", settingsRevision: "settings-1" }), expect.any(Function)));
     expect(window.llmWikiApplication.request).not.toHaveBeenCalledWith(expect.objectContaining({ path: expect.stringContaining("/entries") }));
@@ -350,6 +351,7 @@ describe("Task work sessions", () => {
     window.llmWikiApplication = { request: vi.fn().mockImplementation(({ path }: { path: string }) => path.endsWith("work-sessions") ? Promise.resolve(response({ sessions: [saved] })) : Promise.resolve(response({ session: saved, entries: [] }))) };
 
     render(<TaskWorkSessions task={task} />);
+    fireEvent.click(await screen.findByText(/Run history ·/));
     fireEvent.click(await screen.findByRole("button", { name: /Finished · old work/ }));
     expect(screen.getByRole("button", { name: "Stop" })).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "Proceed" }));
@@ -363,7 +365,7 @@ describe("Task work sessions", () => {
     window.llmWikiApplication = { request: vi.fn().mockImplementation(({ path }: { path: string }) => path.endsWith("work-sessions") ? Promise.resolve(response({ sessions: [saved] })) : Promise.resolve(response({ session: saved, entries: [] }))) };
     render(<TaskWorkSessions task={task} />);
     fireEvent.change(await screen.findByLabelText("Session"), { target: { value: "one" } });
-    expect(await screen.findByText("Run history")).toBeVisible();
+    fireEvent.click(await screen.findByText(/Run history ·/));
     fireEvent.click(screen.getByRole("button", { name: /Failed · retry this/ }));
     expect(await screen.findByRole("button", { name: "Use instruction again" })).toBeVisible();
     fireEvent.change(screen.getByLabelText("Instruction or note"), { target: { value: "unrelated draft" } });
@@ -928,7 +930,8 @@ describe("Task work sessions", () => {
     await waitFor(() =>
       expect(screen.getByLabelText("Session")).toHaveValue("two"),
     );
-    expect(await screen.findByLabelText("Session title")).toHaveValue("Second");
+    expect(screen.queryByLabelText("Session title")).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", {name:"Second"})).toBeVisible();
     resolveSave(response(savedA));
     await waitFor(() =>
       expect(screen.getByLabelText("Session")).toHaveValue("two"),
@@ -988,12 +991,37 @@ it("keeps completed sessions readable and saves new notes without running or edi
   render(<TaskWorkSessions task={{...task,state:"completed",completedAt:"2026-10-22T10:00:00Z"}} />);
   expect(await screen.findByText("Original note")).toBeVisible();
   const composer = await screen.findByLabelText("Instruction or note");
+  fireEvent.click(screen.getByText("Post-completion note",{selector:"summary"}));
   fireEvent.change(composer,{target:{value:"Additional observation"}});
-  expect(screen.getByRole("button",{name:"Run with Codex"})).toBeDisabled();
+  expect(screen.queryByRole("button",{name:"Run with Codex"})).not.toBeInTheDocument();
   expect(screen.getByRole("button",{name:"Save note"})).toBeEnabled();
   fireEvent.keyDown(composer,{key:"Enter"});
   expect(await screen.findByText("Additional observation")).toBeVisible();
   expect(screen.getByText("Original note")).toBeVisible();
-  expect(screen.getByText("Post-completion note")).toBeVisible();
+  expect(screen.getAllByText("Post-completion note").length).toBeGreaterThan(0);
   expect(request.mock.calls.filter(([v])=>v.method === "POST")).toHaveLength(1);
+});
+
+it("queues additional instructions during an active Run without steering or clearing a newer draft", async () => {
+  const saved={...session("one","Work"),workspacePath:"/project"};
+  const run={id:"running",taskId:task.id,sessionId:"one",instruction:"Current",status:"running" as const,stopRequested:false,provider:"codex" as const,model:saved.model,workspacePath:"/project",evidence:[],formalRequests:[],workLogSyncState:"synced" as const,revision:1};
+  const snapshot:TaskExecutionSnapshot={runs:[run],activeRunId:run.id,selectedRun:run,effectiveConfig:{model:saved.model,cwd:"/project",approvalPolicy:"ask",approvalsReviewer:"user",sandbox:"workspace-write",provenance:"bound_thread",settingsRevision:"v1",ready:true,reasoningEffort:"medium",capabilities:{structuredUserInput:true}}};
+  execution.subscribe.mockResolvedValue(snapshot);execution.execute.mockClear();execution.interrupt.mockClear();execution.queue.mockReset();
+  let resolve!:(v:TaskExecutionSnapshot)=>void;execution.queue.mockReturnValue(new Promise<TaskExecutionSnapshot>(done=>{resolve=done;}));
+  window.llmWikiApplication={request:vi.fn(async({path}:{path:string})=>path.endsWith("work-sessions")?response({sessions:[saved]}):response({session:saved,entries:[]})) as never};
+  render(<TaskWorkSessions task={task}/>);const input=await screen.findByLabelText("Instruction or note");fireEvent.change(input,{target:{value:"Follow up"}});fireEvent.keyDown(input,{key:"Enter"});
+  await waitFor(()=>expect(execution.queue).toHaveBeenCalledWith(expect.objectContaining({action:"enqueue",instruction:"Follow up",taskId:task.id,sessionId:"one"})));
+  fireEvent.change(input,{target:{value:"Newer draft"}});await act(async()=>resolve(snapshot));
+  expect(input).toHaveValue("Newer draft");expect(execution.execute).not.toHaveBeenCalled();expect(execution.interrupt).not.toHaveBeenCalled();
+});
+
+it("offers model-specific reasoning and explicitly resets an unsupported level on model change", async () => {
+  const saved={...session("one","Work"),workspacePath:"/project",reasoningEffort:"ultra"};
+  execution.subscribe.mockResolvedValue({runs:[],activeRunId:null,selectedRun:null});
+  execution.models.mockResolvedValue({models:[{model:"gpt-5.6-sol",displayName:"Sol",supportedReasoningEfforts:[{reasoningEffort:"high"},{reasoningEffort:"ultra"}]},{model:"gpt-5.6-luna",displayName:"Luna",supportedReasoningEfforts:[{reasoningEffort:"low"},{reasoningEffort:"high"}]}]});
+  window.llmWikiApplication={request:vi.fn(async({path}:{path:string})=>path.endsWith("work-sessions")?response({sessions:[saved]}):response({session:saved,entries:[]})) as never};
+  render(<TaskWorkSessions task={task}/>);await screen.findByLabelText("Model");fireEvent.click(screen.getByRole("button",{name:"Refresh supported models",hidden:true}));
+  await waitFor(()=>expect(screen.getByLabelText("Model")).toHaveTextContent("Luna"));fireEvent.change(screen.getByLabelText("Model"),{target:{value:"gpt-5.6-luna"}});
+  expect(screen.getByLabelText("Reasoning effort")).toHaveValue("");expect(screen.getByText(/previous reasoning level is unsupported/)).toBeInTheDocument();
+  expect(screen.getByLabelText("Reasoning effort")).not.toHaveTextContent("ultra");expect(screen.queryByLabelText("Session title")).not.toBeInTheDocument();
 });

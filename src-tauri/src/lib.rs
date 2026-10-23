@@ -189,6 +189,7 @@ fn execution_error(error: String) -> NativeResponse {
     } else if matches!(
         code,
         "active_run_conflict"
+            | "queue_conflict"
             | "active_thread_conflict"
             | "operation_conflict"
             | "session_history_conflict"
@@ -239,6 +240,15 @@ async fn task_session_external_thread_link(
         Ok(body) => NativeResponse { status: 200, body },
         Err(error) => execution_error(error),
     })
+}
+
+#[tauri::command]
+async fn task_session_models(runtime: tauri::State<'_,native::task_execution_runtime::TaskExecutionRuntime>) -> Result<NativeResponse,String> {
+    Ok(match runtime.model_catalog().await {Ok(body)=>NativeResponse{status:200,body},Err(e)=>execution_error(e)})
+}
+#[tauri::command]
+async fn task_session_queue(runtime: tauri::State<'_,native::task_execution_runtime::TaskExecutionRuntime>,input:serde_json::Value) -> Result<NativeResponse,String> {
+    Ok(match runtime.queue_action(&input).await {Ok(body)=>NativeResponse{status:200,body},Err(e)=>execution_error(e)})
 }
 
 #[tauri::command]
@@ -564,6 +574,8 @@ pub fn run() {
             choose_vault,
             choose_project_folder,
             task_session_prepare,
+            task_session_models,
+            task_session_queue,
             task_session_external_threads_list,
             task_session_external_thread_read,
             task_session_external_thread_link,

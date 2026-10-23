@@ -108,6 +108,10 @@ rl.on("line", (line) => {
     response(input.id, { capabilities: { experimentalApi: true } });
   } else if (input.method === "initialized") {
     // notification
+  } else if (input.method === "model/list") {
+    response(input.id, { data: ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-6-astra"].map(model => ({ model, displayName: model, supportedReasoningEfforts: (model.endsWith("luna") ? ["low", "medium", "high"] : ["low", "medium", "high", "ultra"]).map(reasoningEffort => ({ reasoningEffort })), defaultReasoningEffort: "medium" })), nextCursor: null });
+  } else if (input.method === "config/read") {
+    response(input.id, { config: { model_reasoning_effort: null } });
   } else if (input.method === "thread/start") {
     const threadId = `fixture-thread-${nextThread++}`;
     threads.set(threadId, { turns: 0, pending: null });
@@ -126,10 +130,12 @@ rl.on("line", (line) => {
     if (!threads.has(threadId)) threads.set(threadId, { turns: 0, pending: null });
     response(input.id, { thread: { id: threadId }, model: input.params?.model ?? "gpt-5.6-luna", cwd: input.params?.cwd ?? process.cwd(), approvalPolicy: "on-request", approvalsReviewer: input.params?.approvalsReviewer ?? "user", sandbox: { type: "workspaceWrite" } });
   } else if (input.method === "turn/start") {
+    if (process.env.LLM_WIKI_FAKE_CODEX_EFFORT_LOG) appendFileSync(process.env.LLM_WIKI_FAKE_CODEX_EFFORT_LOG, `${input.params?.effort ?? "inherit"}\n`);
     startTurn(input.params?.threadId, input);
   } else if (input.method === "turn/interrupt") {
     response(input.id, { turn: { id: input.params?.turnId, threadId: input.params?.threadId, status: "interrupted" } });
-    write({ method: "turn/completed", params: { threadId: input.params?.threadId, turnId: input.params?.turnId, turn: { id: input.params?.turnId, status: "interrupted" } } });
+    const finish = () => write({ method: "turn/completed", params: { threadId: input.params?.threadId, turnId: input.params?.turnId, turn: { id: input.params?.turnId, status: "interrupted" } } });
+    if (process.env.LLM_WIKI_FAKE_CODEX_INTERRUPT_DELAY) setTimeout(finish, Number(process.env.LLM_WIKI_FAKE_CODEX_INTERRUPT_DELAY)); else finish();
   } else if (input.id && input.method === undefined) {
     for (const [threadId, state] of threads) {
       if (!state.pending || state.pending.id !== String(input.id)) continue;

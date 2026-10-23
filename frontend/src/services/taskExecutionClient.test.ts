@@ -111,3 +111,10 @@ describe("Task execution native client", () => {
     expect(Channel).not.toHaveBeenCalled();
   });
 });
+
+it("keeps capability and queue controls on explicit native commands with exact ownership",async()=>{
+  vi.mocked(invoke).mockResolvedValue({status:200,body:snapshot});
+  await taskExecutionClient.queue({taskId:"task",sessionId:"session",action:"stop_then_drain",runId:"current"});
+  expect(invoke).toHaveBeenCalledWith("task_session_queue",{input:{taskId:"task",sessionId:"session",action:"stop_then_drain",runId:"current"}});
+  await taskExecutionClient.models();expect(invoke).toHaveBeenCalledWith("task_session_models",{input:{}});
+});
