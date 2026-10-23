@@ -453,6 +453,7 @@ pub fn validate_prompt_output(id: PromptId, output: &Value) -> Result<(), Contra
         PromptId::KnowledgeRevisionChat => Some(serde_json::from_value::<crate::native::knowledge_revision_chat::Reply>(output.clone()).map(|_| ()).map_err(|e|e.to_string())),
         PromptId::WorkPreviewPlanner => Some(crate::native::reference_aware_workbench::validate_planner_output(output)),
         PromptId::WorkPreviewFinalizer => Some(crate::native::reference_aware_workbench::validate_output(output)),
+        PromptId::CaptureDistillation => Some(crate::native::capture_distillation::validate_result(output, usize::MAX, usize::MAX).map(|_| ())),
         PromptId::KnowledgeDraft => Some(serde_json::from_value::<crate::native::knowledge_distillation::GenerationResult>(output.clone()).map(|_| ()).map_err(|error| error.to_string())),
         _ => None,
     };
@@ -482,12 +483,7 @@ pub fn validate_prompt_output(id: PromptId, output: &Value) -> Result<(), Contra
         PromptId::WorkPreviewInvestigation => output["findings"].is_array(),
         PromptId::ConflictReview => matches!(output["status"].as_str(),Some("clear"|"findings"|"insufficient_evidence"))
             && output["citations"].is_array() && output["findings"].is_array(),
-        PromptId::CaptureDistillation => crate::native::capture_distillation::validate_result(
-            output,
-            usize::MAX,
-            usize::MAX,
-        )
-        .is_ok(),
+        PromptId::CaptureDistillation => unreachable!("Capture validation returns its original error above"),
         PromptId::UserGeneration => output["proposal"].is_object(),
         PromptId::WorkLogDistillation | PromptId::RunReportDistillation
         | PromptId::TaskJourneyIncrement => {

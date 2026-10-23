@@ -427,112 +427,129 @@ pub(crate) fn workbench_projections(
         .map_err(|error| error.to_string())
 }
 
-fn bounded_text(value: &Value, field: &str, limit: usize) -> Result<String, String> {
-    let text = value
-        .as_str()
-        .ok_or_else(|| format!("invalid_result: {field} must be a string"))?
-        .trim();
-    if text.chars().count() > limit {
-        return Err(format!("invalid_result: {field} is too long"));
+pub(crate) const TITLE_LIMIT: usize = 120;
+pub(crate) const CONTENT_LIMIT: usize = 20_000;
+pub(crate) const CONTEXT_LIMIT: usize = 10_000;
+pub(crate) const REQUEST_LIMIT: usize = 500;
+pub(crate) const REQUEST_COUNT_LIMIT: usize = 8;
+
+mod diagnostics;
+pub(crate) use diagnostics::{record_failure, ResponseDiagnostics};
+
+#[derive(Debug)]
+struct ValidationIssue {
+    field: String,
+    rule: &'static str,
+    observed: Option<usize>,
+    limit: Option<usize>,
+}
+
+impl ValidationIssue {
+    fn new(field: impl Into<String>, rule: &'static str) -> Self {
+        Self { field: field.into(), rule, observed: None, limit: None }
+    }
+
+    fn limit(field: impl Into<String>, rule: &'static str, observed: usize, limit: usize) -> Self {
+        Self { field: field.into(), rule, observed: Some(observed), limit: Some(limit) }
+    }
+}
+
+impl std::fmt::Display for ValidationIssue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "invalid_result: {} {}", self.field, self.rule)?;
+        if let (Some(observed), Some(limit)) = (self.observed, self.limit) {
+            write!(f, " (observed={observed}, limit={limit})")?;
+        }
+        Ok(())
+    }
+}
+
+fn bounded_text(value: &Value, field: &str, limit: usize) -> Result<String, ValidationIssue> {
+    let text = value.as_str()
+        .ok_or_else(|| ValidationIssue::new(field, "must be a string"))?.trim();
+    let length = text.chars().count();
+    if length > limit {
+        return Err(ValidationIssue::limit(field, "is too long", length, limit));
     }
     Ok(text.to_owned())
 }
 
-pub(crate) fn validate_result(
-    result: &Value,
-    text_length: usize,
-    image_count: usize,
-) -> Result<Value, String> {
-    let object = result
-        .as_object()
-        .ok_or("invalid_result: Capture distillation must be an object")?;
-    let allowed = [
-        "schemaVersion",
-        "title",
-        "content",
-        "context",
-        "explicitRequests",
-        "grounding",
-    ];
-    if object.keys().any(|key| !allowed.contains(&key.as_str())) || result["schemaVersion"] != 1 {
-        return Err(
-            "invalid_result: Capture distillation contains unsupported fields or schema".into(),
-        );
+pub(crate) fn validate_result(result: &Value, text_length: usize, image_count: usize) -> Result<Value, String> {
+    validate_result_detailed(result, text_length, image_count).map_err(|issue| issue.to_string())
+}
+
+fn validate_result_detailed(result: &Value, text_length: usize, image_count: usize) -> Result<Value, ValidationIssue> {
+    let object = result.as_object()
+        .ok_or_else(|| ValidationIssue::new("result", "must be an object"))?;
+    let allowed = ["schemaVersion", "title", "content", "context", "explicitRequests", "grounding"];
+    if object.keys().any(|key| !allowed.contains(&key.as_str())) {
+        return Err(ValidationIssue::new("result", "contains unsupported fields"));
     }
-    let title = bounded_text(&result["title"], "title", 120)?;
-    let content = bounded_text(&result["content"], "content", 4_000)?;
-    let context = bounded_text(&result["context"], "context", 2_000)?;
-    let requests = result["explicitRequests"]
-        .as_array()
-        .ok_or("invalid_result: explicitRequests must be an array")?;
-    if requests.len() > 8 {
-        return Err("invalid_result: too many explicitRequests".into());
+    for field in allowed {
+        if result.get(field).is_none_or(Value::is_null) {
+            return Err(ValidationIssue::new(field, "is required"));
+        }
     }
-    let requests = requests
-        .iter()
-        .map(|value| bounded_text(value, "explicitRequests", 500))
+    if result["schemaVersion"] != 1 {
+        return Err(ValidationIssue::new("schemaVersion", "must equal 1"));
+    }
+    let title = bounded_text(&result["title"], "title", TITLE_LIMIT)?;
+    let content = bounded_text(&result["content"], "content", CONTENT_LIMIT)?;
+    let context = bounded_text(&result["context"], "context", CONTEXT_LIMIT)?;
+    let requests = result["explicitRequests"].as_array()
+        .ok_or_else(|| ValidationIssue::new("explicitRequests", "must be an array"))?;
+    if requests.len() > REQUEST_COUNT_LIMIT {
+        return Err(ValidationIssue::limit("explicitRequests", "has too many items", requests.len(), REQUEST_COUNT_LIMIT));
+    }
+    let requests = requests.iter().enumerate()
+        .map(|(index, value)| bounded_text(value, &format!("explicitRequests.{index}"), REQUEST_LIMIT))
         .collect::<Result<Vec<_>, _>>()?;
     if title.is_empty() && content.is_empty() && context.is_empty() && requests.is_empty() {
-        return Err("invalid_result: Capture distillation is empty".into());
+        return Err(ValidationIssue::new("result", "is empty"));
     }
-    let grounding = result["grounding"]
-        .as_array()
-        .ok_or("invalid_result: grounding must be an array")?;
+    let grounding = result["grounding"].as_array()
+        .ok_or_else(|| ValidationIssue::new("grounding", "must be an array"))?;
     let mut grounded = std::collections::HashSet::new();
-    for item in grounding {
-        let field = item["field"]
-            .as_str()
-            .ok_or("invalid_result: grounding field is required")?;
-        let refs = item["sourceRefs"]
-            .as_array()
-            .ok_or("invalid_result: sourceRefs must be an array")?;
-        if refs.is_empty() {
-            return Err("invalid_result: sourceRefs cannot be empty".into());
+    for (index, item) in grounding.iter().enumerate() {
+        let item_object = item.as_object().ok_or_else(|| ValidationIssue::new(format!("grounding.{index}"), "must be an object"))?;
+        if item_object.keys().any(|key| !["field", "sourceRefs"].contains(&key.as_str())) {
+            return Err(ValidationIssue::new(format!("grounding.{index}"), "contains unsupported fields"));
         }
-        for source_ref in refs {
-            let source_ref = source_ref
-                .as_str()
-                .ok_or("invalid_result: sourceRef must be a string")?;
+        let field = item["field"].as_str()
+            .ok_or_else(|| ValidationIssue::new(format!("grounding.{index}.field"), "is required"))?;
+        let refs = item["sourceRefs"].as_array()
+            .ok_or_else(|| ValidationIssue::new(format!("grounding.{index}.sourceRefs"), "must be an array"))?;
+        if refs.is_empty() {
+            return Err(ValidationIssue::new(format!("grounding.{index}.sourceRefs"), "cannot be empty"));
+        }
+        for (ref_index, source_ref) in refs.iter().enumerate() {
+            let path = format!("grounding.{index}.sourceRefs.{ref_index}");
+            let source_ref = source_ref.as_str()
+                .ok_or_else(|| ValidationIssue::new(&path, "must be a string"))?;
             let valid = if let Some(range) = source_ref.strip_prefix("text:") {
-                range
-                    .split_once('-')
-                    .and_then(|(start, end)| {
-                        Some((start.parse::<usize>().ok()?, end.parse::<usize>().ok()?))
-                    })
-                    .is_some_and(|(start, end)| start < end && end <= text_length)
+                range.split_once('-').and_then(|(start, end)| {
+                    Some((start.parse::<usize>().ok()?, end.parse::<usize>().ok()?))
+                }).is_some_and(|(start, end)| start < end && end <= text_length)
             } else if let Some(index) = source_ref.strip_prefix("image:") {
-                index
-                    .parse::<usize>()
-                    .ok()
-                    .is_some_and(|index| index < image_count)
-            } else {
-                false
-            };
+                index.parse::<usize>().ok().is_some_and(|index| index < image_count)
+            } else { false };
             if !valid {
-                return Err(
-                    "invalid_result: grounding sourceRef is not in the Capture source".into(),
-                );
+                return Err(ValidationIssue::new(path, "is not in the Capture source"));
             }
         }
         grounded.insert(field.to_owned());
     }
-    for (field, nonempty) in [
-        ("title", !title.is_empty()),
-        ("content", !content.is_empty()),
-        ("context", !context.is_empty()),
-    ] {
+    for (field, nonempty) in [("title", !title.is_empty()), ("content", !content.is_empty()), ("context", !context.is_empty())] {
         if nonempty && !grounded.contains(field) {
-            return Err(format!("invalid_result: {field} is not grounded"));
+            return Err(ValidationIssue::new(field, "is not grounded"));
         }
     }
     for index in 0..requests.len() {
         if !grounded.contains(&format!("explicitRequests.{index}")) {
-            return Err("invalid_result: explicit request is not grounded".into());
+            return Err(ValidationIssue::new(format!("explicitRequests.{index}"), "is not grounded"));
         }
     }
-    Ok(
-        json!({"schemaVersion":1,"title":title,"content":content,"context":context,"explicitRequests":requests,"grounding":grounding}),
-    )
+    Ok(json!({"schemaVersion":1,"title":title,"content":content,"context":context,"explicitRequests":requests,"grounding":grounding}))
 }
 
 pub(crate) fn provider_content(
@@ -541,6 +558,10 @@ pub(crate) fn provider_content(
     source_number: i64,
     prompt: String,
 ) -> Result<Value, String> {
+    let source_text: String = connection.query_row(
+        "SELECT authored_text FROM capture_source_snapshots WHERE capture_id=? AND source_revision=?",
+        params![capture_id, source_number], |row| row.get(0),
+    ).map_err(|error| error.to_string())?;
     let mut content = vec![json!({"type":"text","text":prompt})];
     let mut statement = connection.prepare(
         "SELECT media_type,data FROM capture_source_images WHERE capture_id=? AND source_revision=? ORDER BY image_index LIMIT 8"
@@ -552,6 +573,10 @@ pub(crate) fn provider_content(
         .map_err(|error| error.to_string())?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| error.to_string())?;
+    content.push(json!({"type":"text","text":format!(
+        "Capture source counts: textCharacterCount={}, imageCount={}. Text offsets count Unicode scalar values in context.text after JSON decoding, starting at zero; end is exclusive. Use 0 <= start < end <= textCharacterCount. Image indices start at zero and must be less than imageCount.",
+        source_text.chars().count(), images.len()
+    )}));
     for (media_type, data) in images {
         content.push(json!({"type":"image_url","image_url":{"url":format!("data:{media_type};base64,{data}")}}));
     }
@@ -681,8 +706,10 @@ pub(crate) fn publish_result(
 mod tests {
     use super::*;
 
-    fn saved_capture() -> (tempfile::TempDir, std::path::PathBuf, Value) {
-        let root = tempfile::tempdir().unwrap();
+    pub(super) fn saved_capture() -> (tempfile::TempDir, std::path::PathBuf, Value) {
+        let temp_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../.tmp/capture-distillation-tests");
+        std::fs::create_dir_all(&temp_root).unwrap();
+        let root = tempfile::tempdir_in(temp_root).unwrap();
         let db = root.path().join("state.sqlite3");
         crate::native::database::initialize(&db).unwrap();
         let mut connection = crate::native::database::open(&db).unwrap();
@@ -703,6 +730,64 @@ mod tests {
                 {"field":"content","sourceRefs":["text:0-11"]}
             ]
         })
+    }
+
+    #[test]
+    fn capture_limits_count_unicode_scalars_and_preserve_failure_reasons() {
+        for (field, limit) in [("title", TITLE_LIMIT), ("content", CONTENT_LIMIT), ("context", CONTEXT_LIMIT)] {
+            let mut result = grounded_result();
+            result[field] = json!("한😀".repeat(limit / 2));
+            result["grounding"].as_array_mut().unwrap().push(json!({"field":field,"sourceRefs":["text:0-1"]}));
+            assert!(validate_result(&result, 11, 0).is_ok(), "{field} at limit");
+            crate::workflow_foundation::validate_prompt_output(PromptId::CaptureDistillation, &result).unwrap();
+            result[field] = json!(format!("{}가", result[field].as_str().unwrap()));
+            let error = crate::workflow_foundation::validate_prompt_output(PromptId::CaptureDistillation, &result).unwrap_err().to_string();
+            assert!(error.contains(&format!("{field} is too long")), "{error}");
+            assert!(error.contains(&format!("observed={}", limit + 1)), "{error}");
+        }
+        let mut result = grounded_result();
+        result["explicitRequests"] = json!(["한".repeat(REQUEST_LIMIT)]);
+        result["grounding"].as_array_mut().unwrap().push(json!({"field":"explicitRequests.0","sourceRefs":["text:0-1"]}));
+        validate_result(&result, 11, 0).unwrap();
+        result["explicitRequests"][0] = json!("한".repeat(REQUEST_LIMIT + 1));
+        assert!(validate_result(&result, 11, 0).unwrap_err().contains("explicitRequests.0 is too long"));
+        result["explicitRequests"] = json!(vec!["request"; REQUEST_COUNT_LIMIT + 1]);
+        assert!(validate_result(&result, 11, 0).unwrap_err().contains("explicitRequests has too many items"));
+    }
+
+    #[test]
+    fn capture_grounding_and_empty_results_remain_rejected() {
+        let mut result = grounded_result();
+        result["grounding"] = json!([]);
+        let error = crate::workflow_foundation::validate_prompt_output(PromptId::CaptureDistillation, &result).unwrap_err().to_string();
+        assert!(error.contains("title is not grounded"), "{error}");
+        result = grounded_result();
+        result["explicitRequests"] = json!(["keep intent"]);
+        assert!(validate_result(&result, 11, 0).unwrap_err().contains("explicitRequests.0 is not grounded"));
+        result = json!({"schemaVersion":1,"title":" ","content":"","context":"","explicitRequests":[],"grounding":[]});
+        assert!(validate_result(&result, 0, 0).unwrap_err().contains("result is empty"));
+        assert!(crate::workflow_foundation::validate_prompt_output(PromptId::CaptureDistillation, &json!({})).unwrap_err().to_string().contains("missing schemaVersion"));
+    }
+
+    #[test]
+    fn capture_grounding_offsets_use_decoded_unicode_not_bytes_or_utf16() {
+        let source = "가😀e\u{301}";
+        assert_eq!(source.chars().count(), 4);
+        let mut result = grounded_result();
+        result["grounding"] = json!([
+            {"field":"title","sourceRefs":["text:0-4"]},
+            {"field":"content","sourceRefs":["text:1-2"]}
+        ]);
+        validate_result(&result, source.chars().count(), 0).unwrap();
+        for invalid in ["text:0-5", "text:4-4", "text:2-1", "text:-1-2", "image:0"] {
+            result["grounding"][0]["sourceRefs"][0] = json!(invalid);
+            assert!(validate_result(&result, source.chars().count(), 0).unwrap_err().contains("grounding.0.sourceRefs.0"));
+        }
+        let (_root, db, created) = saved_capture();
+        let content = provider_content(&crate::native::database::open(&db).unwrap(), "capture-1", 1, "prompt".into()).unwrap();
+        assert!(content[1]["text"].as_str().unwrap().contains("textCharacterCount=11, imageCount=0"));
+        assert!(content[1]["text"].as_str().unwrap().contains("end is exclusive"));
+        assert!(created["distillation"]["jobId"].is_string());
     }
 
     #[test]

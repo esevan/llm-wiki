@@ -17,6 +17,13 @@ The original text and every submitted image remain separately inspectable in Ref
 content has its own revision and job provenance; it does not replace the raw source, add a Task or
 Problem, increment a user-facing version count, or move the Capture out of Inbox.
 
+Generated title, content, and context allow at most 120, 20,000, and 10,000 Unicode scalar values
+respectively, after trimming outer whitespace. Up to eight explicit requests may contain at most
+500 characters each. These are maximums, not target lengths. Organization preserves supported
+intent without padding, and the full raw source remains available. Every nonempty generated field
+must remain grounded in the source. Text references use zero-based Unicode scalar offsets with
+an exclusive end; image references use zero-based indices.
+
 Opening Refinement only reads the existing operation. It never starts another initial organization
 job. Chat remains usable while organization is queued or running. A chat message can make the
 current context newer; one successor attempt then represents the latest context under the same
@@ -30,5 +37,12 @@ without overwriting the current Capture.
 
 Failures remain visible after restart with a safe message. Retry uses the original registered prompt
 and exact source revision, and equivalent retry gestures coalesce while an attempt is active.
+Stored validation errors identify the field and rule instead of a generic type/value error. The stored
+job result includes bounded failure metadata: source character/image counts, output field lengths,
+validation field/rule, and provider finish reason when available. Rejected response text is not
+saved. Metadata distinguishes a literal empty JSON object response from an absent response candidate;
+a failed job's former default `{}` alone cannot establish what the provider returned. Strict provider
+schemas describe the same limits without requiring provider-specific length keywords; local
+validation enforces the limits. Provider context/output-token limits can still prevent generation.
 
 Related specification: [Automatic Capture Distillation](../../specs/016-capture-auto-distillation/spec.md).
