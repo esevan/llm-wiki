@@ -147,6 +147,7 @@ export interface WorkLogEntry {
   imageSummary?: string;
   imageSummaryVersions?: Partial<Record<"ko" | "en", { image_summary: string }>>;
   imageSummaryJob?: { id: string; status: string; error?: string };
+  distillationJob?: { id: string; status: string; error?: string };
   id: string;
   body?: string;
   createdAt?: string;
@@ -201,6 +202,7 @@ export interface TaskAggregate extends TaskCard {
     kind: "prerequisite" | "split_from" | "related";
     note?: string;
   }>;
+  workLogRefreshPending?: boolean;
   workLog?: WorkLogEntry[];
   checklist?: ChecklistItem[];
   decisions?: Array<{

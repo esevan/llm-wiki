@@ -203,6 +203,9 @@ export function TaskDetail({
   useEffect(() => { if (initialRefinement) setTab("details"); }, [initialRefinement]);
   useEffect(() => { if (tab === "review") setKnowledgeReviewMounted(true); }, [tab]);
   const loadSequence = useRef(0);
+  const currentTaskIdRef = useRef(taskId);
+  currentTaskIdRef.current = taskId;
+  useEffect(() => { currentTaskIdRef.current = taskId; return () => { currentTaskIdRef.current = ""; }; }, [taskId]);
   const mutationQueue = useRef<Promise<void>>(Promise.resolve());
   const mutationBusyRef = useRef(false);
   useEffect(() => {
@@ -289,20 +292,52 @@ export function TaskDetail({
       });
     return () => { cancelled = true; };
   }, [taskId]);
+  const pendingWorkLogRefresh = useRef<{taskId:string; again:boolean; promise:Promise<void>} | undefined>(undefined);
+  const refreshSessionWorkLog = useCallback((invalidate = false): Promise<void> => {
+    if (currentTaskIdRef.current !== taskId) return Promise.resolve();
+    const existing = pendingWorkLogRefresh.current;
+    if (existing?.taskId === taskId) {
+      if (invalidate) existing.again = true;
+      return existing.promise;
+    }
+    const pending = {taskId, again:false, promise:Promise.resolve()};
+    pendingWorkLogRefresh.current = pending;
+    pending.promise = (async () => {
+      try {
+        do {
+          pending.again = false;
+          await load();
+        } while (pending.again && currentTaskIdRef.current === taskId);
+      } finally {
+        if (pendingWorkLogRefresh.current === pending) pendingWorkLogRefresh.current = undefined;
+      }
+    })();
+    return pending.promise;
+  }, [load, taskId]);
+  const invalidateSessionWorkLog = useCallback(() => { void refreshSessionWorkLog(true); }, [refreshSessionWorkLog]);
+  const openSessionWorkLog = async (entryId: string) => {
+    const expectedTask = taskId;
+    await refreshSessionWorkLog();
+    if (currentTaskIdRef.current === expectedTask) focusInTab("work", `#work-log-${entryId}`);
+  };
   const workLogJobsPending = detailState?.persisted.workLog?.some(log =>
     [log.imageSummaryJob, log.translationJob].some(job =>
-      ["queued", "running", "retryable"].includes(job?.status ?? "")));
+      ["queued", "running", "retryable"].includes(job?.status ?? ""))) ||
+    (tab === "work" && (detailState?.persisted.workLogRefreshPending ||
+      detailState?.persisted.workLog?.some(log =>
+        ["queued", "running", "retryable"].includes(log.distillationJob?.status ?? "") ||
+        ["queued", "running", "awaiting_response"].includes(log.execution?.status ?? ""))));
   useEffect(() => {
     if (!workLogJobsPending) return;
     let stopped = false;
     let timer: ReturnType<typeof setTimeout>;
     const poll = async () => {
-      if (!mutationBusyRef.current) await load();
+      if (!mutationBusyRef.current) await refreshSessionWorkLog();
       if (!stopped) timer = setTimeout(() => void poll(), 1000);
     };
     timer = setTimeout(() => void poll(), 1000);
     return () => { stopped = true; clearTimeout(timer); };
-  }, [workLogJobsPending, load]);
+  }, [workLogJobsPending, refreshSessionWorkLog, tab]);
   useEffect(() => {
     const refresh = () => { if (!mutationBusyRef.current) void load(); };
     window.addEventListener("llm-wiki:image-summary-updated", refresh);
@@ -605,9 +640,9 @@ export function TaskDetail({
         const tabs: DetailTab[] = ["work", "sessions", "details", "review"];
         const current = tabs.indexOf(tab);
         const next = event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : event.key === "ArrowRight" ? (current + 1) % tabs.length : event.key === "ArrowLeft" ? (current + tabs.length - 1) % tabs.length : -1;
-        if (next >= 0) { event.preventDefault(); focusInTab(tabs[next], `[data-control="task-detail-tab-${tabs[next]}"]`); }
+        if (next >= 0) { event.preventDefault(); if (tabs[next] === "work") void refreshSessionWorkLog(); focusInTab(tabs[next], `[data-control="task-detail-tab-${tabs[next]}"]`); }
       }}>
-        <button id="task-detail-tab-work" type="button" role="tab" tabIndex={tab === "work" ? 0 : -1} data-control="task-detail-tab-work" aria-controls="task-tab-work" aria-selected={tab === "work"} onClick={() => focusInTab("work", "[data-control=task-detail-tab-work]")}>{text.work}</button>
+        <button id="task-detail-tab-work" type="button" role="tab" tabIndex={tab === "work" ? 0 : -1} data-control="task-detail-tab-work" aria-controls="task-tab-work" aria-selected={tab === "work"} onClick={() => { void refreshSessionWorkLog(); focusInTab("work", "[data-control=task-detail-tab-work]"); }}>{text.work}</button>
         <button id="task-detail-tab-sessions" type="button" role="tab" tabIndex={tab === "sessions" ? 0 : -1} data-control="task-detail-tab-sessions" aria-controls="task-tab-sessions" aria-selected={tab === "sessions"} onClick={() => focusInTab("sessions", "[data-control=task-detail-tab-sessions]")}>{text.workSessionsTab}</button>
         <button id="task-detail-tab-details" type="button" role="tab" tabIndex={tab === "details" ? 0 : -1} data-control="task-detail-tab-details" aria-controls="task-tab-details" aria-selected={tab === "details"} onClick={() => focusInTab("details", "[data-control=task-detail-tab-details]")}>{text.refine}</button>
         <button id="task-detail-tab-review" type="button" role="tab" tabIndex={tab === "review" ? 0 : -1} data-control="task-detail-tab-review" aria-controls="task-tab-review" aria-selected={tab === "review"} onClick={() => focusInTab("review", "[data-control=task-detail-tab-review]")}>{text.reviewTab}</button>
@@ -684,7 +719,7 @@ export function TaskDetail({
       </section>
       {!!task.stateTransitions?.length && <details className="task-state-history" data-control="task-state-history"><summary>{text.transitionHistory}</summary><ol>{task.stateTransitions.map((entry, index) => <li key={index}><time>{entry.createdAt}</time> · {entry.action === 'backlog' ? text.executionBacklog : entry.action === 'on_hold' ? text.hold : entry.action === 'resume' ? text.resumeTask : entry.action === 'reopen' ? text.reopen : entry.to === 'completed' ? text.completed : text.inProgress}{entry.reason && ` · ${entry.reason}`}</li>)}</ol></details>}
       <div id="task-tab-sessions" aria-labelledby="task-detail-tab-sessions" className="task-tab-panel" role="tabpanel" data-task-tab="sessions" hidden={tab !== "sessions"}>
-        {tab === "sessions" && <TaskWorkSessions task={task} draftStore={workSessionDrafts} focusExecution={executionFocus} onOpenWorkLog={(entryId) => focusInTab("work", `#work-log-${entryId}`)} />}
+        {tab === "sessions" && <TaskWorkSessions task={task} draftStore={workSessionDrafts} focusExecution={executionFocus} onWorkLogChanged={invalidateSessionWorkLog} onOpenWorkLog={(entryId) => void openSessionWorkLog(entryId)} />}
       </div>
       <div id="task-tab-details" aria-labelledby="task-detail-tab-details" className="task-tab-panel" role="tabpanel" data-task-tab="details" hidden={tab !== "details"}>
       {(tab === "details") && <RefinementPanel

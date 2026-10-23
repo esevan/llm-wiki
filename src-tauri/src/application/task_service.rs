@@ -962,7 +962,12 @@ impl TaskApplicationService {
                 let summary_job = c.query_row("SELECT id,status,error_message FROM ai_jobs_v2 WHERE task_kind='image_summary' AND entity_type='task_work_log_entries' AND entity_id=? ORDER BY rowid DESC LIMIT 1", [entry_id], |r| Ok(json!({"id":r.get::<_,String>(0)?,"status":r.get::<_,String>(1)?,"error":r.get::<_,String>(2)?}))).optional().map_err(|e|e.to_string())?;
                 let translation_job = c.query_row("SELECT id,status,error_message FROM ai_jobs_v2 WHERE task_kind='derived_translation' AND entity_type='task_work_log_entries' AND entity_id=? ORDER BY rowid DESC LIMIT 1", [entry_id], |r| Ok(json!({"id":r.get::<_,String>(0)?,"status":r.get::<_,String>(1)?,"error":r.get::<_,String>(2)?}))).optional().map_err(|e|e.to_string())?;
                 let comments=c.prepare("SELECT id,body,created_at FROM task_work_log_comments WHERE entry_id=? ORDER BY created_at").map_err(|e|e.to_string())?.query_map([entry_id],|r|Ok(json!({"id":r.get::<_,String>(0)?,"body":r.get::<_,String>(1)?,"createdAt":r.get::<_,String>(2)?}))).map_err(|e|e.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|e|e.to_string())?;
+                // Expose actual job state so the open modal refreshes through
+                // asynchronous distillation and stops polling at terminal state.
+                let run_id = entry["execution"]["runId"].as_str();
+                let distillation_job = c.query_row("SELECT id,status,error_message FROM ai_jobs_v2 WHERE (task_kind='run_report_distillation' AND entity_type='task_work_session_runs' AND entity_id=?1) OR (task_kind='work_log_distillation' AND entity_type='task_work_log_entries' AND entity_id=?2) ORDER BY rowid DESC LIMIT 1", params![run_id,entry_id], |r| Ok(json!({"id":r.get::<_,String>(0)?,"status":r.get::<_,String>(1)?,"error":r.get::<_,String>(2)?}))).optional().map_err(|e|e.to_string())?;
                 if let Some(o) = entry.as_object_mut() {
+                    if let Some(job) = distillation_job { o.insert("distillationJob".into(), job); }
                     if let Some(a) = attachment {
                         o.insert("attachment".into(), a);
                     }
@@ -1001,6 +1006,10 @@ impl TaskApplicationService {
         let transitions = c.prepare("SELECT from_state,to_state,action,reason,created_at FROM task_state_transitions WHERE task_id=? ORDER BY created_at,rowid").map_err(|e|e.to_string())?.query_map([id],|r|Ok(json!({"from":r.get::<_,String>(0)?,"to":r.get::<_,String>(1)?,"action":r.get::<_,String>(2)?,"reason":r.get::<_,String>(3)?,"createdAt":r.get::<_,String>(4)?}))).map_err(|e|e.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|e|e.to_string())?;
         x["stateTransitions"] = json!(transitions);
         x["hasActiveExecution"] = json!(Self::has_active_execution(&c,id)?);
+        // A runnable pending queue can briefly have no active Run between turns.
+        // This read-only hint is for display refresh, not Task transition guards.
+        let refresh_pending:bool=c.query_row("SELECT EXISTS(SELECT 1 FROM task_work_session_runs WHERE task_id=?1 AND status IN ('queued','running','awaiting_response')) OR EXISTS(SELECT 1 FROM task_session_queue_items i JOIN task_session_queue_control q ON q.session_id=i.session_id JOIN tasks t ON t.id=i.task_id WHERE i.task_id=?1 AND i.state='pending' AND q.mode IN ('active','stop_then_drain') AND t.state NOT IN ('completed','on_hold'))",[id],|row|row.get(0)).map_err(|e|e.to_string())?;
+        x["workLogRefreshPending"] = json!(refresh_pending);
         let readiness = self.readiness(id)?;
         let object = x.as_object_mut().ok_or("invalid task")?;
         object.insert("workLog".into(), work_log);

@@ -304,7 +304,7 @@ describe("Task detail", () => {
     const executionHeading = await screen.findByRole("heading", { name: "Run status: Finished" });
     await waitFor(() => expect(executionHeading).toHaveFocus());
     fireEvent.click(screen.getByRole("button", { name: "Open Work Log entry" }));
-    expect(screen.getByRole("tab", { name: "Work" })).toHaveAttribute("aria-selected", "true");
+    await waitFor(() => expect(screen.getByRole("tab", { name: "Work" })).toHaveAttribute("aria-selected", "true"));
     expect(document.querySelector('[data-work-log-entry="linked-log"]')).toHaveFocus();
   });
 
@@ -965,4 +965,131 @@ describe("Task detail tabs and workbench sessions", () => {
     fireEvent.keyDown(screen.getByRole("tab", { name: "Work" }), { key: "ArrowLeft" });
     await waitFor(() => expect(screen.getByRole("tab", { name: "Review" })).toHaveAttribute("aria-selected", "true"));
   });
+});
+
+it("refreshes persisted Task Work Log when a session Run completes before opening its log", async () => {
+  const workSession = { id:"recording-session",taskId:task.id,title:"Recording",provider:"codex" as const,model:"gpt-5.6-sol",approvalMode:"ask" as const,workspacePath:"/project",createdAt:"2026-10-23T10:00:00Z",updatedAt:"2026-10-23T10:00:00Z" };
+  const running = { id:"recording-run",taskId:task.id,sessionId:workSession.id,instruction:"Synthetic saved work",status:"running" as const,stopRequested:false,provider:"codex" as const,model:workSession.model,workspacePath:"/project",evidence:[],formalRequests:[],workLogEntryId:"new-session-log",workLogSyncState:"pending" as const,revision:1 };
+  const finished = {...running,status:"succeeded" as const,workLogSyncState:"synced" as const,revision:2,finalReport:"Synthetic saved result"};
+  type Snapshot=import("../../types/taskWorkbench").TaskExecutionSnapshot;
+  let notify!:(snapshot:Snapshot)=>void;
+  execution.subscribe.mockImplementation(async (_input:unknown,onSnapshot:(snapshot:Snapshot)=>void)=>{notify=onSnapshot;return {runs:[running],activeRunId:running.id,selectedRun:running};});
+  let persisted:import("../../types/taskWorkbench").TaskAggregate={...task,workLog:[]};
+  const request=vi.fn(async({path}:{path:string})=>{
+    if(path.endsWith("work-sessions"))return response({sessions:[workSession]});
+    if(path.endsWith(workSession.id))return response({session:workSession,entries:[]});
+    return response(JSON.parse(JSON.stringify(persisted)));
+  });
+  window.llmWikiApplication={request:request as never};
+  render(<TaskDetail taskId={task.id} onClose={vi.fn()} onChanged={vi.fn()}/>);
+  fireEvent.change(await screen.findByLabelText("Work Log entry"),{target:{value:"Unsaved work note"}});
+  fireEvent.click(await screen.findByRole("tab",{name:"Sessions"}));
+  await screen.findByRole("heading",{name:"Run status: Running"});
+  // Native persistence has succeeded, independently of the mounted Task snapshot.
+  persisted={...task,workLog:[{id:"new-session-log",body:"Synthetic saved result",comments:[],execution:{runId:finished.id,sessionId:workSession.id,status:"succeeded",provider:"codex",model:workSession.model,evidence:[],artifacts:[],limitations:[],syncState:"synced"}}]};
+  await act(async()=>notify({revision:2,runs:[finished],activeRunId:null,selectedRun:finished}));
+  fireEvent.click(screen.getByRole("button",{name:"Open Work Log entry"}));
+  await waitFor(()=>expect(document.querySelector('[data-work-log-entry="new-session-log"]')).toHaveFocus());
+  expect(screen.getByLabelText("Work Log entry")).toHaveValue("Unsaved work note");
+});
+
+it("refreshes a pending Work Log summary in the open Work tab and stops when its job finishes",async()=>{
+  vi.useFakeTimers();
+  let persisted={...task,workLog:[{id:"summary-log",body:"Summary pending",distillationJob:{id:"summary-job",status:"running"}}]};
+  const request=vi.fn(async()=>response(JSON.parse(JSON.stringify(persisted))));
+  window.llmWikiApplication={request:request as never};
+  const view=render(<TaskDetail taskId={task.id} onClose={vi.fn()} onChanged={vi.fn()}/>);
+  try{
+    await act(async()=>{});
+    expect(screen.getByText("Summary pending")).toBeVisible();
+    persisted={...task,workLog:[{id:"summary-log",body:"Summary available",distillationJob:{id:"summary-job",status:"succeeded"}}]};
+    await act(async()=>vi.advanceTimersByTimeAsync(1000));
+    expect(screen.getByText("Summary available")).toBeVisible();
+    const count=request.mock.calls.length;
+    await act(async()=>vi.advanceTimersByTimeAsync(5000));
+    expect(request).toHaveBeenCalledTimes(count);
+  }finally{view.unmount();vi.useRealTimers();}
+});
+
+it("coalesces simultaneous session invalidation and repeated log-open reads",async()=>{
+  const saved={id:"coalesced-session",taskId:task.id,title:"Coalesced",provider:"codex" as const,model:"gpt-5.6-sol",approvalMode:"ask" as const,workspacePath:"/project",createdAt:"2026-10-23T10:00:00Z",updatedAt:"2026-10-23T10:00:00Z"};
+  const run={id:"coalesced-run",taskId:task.id,sessionId:saved.id,instruction:"Check",status:"running" as const,stopRequested:false,provider:"codex" as const,model:saved.model,workspacePath:"/project",evidence:[],formalRequests:[],workLogEntryId:"coalesced-log",workLogSyncState:"pending" as const,revision:1};
+  let notify!:(snapshot:import("../../types/taskWorkbench").TaskExecutionSnapshot)=>void;
+  execution.subscribe.mockImplementation(async(_input:unknown,callback:typeof notify)=>{notify=callback;return{runs:[run],activeRunId:run.id,selectedRun:run};});
+  let block=false;let reads=0;let release!:(value:ReturnType<typeof response>)=>void;
+  let persisted:import("../../types/taskWorkbench").TaskAggregate={...task};
+  window.llmWikiApplication={request:vi.fn(async({path}:{path:string})=>{
+    if(path.endsWith("work-sessions"))return response({sessions:[saved]});
+    if(path.endsWith(saved.id))return response({session:saved,entries:[]});
+    if(path===`/tasks/${task.id}`){reads++;if(block)return new Promise<ReturnType<typeof response>>(resolve=>{release=resolve;});}
+    return response(JSON.parse(JSON.stringify(persisted)));
+  }) as never};
+  render(<TaskDetail taskId={task.id} onClose={vi.fn()} onChanged={vi.fn()}/>);
+  fireEvent.click(await screen.findByRole("tab",{name:"Sessions"}));
+  await screen.findByRole("heading",{name:"Run status: Running"});
+  await waitFor(()=>expect(reads).toBe(2));
+  block=true;
+  const finished={...run,status:"succeeded" as const,workLogSyncState:"synced" as const,revision:2};
+  await act(async()=>notify({revision:2,runs:[finished],activeRunId:null,selectedRun:finished}));
+  expect(reads).toBe(3);
+  fireEvent.click(screen.getByRole("button",{name:"Open Work Log entry"}));
+  fireEvent.click(screen.getByRole("button",{name:"Open Work Log entry"}));
+  expect(reads).toBe(3);
+  // A second persisted revision during the read requires one trailing read.
+  await act(async()=>notify({revision:3,runs:[{...finished,revision:3}],activeRunId:null,selectedRun:{...finished,revision:3}}));
+  expect(reads).toBe(3);
+  persisted={...task,workLog:[{id:"coalesced-log",body:"Coalesced saved result"}]};block=false;
+  await act(async()=>release(response({...task})));
+  await waitFor(()=>expect(document.querySelector('[data-work-log-entry="coalesced-log"]')).toHaveFocus());
+  expect(reads).toBe(4);
+});
+
+it("ignores an old Task's pending log-open refresh after switching modal identity",async()=>{
+ const saved={id:"stale-session",taskId:task.id,title:"Stale",provider:"codex" as const,model:"gpt-5.6-sol",approvalMode:"ask" as const,workspacePath:"/project",createdAt:"2026-10-23T10:00:00Z",updatedAt:"2026-10-23T10:00:00Z"};
+ const run={id:"stale-run",taskId:task.id,sessionId:saved.id,instruction:"Check",status:"succeeded" as const,stopRequested:false,provider:"codex" as const,model:saved.model,workspacePath:"/project",evidence:[],formalRequests:[],workLogEntryId:"old-task-log",workLogSyncState:"synced" as const,revision:1};
+ execution.subscribe.mockResolvedValue({runs:[run],activeRunId:null,selectedRun:run});
+ let block=false;let release!:(value:ReturnType<typeof response>)=>void;
+ const second={...task,id:"task-2",title:"Second modal Task",workLog:[{id:"second-log",body:"Second Task evidence"}]};
+ window.llmWikiApplication={request:vi.fn(async({path}:{path:string})=>{
+  if(path.endsWith("work-sessions"))return response({sessions:[saved]});
+  if(path.endsWith(saved.id))return response({session:saved,entries:[]});
+  if(path==="/tasks/task-2")return response(second);
+  if(path===`/tasks/${task.id}`&&block)return new Promise<ReturnType<typeof response>>(resolve=>{release=resolve;});
+  return response({...task});
+ }) as never};
+ const view=render(<TaskDetail key={task.id} taskId={task.id} onClose={vi.fn()} onChanged={vi.fn()}/>);
+ fireEvent.click(await screen.findByRole("tab",{name:"Sessions"}));
+ await screen.findByRole("heading",{name:"Run status: Finished"});await act(async()=>{});
+ block=true;fireEvent.click(screen.getByRole("button",{name:"Open Work Log entry"}));
+ view.rerender(<TaskDetail key="task-2" taskId="task-2" onClose={vi.fn()} onChanged={vi.fn()}/>);
+ await screen.findByRole("heading",{name:"Second modal Task"});
+ await act(async()=>release(response({...task,workLog:[{id:"old-task-log",body:"Old Task response"}]})));
+ expect(screen.getByText("Second Task evidence")).toBeVisible();
+ expect(screen.queryByText("Old Task response")).not.toBeInTheDocument();
+ expect(screen.getByRole("tab",{name:"Work"})).toHaveAttribute("aria-selected","true");
+});
+
+it("rereads saved Work Log when keyboard navigation returns to Work",async()=>{
+ execution.subscribe.mockResolvedValue({runs:[],activeRunId:null,selectedRun:null});
+ let persisted:import("../../types/taskWorkbench").TaskAggregate={...task,workLog:[]};
+ window.llmWikiApplication={request:vi.fn(async({path}:{path:string})=>path.endsWith("work-sessions")?response({sessions:[]}):response(JSON.parse(JSON.stringify(persisted)))) as never};
+ render(<TaskDetail taskId={task.id} onClose={vi.fn()} onChanged={vi.fn()}/>);
+ fireEvent.click(await screen.findByRole("tab",{name:"Sessions"}));
+ persisted={...task,workLog:[{id:"keyboard-log",body:"Saved while another tab was open"}]};
+ fireEvent.keyDown(screen.getByRole("tab",{name:"Sessions"}),{key:"ArrowLeft"});
+ expect(await screen.findByText("Saved while another tab was open")).toBeVisible();
+});
+
+it("keeps refresh through the runnable Queue gap before its next Run appears",async()=>{
+ vi.useFakeTimers();
+ let persisted:import("../../types/taskWorkbench").TaskAggregate={...task,workLog:[],workLogRefreshPending:true};
+ const request=vi.fn(async()=>response(JSON.parse(JSON.stringify(persisted))));window.llmWikiApplication={request:request as never};
+ const view=render(<TaskDetail taskId={task.id} onClose={vi.fn()} onChanged={vi.fn()}/>);
+ try{
+  await act(async()=>{});
+  persisted={...task,workLogRefreshPending:false,workLog:[{id:"queued-log",body:"Queued follow-up saved"}]};
+  await act(async()=>vi.advanceTimersByTimeAsync(1000));
+  expect(screen.getByText("Queued follow-up saved")).toBeVisible();
+  const count=request.mock.calls.length;await act(async()=>vi.advanceTimersByTimeAsync(5000));expect(request).toHaveBeenCalledTimes(count);
+ }finally{view.unmount();vi.useRealTimers();}
 });

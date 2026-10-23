@@ -310,11 +310,13 @@ export function TaskWorkSessions({
   draftStore,
   focusExecution,
   onOpenWorkLog,
+  onWorkLogChanged,
 }: {
   task: TaskAggregate;
   draftStore?: Map<string, WorkSessionDraft>;
   focusExecution?: { sessionId: string; runId: string };
   onOpenWorkLog?: (entryId: string) => void;
+  onWorkLogChanged?: () => void;
 }) {
   const workbenchText = useTaskWorkbenchText();
   const t = document.documentElement.lang.startsWith("ko") ? copy.ko : copy.en;
@@ -338,6 +340,16 @@ export function TaskWorkSessions({
         ? current : snapshot),
     [],
   );
+  // Native snapshots include live deltas. Refresh the owning Task only when
+  // its persisted Run/Work Log projection changes, never once per token.
+  const workLogSignature = execution?.runs.map(run => [run.id, run.workLogEntryId, run.status, run.workLogSyncState, run.workLogSyncError, run.revision]);
+  const workLogFingerprint = JSON.stringify([task.id, activeId, workLogSignature]);
+  const lastWorkLogFingerprint = useRef("");
+  useEffect(() => {
+    if (!execution?.runs.length || lastWorkLogFingerprint.current === workLogFingerprint) return;
+    lastWorkLogFingerprint.current = workLogFingerprint;
+    onWorkLogChanged?.();
+  }, [execution?.runs.length, onWorkLogChanged, workLogFingerprint]);
   const [answers, setAnswers] = useState<Record<string, string[]>>({});
   const [requestBusy, setRequestBusy] = useState("");
   const [modelCatalogue, setModelCatalogue] = useState<CodexModelCapability[]>([]);

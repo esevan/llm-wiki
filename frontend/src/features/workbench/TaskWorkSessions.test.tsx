@@ -1055,3 +1055,18 @@ it("puts unprepared setup before conversation and cancels settings without losin
   expect(screen.getByRole("button",{name:"Prepare conversation"})).toBeEnabled();
   expect(request.mock.calls.every(([input])=>!["POST","PATCH","PUT","DELETE"].includes((input as {method?:string}).method ?? "GET"))).toBe(true);
 });
+
+it("notifies Work Log changes for persisted Run revisions but not streamed text deltas",async()=>{
+ const saved={...session("notify","Notify"),workspacePath:"/project"};
+ const run={id:"notify-run",taskId:task.id,sessionId:saved.id,instruction:"Check",status:"running" as const,stopRequested:false,provider:"codex" as const,model:saved.model,workspacePath:"/project",evidence:[],formalRequests:[],workLogEntryId:"notify-log",workLogSyncState:"pending" as const,revision:1};
+ let notify!:(snapshot:TaskExecutionSnapshot)=>void;
+ execution.subscribe.mockImplementation(async(_input:unknown,callback:typeof notify)=>{notify=callback;return{runs:[run],activeRunId:run.id,selectedRun:run};});
+ window.llmWikiApplication={request:vi.fn(async({path}:{path:string})=>path.endsWith("work-sessions")?response({sessions:[saved]}):response({session:saved,entries:[]})) as never};
+ const changed=vi.fn();render(<TaskWorkSessions task={task} onWorkLogChanged={changed}/>);
+ await screen.findByRole("heading",{name:"Run status: Running"});await waitFor(()=>expect(changed).toHaveBeenCalledTimes(1));
+ for(let i=0;i<5;i++)await act(async()=>notify({revision:i+2,runs:[{...run,liveStatus:{kind:"agentMessage",status:"running",text:`delta ${i}`}}],activeRunId:run.id,selectedRun:run}));
+ expect(changed).toHaveBeenCalledTimes(1);
+ const finished={...run,status:"succeeded" as const,workLogSyncState:"synced" as const,revision:2};
+ await act(async()=>notify({revision:8,runs:[finished],activeRunId:null,selectedRun:finished}));
+ expect(changed).toHaveBeenCalledTimes(2);
+});
