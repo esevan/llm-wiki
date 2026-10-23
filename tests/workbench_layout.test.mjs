@@ -9,6 +9,10 @@ import { createServer } from 'vite';
 const { chromium } = await import(process.env.LLM_WIKI_PLAYWRIGHT_MODULE || 'playwright-core');
 const server = await createServer({
   plugins: [{ name: 'layout-fixture', configureServer(server) {
+    server.middlewares.use('/preview-spacing', async (_req, res) => {
+      res.setHeader('Content-Type', 'text/html');
+      res.end(await server.transformIndexHtml('/preview-spacing', '<html><head></head><body><div id="root"></div><script type="module" src="/src/test/previewSpacing.fixture.tsx"></script></body></html>'));
+    });
     server.middlewares.use('/review-app', async (_req, res) => {
       res.setHeader('Content-Type', 'text/html');
       res.end(await server.transformIndexHtml('/review-app', '<html><head></head><body><div id="root"></div><script type="module" src="/src/test/reviewLayout.fixture.tsx"></script></body></html>'));
@@ -25,6 +29,33 @@ const origin = server.resolvedUrls.local[0];
 const browser = await chromium.launch({ headless: true, ...(process.env.LLM_WIKI_BROWSER_EXECUTABLE ? { executablePath: process.env.LLM_WIKI_BROWSER_EXECUTABLE } : {}) });
 const sizes = [[1440,900], [2560,1440], [3440,1440], [5120,1440], [640,480], [390,700]];
 try {
+  await test('initial preview keeps a section gap without changing ready layouts', async () => {
+    const page = await browser.newPage();
+    try {
+      for (const width of [1440, 640]) for (const state of ['loading', 'failed', 'empty', 'ready', 'edit', 'history']) {
+        await page.setViewportSize({width, height: 1000});
+        await page.goto(`${origin}preview-spacing?state=${state}`);
+        await page.locator('.reference-aware-preview').waitFor();
+        const card = page.locator('#refinement-result-preview > .reference-aware-preview');
+        const header = page.locator('#refinement-result-preview > header');
+        if (['ready', 'edit', 'history'].includes(state)) {
+          assert.equal(await header.count(), 0);
+          if (state === 'edit') await page.locator('[data-control=reference-preview-save]').waitFor();
+          if (state === 'history') await page.locator('[data-control=draft-version-restore]').waitFor();
+        }
+        else {
+          const a = await card.boundingBox(), b = await header.boundingBox();
+          assert.ok(Math.abs(b.y - a.y - a.height - 24) <= 1, `${state} keeps a 24px gap at ${width}px`);
+          assert.equal(await header.evaluate(el => getComputedStyle(el).display), 'flex');
+        }
+        assert.equal(await page.locator('.refinement-panel').evaluate(el => el.scrollWidth > el.clientWidth + 1), false);
+        if (width === 1440) {
+          const rail = await page.locator('.refinement-support-rail').boundingBox();
+          assert.ok(rail.width >= 400 && rail.width <= 760);
+        }
+      }
+    } finally { await page.close(); }
+  });
   await test('review App modals and main content grow with the viewport', async () => {
     const measurements = [];
     const chatWidths = new Map();

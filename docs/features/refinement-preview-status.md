@@ -27,6 +27,8 @@ Saving an image-only Capture automatically starts AI analysis of its text, table
 
 ## Work in the refinement panel
 
+When a loading work draft appears above proposed results, a 24px section gap separates the draft card from the results heading.
+
 Open **Refine** from a Capture or Task, or resume the saved refinement shortcut in Workbench.
 Refinement opens in a focused dialog: the proposed result stays in a scrollable left pane while the
 full conversation history and composer stay together in a right-hand chat pane. The rest of Workbench

@@ -707,9 +707,10 @@ main:has(.task-workbench.active :is(.task-detail, .refinement-panel)) {
 .refinement-composer { display: flex; align-items: flex-end; gap: var(--space-2); }
 .refinement-composer textarea { flex: 1; min-width: 0; min-height: 76px; }
 .refinement-preview { margin-top: var(--space-5); padding-top: var(--space-5); border-top: var(--border-default); }
-.refinement-preview > header { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+.refinement-preview > #refinement-result-preview > header { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
 .refinement-preview h3 { margin: 0; }
-.refinement-preview > header small { font-size: var(--font-size-sm); color: var(--color-text-secondary); }
+.refinement-preview > #refinement-result-preview > .reference-aware-preview + header { margin-block-start: var(--space-6); }
+.refinement-preview > #refinement-result-preview > header small { font-size: var(--font-size-sm); color: var(--color-text-secondary); }
 .proposal-document { padding: var(--space-4) 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; border-bottom: var(--border-default); }
 .proposal-document h4 { font-size: var(--font-size-md); margin: var(--space-2) 0 var(--space-4); overflow-wrap: anywhere; }
 .proposal-fields { display: grid; gap: var(--space-4); margin: 0 0 var(--space-4); }
