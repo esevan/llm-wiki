@@ -6,12 +6,13 @@ export function SessionQueue({queue, currentRun, readOnly, busy, taskId, session
   const ko=document.documentElement.lang.startsWith("ko");
   const [editing,setEditing]=useState<string | undefined>(editorDraft?.id);const [body,setBody]=useState(editorDraft?.body ?? "");
   useEffect(()=>{onEditorChange?.(editing?{id:editing,body}:undefined);},[editing,body,onEditorChange]);
-  if(!queue || (!queue.items.length && !editing))return null;
+  if(!queue || (!queue.items.length && !editing && !currentRun))return null;
   const waiting=queue.control.mode==="stop_then_drain";
   const action=(input:Omit<Action,"taskId"|"sessionId">)=>onAction({...input,taskId,sessionId});
   return <section className="session-queue" aria-label={ko?"대기 요청":"Pending requests"}>
     <header><h4>{ko?"대기 요청":"Pending requests"} <span>{queue.items.length}</span></h4><span>{queue.control.mode==="active"?(ko?"현재 실행 완료 뒤 순서대로 실행":"Run in order after current work finishes"):(ko?"대기 중 · 자동 시작 안 함":"Waiting · automatic start paused")}</span></header>
     <p className="session-queue-meta">{ko?"각 요청에 기록한 설정으로 실행 · 세션 기본값 변경 영향 없음":"Uses each request’s recorded settings · later defaults do not alter pending work"}</p>
+    {!queue.items.length && !editing && <p className="session-queue-empty">{ko?"추가 요청을 아래에 적으면 현재 작업 다음에 실행할 수 있습니다.":"Add a request below to run after the current work."}</p>}
     <ol>{queue.items.map((item,index)=><li key={item.id}>
       <span className="session-queue-number">{index+1}</span><div>{editing===item.id?<><label>{ko?"대기 요청 편집":"Edit pending request"}<textarea data-control="session-queue-edit-body" value={body} onChange={e=>setBody(e.target.value)}/></label><button data-control="session-queue-edit-save" disabled={busy||!body.trim()} onClick={()=>void action({action:"edit",itemId:item.id,expectedRevision:item.revision,instruction:body}).then(()=>setEditing(undefined)).catch(()=>{})}>{ko?"변경 저장":"Save changes"}</button><button data-control="session-queue-edit-cancel" onClick={()=>setEditing(undefined)}>{ko?"취소":"Cancel"}</button></>:<p>{item.instruction}</p>}
         <small>{item.settings.cwd} · {item.settings.model} · {ko?"추론":"Reasoning"} {item.settings.resolvedEffort} {item.settings.reasoningEffort?"":(ko?"(상속값 확정)":"(resolved inherited value)")} · {item.attachment?.name??(ko?"첨부 없음":"No attachment")}</small>

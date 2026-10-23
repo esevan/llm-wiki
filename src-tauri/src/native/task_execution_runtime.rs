@@ -39,6 +39,7 @@ struct Inner {
 
 #[derive(Clone)]
 struct ActiveThread {
+    normalized: Value,
     thread_id: String,
     generation: i64,
     settings_revision: String,
@@ -410,45 +411,54 @@ impl TaskExecutionRuntime {
         let prepared = self.inner.service.prepared(task_id, session_id)?;
         self.ensure_started().await?;
         let generation = self.inner.server.generation().await?;
-        if let Some(thread_id) = prepared.thread_id.as_deref() {
+        let cached = {
             let active = self.inner.active_threads.lock().await;
-            if input.get("queueItemId").is_none() && input["resolveReasoning"]!=true && active.get(session_id).is_some_and(|active| {
-                active.thread_id == thread_id
+            active.get(session_id).filter(|active| {
+                prepared.thread_id.as_deref() == Some(active.thread_id.as_str())
                     && active.generation == generation
                     && active.settings_revision == prepared.settings_revision
-            }) {
-                let snapshot = self.enrich_snapshot(self.inner.service.snapshot(
-                    task_id,
-                    session_id,
-                    input.get("runId").and_then(Value::as_str),
-                )?);
-                return Ok((snapshot, prepared));
-            }
+            }).cloned()
+        };
+        if cached.is_some() && input.get("queueItemId").is_none() && input["resolveReasoning"] != true {
+            let snapshot = self.enrich_snapshot(self.inner.service.snapshot(
+                task_id, session_id, input.get("runId").and_then(Value::as_str),
+            )?);
+            return Ok((snapshot, prepared));
         }
         let developer_instructions = format!(
             "{}\n\n{}",
             prepared.bootstrap, FILESYSTEM_SCOPE_INSTRUCTIONS
         );
-        let response = if let Some(thread_id) = prepared.thread_id.as_deref() {
-            self.inner
-                .server
-                .request(
-                    "thread/resume",
-                    json!({"threadId":thread_id,"model":prepared.model,"cwd":prepared.cwd,"approvalsReviewer":prepared.approvals_reviewer,"developerInstructions":developer_instructions,"excludeTurns":true}),
-                )
-                .await?
-                .1
+        // A loaded thread can precede its first persisted rollout. Refreshing
+        // reasoning must not force disk-based resume of that live conversation.
+        let normalized = if let Some(cached) = cached {
+            cached.normalized
         } else {
-            self.inner
-                .server
-                .request(
-                    "thread/start",
-                    json!({"model":prepared.model,"cwd":prepared.cwd,"approvalsReviewer":prepared.approvals_reviewer,"developerInstructions":developer_instructions}),
-                )
-                .await?
-                .1
+            let response = if let Some(thread_id) = prepared.thread_id.as_deref() {
+                self.inner
+                    .server
+                    .request(
+                        "thread/resume",
+                        json!({"threadId":thread_id,"model":prepared.model,"cwd":prepared.cwd,"approvalsReviewer":prepared.approvals_reviewer,"developerInstructions":developer_instructions,"excludeTurns":true}),
+                    )
+                    .await.map_err(|error| {
+                        if error.to_ascii_lowercase().contains("no rollout found") {
+                            format!("conversation_unavailable: {error}. Existing session and history are preserved. Retry with the original Codex connection, or explicitly choose New session to start separate work.")
+                        } else { format!("conversation_resume_failed: {error}") }
+                    })?
+                    .1
+            } else {
+                self.inner
+                    .server
+                    .request(
+                        "thread/start",
+                        json!({"model":prepared.model,"cwd":prepared.cwd,"approvalsReviewer":prepared.approvals_reviewer,"developerInstructions":developer_instructions}),
+                    )
+                    .await.map_err(|error| format!("conversation_start_failed: {error}"))?
+                    .1
+            };
+            normalize_thread_response(&response)?
         };
-        let normalized = normalize_thread_response(&response)?;
         let catalogue = if prepared.reasoning_effort.is_some() || input["resolveReasoning"]==true || input.get("queueItemId").is_some() {self.model_catalog_for(Some(&prepared.cwd)).await.unwrap_or(json!({"models":[]}))}else{json!({"models":[]})};
         let selected = catalogue["models"].as_array().and_then(|models|models.iter().find(|m|m["model"].as_str()==Some(prepared.model.as_str())));
         if let Some(effort)=prepared.reasoning_effort.as_deref() {
@@ -476,6 +486,7 @@ impl TaskExecutionRuntime {
         self.inner.active_threads.lock().await.insert(
             session_id.to_owned(),
             ActiveThread {
+                normalized: normalized.clone(),
                 thread_id: thread_id.to_owned(),
                 generation,
                 settings_revision: prepared.settings_revision.clone(),
@@ -1755,6 +1766,56 @@ mod tests {
         assert!(runtime.inner.early_events.lock().await.is_empty());
         assert!(runtime.inner.server.generation().await.is_ok());
         runtime.shutdown().await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn reasoning_prepare_reuses_loaded_thread_before_first_rollout() {
+        use std::os::unix::fs::PermissionsExt;
+        let root=tempdir().unwrap();let db=root.path().join("state.sqlite3");crate::native::database::initialize(&db).unwrap();
+        let tasks=TaskApplicationService::new(&db);
+        let task=tasks.execute("task.create",&json!({"operationId":"task","inputText":"Keep context","title":"Prepare regression"})).unwrap()["id"].as_str().unwrap().to_owned();
+        let session=tasks.execute("task.work-session.create",&json!({"operationId":"session","taskId":task,"title":"Work"})).unwrap()["id"].as_str().unwrap().to_owned();
+        tasks.execute("task.work-session.update",&json!({"operationId":"settings","taskId":task,"sessionId":session,"title":"Work","provider":"codex","model":"gpt-5.6-sol","workspacePath":root.path()})).unwrap();
+        let fake=std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../tests/fakes/codex_app_server.mjs").canonicalize().unwrap();
+        let wrapper=root.path().join("fake-rollout");
+        let protocol_log=root.path().join("protocol.log");
+        std::fs::write(&wrapper,format!("#!/bin/sh\nexport LLM_WIKI_FAKE_CODEX_REQUIRE_ROLLOUT=1\nexport LLM_WIKI_FAKE_CODEX_LOG='{}'\nexec '{}'\n",protocol_log.display(),fake.display())).unwrap();
+        std::fs::set_permissions(&wrapper,std::fs::Permissions::from_mode(0o700)).unwrap();
+        let runtime=TaskExecutionRuntime::with_test_server(TaskExecutionApplicationService::new(&db),wrapper.clone());
+        let input=json!({"taskId":task,"sessionId":session,"resolveReasoning":true});
+        assert!(TaskExecutionApplicationService::new(&db).prepared(&task,&session).unwrap().thread_id.is_none());
+        let first=runtime.prepare(&input).await.expect("fresh session first preparation must start, never resume");
+        let protocol=std::fs::read_to_string(&protocol_log).unwrap();
+        assert_eq!(protocol.lines().filter(|method| *method=="thread/start").count(),1);
+        assert!(!protocol.lines().any(|method| method=="thread/resume"));
+        let original_thread=TaskExecutionApplicationService::new(&db).prepared(&task,&session).unwrap().thread_id.unwrap();
+        let second=runtime.prepare(&input).await.expect("reasoning refresh must not resume a loaded thread without a rollout");
+        assert_eq!(TaskExecutionApplicationService::new(&db).prepared(&task,&session).unwrap().thread_id.as_deref(),Some(original_thread.as_str()));
+        assert_eq!(first["effectiveConfig"]["settingsRevision"],second["effectiveConfig"]["settingsRevision"]);
+        assert_eq!(second["effectiveConfig"]["reasoningEffort"],"medium");
+        assert!(second["runs"].as_array().unwrap().is_empty());
+        let protocol=std::fs::read_to_string(&protocol_log).unwrap();
+        assert_eq!(protocol.lines().filter(|method| *method=="thread/start").count(),1);
+        assert!(!protocol.lines().any(|method| method=="thread/resume"));
+        // Changing model/settings must not reuse stale cached configuration.
+        tasks.execute("task.work-session.update",&json!({"operationId":"changed-model","taskId":task,"sessionId":session,"title":"Work","provider":"codex","model":"gpt-5.6-luna","workspacePath":root.path()})).unwrap();
+        let error=runtime.prepare(&input).await.unwrap_err();
+        assert!(error.contains("no rollout found for thread Id"));
+        let unchanged=TaskExecutionApplicationService::new(&db).prepared(&task,&session).unwrap();
+        assert_eq!(unchanged.thread_id.as_deref(),Some(original_thread.as_str()));
+        assert_eq!(unchanged.model,"gpt-5.6-luna");
+        assert!(runtime.snapshot(&input).unwrap()["effectiveConfig"].is_null());
+        runtime.shutdown().await;
+        // A different provider generation must not reuse stale live metadata or
+        // silently replace the missing conversation with a new thread.
+        let restarted=TaskExecutionRuntime::with_test_server(TaskExecutionApplicationService::new(&db),wrapper);
+        let error=restarted.prepare(&input).await.unwrap_err();
+        assert!(error.contains("no rollout found for thread Id"));
+        assert!(error.contains("Existing session and history are preserved"));
+        let saved=TaskExecutionApplicationService::new(&db).prepared(&task,&session).unwrap();
+        assert_eq!(saved.thread_id.as_deref(),Some(original_thread.as_str()));
+        restarted.shutdown().await;
     }
 
     #[cfg(unix)]

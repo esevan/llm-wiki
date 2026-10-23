@@ -127,6 +127,10 @@ rl.on("line", (line) => {
     response(input.id, { data: history, nextCursor: null });
   } else if (input.method === "thread/resume") {
     const threadId = input.params?.threadId;
+    if (process.env.LLM_WIKI_FAKE_CODEX_REQUIRE_ROLLOUT === "1" && (!threads.has(threadId) || threads.get(threadId).turns === 0)) {
+      write({id: input.id, error: {code: -32600, message: `no rollout found for thread Id ${threadId}`}});
+      return;
+    }
     if (!threads.has(threadId)) threads.set(threadId, { turns: 0, pending: null });
     response(input.id, { thread: { id: threadId }, model: input.params?.model ?? "gpt-5.6-luna", cwd: input.params?.cwd ?? process.cwd(), approvalPolicy: "on-request", approvalsReviewer: input.params?.approvalsReviewer ?? "user", sandbox: { type: "workspaceWrite" } });
   } else if (input.method === "turn/start") {

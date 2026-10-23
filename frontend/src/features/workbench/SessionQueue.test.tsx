@@ -22,3 +22,10 @@ it("retains an unsaved edit when its request is claimed before the user saves",(
  view.rerender(<SessionQueue {...props} queue={{...queue,items:[]}}/>);
  expect(screen.getByLabelText("Retained edit draft")).toHaveValue("Keep this unsaved text");expect(screen.getByRole("status")).toHaveTextContent("was not applied");expect(action).not.toHaveBeenCalled();
 });
+
+it("shows the empty pending-request destination while work is running without offering an empty drain",()=>{
+ render(<SessionQueue queue={{...queue,items:[]}} currentRun={run} readOnly={false} busy={false} taskId="task" sessionId="session" onAction={vi.fn()}/>);
+ expect(screen.getByRole("region",{name:"Pending requests"})).toBeVisible();
+ expect(screen.getByText("Add a request below to run after the current work.")).toBeVisible();
+ expect(screen.queryByRole("button",{name:"Stop current work, then run pending requests"})).not.toBeInTheDocument();
+});

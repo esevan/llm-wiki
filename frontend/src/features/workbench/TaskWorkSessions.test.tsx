@@ -994,6 +994,8 @@ it("keeps completed sessions readable and saves new notes without running or edi
   fireEvent.click(screen.getByText("Post-completion note",{selector:"summary"}));
   fireEvent.change(composer,{target:{value:"Additional observation"}});
   expect(screen.queryByRole("button",{name:"Run with Codex"})).not.toBeInTheDocument();
+  expect(screen.queryByRole("button",{name:"New session"})).not.toBeInTheDocument();
+  expect(screen.queryByRole("button",{name:"Link Codex session"})).not.toBeInTheDocument();
   expect(screen.getByRole("button",{name:"Save note"})).toBeEnabled();
   fireEvent.keyDown(composer,{key:"Enter"});
   expect(await screen.findByText("Additional observation")).toBeVisible();
@@ -1009,7 +1011,12 @@ it("queues additional instructions during an active Run without steering or clea
   execution.subscribe.mockResolvedValue(snapshot);execution.execute.mockClear();execution.interrupt.mockClear();execution.queue.mockReset();
   let resolve!:(v:TaskExecutionSnapshot)=>void;execution.queue.mockReturnValue(new Promise<TaskExecutionSnapshot>(done=>{resolve=done;}));
   window.llmWikiApplication={request:vi.fn(async({path}:{path:string})=>path.endsWith("work-sessions")?response({sessions:[saved]}):response({session:saved,entries:[]})) as never};
-  render(<TaskWorkSessions task={task}/>);const input=await screen.findByLabelText("Instruction or note");fireEvent.change(input,{target:{value:"Follow up"}});fireEvent.keyDown(input,{key:"Enter"});
+  render(<TaskWorkSessions task={task}/>);const input=await screen.findByLabelText("Instruction or note");
+  expect(screen.getByText("Additional work request",{selector:"label"})).toBeVisible();
+  const status=document.querySelector("[data-control=task-execution-heading]")!;
+  const timeline=document.querySelector(".task-session-entries")!;
+  expect(status.compareDocumentPosition(timeline) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  fireEvent.change(input,{target:{value:"Follow up"}});fireEvent.keyDown(input,{key:"Enter"});
   await waitFor(()=>expect(execution.queue).toHaveBeenCalledWith(expect.objectContaining({action:"enqueue",instruction:"Follow up",taskId:task.id,sessionId:"one"})));
   fireEvent.change(input,{target:{value:"Newer draft"}});await act(async()=>resolve(snapshot));
   expect(input).toHaveValue("Newer draft");expect(execution.execute).not.toHaveBeenCalled();expect(execution.interrupt).not.toHaveBeenCalled();
@@ -1024,4 +1031,27 @@ it("offers model-specific reasoning and explicitly resets an unsupported level o
   await waitFor(()=>expect(screen.getByLabelText("Model")).toHaveTextContent("Luna"));fireEvent.change(screen.getByLabelText("Model"),{target:{value:"gpt-5.6-luna"}});
   expect(screen.getByLabelText("Reasoning effort")).toHaveValue("");expect(screen.getByText(/previous reasoning level is unsupported/)).toBeInTheDocument();
   expect(screen.getByLabelText("Reasoning effort")).not.toHaveTextContent("ultra");expect(screen.queryByLabelText("Session title")).not.toBeInTheDocument();
+});
+
+it("puts unprepared setup before conversation and cancels settings without losing request text", async () => {
+  const saved={...session("setup","Work"),workspacePath:"/project"};
+  execution.subscribe.mockResolvedValue({runs:[],activeRunId:null,selectedRun:null});
+  execution.models.mockResolvedValue({models:[]});
+  const request=vi.fn(async({path}:{path:string})=>path.endsWith("work-sessions")?response({sessions:[saved]}):response({session:saved,entries:[]}));
+  window.llmWikiApplication={request:request as never};
+  render(<TaskWorkSessions task={task}/>);
+  const folder=await screen.findByLabelText("Project folder path");
+  const environment=folder.closest("details")!;
+  expect(environment).toHaveAttribute("open");
+  expect(screen.getByRole("heading",{name:"Where should Codex work?"})).toBeVisible();
+  expect(environment.compareDocumentPosition(document.querySelector(".task-session-entries")!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  const composer=screen.getByLabelText("Instruction or note");
+  fireEvent.change(composer,{target:{value:"Keep my request"}});
+  fireEvent.change(folder,{target:{value:"/unsaved"}});
+  expect(screen.getByRole("button",{name:"Prepare conversation"})).toBeDisabled();
+  fireEvent.click(screen.getByRole("button",{name:"Cancel changes"}));
+  expect(folder).toHaveValue("/project");
+  expect(composer).toHaveValue("Keep my request");
+  expect(screen.getByRole("button",{name:"Prepare conversation"})).toBeEnabled();
+  expect(request.mock.calls.every(([input])=>!["POST","PATCH","PUT","DELETE"].includes((input as {method?:string}).method ?? "GET"))).toBe(true);
 });
