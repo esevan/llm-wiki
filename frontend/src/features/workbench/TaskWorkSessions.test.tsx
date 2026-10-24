@@ -1070,3 +1070,29 @@ it("notifies Work Log changes for persisted Run revisions but not streamed text 
  await act(async()=>notify({revision:8,runs:[finished],activeRunId:null,selectedRun:finished}));
  expect(changed).toHaveBeenCalledTimes(2);
 });
+
+it("discloses semantic context summary to the user without claiming uncertain delivery succeeded",async()=>{
+ const saved={...session("context","Context"),workspacePath:"/project"};
+ const run={id:"context-run",taskId:task.id,sessionId:saved.id,instruction:"Check replies",status:"needs_attention" as const,stopRequested:false,provider:"codex" as const,model:saved.model,workspacePath:"/project",evidence:[],formalRequests:[],workLogSyncState:"synced" as const,revision:1,initialContext:{mode:"summary" as const,strategy:"model_semantic_map_reduce_v1",delivery:"uncertain",sourceCount:4,originalBytes:90000,sentBytes:30000,budgetBytes:32768,capturedAt:"2026-10-23T10:00:00Z"}};
+ execution.subscribe.mockResolvedValue({runs:[run],activeRunId:null,selectedRun:run});
+ window.llmWikiApplication={request:vi.fn(async({path}:{path:string})=>path.endsWith("work-sessions")?response({sessions:[saved]}):response({session:saved,entries:[]})) as never};
+ render(<TaskWorkSessions task={task}/>);
+ expect(await screen.findByRole("note")).toHaveTextContent("Additional context budget exceeded");
+ expect(screen.getByRole("note")).toHaveTextContent("not the full original text");
+ expect(screen.getByRole("note")).toHaveTextContent("Delivery is uncertain");
+ expect(screen.getByRole("note")).not.toHaveTextContent("Delivered with this Run");
+});
+
+
+it("shows semantic preparation cost notice and routes cancellation without discarding the draft",async()=>{
+ const saved={...session("context-cancel","Context"),workspacePath:"/project"};
+ execution.subscribe.mockResolvedValue({contextPreparing:true,runs:[],activeRunId:null,selectedRun:null});
+ execution.interrupt.mockResolvedValue({contextPreparing:false,runs:[],activeRunId:null,selectedRun:null});
+ window.llmWikiApplication={request:vi.fn(async({path}:{path:string})=>path.endsWith("work-sessions")?response({sessions:[saved]}):response({session:saved,entries:[]})) as never};
+ const drafts=new Map<string,WorkSessionDraft>([[saved.id,{body:"Keep my request",operationId:"draft"}]]);
+ render(<TaskWorkSessions task={task} draftStore={drafts}/>);
+ expect(await screen.findByText(/Additional model calls may take time and incur cost/)).toBeInTheDocument();
+ fireEvent.click(screen.getByRole("button",{name:"Cancel context preparation"}));
+ await waitFor(()=>expect(execution.interrupt).toHaveBeenCalledWith({taskId:task.id,sessionId:saved.id,runId:"context-preparation"}));
+ expect(screen.getByDisplayValue("Keep my request")).toBeInTheDocument();expect(drafts.get(saved.id)?.body).toBe("Keep my request");expect(execution.execute).not.toHaveBeenCalled();
+});

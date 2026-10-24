@@ -21,6 +21,7 @@ pub mod settings;
 pub(crate) mod task_assistance;
 pub(crate) mod task_distillation;
 pub(crate) mod task_execution_runtime;
+pub(crate) mod session_context_summary;
 pub(crate) mod task_hierarchy;
 pub(crate) mod task_journey;
 pub(crate) mod vault;

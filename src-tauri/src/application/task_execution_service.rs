@@ -425,11 +425,8 @@ impl TaskExecutionApplicationService {
         super::task_service::ensure_task_mutable(&connection, &prepared.task_id)?;
         let epoch:String=connection.query_row("SELECT CAST(settings_epoch AS TEXT) FROM task_work_sessions WHERE id=?",[&prepared.session_id],|r|r.get(0)).map_err(|e|e.to_string())?;
         if epoch!=prepared.settings_epoch {return Err("settings_revision_conflict: settings changed while preparing the conversation".into());}
-        let sent_context = if prepared.thread_id.is_none() {
-            Some(prepared.context_hash.as_str())
-        } else {
-            None
-        };
+        // Preparation confirms provider settings, not delivery of Task data.
+        let sent_context: Option<&str> = None;
         let updated=connection.execute("UPDATE task_work_sessions SET codex_thread_id=?,effective_model=?,effective_cwd=?,effective_approval_policy=?,effective_sandbox=?,effective_structured_input=?,effective_settings_revision=?,context_hash=COALESCE(?,context_hash),execution_revision=execution_revision+1,updated_at=updated_at WHERE id=? AND task_id=? AND (codex_thread_id IS NULL OR codex_thread_id=?)", params![thread_id,model,cwd,approval,sandbox,i64::from(capability),prepared.settings_revision,sent_context,prepared.session_id,prepared.task_id,thread_id]).map_err(|e|e.to_string())?;
         if updated != 1 {
             return Err("ownership_failure: conversation belongs to another session".into());
@@ -440,6 +437,43 @@ impl TaskExecutionApplicationService {
         )
     }
 
+    pub(crate) fn validate_context_start(
+        &self,
+        input: &Value,
+        prepared: &PreparedExecution,
+    ) -> Result<(), String> {
+        super::task_session_queue::validate_attachment(input)?;
+        let mut c = database::open(&self.db_path)?;
+        let tx = c.transaction().map_err(|e| e.to_string())?;
+        super::task_service::ensure_task_mutable(&tx, &prepared.task_id)?;
+        if req(input, "settingsRevision")? != prepared.settings_revision {
+            return Err(
+                "settings_revision_conflict: check settings before context preparation".into(),
+            );
+        }
+        let held: bool = tx
+            .query_row(
+                "SELECT state='on_hold' FROM tasks WHERE id=?",
+                [&prepared.task_id],
+                |r| r.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+        if held {
+            return Err("task_on_hold: resume this Task before starting an execution".into());
+        }
+        let active:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM task_work_session_runs WHERE session_id=? AND status IN ('queued','running','awaiting_response'))",[&prepared.session_id],|r|r.get(0)).map_err(|e|e.to_string())?;
+        if active {
+            return Err("active_run_conflict: this session already has an active execution".into());
+        }
+        super::task_session_queue::validate_claim(&tx, input, prepared)?;
+        Ok(())
+    }
+
+    pub(crate) fn has_submission(&self, input: &Value) -> Result<bool, String> {
+        self.ensure_session_owner(req(input, "taskId")?, req(input, "sessionId")?)?;
+        let c = database::open(&self.db_path)?;
+        c.query_row("SELECT EXISTS(SELECT 1 FROM task_work_session_runs WHERE session_id=? AND submission_key=?)",params![req(input,"sessionId")?,req(input,"operationId")?],|r|r.get(0)).map_err(|e|e.to_string())
+    }
     pub(crate) fn create_run(&self, input: &Value) -> Result<(Value, bool), String> {
         super::task_session_queue::validate_attachment(input)?;
         let task_id = req(input, "taskId")?;
@@ -497,13 +531,21 @@ impl TaskExecutionApplicationService {
             redact_text(instruction, 500)
         );
         tx.execute("INSERT INTO task_work_log_entries(id,task_id,body,image_data,image_media_type,image_summary,created_at) VALUES(?,?,?,'','','',?)",params![log_id,task_id,body,at]).map_err(|e|e.to_string())?;
-        tx.execute("INSERT INTO task_work_session_runs(id,task_id,session_id,submission_key,payload_hash,instruction,user_entry_id,work_log_entry_id,retry_of_run_id,model,workspace_path,context_hash,provider_thread_id,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,'queued',?,?)",params![run_id,task_id,session_id,operation_id,payload_hash,instruction,entry_id,log_id,retry,prepared.model,prepared.cwd,prepared.context_hash,prepared.thread_id,at,at]).map_err(|e|e.to_string())?;
+        // Preserve the Task definition actually included in the frozen context,
+        // even when preparation saw a later revision during model summarization.
+        let run_context_hash=input.get("initialContext").and_then(|v|v["metadata"]["taskContextHash"].as_str()).unwrap_or(&prepared.context_hash);
+        tx.execute("INSERT INTO task_work_session_runs(id,task_id,session_id,submission_key,payload_hash,instruction,user_entry_id,work_log_entry_id,retry_of_run_id,model,workspace_path,context_hash,provider_thread_id,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,'queued',?,?)",params![run_id,task_id,session_id,operation_id,payload_hash,instruction,entry_id,log_id,retry,prepared.model,prepared.cwd,run_context_hash,prepared.thread_id,at,at]).map_err(|e|e.to_string())?;
         tx.execute("INSERT INTO task_work_session_run_logs(run_id,work_log_entry_id,created_at,updated_at) VALUES(?,?,?,?)",params![run_id,log_id,at,at]).map_err(|e|e.to_string())?;
         super::task_session_queue::link_claim(&tx, input, &run_id)?;
         if input.get("queueItemId").is_none() {
             tx.execute("UPDATE task_session_queue_control SET mode='paused',reason='Manual execution started; review pending requests',stop_run_id=NULL,revision=revision+1 WHERE session_id=?",[session_id]).map_err(|e|e.to_string())?;
         }
         tx.execute("UPDATE task_work_session_runs SET reasoning_effort=? WHERE id=?", params![input.get("resolvedEffort").and_then(Value::as_str).or(prepared.reasoning_effort.as_deref()),run_id]).map_err(|e|e.to_string())?;
+        if let Some(context) = input.get("initialContext").filter(|value| !value.is_null()) {
+            let text=context["text"].as_str().ok_or("context_summary_failed: missing context payload")?;
+            if text.len()>super::task_session_context::CONTEXT_BUDGET_BYTES {return Err("context_summary_failed: context exceeds contribution budget".into());}
+            tx.execute("UPDATE task_work_session_runs SET initial_context_json=? WHERE id=?",params![context.to_string(),run_id]).map_err(|e|e.to_string())?;
+        }
         tx.commit().map_err(|e| e.to_string())?;
         Ok((self.snapshot(task_id, session_id, Some(&run_id))?, false))
     }
@@ -954,8 +996,8 @@ impl TaskExecutionApplicationService {
         if !owned {
             return Err("ownership_failure: work session not found".into());
         }
-        let mut stmt=c.prepare("SELECT id,instruction,status,stop_requested,provider,model,workspace_path,final_report,error_code,error_message,work_log_entry_id,work_log_sync_state,revision,created_at,started_at,finished_at,retry_of_run_id,provider_thread_id,provider_turn_id,user_entry_id,reasoning_effort FROM task_work_session_runs WHERE task_id=? AND session_id=? ORDER BY created_at DESC,id DESC LIMIT 100").map_err(|e|e.to_string())?;
-        let bases=stmt.query_map(params![task,session],|r|Ok(json!({"id":r.get::<_,String>(0)?,"taskId":task,"sessionId":session,"instruction":r.get::<_,String>(1)?,"status":r.get::<_,String>(2)?,"stopRequested":r.get::<_,i64>(3)?!=0,"provider":r.get::<_,String>(4)?,"model":r.get::<_,String>(5)?,"workspacePath":r.get::<_,String>(6)?,"finalReport":r.get::<_,Option<String>>(7)?,"errorCode":r.get::<_,Option<String>>(8)?,"errorMessage":r.get::<_,Option<String>>(9)?,"workLogEntryId":r.get::<_,String>(10)?,"workLogSyncState":r.get::<_,String>(11)?,"revision":r.get::<_,i64>(12)?,"createdAt":r.get::<_,String>(13)?,"startedAt":r.get::<_,Option<String>>(14)?,"finishedAt":r.get::<_,Option<String>>(15)?,"retryOfRunId":r.get::<_,Option<String>>(16)?,"threadId":r.get::<_,Option<String>>(17)?,"turnId":r.get::<_,Option<String>>(18)?,"userEntryId":r.get::<_,String>(19)?,"reasoningEffort":r.get::<_,Option<String>>(20)?}))).map_err(|e|e.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|e|e.to_string())?;
+        let mut stmt=c.prepare("SELECT id,instruction,status,stop_requested,provider,model,workspace_path,final_report,error_code,error_message,work_log_entry_id,work_log_sync_state,revision,created_at,started_at,finished_at,retry_of_run_id,provider_thread_id,provider_turn_id,user_entry_id,reasoning_effort,initial_context_json,dispatch_state FROM task_work_session_runs WHERE task_id=? AND session_id=? ORDER BY created_at DESC,id DESC LIMIT 100").map_err(|e|e.to_string())?;
+        let bases=stmt.query_map(params![task,session],|r|Ok(json!({"id":r.get::<_,String>(0)?,"taskId":task,"sessionId":session,"instruction":r.get::<_,String>(1)?,"status":r.get::<_,String>(2)?,"stopRequested":r.get::<_,i64>(3)?!=0,"provider":r.get::<_,String>(4)?,"model":r.get::<_,String>(5)?,"workspacePath":r.get::<_,String>(6)?,"finalReport":r.get::<_,Option<String>>(7)?,"errorCode":r.get::<_,Option<String>>(8)?,"errorMessage":r.get::<_,Option<String>>(9)?,"workLogEntryId":r.get::<_,String>(10)?,"workLogSyncState":r.get::<_,String>(11)?,"revision":r.get::<_,i64>(12)?,"createdAt":r.get::<_,String>(13)?,"startedAt":r.get::<_,Option<String>>(14)?,"finishedAt":r.get::<_,Option<String>>(15)?,"retryOfRunId":r.get::<_,Option<String>>(16)?,"threadId":r.get::<_,Option<String>>(17)?,"turnId":r.get::<_,Option<String>>(18)?,"userEntryId":r.get::<_,String>(19)?,"reasoningEffort":r.get::<_,Option<String>>(20)?,"initialContext":r.get::<_,Option<String>>(21)?.and_then(|raw|serde_json::from_str::<Value>(&raw).ok()).map(|context|{let mut metadata=context["metadata"].clone();metadata["delivery"]=json!(r.get::<_,String>(22).unwrap_or_else(|_|"uncertain".into()));metadata})}))).map_err(|e|e.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|e|e.to_string())?;
         let runs = bases
             .into_iter()
             .map(|mut run| {
@@ -1000,7 +1042,7 @@ impl TaskExecutionApplicationService {
             return Err("ownership_failure: Run not found in this Task session".into());
         }
         let config=c.query_row("SELECT effective_model,effective_cwd,effective_approval_policy,approvals_reviewer,effective_sandbox,codex_thread_id,effective_structured_input,effective_settings_revision,execution_revision FROM task_work_sessions WHERE id=?",[session],|r|Ok((r.get::<_,Option<String>>(0)?,r.get::<_,Option<String>>(1)?,r.get::<_,Option<String>>(2)?,r.get::<_,String>(3)?,r.get::<_,Option<String>>(4)?,r.get::<_,Option<String>>(5)?,r.get::<_,i64>(6)?!=0,r.get::<_,Option<String>>(7)?,r.get::<_,i64>(8)?))).map_err(|e|e.to_string())?;
-        let mut result = json!({"runs":runs,"activeRunId":active,"selectedRun":selected_run,"revision":config.8});
+        let mut result = json!({"sessionId":session,"runs":runs,"activeRunId":active,"selectedRun":selected_run,"revision":config.8});
         if let (
             Some(model),
             Some(cwd),
@@ -1370,6 +1412,19 @@ mod tests {
 
     fn run_input(f: &Fixture, key: &str, instruction: &str) -> Value {
         json!({"taskId":f.task,"sessionId":f.session,"operationId":key,"instruction":instruction,"settingsRevision":f.settings_revision})
+    }
+
+    #[test]
+    fn context_preflight_reuses_hold_active_and_settings_guards_without_creating_records() {
+        let f=fixture();let input=run_input(&f,"context","Inspect recorded answers");let prepared=f.service.prepared(&f.task,&f.session).unwrap();
+        f.service.validate_context_start(&input,&prepared).unwrap();
+        let mut stale=input.clone();stale["settingsRevision"]=json!("stale");assert!(f.service.validate_context_start(&stale,&prepared).unwrap_err().contains("settings_revision_conflict"));
+        let c=database::open(&f.db).unwrap();c.execute("UPDATE tasks SET state='on_hold' WHERE id=?",[&f.task]).unwrap();
+        assert!(f.service.validate_context_start(&input,&prepared).unwrap_err().contains("task_on_hold"));
+        assert_eq!(c.query_row("SELECT count(*) FROM task_work_session_runs",[],|r|r.get::<_,i64>(0)).unwrap(),0);
+        c.execute("UPDATE tasks SET state='in_progress' WHERE id=?",[&f.task]).unwrap();f.service.create_run(&input).unwrap();
+        assert!(f.service.validate_context_start(&run_input(&f,"another","Other request"),&prepared).unwrap_err().contains("active_run_conflict"));
+        assert_eq!(c.query_row("SELECT count(*) FROM task_work_session_runs",[],|r|r.get::<_,i64>(0)).unwrap(),1);
     }
 
     #[test]

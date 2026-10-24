@@ -5,7 +5,7 @@ use sha2::{Digest, Sha256};
 use serde_json::{json, Map, Value};
 use std::collections::BTreeMap;
 
-pub const CURRENT_SCHEMA_VERSION: i64 = 26;
+pub const CURRENT_SCHEMA_VERSION: i64 = 27;
 
 type MigrationFunction = for<'connection> fn(&Transaction<'connection>) -> Result<(), String>;
 type LegacyLocalizationRow = (String, String, String, String, String, String, String);
@@ -119,7 +119,12 @@ const MIGRATIONS: &[Migration] = &[
     Migration { version:24, name:"add Task hold and execution backlog", run:add_task_hold },
     Migration { version:25, name:"add evidence-bound Knowledge revision chat", run:add_knowledge_revision_chat },
     Migration { version:26, name:"add session reasoning and follow-up queues", run:add_session_queue },
+    Migration { version:27, name:"record first actual Run Task context", run:add_session_initial_context },
 ];
+
+fn add_session_initial_context(tx: &Transaction<'_>) -> Result<(), String> {
+    tx.execute_batch("ALTER TABLE task_work_session_runs ADD COLUMN initial_context_json TEXT;").map_err(|e|e.to_string())
+}
 
 fn add_session_queue(tx: &Transaction<'_>) -> Result<(), String> {
     tx.execute_batch(include_str!("task_session_queue_schema.sql")).map_err(|e|e.to_string())
@@ -2402,4 +2407,65 @@ fn session_queue_upgrade_preserves_v25_history_and_rolls_back_atomically() {
     failed.execute("CREATE TABLE task_session_queue_items(dummy INTEGER)",[]).unwrap();assert!(apply(&mut failed).is_err());
     assert_eq!(schema_version(&failed).unwrap(),25);
     assert_eq!(failed.query_row("SELECT count(*) FROM pragma_table_info('task_work_sessions') WHERE name='reasoning_effort'",[],|r|r.get::<_,i64>(0)).unwrap(),0);
+}
+
+#[cfg(test)]
+mod initial_context_upgrade_tests {
+    use super::*;
+    #[test]
+    fn initial_context_v27_is_additive_repeatable_and_atomic() {
+        let mut c = Connection::open_in_memory().unwrap();
+        apply_plan(&mut c, &MIGRATIONS[..26], 26).unwrap();
+        c.execute_batch("INSERT INTO tasks(id,current_revision,state,created_at,last_user_activity_at) VALUES('task',1,'in_progress','before','before'); INSERT INTO task_work_sessions(id,task_id,title,created_at,updated_at) VALUES('session','task','Exact historical title','before','before');").unwrap();
+        c.execute_batch("INSERT INTO task_work_session_entries(id,session_id,author,kind,body,created_at) VALUES('entry','session','user','note','Exact request','before'); INSERT INTO task_work_log_entries(id,task_id,body,created_at) VALUES('log','task','Exact original bytes','before'); INSERT INTO task_work_session_runs(id,task_id,session_id,submission_key,payload_hash,instruction,user_entry_id,work_log_entry_id,model,workspace_path,context_hash,status,final_report,created_at,updated_at) VALUES('run','task','session','operation','hash','Exact request','entry','log','model','/project','context','succeeded','Exact stored report','before','before');").unwrap();
+        apply(&mut c).unwrap();
+        apply(&mut c).unwrap();
+        assert_eq!(schema_version(&c).unwrap(), 27);
+        assert_eq!(
+            c.query_row(
+                "SELECT final_report FROM task_work_session_runs WHERE id='run'",
+                [],
+                |r| r.get::<_, String>(0)
+            )
+            .unwrap(),
+            "Exact stored report"
+        );
+        assert!(c
+            .query_row(
+                "SELECT initial_context_json FROM task_work_session_runs WHERE id='run'",
+                [],
+                |r| r.get::<_, Option<String>>(0)
+            )
+            .unwrap()
+            .is_none());
+        assert_eq!(
+            c.query_row(
+                "SELECT title FROM task_work_sessions WHERE id='session'",
+                [],
+                |r| r.get::<_, String>(0)
+            )
+            .unwrap(),
+            "Exact historical title"
+        );
+        assert!(columns(&c, "task_work_session_runs")
+            .unwrap()
+            .contains(&"initial_context_json".into()));
+        assert_eq!(
+            c.query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |r| r
+                .get::<_, i64>(
+                0
+            ))
+            .unwrap(),
+            0
+        );
+        let mut failed = Connection::open_in_memory().unwrap();
+        apply_plan(&mut failed, &MIGRATIONS[..26], 26).unwrap();
+        failed
+            .execute_batch(
+                "ALTER TABLE task_work_session_runs ADD COLUMN initial_context_json TEXT;",
+            )
+            .unwrap();
+        assert!(apply(&mut failed).is_err());
+        assert_eq!(schema_version(&failed).unwrap(), 26);
+    }
 }

@@ -134,6 +134,8 @@ rl.on("line", (line) => {
     if (!threads.has(threadId)) threads.set(threadId, { turns: 0, pending: null });
     response(input.id, { thread: { id: threadId }, model: input.params?.model ?? "gpt-5.6-luna", cwd: input.params?.cwd ?? process.cwd(), approvalPolicy: "on-request", approvalsReviewer: input.params?.approvalsReviewer ?? "user", sandbox: { type: "workspaceWrite" } });
   } else if (input.method === "turn/start") {
+    if (process.env.LLM_WIKI_FAKE_CODEX_INPUT_LOG) appendFileSync(process.env.LLM_WIKI_FAKE_CODEX_INPUT_LOG, `${JSON.stringify(input.params)}\n`);
+    if (process.env.LLM_WIKI_FAKE_CODEX_REJECT_TURN === "1") { write({id:input.id,error:{code:-32600,message:process.env.LLM_WIKI_FAKE_CODEX_REJECT_TURN_MESSAGE || "Synthetic turn not accepted"}});return; }
     if (process.env.LLM_WIKI_FAKE_CODEX_EFFORT_LOG) appendFileSync(process.env.LLM_WIKI_FAKE_CODEX_EFFORT_LOG, `${input.params?.effort ?? "inherit"}\n`);
     startTurn(input.params?.threadId, input);
   } else if (input.method === "turn/interrupt") {
