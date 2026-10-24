@@ -40,15 +40,7 @@ Task Work Log는 텍스트·스크린샷·댓글·검증 체크를 지원합니�
 
 ![작업 초안과 대화를 함께 보여주는 Task 다듬기](features/images/integrated-preview.ko.jpg)
 
-## 4. 해결하려는 문제를 중심으로 일을 정리합니다.
-
-각 작업이 어떤 문제를 해결하는지, 왜 필요한지 맥락을 보존합니다.
-Capture에서 이미 찾은 해결 방향은 보존합니다. 간단한 Task는 즉시 시작할 수 있고, 선택적인
-Refinement는 검토 가능한 Problem과 여러 버전의 Task를 만들 수 있습니다. Task는 `task`(Task),
-`in_progress`(진행 중), `completed`(완료) 상태를 독립적으로 가집니다. Work Log에는 텍스트·이미지·파일·댓글·체크리스트·
-결정을 남기며, Task를 완료해도 Problem이 자동으로 해결되지는 않습니다.
-
-## 5. 과정은 비공개로 유지하고, Knowledge는 자유롭게 옮깁니다.
+## 4. 과정은 비공개로 유지하고, Knowledge는 자유롭게 옮깁니다.
 
 대화·초안·Refinement·진행 기록·완료 결정은 개인 로컬 과정으로 남습니다. 독립 Task의 완료와 발행은 서로 다른
 사용자 결정입니다. 사용자가 Knowledge 발행을 명시적으로 승인해야 Obsidian 호환 Playbook과 원시
@@ -60,7 +52,7 @@ canonical 파일을 대체하거나 다시 쓰는 일은 없습니다.
 
 ![별도 발행 승인 전 비공개로 유지되는 수정된 Knowledge 초안](features/images/integrated-knowledge-applied.ko.jpg)
 
-## 6. 작업을 이해하되, 사용자를 점수화하지 않습니다.
+## 5. 작업을 이해하되, 사용자를 점수화하지 않습니다.
 
 Compass는 목표·근거·마일스톤 이벤트·방향을 설명합니다. 이를 직원 점수, 생산성 순위, 개인 평가로
 바꾸면 안 됩니다. 향후 조직 기능도 언어·데이터·권한·시각화에서 이 경계를 지켜야 합니다.

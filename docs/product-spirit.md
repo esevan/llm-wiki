@@ -42,15 +42,7 @@ explicit Korean reading flow and does not change its English canonical Markdown.
 
 ![Task Refine keeps the work preview beside the conversation](features/images/integrated-preview.en.jpg)
 
-## 4. Organize work around the problem to solve.
-
-Preserve the context of what problem each piece of work solves and why it matters.
-Capture preserves the solution already found. A simple Task may begin immediately, while optional
-Refinement can produce a reviewable Problem and multiple revisioned Tasks. Tasks have independent
-`task`, `in_progress`, and `completed` states. Work Logs hold authored text, images, files, comments,
-checklists, and decisions; completing a Task does not silently resolve a Problem.
-
-## 5. Private process, portable knowledge.
+## 4. Private process, portable knowledge.
 
 Chats, drafts, refinements, progress, and completed-work decisions remain private local process.
 For standalone Tasks, completion and publication are separate human decisions. Explicit Knowledge publication creates an
@@ -62,7 +54,7 @@ or rewrites the canonical file.
 
 ![A corrected Knowledge draft remains private until separate publication approval](features/images/integrated-knowledge-applied.en.jpg)
 
-## 6. Understand the work, never score the worker.
+## 5. Understand the work, never score the worker.
 
 Compass explains goals, evidence, milestone events, and direction. It must never convert those
 signals into an employee score, productivity rank, or personal judgment. Future team features must

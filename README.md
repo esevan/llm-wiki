@@ -23,14 +23,13 @@ Knowledge publication uses one explicit button. Quality/citation notes do not bl
 
 ## Product Spirit
 
-LLM Wiki is designed from six non-negotiable principles:
+LLM Wiki is designed from five non-negotiable principles:
 
 1. **You talk. The work organizes itself.** Conversation and Refinement do the structuring.
 2. **Reduce cognitive load.** Capture stays light; current work receives the strongest emphasis.
 3. **Resume where you left off.** Work Log screenshots, preserved Refinement context, and Knowledge-backed conflict review make work resumable.
-4. **Organize work around the problem to solve.** Preserve the purpose and problem context of each piece of work. Capture preserves the solution already found; a Task can be created directly, or an optional Refinement can shape a Problem and one or more Tasks. Work remains independently resumable.
-5. **Private process, portable knowledge.** Drafts and working context remain local; only a human-approved completed result becomes Markdown Knowledge.
-6. **Understand the work, never score the worker.** Signals explain evidence, risk, and direction—not individual productivity.
+4. **Private process, portable knowledge.** Drafts and working context remain local; only a human-approved completed result becomes Markdown Knowledge.
+5. **Understand the work, never score the worker.** Signals explain evidence, risk, and direction—not individual productivity.
 
 See [Product Spirit in the product](docs/product-spirit.md) for the design implications and visible product evidence behind each principle.
 
