@@ -160,3 +160,24 @@ The ref follow-up passed 40 focused review/chat tests and all 467 React tests
 plus runtime helpers, typecheck, lint and build. Local timing samples report
 projection p95 19.14ms and selection p95 13.81ms, versus 26.44/20.58ms in
 the previous integration run; this is local timing evidence, not a CI guarantee.
+
+## Idea classification and proposal readiness (2026-10-26)
+
+The generation contract is version 7 and the revision contract is version 3.
+Both provider schemas enumerate the same four canonical idea dispositions.
+Revision response parsing retains an unknown string only as proposal material:
+domain preparation rejects it before readiness or canonical application.
+
+Regression coverage includes the exact invalid-disposition error, retained
+candidate, unchanged saved draft, legacy proposal revalidation on reopen,
+Korean idea-specific diagnostics, and updated proposal application to private
+revision 2 without changing publication. Mounted UI fixtures distinguish
+structural failure, stale sources, and applicable review notes while keeping
+the diff inspectable and the refresh action available.
+
+Packaged E2E is skipped for this bounded contract/copy fix. Native loopback
+provider/SQLite tests exercise the complete failed-proposal → refresh → private
+apply path, and mounted production components exercise the diff, readiness
+message and button conditions. No new native bridge, persistence schema,
+layout or packaging behavior is introduced. These fixtures do not verify a real
+provider, the affected host, or its saved data.

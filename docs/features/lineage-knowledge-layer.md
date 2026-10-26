@@ -66,3 +66,5 @@ when it was generated; switching language does not retranslate that snapshot.
 The localized-label provider path still needs a real-provider UI validation. Existing visual
 captures verified English/Korean chrome and mixed long titles, not independently generated English
 and Korean provider labels.
+
+Revision proposals are checked for structural validity before being offered for private apply. An invalid idea classification remains inspectable with its diff and can be repaired through Request updated proposal; it never changes the saved draft. Review notes alone do not prevent applying a structurally valid proposal. Idea classifications are unverified, deferred, out_of_scope, or rejected.

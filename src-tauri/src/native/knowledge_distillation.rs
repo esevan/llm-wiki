@@ -88,12 +88,17 @@ pub struct Article {
     #[serde(default)]
     pub assumption_bindings: Vec<AssumptionBinding>,
 }
+pub(crate) const IDEA_DISPOSITIONS: [&str; 4] = ["unverified", "deferred", "out_of_scope", "rejected"];
+fn idea_disposition_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    serde_json::from_value(json!({"type":"string","enum":IDEA_DISPOSITIONS})).unwrap()
+}
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Idea {
     pub id: String,
     pub title: String,
     pub body_markdown: String,
+    #[schemars(schema_with = "idea_disposition_schema")]
     pub disposition: String,
     pub reconsideration_conditions: Vec<String>,
     pub source_refs: Vec<SourceRef>,
@@ -793,10 +798,7 @@ pub(crate) fn validate_result(snapshot: &Value, result: &GenerationResult) -> Re
         {
             return Err("invalid idea identity or content".into());
         }
-        if !matches!(
-            idea.disposition.as_str(),
-            "unverified" | "deferred" | "out_of_scope" | "rejected"
-        ) {
+        if !IDEA_DISPOSITIONS.contains(&idea.disposition.as_str()) {
             return Err("invalid idea disposition".into());
         }
         if idea.reconsideration_conditions.is_empty() {
@@ -883,7 +885,7 @@ fn assess_candidate(snapshot: &Value, result: &GenerationResult) -> Result<(Stri
         }
     }
     for idea in &result.ideas {
-        if !matches!(idea.disposition.as_str(),"unverified"|"deferred"|"out_of_scope"|"rejected") {
+        if !IDEA_DISPOSITIONS.contains(&idea.disposition.as_str()) {
             return Err("invalid_knowledge: idea disposition is invalid".into());
         }
     }
@@ -1416,6 +1418,14 @@ mod tests {
         assert!(validate_result(&minimal_snapshot(), &result)
             .unwrap_err()
             .contains("idea_leak"));
+    }
+
+    #[test]
+    fn idea_disposition_schema_matches_canonical_values_without_coercion() {
+        let schema = serde_json::to_value(schemars::schema_for!(Idea)).unwrap();
+        assert_eq!(schema["properties"]["disposition"]["enum"], json!(IDEA_DISPOSITIONS));
+        for value in IDEA_DISPOSITIONS { assert!(IDEA_DISPOSITIONS.contains(&value)); }
+        for value in ["approved", "", "검증됨", "DeFerred"] { assert!(!IDEA_DISPOSITIONS.contains(&value)); }
     }
 
     #[test]

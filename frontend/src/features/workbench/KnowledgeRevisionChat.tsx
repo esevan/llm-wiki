@@ -123,12 +123,14 @@ export function KnowledgeRevisionChat({ taskId, version, disabled, publishedRevi
   const renderProposal = (turn: KnowledgeRevisionTurn) => {
     if (!turn.reply?.candidate?.article) return null;
     const baseVersion = turn.reply.baseRevision === version.revision ? version : versions?.find(v => v.revision === turn.reply!.baseRevision);
+    const structurallyApplicable = turn.state === "proposed" && turn.reply.applicable !== false && !turn.reply.preparationError;
     const content = <section className="knowledge-revision-proposal">
           <h5>{t.compare}</h5><small>v{turn.reply!.baseRevision}</small>
           {!baseVersion && <p role="note">{t.baseUnavailable}</p>}
           {turn.reply!.applicationState === "stale" && <p role="note">{t.staleProposal}</p>}
-          {turn.reply!.preparationError && <p role="alert">{turn.reply!.preparationError}</p>}
-          <div className="knowledge-revision-actions"><button type="button" data-control="knowledge-chat-apply" data-record-id={turn.id} disabled={disabled || pending || deciding || Boolean(input.trim()) || turn.state !== "proposed" || turn.reply!.applicable === false || !baseVersion} onClick={() => void decide(turn.id, "apply")}>{t.apply}</button><button type="button" data-control="knowledge-chat-cancel" disabled={pending} onClick={() => void decide(turn.id, "cancel")}>{t.cancel}</button><button type="button" data-control="knowledge-chat-update-proposal" disabled={disabled || pending || deciding} onClick={() => { const request = t.updateRequest; setInput(input.trim() ? `${input}\n\n${request}` : request); session.previousTurnId = turn.id; inputRef.current?.focus(); }}>{t.updateProposal}</button></div>
+          {!structurallyApplicable && turn.reply.applicationState !== "stale" && <p role="alert">{t.invalidProposal}</p>}
+          {turn.reply!.preparationError && <p><small>{t.validationDetails}: {turn.reply!.preparationError}</small></p>}
+          <div className="knowledge-revision-actions"><button type="button" data-control="knowledge-chat-apply" data-record-id={turn.id} disabled={disabled || pending || deciding || Boolean(input.trim()) || !structurallyApplicable || !baseVersion} onClick={() => void decide(turn.id, "apply")}>{t.apply}</button><button type="button" data-control="knowledge-chat-cancel" disabled={pending} onClick={() => void decide(turn.id, "cancel")}>{t.cancel}</button><button type="button" data-control="knowledge-chat-update-proposal" disabled={disabled || pending || deciding} onClick={() => { const request = t.updateRequest; setInput(input.trim() ? `${input}\n\n${request}` : request); session.previousTurnId = turn.id; inputRef.current?.focus(); }}>{t.updateProposal}</button></div>
           <div className="knowledge-revision-diff" aria-label={t.compare}>
             {changedLines((baseVersion?.bodyMarkdown ?? ""), turn.reply.candidate.article.bodyMarkdown).removed.map((line, i) => <p key={`removed:${i}`}><span>{t.before}</span><del>{line}</del></p>)}
             {changedLines((baseVersion?.bodyMarkdown ?? ""), turn.reply.candidate.article.bodyMarkdown).added.map((line, i) => <p key={`added:${i}`}><span>{t.after}</span><ins>{line}</ins></p>)}
@@ -137,7 +139,7 @@ export function KnowledgeRevisionChat({ taskId, version, disabled, publishedRevi
           </div>
           <details open={Boolean(reviewContainer)} data-control="knowledge-chat-full-compare"><summary>{t.fullComparison}</summary><div className="knowledge-revision-comparison"><section><h6>{t.before}</h6><KnowledgeMarkdown>{(baseVersion?.bodyMarkdown ?? "")}</KnowledgeMarkdown></section><section><h6>{t.after}</h6><KnowledgeMarkdown>{turn.reply.candidate.article.bodyMarkdown}</KnowledgeMarkdown></section></div></details>
           <details data-control="knowledge-chat-bindings"><summary>{t.bindings}</summary><pre>{JSON.stringify({ before: baseVersion?.result.article, after: turn.reply.candidate.article }, null, 2)}</pre></details>
-          {turn.reply.qualityState !== "valid" && <p role="alert">{t.blocked}</p>}
+          {structurallyApplicable && turn.reply.qualityState !== "valid" && <p role="alert">{t.blocked}</p>}
 
         </section>;
     return reviewContainer ? createPortal(content, reviewContainer) : content;

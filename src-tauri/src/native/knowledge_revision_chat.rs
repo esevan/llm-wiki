@@ -78,6 +78,11 @@ fn suggestion(kind: &str, ko: bool) -> &'static str {
 /// Diagnostics are a projection of stored findings plus deterministic validation,
 /// not new model-approved evidence. Rejected quotes stay outside authenticated refs.
 pub(crate) fn diagnostics(snapshot: &Value, result: &Value, issue: &str, ko: bool) -> Vec<Value> {
+    if issue == "invalid_knowledge: idea disposition is invalid" {
+        return result["ideas"].as_array().into_iter().flatten().enumerate()
+            .filter(|(_, idea)| !kd::IDEA_DISPOSITIONS.contains(&idea["disposition"].as_str().unwrap_or("")))
+            .map(|(i, idea)| json!({"kind":"invalid_idea_disposition","locator":format!("ideas[{i}].disposition"),"statement":idea["title"].as_str().unwrap_or(""),"reason":if ko {"아이디어 분류가 지원되는 형식과 다릅니다."} else {"The idea classification is outside the supported contract."},"direction":if ko {"기존 아이디어와 수정 내용을 보존하며 제안을 갱신하세요. 분류는 unverified, deferred, out_of_scope, rejected 중 원래 의미에 맞게 지정해야 합니다."} else {"Request an updated proposal preserving the idea and edits. Use unverified, deferred, out_of_scope or rejected according to its recorded meaning."},"evidence":[]})).collect();
+    }
     let mut findings = result["qualityFindings"]
         .as_array()
         .cloned()
@@ -134,11 +139,20 @@ fn diagnostic_base(b: &Value, ko: bool) -> Vec<Value> {
         Err(e) => diagnostics(&b["snapshot"], &b["result"], &e.to_string(), ko),
     }
 }
-fn turns(tx: &Transaction<'_>, task: &str, _n: i64) -> Result<Vec<Value>, String> {
-    let mut s=tx.prepare("SELECT id,user_message,reply_json,state,error,applied_revision,created_at FROM knowledge_revision_turns WHERE task_id=? ORDER BY rowid").map_err(|e|e.to_string())?;
-    let mut out=s.query_map(params![task],|r|Ok(json!({"id":r.get::<_,String>(0)?,"userMessage":r.get::<_,String>(1)?,"reply":r.get::<_,Option<String>>(2)?.and_then(|s|serde_json::from_str::<Value>(&s).ok()),"state":r.get::<_,String>(3)?,"error":r.get::<_,String>(4)?,"appliedRevision":r.get::<_,Option<i64>>(5)?,"createdAt":r.get::<_,String>(6)?}))).map_err(|e|e.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|e|e.to_string())?;
+fn turns(tx: &Transaction<'_>, task: &str, _n: i64, ko: bool) -> Result<Vec<Value>, String> {
+    let mut s=tx.prepare("SELECT id,user_message,reply_json,state,error,applied_revision,created_at,source_snapshot_json FROM knowledge_revision_turns WHERE task_id=? ORDER BY rowid").map_err(|e|e.to_string())?;
+    let mut out=s.query_map(params![task],|r|Ok(json!({"id":r.get::<_,String>(0)?,"userMessage":r.get::<_,String>(1)?,"reply":r.get::<_,Option<String>>(2)?.and_then(|s|serde_json::from_str::<Value>(&s).ok()),"state":r.get::<_,String>(3)?,"error":r.get::<_,String>(4)?,"appliedRevision":r.get::<_,Option<i64>>(5)?,"createdAt":r.get::<_,String>(6)?,"validationSnapshot":r.get::<_,String>(7)?}))).map_err(|e|e.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|e|e.to_string())?;
     let current=head(tx,task)?;
     for turn in &mut out {
+        if matches!(turn["state"].as_str(), Some("proposed" | "failed")) && turn["reply"]["candidate"].is_object() {
+            let snapshot: Value = serde_json::from_str(turn["validationSnapshot"].as_str().unwrap_or("{}" )).unwrap_or(json!({}));
+            let check = serde_json::from_value::<kd::GenerationResult>(turn["reply"]["candidate"].clone()).map_err(|e|e.to_string()).and_then(|r|kd::prepared(snapshot.clone(), r, "enhanced", ""));
+            if let Err(error) = check {
+                turn["reply"]["applicable"] = json!(false);
+                turn["reply"]["preparationError"] = json!(error);
+                turn["reply"]["diagnostics"] = json!(diagnostics(&snapshot, &turn["reply"]["candidate"], &error, ko));
+            }
+        }
         if let Some(reply)=turn["reply"].as_object_mut() {
             if let Some(expected)=reply.get("expectedPrivateRevision").and_then(Value::as_i64) {
                 if current != Some(expected) && turn["state"]=="proposed" {
@@ -148,13 +162,14 @@ fn turns(tx: &Transaction<'_>, task: &str, _n: i64) -> Result<Vec<Value>, String
             }
         }
     }
+    for turn in &mut out { turn.as_object_mut().unwrap().remove("validationSnapshot"); }
     Ok(out)
 }
 pub(crate) fn get(db: &Path, input: &Value) -> Result<Value, String> {
     let mut c = database::open(db)?;
     let tx = c.transaction().map_err(|e| e.to_string())?;
     let b = base(&tx, input)?;
-    let result = json!({"baseRevision":revision(input)?,"diagnostics":diagnostic_base(&b,input["locale"]=="ko"),"turns":turns(&tx,required(input,"taskId")?,revision(input)?)?});
+    let result = json!({"baseRevision":revision(input)?,"diagnostics":diagnostic_base(&b,input["locale"]=="ko"),"turns":turns(&tx,required(input,"taskId")?,revision(input)?,input["locale"]=="ko")?});
     tx.commit().map_err(|e| e.to_string())?;
     Ok(result)
 }
@@ -221,7 +236,7 @@ pub(crate) async fn send_registered(
             )
             .map_err(|e| e.to_string())?;
         let expected_head = head(&tx, task)?;
-        let history = turns(&tx, task, n)?;
+        let history = turns(&tx, task, n, input["locale"]=="ko")?;
         tx.execute("INSERT INTO knowledge_revision_turns(id,task_id,base_revision,base_content_hash,expected_private_revision,request_hash,user_message,source_snapshot_json,prompt_version,state) VALUES(?,?,?,?,?,?,?,'{}',?,'running')",params![id,task,n,b["contentHash"].as_str(),expected_head,request_hash,message,crate::workflow_foundation::prompt_definition(PromptId::KnowledgeRevisionChat).version]).map_err(|e|e.to_string())?;
         let snapshot = kd::capture_snapshot_tx(&tx, task, actual, input["locale"].as_str().unwrap_or("en"))?;
         tx.execute("UPDATE knowledge_revision_turns SET source_snapshot_json=? WHERE id=?",params![snapshot.to_string(),id]).map_err(|e|e.to_string())?;
@@ -554,6 +569,40 @@ mod tests {
         assert!(request.contains("previousProposal")&&request.contains("chat-1")&&request.contains("A newer completion report"));
         assert_eq!(decide(&db,&json!({"taskId":"task","turnId":"chat-updated"}),true).unwrap()["draftRevision"],2);
         assert_eq!(get(&db,&input).unwrap()["turns"][0]["id"],"chat-1");
+    }
+
+    #[tokio::test]
+    async fn invalid_idea_proposal_is_preserved_and_refresh_applies_privately() {
+        let (root, db, _, data) = fixture(false);
+        let settings = root.path().join("settings.json");
+        let mut candidate = data["good"].clone();
+        candidate["ideas"] = json!([{"id":"idea-1","title":"Later option","bodyMarkdown":"Keep this option","disposition":"approved","reconsiderationConditions":["New evidence"],"sourceRefs":[],"relatedTopicKeys":[]}]);
+        let server = provider(&settings, json!({"message":"Preserved edit","missingEvidence":[],"candidate":candidate})).await;
+        let sent = send(&db, &settings, &data["input"]).await.unwrap();
+        let request = server.await.unwrap();
+        assert!(request.contains("out_of_scope"));
+        assert_eq!(sent["applicable"], false);
+        assert_eq!(sent["preparationError"], "invalid_knowledge: idea disposition is invalid");
+        assert_eq!(sent["candidate"]["ideas"][0]["disposition"], "approved");
+        assert_eq!(sent["diagnostics"][0]["locator"], "ideas[0].disposition");
+        assert!(decide(&db, &json!({"taskId":"task","turnId":"chat-1"}), true).is_err());
+        assert_eq!(database::open(&db).unwrap().query_row("SELECT count(*) FROM knowledge_draft_versions WHERE task_id='task'", [], |r|r.get::<_,i64>(0)).unwrap(), 1);
+        // A legacy row without readiness metadata must be revalidated on read.
+        database::open(&db).unwrap().execute("UPDATE knowledge_revision_turns SET state='proposed',prepared_json=NULL,reply_json=json_remove(reply_json,'$.applicable','$.diagnostics','$.preparationError') WHERE id='chat-1'", []).unwrap();
+        let mut ko_input = data["input"].clone(); ko_input["locale"] = json!("ko");
+        let reopened = get(&db, &ko_input).unwrap();
+        assert_eq!(reopened["turns"][0]["reply"]["applicable"], false);
+        assert!(reopened["turns"][0]["reply"]["diagnostics"][0]["reason"].as_str().unwrap().contains("아이디어"));
+        assert!(decide(&db, &json!({"taskId":"task","turnId":"chat-1"}), true).is_err());
+        candidate["ideas"][0]["disposition"] = json!("deferred");
+        let mut input = data["input"].clone(); input["operationId"] = json!("chat-fixed"); input["previousTurnId"] = json!("chat-1");
+        let server = provider(&settings, json!({"message":"Repaired classification","missingEvidence":[],"candidate":candidate})).await;
+        assert_eq!(send(&db, &settings, &input).await.unwrap()["applicable"], true);
+        assert!(server.await.unwrap().contains("previousProposal"));
+        assert_eq!(decide(&db, &json!({"taskId":"task","turnId":"chat-fixed"}), true).unwrap()["draftRevision"], 2);
+        let c = database::open(&db).unwrap();
+        let published: Option<i64> = c.query_row("SELECT published_revision FROM knowledge_pointers WHERE task_id='task'", [], |r|r.get(0)).unwrap();
+        assert_eq!(published, None);
     }
 
     #[tokio::test]

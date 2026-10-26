@@ -203,12 +203,29 @@ describe("readable diagnostics and main review",()=>{
     const reply={...proposal(),applicable:false,preparationError:'Article body is incomplete'};
     window.llmWikiApplication={request:vi.fn(async()=>response({diagnostics:[],turns:[{id:'bad',state:'failed',userMessage:'Keep my edit',reply}]}))};
     const mounted=render(<KnowledgeRevisionChat taskId="main-slot" version={chatVersion()} reviewContainerRef={{current:slot}} disabled={false} onStateChange={vi.fn()} onApplied={vi.fn()}/>);
-    await screen.findByText('Article body is incomplete');
+    await screen.findByText(/Article body is incomplete/);
     expect(slot.querySelector('[data-control="knowledge-chat-apply"]')).toBeDisabled();
+    expect(screen.getByText(/This proposal needs a structural correction/)).toBeVisible();
+    expect(screen.queryByText(/You can apply it without/)).toBeNull();
     expect(document.querySelector('.knowledge-revision-transcript .knowledge-revision-proposal')).toBeNull();
     expect(slot.querySelector('[data-control="knowledge-chat-full-compare"]')).toHaveAttribute('open');
     fireEvent.click(screen.getByRole('button',{name:'Request updated proposal'}));
     expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toContain('Adapt this saved proposal');
     mounted.unmount();slot.remove();
   });
+  it("keeps ordinary review notes applicable and separates stale proposals from structural failures", async () => {
+    const reply = {...proposal(), applicable:true, qualityState:'blocked_unsupported'};
+    window.llmWikiApplication={request:vi.fn(async()=>response({diagnostics:[],turns:[{id:'warning',state:'proposed',userMessage:'Retain warning',reply}]}))};
+    const mounted=render(<KnowledgeRevisionChat taskId="warning-apply" version={chatVersion()} disabled={false} onStateChange={vi.fn()} onApplied={vi.fn()}/>);
+    await screen.findByText(/You can apply it without/);
+    expect(screen.getByRole('button',{name:'Apply and recheck private draft'})).toBeEnabled();
+    mounted.unmount();
+    window.llmWikiApplication={request:vi.fn(async()=>response({diagnostics:[],turns:[{id:'stale',state:'proposed',userMessage:'Old proposal',reply:{...reply, applicable:false, applicationState:'stale'}}]}))};
+    render(<KnowledgeRevisionChat taskId="stale-apply" version={chatVersion()} disabled={false} onStateChange={vi.fn()} onApplied={vi.fn()}/>);
+    await screen.findByText(/The document or its sources changed/);
+    expect(screen.getByRole('button',{name:'Apply and recheck private draft'})).toBeDisabled();
+    expect(screen.queryByText(/This proposal needs a structural correction/)).toBeNull();
+    expect(screen.queryByText(/You can apply it without/)).toBeNull();
+  });
+
 });

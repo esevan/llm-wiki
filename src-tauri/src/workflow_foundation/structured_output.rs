@@ -653,7 +653,15 @@ pub(crate) fn parse_completion(
     } else {
         parsed
     };
-    let schema = schema(id, context)?;
+    let mut schema = schema(id, context)?;
+    // Keep rejected revision ideas as inspectable, repairable proposals. The
+    // strict provider contract remains unchanged; the domain preparation gate
+    // rejects unknown classifications before advertising or applying a draft.
+    if id == PromptId::KnowledgeRevisionChat {
+        if let Some(disposition) = schema.pointer_mut("/$defs/Idea/properties/disposition").and_then(Value::as_object_mut) {
+            disposition.remove("enum");
+        }
+    }
     validate_shape(&schema, &schema, &parsed, "", true).map_err(|error| {
         if id == PromptId::WorkPreviewFinalizer {
             format!("preview_response_schema: {error}")
