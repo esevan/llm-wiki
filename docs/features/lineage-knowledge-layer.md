@@ -68,3 +68,5 @@ captures verified English/Korean chrome and mixed long titles, not independently
 and Korean provider labels.
 
 Revision proposals are checked for structural validity before being offered for private apply. An invalid idea classification remains inspectable with its diff and can be repaired through Request updated proposal; it never changes the saved draft. Review notes alone do not prevent applying a structurally valid proposal. Idea classifications are unverified, deferred, out_of_scope, or rejected.
+
+Request updated proposal sends immediately using the selected document version, the saved proposal, its validation diagnostics and any unsent request text. It does not apply or publish. If the reply asks for clarification without a candidate, the old proposal remains available from the conversation but is not automatically reopened.

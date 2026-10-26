@@ -62,13 +62,14 @@ export function KnowledgeRevisionChat({ taskId, version, disabled, publishedRevi
   }, [session, load]);
   useEffect(() => { transcriptRef.current?.scrollTo?.({ top: transcriptRef.current.scrollHeight }); }, [turns, pending]);
   useEffect(() => { onStateChange(Boolean(input.trim()) || pending || deciding, pending || deciding); return () => onStateChange(false, false); }, [input, pending, deciding, onStateChange]);
-  const send = async () => {
-    if (disabled || session.pending || pending || deciding || !input.trim()) return;
+  const send = async (update?: { message: string; previousTurnId: string }) => {
+    const message = update?.message ?? input;
+    if (disabled || session.pending || pending || deciding || !message.trim()) return;
     const sequence = ++requestSequence.current;
-    const message = input;
     const id = crypto.randomUUID();
     setRequestId(id); setPending(true); setError("");
     session.requestId = id; session.error = "";
+    if (update) { session.input = message; session.previousTurnId = update.previousTurnId; setInputState(message); }
     const request = taskClient.knowledgeRevisionSend(taskId, version.revision, version.contentHash, message, id, session.previousTurnId)
       .then(() => { if (session.requestId === id) { session.input = ""; session.previousTurnId = undefined; } })
       .catch(cause => { if (session.requestId === id) session.error = `${t.failed} ${String(cause instanceof Error ? cause.message : cause)}`; })
@@ -119,7 +120,7 @@ export function KnowledgeRevisionChat({ taskId, version, disabled, publishedRevi
     <button type="button" data-control="knowledge-chat-use-issue" data-record-id={`${issue.locator}:${index}`} disabled={disabled || pending || deciding} onClick={() => { setInput(`${t.fixThis}\n${issue.statement}\n${issue.reason}\n${issue.direction}`); inputRef.current?.focus(); }}>{t.fixThis}</button>
   </li>)}</ol>;
   const proposals = turns.filter(turn => turn.reply?.candidate?.article && ["proposed", "failed"].includes(turn.state));
-  const selectedProposal = proposals.find(turn => turn.id === reviewId) ?? proposals.at(-1);
+  const selectedProposal = proposals.find(turn => turn.id === reviewId) ?? proposals.find(turn => turn.id === turns.at(-1)?.id);
   const renderProposal = (turn: KnowledgeRevisionTurn) => {
     if (!turn.reply?.candidate?.article) return null;
     const baseVersion = turn.reply.baseRevision === version.revision ? version : versions?.find(v => v.revision === turn.reply!.baseRevision);
@@ -130,7 +131,7 @@ export function KnowledgeRevisionChat({ taskId, version, disabled, publishedRevi
           {turn.reply!.applicationState === "stale" && <p role="note">{t.staleProposal}</p>}
           {!structurallyApplicable && turn.reply.applicationState !== "stale" && <p role="alert">{t.invalidProposal}</p>}
           {turn.reply!.preparationError && <p><small>{t.validationDetails}: {turn.reply!.preparationError}</small></p>}
-          <div className="knowledge-revision-actions"><button type="button" data-control="knowledge-chat-apply" data-record-id={turn.id} disabled={disabled || pending || deciding || Boolean(input.trim()) || !structurallyApplicable || !baseVersion} onClick={() => void decide(turn.id, "apply")}>{t.apply}</button><button type="button" data-control="knowledge-chat-cancel" disabled={pending} onClick={() => void decide(turn.id, "cancel")}>{t.cancel}</button><button type="button" data-control="knowledge-chat-update-proposal" disabled={disabled || pending || deciding} onClick={() => { const request = t.updateRequest; setInput(input.trim() ? `${input}\n\n${request}` : request); session.previousTurnId = turn.id; inputRef.current?.focus(); }}>{t.updateProposal}</button></div>
+          <div className="knowledge-revision-actions"><button type="button" data-control="knowledge-chat-apply" data-record-id={turn.id} disabled={disabled || pending || deciding || Boolean(input.trim()) || !structurallyApplicable || !baseVersion} onClick={() => void decide(turn.id, "apply")}>{t.apply}</button><button type="button" data-control="knowledge-chat-cancel" disabled={pending} onClick={() => void decide(turn.id, "cancel")}>{t.cancel}</button><button type="button" data-control="knowledge-chat-update-proposal" disabled={disabled || pending || deciding} onClick={() => void send({ message: input.trim() ? `${input}\n\n${t.updateRequest}` : t.updateRequest, previousTurnId: turn.id })}>{t.updateProposal}</button></div>
           <div className="knowledge-revision-diff" aria-label={t.compare}>
             {changedLines((baseVersion?.bodyMarkdown ?? ""), turn.reply.candidate.article.bodyMarkdown).removed.map((line, i) => <p key={`removed:${i}`}><span>{t.before}</span><del>{line}</del></p>)}
             {changedLines((baseVersion?.bodyMarkdown ?? ""), turn.reply.candidate.article.bodyMarkdown).added.map((line, i) => <p key={`added:${i}`}><span>{t.after}</span><ins>{line}</ins></p>)}

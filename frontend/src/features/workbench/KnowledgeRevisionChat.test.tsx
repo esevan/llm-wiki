@@ -210,7 +210,7 @@ describe("readable diagnostics and main review",()=>{
     expect(document.querySelector('.knowledge-revision-transcript .knowledge-revision-proposal')).toBeNull();
     expect(slot.querySelector('[data-control="knowledge-chat-full-compare"]')).toHaveAttribute('open');
     fireEvent.click(screen.getByRole('button',{name:'Request updated proposal'}));
-    expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toContain('Adapt this saved proposal');
+    await waitFor(()=>expect(window.llmWikiApplication!.request).toHaveBeenCalledWith(expect.objectContaining({method:'POST',body:expect.stringContaining('Adapt this saved proposal')})));
     mounted.unmount();slot.remove();
   });
   it("keeps ordinary review notes applicable and separates stale proposals from structural failures", async () => {
@@ -226,6 +226,61 @@ describe("readable diagnostics and main review",()=>{
     expect(screen.getByRole('button',{name:'Apply and recheck private draft'})).toBeDisabled();
     expect(screen.queryByText(/This proposal needs a structural correction/)).toBeNull();
     expect(screen.queryByText(/You can apply it without/)).toBeNull();
+  });
+
+  it("regenerates a saved failed v1 proposal on current v2 in one click and applies only the new proposal", async () => {
+    const version={...chatVersion(),revision:2,contentHash:'v2-hash',bodyMarkdown:'Preserve newer v2 edits'};
+    const bad={...proposal(),applicable:false,preparationError:'invalid_knowledge: idea disposition is invalid'};
+    const turns: KnowledgeRevisionConversation['turns']=[{id:'old-bad',state:'failed',userMessage:'Original edit',reply:bad,createdAt:'old'}];
+    const requests: Array<{path:string;body?:string}>=[];
+    let release!:()=>void;
+    const waiting=new Promise<void>(resolve=>{release=resolve;});
+    window.llmWikiApplication={request:vi.fn(async ({path,body})=>{
+      requests.push({path,body});
+      if(path.endsWith('/apply')) return response({draftRevision:3});
+      if(body){
+        const input=JSON.parse(body); await waiting;
+        turns.push({id:input.operationId,state:'proposed',userMessage:input.message,reply:{...proposal(),id:input.operationId,baseRevision:2,applicable:true},createdAt:'new'});
+        return response(turns.at(-1)!.reply);
+      }
+      return response({diagnostics:[],turns});
+    })};
+    const onApplied=vi.fn().mockResolvedValue(undefined);
+    const props={taskId:'recover-current-v2',version,versions:[chatVersion(),version],disabled:false,onStateChange:vi.fn(),onApplied};
+    const mounted=render(<KnowledgeRevisionChat {...props}/>);
+    await screen.findByText(/idea disposition is invalid/);
+    fireEvent.change(screen.getByRole('textbox'),{target:{value:'Keep my unsent detail'}});
+    const update=screen.getByRole('button',{name:'Request updated proposal'});
+    fireEvent.click(update);fireEvent.click(update);
+    const sent=requests.filter(r=>r.body);
+    expect(sent).toHaveLength(1);
+    expect(sent[0].path).toContain('/versions/2/revision-chat');
+    expect(JSON.parse(sent[0].body!)).toMatchObject({previousTurnId:'old-bad',expectedContentHash:'v2-hash'});
+    expect(JSON.parse(sent[0].body!).message).toContain('Keep my unsent detail');
+    expect(screen.getByRole('button',{name:'Apply and recheck private draft'})).toBeDisabled();
+    mounted.unmount();render(<KnowledgeRevisionChat {...props}/>);
+    expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toContain('Keep my unsent detail');
+    await act(async()=>{release();await waiting;});
+    await waitFor(()=>expect(screen.getByRole('button',{name:'Apply and recheck private draft'})).toBeEnabled());
+    fireEvent.click(screen.getByRole('button',{name:'Apply and recheck private draft'}));
+    await waitFor(()=>expect(onApplied).toHaveBeenCalledWith(3));
+    expect(requests.find(r=>r.path.endsWith('/apply'))!.path).not.toContain('old-bad');
+  });
+
+  it("shows the latest clarification instead of automatically reopening an old failed proposal",async()=>{
+    const turns: KnowledgeRevisionConversation['turns']=[{id:'old-failed',state:'failed',userMessage:'Original request',reply:{...proposal(),applicable:false,preparationError:'invalid_knowledge: idea disposition is invalid'},createdAt:'old'}];
+    window.llmWikiApplication={request:vi.fn(async({body})=>{
+      if(body){const input=JSON.parse(body);turns.push({id:input.operationId,state:'needs_evidence',userMessage:input.message,reply:{...proposal(),candidate:null,message:'Which classification matches your original idea?',applicable:false},createdAt:'new'});}
+      return response({turns,diagnostics:[]});
+    })};
+    render(<KnowledgeRevisionChat taskId="clarify-recovery" version={chatVersion()} disabled={false} onStateChange={vi.fn()} onApplied={vi.fn()}/>);
+    await screen.findByText(/idea disposition is invalid/);
+    fireEvent.click(screen.getByRole('button',{name:'Request updated proposal'}));
+    await screen.findByText('Which classification matches your original idea?');
+    await waitFor(()=>expect(screen.queryByText(/idea disposition is invalid/)).toBeNull());
+    expect(screen.queryByRole('button',{name:'Apply and recheck private draft'})).toBeNull();
+    fireEvent.click(screen.getByRole('button',{name:/Review proposal in document/}));
+    expect(screen.getByText(/idea disposition is invalid/)).toBeVisible();
   });
 
 });

@@ -181,3 +181,5 @@ apply path, and mounted production components exercise the diff, readiness
 message and button conditions. No new native bridge, persistence schema,
 layout or packaging behavior is introduced. These fixtures do not verify a real
 provider, the affected host, or its saved data.
+
+Follow-up recovery uses revision contract version 4. Mounted component tests click the actual update control against a saved failed v1 proposal while reviewing v2, verify one POST across repeated clicks and remount, preserve unsent text, and apply only the newly returned proposal. A clarification response no longer automatically reopens the historical error. Native fixtures assert that the rejected candidate and its validation diagnostics reach the provider request. Synthetic provider replies do not establish real-model recovery on the affected host.

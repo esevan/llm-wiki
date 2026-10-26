@@ -255,6 +255,9 @@ pub(crate) async fn send_registered(
         .map(|turn| turn["reply"]["candidate"].clone())
         .unwrap_or(Value::Null);
     context["previousProposalId"] = input["previousTurnId"].clone();
+    if let Some(previous) = history.iter().find(|turn| turn["id"] == input["previousTurnId"]) {
+        context["previousProposalValidation"] = json!({"preparationError":previous["reply"]["preparationError"],"diagnostics":previous["reply"]["diagnostics"],"baseRevision":previous["reply"]["baseRevision"]});
+    }
     context["request"] = json!(message);
     let scope = format!("knowledge-revision:{task}:{id}");
     let result = async {
@@ -594,12 +597,24 @@ mod tests {
         assert_eq!(reopened["turns"][0]["reply"]["applicable"], false);
         assert!(reopened["turns"][0]["reply"]["diagnostics"][0]["reason"].as_str().unwrap().contains("아이디어"));
         assert!(decide(&db, &json!({"taskId":"task","turnId":"chat-1"}), true).is_err());
+        // Reproduce an old v1 failed proposal while current private content is v2.
+        let mut newer = data["good"].clone();
+        newer["article"]["bodyMarkdown"] = json!("Approval flow\n\nPreserve newer v2 edits");
+        let mut c = database::open(&db).unwrap(); let tx = c.transaction().unwrap();
+        let snapshot = kd::capture_snapshot_tx(&tx, "task", 1, "en").unwrap();
+        let prepared = kd::prepared(snapshot, serde_json::from_value(newer.clone()).unwrap(), "enhanced", "").unwrap();
+        let v2 = kd::append_generated_tx(&tx, &prepared).unwrap(); tx.commit().unwrap();
+        candidate["article"]["bodyMarkdown"] = newer["article"]["bodyMarkdown"].clone();
         candidate["ideas"][0]["disposition"] = json!("deferred");
-        let mut input = data["input"].clone(); input["operationId"] = json!("chat-fixed"); input["previousTurnId"] = json!("chat-1");
+        let mut input = data["input"].clone(); input["operationId"] = json!("chat-fixed"); input["previousTurnId"] = json!("chat-1"); input["baseRevision"] = json!(2); input["expectedContentHash"] = v2["contentHash"].clone();
         let server = provider(&settings, json!({"message":"Repaired classification","missingEvidence":[],"candidate":candidate})).await;
         assert_eq!(send(&db, &settings, &input).await.unwrap()["applicable"], true);
-        assert!(server.await.unwrap().contains("previousProposal"));
-        assert_eq!(decide(&db, &json!({"taskId":"task","turnId":"chat-fixed"}), true).unwrap()["draftRevision"], 2);
+        let repair_request = server.await.unwrap();
+        assert!(repair_request.contains("previousProposalValidation"));
+        assert!(repair_request.contains("invalid_knowledge: idea disposition is invalid"));
+        assert!(repair_request.contains("approved"));
+        assert!(repair_request.contains("Preserve newer v2 edits"));
+        assert_eq!(decide(&db, &json!({"taskId":"task","turnId":"chat-fixed"}), true).unwrap()["draftRevision"], 3);
         let c = database::open(&db).unwrap();
         let published: Option<i64> = c.query_row("SELECT published_revision FROM knowledge_pointers WHERE task_id='task'", [], |r|r.get(0)).unwrap();
         assert_eq!(published, None);
