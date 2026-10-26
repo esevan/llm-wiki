@@ -243,3 +243,8 @@
 @media(min-width:1051px) { .knowledge-review { grid-template-columns: minmax(0,1fr) 288px; } }
 .knowledge-review .knowledge-article .knowledge-draft-editor { padding: 0; }
 .knowledge-review .knowledge-article .knowledge-draft-editor textarea { min-height: 22rem; height: auto; }
+
+/* Preparation and recovery stay together before a private article exists. */
+.knowledge-review.knowledge-review-empty { grid-template-columns: minmax(0, 1fr); gap: var(--space-4); max-width: 48rem; padding: var(--space-5); border: var(--border-default); border-radius: var(--radius-panel); background: var(--color-bg-surface); }
+.knowledge-review-empty > button { justify-self: start; min-height: 44px; padding: var(--space-2) var(--space-5); }
+.knowledge-review-empty > p { margin: 0; }

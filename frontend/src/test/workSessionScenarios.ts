@@ -1,4 +1,5 @@
 import type { WorkbenchScenarioHarness } from "./workbenchScenarios";
+import { taskClient } from "../services/taskClient";
 import { taskExecutionClient } from "../services/taskExecutionClient";
 
 type Session = {
@@ -257,7 +258,7 @@ export async function interactWithCommittedAnswer(
  * Keep this scenario deliberately small because the live two-turn acceptance
  * is a separate gate.
  */
-export async function runTaskCodexExecutionScenario(h: WorkbenchScenarioHarness) {
+export async function runTaskCodexExecutionScenario(h: WorkbenchScenarioHarness & { providerUrl: string }) {
   const titleA = `Codex execution A ${Date.now()}`;
   const titleB = `Codex execution B ${Date.now()}`;
   await h.create(titleA);
@@ -320,6 +321,23 @@ export async function runTaskCodexExecutionScenario(h: WorkbenchScenarioHarness)
   const linkedRuns = workLog.workLog?.map((entry) => entry.execution?.runId).filter(Boolean) ?? [];
   if (linkedRuns.length !== 2 || !linkedRuns.includes(first.id) || !linkedRuns.includes(runs[0]?.id)) throw new Error("Completed executions were not projected exactly once into the existing Work Log");
   await h.step("Detaching and reopening restored Task A’s completed Runs and the existing Work Log execution link.");
+
+  await h.api("/provider/config", "PUT", {base_url:h.providerUrl,model:"deterministic-test-model",api_key:"desktop-e2e-key"});
+  await closeDetail(h);
+  await taskClient.transition(taskA.id,taskAAfterRuns.taskRevision,"in_progress");
+  await taskClient.complete(taskA.id,taskAAfterRuns.taskRevision,"The controlled fixture completed both Runs and preserved original evidence.");
+  await h.detail(titleA);
+  const review = document.querySelector<HTMLButtonElement>('[data-control="task-detail-tab-review"]');
+  if (!review) throw new Error("Missing Knowledge review tab");
+  await h.prepareClick(review,"Open completed Run Knowledge review");h.click(review,"Open completed Run Knowledge review");
+  await h.waitFor(()=>Boolean(document.querySelector('[data-control="task-knowledge-draft"]')),"private draft action after completed Runs");
+  const draft = document.querySelector<HTMLButtonElement>('[data-control="task-knowledge-draft"]')!;
+  await h.prepareClick(draft,"Prepare private draft from completed Runs");h.click(draft,"Prepare private draft from completed Runs");
+  await h.waitFor(()=>Boolean(document.querySelector('.knowledge-review[data-content-hash]')),"one-action Run-backed private draft");
+  const knowledge=await h.api<{versions:unknown[];pointers:{publishedRevision?:number}}>(`/tasks/${taskA.id}/knowledge`);
+  if(knowledge.versions.length!==1 || knowledge.pointers.publishedRevision!==undefined) throw new Error("Run-backed preparation must create exactly one private draft without publication");
+  await h.step("One private-draft action refreshed completed Run evidence and Journey, rendered the exact draft inline, and left publication untouched.");
+
 }
 
 async function executeInstruction(h: WorkbenchScenarioHarness, label: string, instruction: string, taskId: string, sessionIdValue: string, settingsRevision: string) {

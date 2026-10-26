@@ -823,10 +823,14 @@ impl TaskExecutionApplicationService {
                 }),
         );
         let expected_projection_revision=connection.query_row("SELECT revision FROM task_distillation_current WHERE owner_type='work_log' AND owner_id=?",[&work_log_entry_id],|row|row.get::<_,i64>(0)).optional().map_err(|error|error.to_string())?.unwrap_or(0);
-        let missing=final_report.is_none().then(||format!("Run ended with status {status} without a final report"));
+        let missing=final_report.as_deref().is_none_or(|report| report.trim().is_empty()).then(||format!("Run ended with status {status} without a final report"));
         let mut input=build_run_input(DistillationOwner{task_id,task_revision,run_id:Some(run_id.into()),run_revision:Some(run_revision),work_log_entry_id:Some(work_log_entry_id),
             },final_report.as_deref(),missing.as_deref(),sources,expected_projection_revision,locale,
         )?;
+        input.required_completion_id = connection.query_row(
+            "SELECT c.id FROM task_completions c JOIN tasks t ON t.id=c.task_id WHERE c.task_id=? AND t.state='completed' AND c.task_revision=t.current_revision ORDER BY c.created_at DESC,c.id DESC LIMIT 1",
+            [&input.owner.task_id], |row| row.get(0),
+        ).optional().map_err(|e|e.to_string())?;
         let source_revision=input.source_set_hash.clone();
         let mut existing_semantic_graph =
             crate::native::task_distillation::task_projection(&connection, &input.owner.task_id)?;

@@ -174,7 +174,6 @@ export function TaskDetail({
   const [editing, setEditing] = useState(session?.editing ?? false);
   const workSessionDrafts = useRef(session?.workSessionDrafts ?? new Map<string, WorkSessionDraft>()).current;
   const [showCompletedChecklist, setShowCompletedChecklist] = useState(false);
-  const [knowledgeQueued, setKnowledgeQueued] = useState(false);
   const [mutationBusy, setMutationBusy] = useState(false);
   const [lineage, setLineage] = useState<LineageSnapshot>();
   const [lineageExpanded, setLineageExpanded] = useState(Boolean(openJourney));
@@ -345,7 +344,6 @@ export function TaskDetail({
   }, [load]);
   useEffect(() => {
     if (!queueKnowledgeDraft) return;
-    setKnowledgeQueued(false);
     setKnowledgeDraft((current) => current?.draftRevision === queueKnowledgeDraft.draftRevision && current.contentHash === queueKnowledgeDraft.contentHash
       ? current
       : { ...queueKnowledgeDraft, savedBodyMarkdown: queueKnowledgeDraft.bodyMarkdown });
@@ -466,9 +464,8 @@ export function TaskDetail({
     };
   };
   const createKnowledgeDraft = async () => {
-    if (!task || task.state !== "completed" || knowledgeQueued) return;
+    if (!task || task.state !== "completed") return;
     await taskClient.knowledgeDraft(task.id, revision);
-    setKnowledgeQueued(true);
   };
   const canonicalTask = detailState && { ...detailState.persisted, ...detailState.draft };
   const task = canonicalTask && (editing || detailState!.dirty.size ? canonicalTask : localizedTask(canonicalTask));
@@ -830,7 +827,7 @@ export function TaskDetail({
           <article className="log-entry" id={`work-log-${log.id}`} key={log.id} data-work-log-entry={log.id} tabIndex={-1}>
             {log.createdAt && <time dateTime={log.createdAt}>{workLogTimestamp(log.createdAt)}</time>}
             {!log.distillation && !log.execution && <p>{log.bodyVersions?.[document.documentElement.lang.startsWith("ko") ? "ko" : "en"]?.body || log.body}</p>}
-            <WorkLogDistillation projection={log.distillation} execution={log.execution} busy={mutationBusy || task.state === "completed"} onRetry={() => { void update(async () => { await taskClient.repairDistillation(task.id, "retry failed Distillation", log.execution?.runId); return task; }).catch(() => undefined); }} onRepair={() => { void update(async () => { await taskClient.repairDistillation(task.id, "repair requested by user", log.execution?.runId); return task; }).catch(() => undefined); }} onOpenOriginal={() => { if (log.execution) { setExecutionFocus({ sessionId: log.execution.sessionId, runId: log.execution.runId }); focusInTab("sessions", "[data-control=task-execution-heading]"); } }} />
+            <WorkLogDistillation projection={log.distillation} execution={log.execution} busy={mutationBusy} onRetry={() => { void update(async () => { await taskClient.repairDistillation(task.id, "retry failed Distillation", log.execution?.runId); return task; }).catch(() => undefined); }} onRepair={() => { void update(async () => { await taskClient.repairDistillation(task.id, "repair requested by user", log.execution?.runId); return task; }).catch(() => undefined); }} onOpenOriginal={() => { if (log.execution) { setExecutionFocus({ sessionId: log.execution.sessionId, runId: log.execution.runId }); focusInTab("sessions", "[data-control=task-execution-heading]"); } }} />
             {log.execution && <details data-control="task-worklog-original-details" className="work-log-execution" aria-label="Codex execution"><summary>{displayLocale.startsWith("ko") ? "원본 실행 기록과 증거" : "Original execution and evidence"}</summary>
               {(() => {
                 const status = { queued: text.executionQueued, running: text.executionRunning, awaiting_response: text.executionAwaitingResponse, succeeded: text.executionSucceeded, failed: text.executionFailed, cancelled: text.executionCancelled, interrupted: text.executionInterrupted, needs_attention: text.executionNeedsAttention }[log.execution.status];
@@ -1146,7 +1143,6 @@ export function TaskDetail({
         ref={knowledgeReviewRef}
         taskId={task.id}
         completed={task.state === "completed"}
-        generationQueued={knowledgeQueued}
         refreshKey={`${refreshKey ?? 0}:${queueKnowledgeDraft?.draftRevision ?? 0}`}
         preferredRevision={queueKnowledgeDraft?.draftRevision}
         onGenerate={createKnowledgeDraft}

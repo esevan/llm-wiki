@@ -53,6 +53,45 @@ const projection = (versions = [version(1), version(2)]) => ({
 });
 
 describe("Knowledge review", () => {
+  it("resumes durable preparation, shows stages and retries a failure in place", async () => {
+    let jobs = [{ id: "generation", task_kind: "knowledge_draft", entity_id: "task-1", status: "running", stage: "preparing" }];
+    let stored = projection([]);
+    window.llmWikiApplication = { request: vi.fn(async ({ path }: { path: string }) => response(path === "/jobs" ? { jobs } : stored)) };
+    const generate = vi.fn(async () => { jobs = [{ ...jobs[0], id: "retry", status: "running", stage: "preparing" }]; });
+    const view = render(<KnowledgeReviewPanel taskId="task-1" completed onGenerate={generate} />);
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Organizing work"));
+    expect(screen.getByRole("button", { name: /Organizing work/ })).toBeDisabled();
+    jobs = [{ ...jobs[0], stage: "generating" }];
+    act(() => window.dispatchEvent(new Event("llm-wiki:queue-changed")));
+    expect(await screen.findByRole("button", { name: /Creating draft/ })).toBeDisabled();
+    jobs = [{ ...jobs[0], status: "failed" }];
+    act(() => window.dispatchEvent(new Event("llm-wiki:queue-changed")));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Your records and existing drafts are preserved");
+    const retry = screen.getByRole("button", { name: "Try again" });
+    fireEvent.click(retry); fireEvent.click(retry);
+    await waitFor(() => expect(generate).toHaveBeenCalledTimes(1));
+    view.unmount();
+    render(<KnowledgeReviewPanel taskId="task-1" completed onGenerate={generate} />);
+    expect(await screen.findByRole("button", { name: /Organizing work/ })).toBeDisabled();
+    expect(generate).toHaveBeenCalledTimes(1);
+    jobs = [{ ...jobs[0], status: "completed" }]; stored = projection([version(3)]);
+    act(() => window.dispatchEvent(new Event("llm-wiki:queue-changed")));
+    expect(await screen.findByRole("heading", { name: "Offline use", level: 3 })).toBeVisible();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("keeps an existing draft readable and failure recovery outside collapsed tools", async () => {
+    window.llmWikiApplication = { request: vi.fn(async ({ path }: { path: string }) => response(path === "/jobs"
+      ? { jobs: [{ id: "failed", task_kind: "knowledge_draft", entity_id: "task-1", status: "failed" }] }
+      : projection())) };
+    const generate = vi.fn();
+    render(<KnowledgeReviewPanel taskId="task-1" completed onGenerate={generate} />);
+    expect(await screen.findByRole("alert")).toHaveTextContent("Could not organize the work");
+    expect(screen.getByRole("heading", { name: "Offline use", level: 3 })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Try again" })).toBeVisible();
+    expect(document.querySelector<HTMLDetailsElement>('[data-control="knowledge-history"]')?.open).toBe(false);
+    expect(generate).not.toHaveBeenCalled();
+  });
   it("identifies source-bound reuse interpretations as review suggestions", async () => {
     const draft = version(2);
     const interpreted = { ...draft, result: { ...draft.result, article: { ...draft.result.article,
@@ -198,7 +237,7 @@ describe("Knowledge review", () => {
     if (!document.querySelector<HTMLDetailsElement>('[data-control="knowledge-history"]')!.open) fireEvent.click(screen.getByText("Versions and draft tools"));
     fireEvent.click(screen.getByText(/Ideas to revisit/));
     expect(screen.getByText("Try a reminder automation later.")).toBeVisible();
-    expect(request).toHaveBeenCalledTimes(2);
+    expect(request.mock.calls.filter(([input]) => input.path !== "/jobs")).toHaveLength(2);
     expect(request).toHaveBeenCalledWith(expect.objectContaining({ path: "/tasks/task-1/knowledge", method: "GET" }));
   });
 
@@ -424,7 +463,7 @@ describe("Knowledge review", () => {
     render(<KnowledgeReviewPanel taskId="task-1" completed onGenerate={generate} />);
     const regenerate = await screen.findByRole("button", { name: "Regenerate private draft" });
     fireEvent.click(regenerate);
-    expect(await screen.findByRole("alert")).toHaveTextContent("The generation service could not be reached");
+    expect(await screen.findByRole("alert")).toHaveTextContent("Could not organize the work or create the draft");
     fireEvent.click(regenerate);
     await waitFor(() => expect(generate).toHaveBeenCalledTimes(2));
     fireEvent.click(screen.getByRole("button", { name: "Edit current draft" }));
@@ -515,7 +554,7 @@ describe("Knowledge review", () => {
     expect(screen.queryByText("Older applied proposal")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Finish exact remaining steps" }));
     await waitFor(() => expect(recover).toHaveBeenCalledWith({ operationId: "saved-operation", choice: "finish" }));
-    await waitFor(() => expect(request).toHaveBeenCalledTimes(3));
+    await waitFor(() => expect(request.mock.calls.filter(([input]) => input.path !== "/jobs")).toHaveLength(3));
   });
 
   it("resumes status polling after retry and reloads the published pointer on completion", async () => {

@@ -63,6 +63,8 @@ pub struct DistillationInput {
     pub rules_version: String,
     pub locale: String,
     pub repair_reason: Option<String>,
+    #[serde(default)]
+    pub required_completion_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -333,6 +335,7 @@ pub fn build_run_input(
         rules_version: RULES_VERSION.into(),
         locale: locale.into(),
         repair_reason: None,
+        required_completion_id: None,
     })
 }
 
@@ -699,6 +702,10 @@ pub fn validate_result(
         }
     }
     for topic in &result.topic_states {
+        let scoped = !input.affected_semantic_ids.is_empty() || input.repair_reason.as_deref().is_some_and(|reason| reason.starts_with("targeted source change:"));
+        if scoped && topic.current_node_id.iter().chain(topic.replacement_node_id.iter()).any(|id| !candidate_ids.contains(id.as_str()) && !input.affected_semantic_ids.contains(id)) {
+            return Err("topic change reaches outside the affected semantic subgraph".into());
+        }
         check_citations(&topic.sources, &format!("topic {}", topic.topic_key))?;
         if topic.status == "adopted" && topic.current_node_id.is_none() {
             return Err("adopted topic requires a current node".into());
@@ -1034,8 +1041,26 @@ pub fn canonicalize_semantic_ids(
     Ok(())
 }
 
+/// Canonical completion is recorded authority, independent of model synthesis.
+/// Attach only the exact latest completion; never infer verification or new evidence.
+pub fn attach_recorded_completion(input: &DistillationInput, result: &mut DistillationResult) {
+    let Some(id) = input.required_completion_id.as_ref() else { return; };
+    if result.completion_snapshots.iter().any(|snapshot| snapshot.completion_id == *id) { return; }
+    let Some(source) = input.sources.iter().find(|source| source.source_type == "task_completion" && source.evidence_state == "explicit_completion" && source.id == *id) else { return; };
+    let citation = SourceCitation { source_type: source.source_type.clone(), id: source.id.clone(), revision: source.revision.clone(), locator: source.locator.clone(), quote: source.excerpt.clone() };
+    let claim = stable_semantic_id(&input.owner.task_id,"completion",id,&source.revision);
+    result.claims.push(DistilledClaim { id: claim.clone(), kind: "completion".into(), statement: source.excerpt.clone(), actor: "user".into(), epistemic_state: "performed".into(), status: "current".into(), topic_key: None, sources: vec![citation.clone()], contradicted_by: vec![] });
+    result.completion_snapshots.push(CompletionSnapshot {
+        id: stable_semantic_id(&input.owner.task_id,"completion_snapshot",id,&source.revision),
+        completion_id: id.clone(), completion_revision: source.revision.clone(),
+        status: "current".into(), claim_ids: vec![claim], unresolved: vec![], verification_state: "recorded".into(),
+        sources: vec![SourceCitation { source_type: source.source_type.clone(), id: source.id.clone(), revision: source.revision.clone(), locator: source.locator.clone(), quote: source.excerpt.clone() }],
+    });
+}
+
 pub fn factual_fallback(input: &DistillationInput, run_status: &str) -> DistillationResult {
     let mut result = DistillationResult::default();
+    attach_recorded_completion(input, &mut result);
     result.warnings.push(if input.primary_source.is_some() {
         "Semantic Distillation is unavailable; showing saved Run facts.".into()
     } else {

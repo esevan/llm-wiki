@@ -19,11 +19,39 @@ pub fn terminal_run_for_repair(
     task_id: &str,
     run_id: Option<&str>,
 ) -> Result<String, String> {
-    crate::application::task_service::ensure_task_mutable(connection, task_id)?;
+    ensure_derived_task_available(connection, task_id)?;
     if run_id.is_some_and(|id| id.trim().is_empty()) {
         return Err("runId must not be empty".into());
     }
     connection.query_row("SELECT id FROM task_work_session_runs WHERE task_id=? AND (? IS NULL OR id=?) AND status IN ('succeeded','failed','cancelled','interrupted','needs_attention') ORDER BY finished_at DESC,created_at DESC,id DESC LIMIT 1",params![task_id,run_id,run_id],|row|row.get(0)).optional().map_err(|e|e.to_string())?.ok_or_else(||"No completed Run is available to repair for this Task".into())
+}
+
+/// Derived views may refresh after completion; canonical content remains read-only.
+fn ensure_derived_task_available(connection: &Connection, task_id: &str) -> Result<(), String> {
+    let available: bool = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM tasks WHERE id=? AND NOT EXISTS(SELECT 1 FROM deleted_entities WHERE entity_type='tasks' AND entity_id=tasks.id))",
+        [task_id], |row| row.get(0),
+    ).map_err(|error| error.to_string())?;
+    if !available { return Err("Task not found".into()); }
+    Ok(())
+}
+
+/// Keep read-only context separate from the exact mutation allowlist.
+pub(crate) fn scope_generation_input(value: &mut Value, affected: &[String]) {
+    value["readOnlySemanticGraph"] = value["existingSemanticGraph"].clone();
+    value["distillationInput"]["affectedSemanticIds"] = json!(affected);
+    if let Some(targets) = value["distillationInput"]["semanticTargetRevisions"].as_object_mut() {
+        targets.retain(|id, _| affected.contains(id));
+    }
+    if let Some(nodes) = value["existingSemanticGraph"]["nodes"].as_array_mut() {
+        nodes.retain(|node| node["id"].as_str().is_some_and(|id| affected.iter().any(|allowed| allowed == id)));
+    }
+    if let Some(edges) = value["existingSemanticGraph"]["relationships"].as_array_mut() {
+        edges.retain(|edge| ["from", "to"].iter().all(|key| edge[*key].as_str().is_some_and(|id| affected.iter().any(|allowed| allowed == id))));
+    }
+    if let Some(topics) = value["existingSemanticGraph"]["topicStates"].as_array_mut() {
+        topics.retain(|topic| topic["currentNodeId"].as_str().is_some_and(|id| affected.iter().any(|allowed| allowed == id)) && topic["replacementNodeId"].as_str().is_none_or(|id| affected.iter().any(|allowed| allowed == id)));
+    }
 }
 
 fn owner(input: &DistillationInput) -> Result<(&'static str, String), String> {
@@ -85,11 +113,13 @@ fn derived_dependencies(
         }
     }
     for relationship in &result.relationship_changes {
+
         for source in &relationship.sources {
             output.push((source.clone(), String::new(), relationship.id.clone()));
         }
     }
     for topic in &result.topic_states {
+
         for source in &topic.sources {
             output.push((source.clone(), String::new(), String::new()));
         }
@@ -164,6 +194,10 @@ fn check_expected_targets(
     Ok(())
 }
 
+fn scoped_input(input: &DistillationInput) -> bool {
+    !input.affected_semantic_ids.is_empty() || input.repair_reason.as_deref().is_some_and(|reason| reason.starts_with("targeted source change:"))
+}
+
 fn apply_semantics(
     tx: &Transaction<'_>,
     input: &DistillationInput,
@@ -232,6 +266,12 @@ fn apply_semantics(
         }
     }
     for relationship in &result.relationship_changes {
+        if scoped_input(input) {
+            let prior: Option<(String,String)> = tx.query_row("SELECT from_node_id,to_node_id FROM task_distillation_relationships WHERE task_id=? AND relationship_id=?",params![task,&relationship.id],|r|Ok((r.get(0)?,r.get(1)?))).optional().map_err(|e|e.to_string())?;
+            if prior.is_some_and(|(from,to)| !input.affected_semantic_ids.contains(&from) || !input.affected_semantic_ids.contains(&to)) {
+                return Err("relationship change reaches outside the affected semantic subgraph".into());
+            }
+        }
         for endpoint in [&relationship.from, &relationship.to] {
             let exists=tx.query_row("SELECT EXISTS(SELECT 1 FROM task_distillation_nodes WHERE task_id=? AND node_id=?)",params![task,endpoint],|row|row.get::<_,bool>(0)).map_err(|e|e.to_string())?;
             if !exists {
@@ -241,6 +281,12 @@ fn apply_semantics(
         tx.execute("INSERT INTO task_distillation_relationships(task_id,relationship_id,kind,from_node_id,to_node_id,reason,sources_json,active,projection_revision) VALUES(?,?,?,?,?,?,?,1,?) ON CONFLICT(task_id,relationship_id) DO UPDATE SET kind=excluded.kind,from_node_id=excluded.from_node_id,to_node_id=excluded.to_node_id,reason=excluded.reason,sources_json=excluded.sources_json,active=1,projection_revision=excluded.projection_revision",params![task,&relationship.id,&relationship.kind,&relationship.from,&relationship.to,&relationship.reason,serde_json::to_string(&relationship.sources).map_err(|e|e.to_string())?,projection_revision]).map_err(|error|error.to_string())?;
     }
     for topic in &result.topic_states {
+        if scoped_input(input) {
+            let prior: Option<(Option<String>,Option<String>)> = tx.query_row("SELECT current_node_id,replacement_node_id FROM task_distillation_topics WHERE task_id=? AND topic_key=?",params![task,&topic.topic_key],|r|Ok((r.get(0)?,r.get(1)?))).optional().map_err(|e|e.to_string())?;
+            if prior.is_some_and(|(current,replacement)| current.is_none() || current.iter().chain(replacement.iter()).any(|id| !input.affected_semantic_ids.contains(id))) {
+                return Err("topic change reaches outside the affected semantic subgraph".into());
+            }
+        }
         let prior:Option<String>=tx.query_row("SELECT current_node_id FROM task_distillation_topics WHERE task_id=? AND topic_key=?",params![task,&topic.topic_key],|row|row.get(0)).optional().map_err(|e|e.to_string())?.flatten();
         if let Some(prior) = prior.filter(|id| Some(id) != topic.current_node_id.as_ref()) {
             if !result.node_changes.iter().any(|change| {
@@ -297,8 +343,14 @@ pub fn publish_for_worker(
         result,
         prompt_id,
         prompt_version,
-        Some(worker),
+        Some((worker, None)),
     )
+}
+
+pub(crate) fn publish_for_parent_worker(
+    connection: &mut Connection, job_id: &str, input: &DistillationInput, result: &DistillationResult, prompt: (PromptId,u32), ownership: (&str,&str),
+) -> Result<Value,String> {
+    publish_inner(connection,job_id,input,result,prompt.0,prompt.1,Some((ownership.0,Some(ownership.1))))
 }
 
 fn publish_inner(
@@ -308,14 +360,28 @@ fn publish_inner(
     result: &DistillationResult,
     prompt_id: PromptId,
     prompt_version: u32,
-    expected_worker: Option<&str>,
+    ownership: Option<(&str,Option<&str>)>,
 ) -> Result<Value, String> {
     validate_result(input, result)?;
     let (owner_type, owner_id) = owner(input)?;
     let tx = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|error| error.to_string())?;
-    if owner_type == "work_log" { crate::application::task_service::ensure_task_mutable(&tx, &input.owner.task_id)?; }
+    ensure_derived_task_available(&tx, &input.owner.task_id)?;
+    if let Some(run) = input.owner.run_id.as_deref() {
+        let owned: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM task_work_session_runs WHERE id=? AND task_id=? AND work_log_entry_id=?)",params![run,&input.owner.task_id,&input.owner.work_log_entry_id],|r|r.get(0)).map_err(|e|e.to_string())?;
+        if !owned { return Err("Run does not belong to this Task and Work Log".into()); }
+    }
+    if let Some((worker,parent)) = ownership {
+        let owns:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM ai_jobs_v2 WHERE id=? AND worker_id=? AND status='running')",params![job_id,worker],|row|row.get(0)).map_err(|e|e.to_string())?;
+        if let Some(parent) = parent {
+            let parent_owns: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM ai_jobs_v2 WHERE id=? AND worker_id=? AND status='running')",params![parent,worker],|r|r.get(0)).map_err(|e|e.to_string())?;
+            if !parent_owns { return Err("stale_job: parent worker no longer owns publication".into()); }
+        }
+        if !owns {
+            return Err("stale_job: worker no longer owns publication".into());
+        }
+    }
     if let Some(revision)=tx.query_row("SELECT revision FROM task_distillation_revisions WHERE job_id=? AND owner_type=? AND owner_id=?",params![job_id,owner_type,&owner_id],|row|row.get::<_,i64>(0)).optional().map_err(|error|error.to_string())? {
         return Ok(json!({"ownerType":owner_type,"ownerId":owner_id,"revision":revision,"freshness":"current","applicationDisposition":"applied","replayed":true}));
     }
@@ -329,12 +395,6 @@ fn publish_inner(
         .map_err(|e| e.to_string())?;
     if status.as_deref() != Some("running") {
         return Err("stale_job: publication requires the active running job".into());
-    }
-    if let Some(worker) = expected_worker {
-        let owns:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM ai_jobs_v2 WHERE id=? AND worker_id=? AND status='running')",params![job_id,worker],|row|row.get(0)).map_err(|e|e.to_string())?;
-        if !owns {
-            return Err("stale_job: worker no longer owns publication".into());
-        }
     }
     let task_head = tx
         .query_row(
@@ -671,6 +731,85 @@ mod tests {
     use crate::application::task_distillation_service::*;
     use crate::native::{database, migrations};
     use std::collections::BTreeMap;
+
+    #[test]
+    fn generation_scope_filters_schema_targets_and_keeps_read_only_context() {
+        let graph=json!({"nodes":[{"id":"allowed","revision":2},{"id":"read-only","revision":4}],"relationships":[],"topicStates":[]});
+        let mut value=json!({"existingSemanticGraph":graph,"distillationInput":{"semanticTargetRevisions":{"allowed":2,"read-only":4}}});
+        scope_generation_input(&mut value,&["allowed".into()]);
+        assert_eq!(value["readOnlySemanticGraph"]["nodes"].as_array().unwrap().len(),2);
+        assert_eq!(value["existingSemanticGraph"]["nodes"].as_array().unwrap().len(),1);
+        assert_eq!(value["distillationInput"]["semanticTargetRevisions"],json!({"allowed":2}));
+        let schema=crate::workflow_foundation::structured_output::schema(PromptId::RunReportDistillation,&value).unwrap();
+        assert_eq!(schema["$defs"]["NodeChange"]["properties"]["targetIds"]["items"]["enum"],json!(["allowed"]));
+        scope_generation_input(&mut value,&[]);
+        let schema=crate::workflow_foundation::structured_output::schema(PromptId::RunReportDistillation,&value).unwrap();
+        assert_eq!(schema["$defs"]["NodeChange"]["properties"]["targetIds"]["maxItems"],0);
+    }
+
+    #[test]
+    fn completed_task_derived_publication_preserves_original_and_scope_guards() {
+        let (_root,db,mut input,mut result)=fixture();
+        let mut c=database::open(&db).unwrap();
+        c.execute("UPDATE tasks SET state='completed' WHERE id='task'",[]).unwrap();
+        assert_eq!(terminal_run_for_repair(&c,"task",Some("run")).unwrap(),"run");
+        input.projection_kind="work_log".into();
+        result.work_log_view.sections.push(WorkLogSection { kind:"outcome".into(),claim_ids:vec!["claim".into()] });
+        job(&c,&input,"work-job");
+        publish(&mut c,"work-job",&input,&result,PromptId::RunReportDistillation,5).unwrap();
+        assert_eq!(c.query_row("SELECT body FROM task_work_log_entries WHERE id='log'",[],|r|r.get::<_,String>(0)).unwrap(),"original");
+        assert!(crate::application::task_service::ensure_task_mutable(&c,"task").unwrap_err().contains("read-only"));
+        input.projection_kind="task_journey".into();
+        job(&c,&input,"first");publish(&mut c,"first",&input,&result,PromptId::TaskJourneyIncrement,3).unwrap();
+        input.expected_projection_revision=1;
+        input.semantic_target_revisions.insert("node".into(),1);
+        input.repair_reason=Some("targeted source change: completion".into());
+        result.node_changes[0].action="enrich".into();
+        result.node_changes[0].target_ids=vec!["node".into()];
+        result.node_changes[0].expected_target_revisions.insert("node".into(),1);
+        let before=task_projection(&c,"task").unwrap();
+        job(&c,&input,"outside");
+        assert!(publish(&mut c,"outside",&input,&result,PromptId::TaskJourneyIncrement,3).unwrap_err().contains("outside the affected"));
+        assert_eq!(task_projection(&c,"task").unwrap(),before);
+        input.affected_semantic_ids=vec!["node".into()];
+        job(&c,&input,"allowed");publish(&mut c,"allowed",&input,&result,PromptId::TaskJourneyIncrement,3).unwrap();
+        assert_eq!(c.query_row("SELECT revision FROM task_distillation_nodes WHERE node_id='node'",[],|r|r.get::<_,i64>(0)).unwrap(),2);
+        c.execute("INSERT INTO deleted_entities(entity_type,entity_id) VALUES('tasks','task')",[]).unwrap();
+        assert!(terminal_run_for_repair(&c,"task",Some("run")).is_err());
+    }
+
+    #[test]
+    fn empty_scope_cannot_change_read_only_topics_or_null_topic_state() {
+        let (_root,db,mut input,mut result)=fixture();let mut c=database::open(&db).unwrap();
+        job(&c,&input,"first");publish(&mut c,"first",&input,&result,PromptId::TaskJourneyIncrement,3).unwrap();
+        c.execute("INSERT INTO task_distillation_topics(task_id,topic_key,status,current_node_id,sources_json,projection_revision) VALUES('task','kept','unresolved',NULL,'[]',1)",[]).unwrap();
+        input.expected_projection_revision=1; input.repair_reason=Some("targeted source change: completion".into());
+        result.node_changes.clear();
+        result.topic_states=vec![TopicState { topic_key:"kept".into(),status:"unresolved".into(),current_node_id:Some("node".into()),replacement_node_id:None,sources:result.claims[0].sources.clone() }];
+        job(&c,&input,"outside-topic");
+        assert!(publish(&mut c,"outside-topic",&input,&result,PromptId::TaskJourneyIncrement,3).unwrap_err().contains("outside the affected"));
+        result.topic_states[0].current_node_id=None;
+        job(&c,&input,"null-topic");
+        assert!(publish(&mut c,"null-topic",&input,&result,PromptId::TaskJourneyIncrement,3).unwrap_err().contains("outside the affected"));
+        assert_eq!(current(&c,"task_journey","task").unwrap().unwrap()["projectionRevision"],1);
+        assert_eq!(c.query_row("SELECT count(*) FROM task_distillation_node_history",[],|r|r.get::<_,i64>(0)).unwrap(),0);
+    }
+
+    #[test]
+    fn superseded_worker_cannot_replay_work_log_or_apply_its_journey_child() {
+        let (_root,db,mut input,mut result)=fixture();let mut c=database::open(&db).unwrap();
+        input.projection_kind="work_log".into();
+        result.work_log_view.sections.push(WorkLogSection { kind:"outcome".into(),claim_ids:vec!["claim".into()] });
+        job(&c,&input,"parent");c.execute("UPDATE ai_jobs_v2 SET worker_id='old' WHERE id='parent'",[]).unwrap();
+        publish_for_worker(&mut c,"parent",&input,&result,PromptId::RunReportDistillation,5,"old").unwrap();
+        c.execute("UPDATE ai_jobs_v2 SET worker_id='new' WHERE id='parent'",[]).unwrap();
+        assert!(publish_for_worker(&mut c,"parent",&input,&result,PromptId::RunReportDistillation,5,"old").unwrap_err().contains("worker"));
+        input.projection_kind="task_journey".into();job(&c,&input,"child");
+        c.execute("UPDATE ai_jobs_v2 SET worker_id='old' WHERE id='child'",[]).unwrap();
+        assert!(publish_for_parent_worker(&mut c,"child",&input,&result,(PromptId::TaskJourneyIncrement,3),("old","parent")).unwrap_err().contains("parent worker"));
+        assert!(task_projection(&c,"task").unwrap().is_none());
+        assert_eq!(c.query_row("SELECT count(*) FROM task_distillation_revisions",[],|r|r.get::<_,i64>(0)).unwrap(),1);
+    }
 
     fn fixture() -> (
         tempfile::TempDir,

@@ -466,6 +466,14 @@ pub(crate) fn schema(id: PromptId, context: &Value) -> Result<Value, String> {
         }
     }
     let targets = ids(context, "semanticTargetRevisions");
+    if matches!(id, PromptId::WorkLogDistillation | PromptId::RunReportDistillation | PromptId::TaskJourneyIncrement) {
+        let target_ids = &mut value["$defs"]["NodeChange"]["properties"]["targetIds"];
+        if targets.is_empty() {
+            target_ids["maxItems"] = json!(0);
+        } else {
+            target_ids["items"]["enum"] = json!(targets);
+        }
+    }
     strictify(&mut value, &targets)?;
     Ok(value)
 }

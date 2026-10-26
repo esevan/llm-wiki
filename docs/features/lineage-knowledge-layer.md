@@ -42,6 +42,10 @@ and endpoint quotes, while the underlying activity remains authoritative.
 
 ## Exact journey used by a Knowledge draft
 
+**Generate private draft** also prepares any required execution summary and current Journey. The same view shows **Organizing work… → Creating draft…** and offers an in-place retry on failure. Matching active requests are reused; reopening the Task or restarting the app reconnects to the stored request. Users do not need to locate or retry internal Queue jobs. Existing drafts remain readable throughout preparation, and publication still requires its separate explicit action.
+
+Completed Tasks allow derived summary/Journey repair while their original Task, Run and completion records remain read-only. Model mutation targets use the same bounded node/revision allowlist as validation; other graph context is read-only. A recorded completion snapshot preserves the exact canonical evidence without claiming independent verification, including when a Run has no final report. Changed evidence or worker ownership blocks application of the earlier result.
+
 Generating a Knowledge draft in the app first creates or reuses the current journey for the selected
 locale. The immutable draft lineage stores that exact snapshot as
 `lineage.journey = { sourceHash, journey, modelStatus, modelError }`; see the

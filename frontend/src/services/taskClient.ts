@@ -21,6 +21,11 @@ import type {
   WorkPreviewFields,
 } from "../types/taskWorkbench";
 
+export interface KnowledgeGenerationJob {
+  id: string; task_kind: string; entity_id: string; status: string; stage?: string;
+  error?: { message?: string } | null;
+}
+
 const locale = () =>
   document.documentElement.lang.startsWith("ko") ? "ko" : "en";
 const operationId = () =>
@@ -310,6 +315,7 @@ export const taskClient = {
     request<KnowledgeReviewProjection>(`/tasks/${encodeURIComponent(id)}/knowledge/review-notes`, "POST", input),
   knowledge: (id: string) =>
     request<KnowledgeReviewProjection>(`/tasks/${encodeURIComponent(id)}/knowledge`),
+  knowledgeJobs: () => request<{ jobs: KnowledgeGenerationJob[] }>("/jobs"),
   knowledgeDraft: (id: string, expectedTaskRevision: number) =>
     request<{
       id: string;

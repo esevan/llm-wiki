@@ -3,7 +3,7 @@ import { DraftVersionControls } from "../../components/DraftVersionControls";
 import { ContentRevisionTransition, type ContentTransitionCause } from "../../components/ContentRevisionTransition";
 import { KnowledgeMarkdown } from "../../components/KnowledgeMarkdown";
 import { ReferenceViewer, type ReferenceDocument } from "../../components/ReferenceViewer";
-import { taskClient } from "../../services/taskClient";
+import { taskClient, type KnowledgeGenerationJob } from "../../services/taskClient";
 import type {
   ExactReferenceBinding,
   KnowledgeArchiveProposal,
@@ -142,7 +142,7 @@ const isKnowledgeProjection = (value: unknown): value is KnowledgeReviewProjecti
     && Array.isArray(candidate.ideas);
 };
 
-export function KnowledgeReviewPanel({ taskId, completed, generationQueued, refreshKey, preferredRevision, onGenerate, onDirtyChange, onPrepareArchive, onOrganizeArchive, onPublishArchive, onArchiveStatus, onRetryArchive, onRecoverArchive, ref }: Props) {
+export function KnowledgeReviewPanel({ taskId, completed, generationQueued: externalGenerationQueued, refreshKey, preferredRevision, onGenerate, onDirtyChange, onPrepareArchive, onOrganizeArchive, onPublishArchive, onArchiveStatus, onRetryArchive, onRecoverArchive, ref }: Props) {
   const text = useTaskWorkbenchText().knowledgeReview;
   const [projection, setProjection] = useState<KnowledgeReviewProjection>();
   const [selected, setSelected] = useState<number>();
@@ -255,6 +255,40 @@ export function KnowledgeReviewPanel({ taskId, completed, generationQueued, refr
   }, [load, preferredRevision, refreshKey]);
   const version = projection?.versions.find(candidate => candidate.revision === selected);
   const currentRevision = projection?.pointers.currentPrivateRevision;
+  const [generationJob, setGenerationJob] = useState<KnowledgeGenerationJob>();
+  const [generationError, setGenerationError] = useState(false);
+  const generationSubmitting = useRef(false);
+  const completedGeneration = useRef<string | undefined>(undefined);
+  const generationReadSequence = useRef(0);
+  const generationQueued = externalGenerationQueued || Boolean(generationJob && ["queued", "running", "retryable"].includes(generationJob.status));
+  const generationLabel = generationJob?.stage === "preparing" ? text.preparingEvidence : text.generating;
+  const refreshGeneration = useCallback(async () => {
+    const expectedTask = taskId;
+    const sequence = ++generationReadSequence.current;
+    try {
+      const result = await taskClient.knowledgeJobs();
+      if (sequence !== generationReadSequence.current || currentTaskId.current !== expectedTask || !Array.isArray(result?.jobs)) return;
+      const latest = result.jobs.find(job => job.task_kind === "knowledge_draft" && job.entity_id === expectedTask);
+      setGenerationJob(latest);
+      setGenerationError(Boolean(latest && ["failed", "cancelled", "stale"].includes(latest.status)));
+      if (latest?.status === "completed" && completedGeneration.current !== latest.id) {
+        completedGeneration.current = latest.id;
+        await load();
+      }
+    } catch { /* A transient status-read failure does not discard the active request. */ }
+  }, [load, taskId]);
+  useEffect(() => {
+    setGenerationJob(undefined); setGenerationError(false); completedGeneration.current = undefined;
+    void refreshGeneration();
+    window.addEventListener("llm-wiki:queue-changed", refreshGeneration);
+    return () => window.removeEventListener("llm-wiki:queue-changed", refreshGeneration);
+  }, [refreshGeneration]);
+  useEffect(() => {
+    if (!generationQueued) return;
+    const timer = setInterval(() => void refreshGeneration(), 1000);
+    return () => clearInterval(timer);
+  }, [generationQueued, refreshGeneration]);
+
   useEffect(() => {
     if (pendingGenerationRevision.current === undefined) return;
     if (generationQueued) { observedGenerationQueue.current = true; return; }
@@ -385,13 +419,14 @@ export function KnowledgeReviewPanel({ taskId, completed, generationQueued, refr
     focus: () => root.current?.focus({ preventScroll: true }),
   }), [savedBody, save]);
   const generate = async () => {
-    if (busy || !completed) return;
-    setBusy("generate"); setError(""); setStatus(text.generating);
+    if (busy || !completed || generationQueued || generationSubmitting.current) return;
+    generationSubmitting.current = true; setGenerationError(false);
+    setBusy("generate"); setError(""); setStatus("");
     pendingGenerationRevision.current = currentRevision;
     observedGenerationQueue.current = false;
-    try { await onGenerate(); }
-    catch { pendingGenerationRevision.current = undefined; setError(text.generationUnavailable); setStatus(""); }
-    finally { setBusy(undefined); }
+    try { await onGenerate(); await refreshGeneration(); }
+    catch { pendingGenerationRevision.current = undefined; setGenerationError(true); setStatus(""); }
+    finally { generationSubmitting.current = false; setBusy(undefined); }
   };
   const saveReviewNote = async () => {
     if (!version || savingNote) return;
@@ -511,7 +546,7 @@ export function KnowledgeReviewPanel({ taskId, completed, generationQueued, refr
 
   if (loading && !projection) return <section ref={root} className="knowledge-review" aria-label={text.title} tabIndex={-1}><p role="status">{text.loading}</p></section>;
   if (!projection) return <section ref={root} className="knowledge-review" aria-label={text.title} tabIndex={-1}><p role="alert">{text.loadFailed} {error}</p><button type="button" data-control="knowledge-review-retry" onClick={() => void load()}>{text.retry}</button></section>;
-  if (!version) return <section ref={root} className="knowledge-review knowledge-review-empty" aria-label={text.title} tabIndex={-1}><header><div><p className="knowledge-review-kicker">{text.privateDraft}</p><h3>{text.title}</h3></div><span className="knowledge-state">{text.notPublished}</span></header><p>{text.empty}</p><button type="button" data-control="task-knowledge-draft" disabled={!completed || generationQueued || busy === "generate"} onClick={() => void generate()}>{busy === "generate" || generationQueued ? text.generating : text.generate}</button>{error && <p role="alert">{error}</p>}</section>;
+  if (!version) return <section ref={root} className="knowledge-review knowledge-review-empty" aria-label={text.title} tabIndex={-1}><header><div><p className="knowledge-review-kicker">{text.privateDraft}</p><h3>{text.title}</h3></div><span className="knowledge-state">{text.notPublished}</span></header><p>{text.empty}</p><button type="button" data-control="task-knowledge-draft" aria-busy={Boolean(generationQueued || busy === "generate")} disabled={!completed || generationQueued || busy === "generate"} onClick={() => void generate()}>{busy === "generate" || generationQueued ? generationLabel : generationError ? text.retry : text.generate}</button>{generationQueued && <p role="status">{generationLabel}</p>}{generationError && <p className="knowledge-draft-error" role="alert">{text.generationFailed}</p>}{error && <p role="alert">{error}</p>}</section>;
 
   const noteKey = `${taskId}:${version.revision}:${version.contentHash}`;
   const reviewNotes = (projection.reviewNotes ?? []).filter(note => note.knowledgeRevision === version.revision && note.contentHash === version.contentHash);
@@ -524,6 +559,8 @@ export function KnowledgeReviewPanel({ taskId, completed, generationQueued, refr
     <header className="knowledge-review-header"><p className="knowledge-review-kicker">{projection.pointers.publishedRevision === version.revision ? text.published : text.privateDraft} · v{version.revision}</p>
       <ContentRevisionTransition as="h3" entityKey={`knowledge:${taskId}`} revision={version.revision} cause={appliedTransition?.revision === version.revision ? appliedTransition.cause : undefined} historical={version.revision !== currentRevision} variant="title">{article?.title ?? version.title}</ContentRevisionTransition>
     </header>
+    {generationQueued && <p role="status" className="knowledge-draft-status">{generationLabel}</p>}
+    {generationError && <div><p className="knowledge-draft-error" role="alert">{text.generationFailed}</p><button type="button" data-control="task-knowledge-draft-retry" disabled={!completed || generationQueued || Boolean(busy) || dirty} onClick={() => void generate()}>{text.retry}</button></div>}
     <div className="knowledge-revision-review-slot" ref={revisionReviewTarget} />
     {status && <p role="status" className="knowledge-draft-status">{status}</p>}
     {error && <p role="alert" className="knowledge-draft-error">{error}</p>}
@@ -552,7 +589,7 @@ export function KnowledgeReviewPanel({ taskId, completed, generationQueued, refr
     <section className="knowledge-publication" aria-label={text.publicationReview}>
       <header><div><h4>{text.publicationReview}</h4>{!onPrepareArchive && <p>{text.publicationUnavailable}</p>}</div><button type="button" data-control="knowledge-archive-prepare" disabled={savingNote || Boolean(busy)} onClick={() => void preparePublication()}>{busy === "prepare" ? text.preparingPublication : text.preparePublication}</button></header>
       <p className="knowledge-publication-hint">{text.publicationHint}</p>
-      {publicationError && <div className="knowledge-publication-error"><p className="knowledge-draft-error" role="alert">{publicationError}</p>{canRegenerate && <button type="button" data-control="knowledge-publication-regenerate" disabled={!completed || Boolean(busy) || generationQueued} onClick={() => { setPublicationError(""); setCanRegenerate(false); void generate(); }}>{generationQueued || busy === "generate" ? text.generating : text.regenerate}</button>}</div>}
+      {publicationError && <div className="knowledge-publication-error"><p className="knowledge-draft-error" role="alert">{publicationError}</p>{canRegenerate && <button type="button" data-control="knowledge-publication-regenerate" disabled={!completed || Boolean(busy) || generationQueued} onClick={() => { setPublicationError(""); setCanRegenerate(false); void generate(); }}>{generationQueued || busy === "generate" ? generationLabel : text.regenerate}</button>}</div>}
       {projection.pointers.publicationDocumentId && projection.pointers.publicationContentHash && <details className="knowledge-organization" data-control="knowledge-archive-organize">
         <summary>{text.managePublication}</summary>
         <p>{text.currentPublishedPath}: <code>{projection.pointers.publicationPath ?? text.noPath}</code></p>
@@ -595,7 +632,7 @@ export function KnowledgeReviewPanel({ taskId, completed, generationQueued, refr
 
 
     <p className="knowledge-compare-hint">{text.compareHint}</p>
-    <div className="knowledge-regenerate"><button type="button" data-control="knowledge-version-regenerate" disabled={!completed || generationQueued || Boolean(busy) || dirty} onClick={() => void generate()}>{busy === "generate" || generationQueued ? text.generating : text.regenerate}</button></div>
+    <div className="knowledge-regenerate"><button type="button" data-control="knowledge-version-regenerate" disabled={!completed || generationQueued || Boolean(busy) || dirty} onClick={() => void generate()}>{busy === "generate" || generationQueued ? generationLabel : text.regenerate}</button></div>
     </details>
     </aside>
     <ReferenceViewer open={Boolean(source)} binding={source} references={viewerReferences} read={async (binding: ExactReferenceBinding) => artifactDocuments.get(viewerKey(binding)) ?? linkDocuments.get(viewerKey(binding)) ?? ({ ...binding, markdown: quoteMarkdown(binding) } as ReferenceDocument)} onClose={() => setSource(undefined)} onNavigate={setSource} />

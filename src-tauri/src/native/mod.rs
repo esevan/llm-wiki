@@ -4,6 +4,7 @@ pub(crate) mod conversation_context;
 pub(crate) mod database;
 mod job_results;
 pub(crate) mod knowledge_distillation;
+mod knowledge_preparation;
 pub(crate) mod knowledge_revision_chat;
 pub mod jobs;
 pub(crate) mod lineage;
@@ -533,8 +534,7 @@ impl NativeApplication {
                         if let Ok(mut refresh)=service.distillation_job_input(&run_id,input.get("locale").and_then(Value::as_str).unwrap_or("en"),
                         ) {
                             refresh["distillationInput"]["repairReason"]=json!(format!("targeted source change: {name}"));
-                            refresh["distillationInput"]["affectedSemanticIds"] =
-                                json!(affected_semantic_ids);
+                            task_distillation::scope_generation_input(&mut refresh, &affected_semantic_ids);
                             let queued=self.enqueue_job(refresh).await;
                             if queued.status<300 {response.body["distillationJob"]=queued.body;} else {response.body["distillationQueueError"]=queued.body;}
                         }

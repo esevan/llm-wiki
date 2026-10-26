@@ -91,10 +91,11 @@ fn job_view(row: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {
         "source_revision":row.get::<_,String>(15)?,
         "execution_outcome":row.get::<_,String>(16)?,
         "application_disposition":row.get::<_,String>(17)?,
+        "stage":row.get::<_,Option<String>>(18)?,
     }))
 }
 
-const JOB_SELECT: &str = "SELECT id,task_kind,entity_type,entity_id,status,progress_completed,progress_total,result_interface,error_code,error_message,created_at,started_at,finished_at,prompt_id,prompt_version,source_revision,execution_outcome,application_disposition FROM ai_jobs_v2";
+const JOB_SELECT: &str = "SELECT id,task_kind,entity_type,entity_id,status,progress_completed,progress_total,result_interface,error_code,error_message,created_at,started_at,finished_at,prompt_id,prompt_version,source_revision,execution_outcome,application_disposition,json_extract(input_json,'$.knowledgeStage') FROM ai_jobs_v2";
 
 pub fn list(db_path: &Path) -> Result<Value, String> {
     let connection = database::open(db_path)?;
@@ -259,14 +260,14 @@ pub async fn enqueue(
         let (_, data, media_type) = image_source(&database::open(&db_path)?, &entity_type, &entity_id)?;
         Some(image_source_hash(&data, &media_type))
     } else { None };
-    let idempotency_key = format!(
+    let mut idempotency_key = format!(
         "{}:{}:{}:{:x}",
         task_kind,
         entity_type,
         entity_id,
         Sha256::digest(input.to_string().as_bytes())
     );
-    let idempotency_key = image_hash.map(|hash| format!("image_summary:{entity_type}:{entity_id}:{hash}")).unwrap_or(idempotency_key);
+    idempotency_key = image_hash.map(|hash| format!("image_summary:{entity_type}:{entity_id}:{hash}")).unwrap_or(idempotency_key);
     let prompt_id = PromptId::for_job(&task_kind, &entity_type);
     let prompt_version = prompt_id.map(|id| prompt_definition(id).version).unwrap_or(0);
     let source_revision = input
@@ -277,6 +278,15 @@ pub async fn enqueue(
         .to_owned();
     let mut connection = database::open(&db_path)?;
     let tx = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate).map_err(|e| e.to_string())?;
+    if task_kind == "knowledge_draft" {
+        let task = input["taskId"].as_str().ok_or("taskId is required")?;
+        if task != entity_id || entity_type != "tasks" { return Err("invalid Knowledge target".into()); }
+        let expected = input["expectedTaskRevision"].as_i64().ok_or("expectedTaskRevision is required")?;
+        let source = super::knowledge_preparation::request_source(&tx, task, expected)?;
+        idempotency_key = format!("knowledge_draft:{task}:{}:{source}", input["locale"].as_str().unwrap_or("en"));
+        input["knowledgeSourceHash"] = json!(source);
+        input["knowledgeStage"] = json!("preparing");
+    }
     let automatic_image = task_kind == "image_summary" && input.get("automatic").and_then(Value::as_bool).unwrap_or(false);
     let existing = tx.query_row(
         "SELECT id FROM ai_jobs_v2 WHERE idempotency_key=? AND (status IN ('queued','running','retryable') OR ?) ORDER BY created_at DESC LIMIT 1",
@@ -392,6 +402,9 @@ pub fn retry(
         ).optional().map_err(|error|error.to_string())?;
         if let Some(active) = active { return get(db_path,&active); }
     }
+    if task_kind == "knowledge_draft" {
+        connection.execute("UPDATE ai_jobs_v2 SET input_json=json_remove(input_json,'$.knowledgeRefreshJob') WHERE id=? AND status IN ('failed','cancelled','stale')",[job_id]).map_err(|e|e.to_string())?;
+    }
     let changed = connection.execute(
         "UPDATE ai_jobs_v2 SET status='queued',execution_outcome='pending',application_disposition='pending',error_code='',error_message='',started_at=NULL,finished_at=NULL,available_at=CURRENT_TIMESTAMP WHERE id=? AND status IN ('failed','cancelled','stale')",
         [job_id],
@@ -457,7 +470,7 @@ fn get_for_id(
     )
 }
 
-async fn run(
+fn run(
     db_path: PathBuf,
     settings_path: PathBuf,
     vault: PathBuf,
@@ -466,9 +479,10 @@ async fn run(
     token: CancellationToken,
     generation: String,
     job_id: String,
-) -> Result<(), String> {
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send>> {
+    Box::pin(async move {
     let outcome = loop {
-        let outcome = run_inner(&db_path, &settings_path, &vault, &semantic, &token, &generation, &job_id,
+        let outcome = run_inner(&db_path, &settings_path, &vault, (&registry, &semantic), &token, &generation, &job_id,
         ).await;
         if token.is_cancelled() || outcome.is_ok() { break outcome; }
         let error = outcome.as_ref().unwrap_err();
@@ -531,10 +545,11 @@ async fn run(
     }
     registry.finish(&job_id, &generation);
     outcome
+    })
 }
 
 fn transient_error(error: &str) -> bool {
-    !["invalid_prompt", "invalid_result", "prompt version", "missing", "required", "stale", "cancelled", "not valid JSON"]
+    !["invalid_prompt", "invalid_result", "prompt version", "missing", "required", "stale", "cancelled", "not valid JSON", "knowledge_preparation_failed", "outside the affected", "task_completed"]
         .iter().any(|marker| error.to_ascii_lowercase().contains(marker))
 }
 
@@ -552,7 +567,7 @@ pub(crate) fn recover_stored(
         [],
     ).map_err(|error| error.to_string())?;
     let mut statement = connection.prepare(
-        "SELECT id FROM ai_jobs_v2 WHERE status='queued' ORDER BY created_at,rowid"
+        "SELECT j.id FROM ai_jobs_v2 j WHERE j.status='queued' AND NOT (j.task_kind='task_journey_increment' AND EXISTS(SELECT 1 FROM ai_jobs_v2 parent WHERE parent.id=json_extract(j.input_json,'$.sourceRunJobId') AND parent.status IN ('queued','running','retryable'))) ORDER BY j.created_at,j.rowid"
     ).map_err(|error| error.to_string())?;
     let ids = statement.query_map([], |row| row.get::<_,String>(0))
         .map_err(|error| error.to_string())?
@@ -569,11 +584,12 @@ async fn run_inner(
     db_path: &Path,
     settings_path: &Path,
     vault: &Path,
-    semantic: &crate::native::semantic::SemanticEngine,
+    services: (&JobRegistry, &crate::native::semantic::SemanticEngine),
     token: &CancellationToken,
     generation: &str,
     job_id: &str,
 ) -> Result<(), String> {
+    let (registry, semantic) = services;
     if token.is_cancelled() { return Ok(()); }
     let (task, entity_type, entity_id, input, prompt_id, prompt_version) = {
         let connection = database::open(db_path)?;
@@ -606,7 +622,13 @@ async fn run_inner(
     }
     let input = serde_json::from_str::<Value>(&input).unwrap_or_else(|_| json!({}));
     if task == "task_journey_increment" {
-        return apply_task_journey_increment(db_path, job_id, &input, generation);
+        return apply_task_journey_increment(db_path, job_id, &input, generation, None);
+    }
+    if task == "run_report_distillation" {
+        let saved: Option<String> = database::open(db_path)?.query_row("SELECT result_json FROM task_distillation_revisions WHERE job_id=? AND owner_type='work_log'",[job_id],|r|r.get(0)).optional().map_err(|e|e.to_string())?;
+        if let Some(saved) = saved {
+            return finalize_run_distillation(db_path,job_id,prompt_version,&input,Ok(serde_json::from_str(&saved).map_err(|e|e.to_string())?),generation);
+        }
     }
     if task == "run_report_distillation" && distillation_input(&input)?.primary_source.is_none() {
         return finalize_run_distillation(
@@ -686,13 +708,15 @@ async fn run_inner(
         return Ok(());
     }
     if task == "knowledge_draft" {
+        super::knowledge_preparation::Preparation {db:db_path,settings:settings_path,vault,registry,semantic}.ensure(token,generation,job_id,&input).await?;
+        database::open(db_path)?.execute("UPDATE ai_jobs_v2 SET input_json=json_set(input_json,'$.knowledgeStage','generating'),progress_completed=1,progress_total=2 WHERE id=? AND status='running' AND worker_id=?",params![job_id,generation]).map_err(|e|e.to_string())?;
         let prepared = tokio::select! {
             biased;
             _ = token.cancelled() => return Ok(()),
             prepared = crate::native::task_assistance::prepare_knowledge_draft(db_path, settings_path, &input) => prepared?,
         };
         if token.is_cancelled() { return Ok(()); }
-        return finalize_knowledge_draft(db_path, job_id, &input, &prepared);
+        return finalize_knowledge_draft_for_worker(db_path, job_id, &input, &prepared, Some(generation));
     }
     if task == "lineage_inference" && entity_type == "tasks" {
         return run_task_journey(db_path, settings_path, token, generation, job_id, &entity_id, &input,
@@ -940,49 +964,60 @@ fn finalize_run_distillation(
         validate_prompt_output(PromptId::RunReportDistillation,&value).map_err(|error|error.to_string())?;
         serde_json::from_value::<DistillationResult>(value).map_err(|error|format!("invalid Distillation result: {error}"))?
     };
+    crate::application::task_distillation_service::attach_recorded_completion(&manifest, &mut candidate);
     canonicalize_semantic_ids(&manifest,&mut candidate)?;
     let mut connection=database::open(db_path)?;
     let work_log=crate::native::task_distillation::publish_for_worker(&mut connection,job_id,&manifest,&candidate,PromptId::RunReportDistillation,prompt_version,
         generation,
     )?;
-    connection.execute("UPDATE ai_jobs_v2 SET status='completed',execution_outcome='succeeded',result_json=?,progress_completed=1,finished_at=CURRENT_TIMESTAMP WHERE id=? AND status='running'",params![serde_json::to_string(&candidate).map_err(|e|e.to_string())?,job_id]).map_err(|error|error.to_string())?;
+
     let expected= manifest.expected_journey_revision;
     let mut journey_manifest=manifest.clone();
     journey_manifest.projection_kind="task_journey".into();
     journey_manifest.expected_projection_revision=expected;
 
-    let mut journey_id=id();
+    let tx=connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate).map_err(|e|e.to_string())?;
+    let owns:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM ai_jobs_v2 WHERE id=? AND worker_id=? AND status='running')",params![job_id,generation],|r|r.get(0)).map_err(|e|e.to_string())?;
+    if !owns { return Err("stale_job: report worker no longer owns publication".into()); }
+    let journey_id = format!("journey-{:x}", Sha256::digest(format!("{job_id}:{}",manifest.source_set_hash).as_bytes()));
     let journey_input=json!({"distillationInput":journey_manifest,"validatedResult":candidate,"sourceRunJobId":job_id});
-    connection.execute("INSERT OR IGNORE INTO ai_jobs_v2(id,task_kind,entity_type,entity_id,status,input_json,idempotency_key,prompt_id,prompt_version,source_revision,execution_outcome,application_disposition) VALUES(?,'task_journey_increment','tasks',?,'queued',?,?, 'task_journey_increment',3,?,'pending','pending')",params![&journey_id,&manifest.owner.task_id,journey_input.to_string(),format!("task-journey-increment:{}:{}",manifest.owner.task_id,manifest.source_set_hash),&manifest.source_set_hash]).map_err(|error|error.to_string())?;
-    journey_id = connection
-        .query_row(
-            "SELECT id FROM ai_jobs_v2 WHERE idempotency_key=?",
-            [format!(
-                "task-journey-increment:{}:{}",
-                manifest.owner.task_id, manifest.source_set_hash
-            )],
-            |row| row.get(0),
-        )
-        .map_err(|e| e.to_string())?;
-    apply_task_journey_increment(db_path, &journey_id, &journey_input, generation)?;
-    connection.execute("UPDATE ai_jobs_v2 SET result_json=json_set(COALESCE(NULLIF(result_json,''),'{}'),'$.workLogPublication',json(?),'$.journeyJobId',?) WHERE id=?",params![work_log.to_string(),journey_id,job_id]).map_err(|error|error.to_string())?;
+    tx.execute("INSERT OR IGNORE INTO ai_jobs_v2(id,task_kind,entity_type,entity_id,status,input_json,idempotency_key,prompt_id,prompt_version,source_revision,execution_outcome,application_disposition) VALUES(?,'task_journey_increment','tasks',?,'queued',?,?, 'task_journey_increment',3,?,'pending','pending')",params![&journey_id,&manifest.owner.task_id,journey_input.to_string(),format!("task-journey-increment:{job_id}:{}",manifest.source_set_hash),&manifest.source_set_hash]).map_err(|error|error.to_string())?;
+    // A retry of the same report resumes its own child; a new report request
+    // never attaches to an older failed child with the same source hash.
+    tx.execute("UPDATE ai_jobs_v2 SET status='queued',worker_id='',execution_outcome='pending',error_code='',error_message='' WHERE id=? AND status IN ('failed','cancelled')",[&journey_id]).map_err(|e|e.to_string())?;
+    tx.commit().map_err(|e|e.to_string())?;
+    if let Err(error) = apply_task_journey_increment(db_path, &journey_id, &journey_input, generation, Some(job_id)) {
+        connection.execute("UPDATE ai_jobs_v2 SET status='failed',execution_outcome='failed',error_code='application_error',error_message=?,finished_at=CURRENT_TIMESTAMP WHERE id=? AND status='running' AND worker_id=?",params![error,journey_id,generation]).map_err(|e|e.to_string())?;
+        return Err(format!("knowledge_preparation_failed: {error}"));
+    }
+    connection.execute("UPDATE ai_jobs_v2 SET status='completed',execution_outcome='succeeded',result_json=?,progress_completed=1,finished_at=CURRENT_TIMESTAMP WHERE id=? AND status='running' AND worker_id=?",params![serde_json::to_string(&candidate).map_err(|e|e.to_string())?,job_id,generation]).map_err(|e|e.to_string())?;
+    connection.execute("UPDATE ai_jobs_v2 SET result_json=json_set(COALESCE(NULLIF(result_json,''),'{}'),'$.workLogPublication',json(?),'$.journeyJobId',?) WHERE id=? AND worker_id=? AND status='completed'",params![work_log.to_string(),journey_id,job_id,generation]).map_err(|error|error.to_string())?;
     Ok(())
 }
 
 fn apply_task_journey_increment(db_path:&Path,job_id:&str,input:&Value,
-    generation: &str,
+    generation: &str, parent: Option<&str>,
 )->Result<(),String>{
     use crate::application::task_distillation_service::DistillationResult;
     let manifest=distillation_input(input)?;
     let candidate:DistillationResult=serde_json::from_value(input.get("validatedResult").cloned().ok_or("validatedResult is required")?,
     ).map_err(|error|format!("invalid validated Distillation result: {error}"))?;
     let mut connection=database::open(db_path)?;
-    connection.execute("UPDATE ai_jobs_v2 SET status='running',worker_id=?,attempt=CASE WHEN attempt=0 THEN 1 ELSE attempt END,started_at=COALESCE(started_at,CURRENT_TIMESTAMP) WHERE id=? AND status='queued'",params![generation,job_id]).map_err(|error|error.to_string())?;
-    let publication=crate::native::task_distillation::publish_for_worker(&mut connection,job_id,&manifest,&candidate,PromptId::TaskJourneyIncrement,
-        3,
-        generation,
-    )?;
-    connection.execute("UPDATE ai_jobs_v2 SET status='completed',execution_outcome='succeeded',result_json=?,progress_completed=1,finished_at=CURRENT_TIMESTAMP WHERE id=? AND status='running'",params![json!({"projection":publication,"distillation":candidate}).to_string(),job_id]).map_err(|error|error.to_string())?;
+    let tx=connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate).map_err(|e|e.to_string())?;
+    if let Some(parent)=parent {
+        let owns:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM ai_jobs_v2 WHERE id=? AND worker_id=? AND status='running')",params![parent,generation],|r|r.get(0)).map_err(|e|e.to_string())?;
+        if !owns { return Err("stale_job: report worker no longer owns Journey application".into()); }
+    }
+    let completed:bool=tx.query_row("SELECT status='completed' FROM ai_jobs_v2 WHERE id=?",[job_id],|r|r.get(0)).map_err(|e|e.to_string())?;
+    if completed { return Ok(()); }
+    tx.execute("UPDATE ai_jobs_v2 SET status='running',worker_id=?,attempt=CASE WHEN attempt=0 THEN 1 ELSE attempt END,started_at=COALESCE(started_at,CURRENT_TIMESTAMP) WHERE id=? AND status='queued'",params![generation,job_id]).map_err(|e|e.to_string())?;
+    tx.commit().map_err(|e|e.to_string())?;
+    let publication=if let Some(parent)=parent {
+        crate::native::task_distillation::publish_for_parent_worker(&mut connection,job_id,&manifest,&candidate,(PromptId::TaskJourneyIncrement,3),(generation,parent))?
+    } else {
+        crate::native::task_distillation::publish_for_worker(&mut connection,job_id,&manifest,&candidate,PromptId::TaskJourneyIncrement,3,generation)?
+    };
+    connection.execute("UPDATE ai_jobs_v2 SET status='completed',execution_outcome='succeeded',result_json=?,progress_completed=1,finished_at=CURRENT_TIMESTAMP WHERE id=? AND status='running' AND worker_id=?",params![json!({"projection":publication,"distillation":candidate}).to_string(),job_id,generation]).map_err(|error|error.to_string())?;
     Ok(())
 }
 
@@ -1333,11 +1368,18 @@ fn complete_without_provider(db_path: &Path, job_id: &str, result: Value) -> Res
 
 /// Commits the draft and its durable Queue result together.  A cancellation that
 /// wins before this transaction starts leaves neither a private draft nor a result.
+#[cfg(test)]
 pub(crate) fn finalize_knowledge_draft(
     db_path: &Path,
     job_id: &str,
     input: &Value,
     prepared: &Value,
+) -> Result<(), String> {
+    finalize_knowledge_draft_for_worker(db_path, job_id, input, prepared, None)
+}
+
+fn finalize_knowledge_draft_for_worker(
+    db_path: &Path, job_id: &str, input: &Value, prepared: &Value, worker: Option<&str>,
 ) -> Result<(), String> {
     let expected_source = prepared
         .get("sourceHash")
@@ -1349,19 +1391,26 @@ pub(crate) fn finalize_knowledge_draft(
         .map_err(|error| error.to_string())?;
     let running = tx
         .execute(
-            "UPDATE ai_jobs_v2 SET source_hash=? WHERE id=? AND status='running'",
-            params![expected_source, job_id],
+            "UPDATE ai_jobs_v2 SET source_hash=? WHERE id=? AND status='running' AND (? IS NULL OR worker_id=?)",
+            params![expected_source, job_id, worker, worker],
         )
         .map_err(|error| error.to_string())?;
     if running == 0 {
         return Err("Knowledge draft job was cancelled before it could be saved".into());
+    }
+    if let Some(expected) = input["knowledgeSourceHash"].as_str() {
+        let task = input["taskId"].as_str().ok_or("taskId is required")?;
+        let revision = input["expectedTaskRevision"].as_i64().ok_or("expectedTaskRevision is required")?;
+        if super::knowledge_preparation::request_source(&tx, task, revision)? != expected {
+            return Err("source_snapshot_stale: Task evidence changed before draft commit".into());
+        }
     }
     let result =
         crate::native::task_assistance::save_prepared_knowledge_draft_tx(&tx, input, prepared)?;
     if result.get("sourceHash").and_then(Value::as_str) != Some(expected_source) {
         return Err("Task evidence changed while the Knowledge draft was running".into());
     }
-    tx.execute("UPDATE ai_jobs_v2 SET status='completed',execution_outcome='succeeded',application_disposition='review_needed',result_json=?,progress_completed=1,finished_at=CURRENT_TIMESTAMP WHERE id=? AND status='running'", params![result.to_string(),job_id]).map_err(|error| error.to_string())?;
+    tx.execute("UPDATE ai_jobs_v2 SET status='completed',execution_outcome='succeeded',application_disposition='review_needed',result_json=?,progress_completed=progress_total,finished_at=CURRENT_TIMESTAMP WHERE id=? AND status='running'", params![result.to_string(),job_id]).map_err(|error| error.to_string())?;
     tx.commit().map_err(|error| error.to_string())?;
     Ok(())
 }
@@ -1393,6 +1442,37 @@ mod registry_tests {
 #[cfg(test)]
 mod foundation_queue_tests {
     use super::*;
+
+    #[test]
+    fn failed_downstream_refresh_does_not_trap_the_next_same_source_request() {
+        let root=tempfile::tempdir().unwrap();let db=root.path().join("state.sqlite3");database::initialize(&db).unwrap();
+        let c=database::open(&db).unwrap();
+        c.execute_batch("INSERT INTO tasks(id,current_revision,state,created_at,last_user_activity_at) VALUES('task',1,'completed','2026-01-01','2026-01-01');
+            INSERT INTO task_revisions(task_id,revision,title,content_hash,created_at) VALUES('task',1,'Work','hash','2026-01-01');
+            INSERT INTO task_completions(id,task_id,task_revision,evidence,report,operation_id,created_at) VALUES('completion','task',1,'Recorded evidence','Finished','complete','2026-01-02');
+            INSERT INTO task_work_log_entries(id,task_id,body,created_at) VALUES('log','task','Original','2026-01-01');
+            INSERT INTO task_work_sessions(id,task_id,title,created_at,updated_at) VALUES('session','task','Work','2026-01-01','2026-01-01');
+            INSERT INTO task_work_session_entries(id,session_id,author,kind,body,created_at) VALUES('entry','session','user','note','Inspect','2026-01-01');
+            INSERT INTO task_work_session_runs(id,task_id,session_id,submission_key,payload_hash,instruction,user_entry_id,work_log_entry_id,model,workspace_path,context_hash,status,revision,created_at,updated_at) VALUES('run','task','session','key','hash','Inspect','entry','log','model','','hash','failed',1,'2026-01-01','2026-01-01');").unwrap();
+        let service=crate::application::task_execution_service::TaskExecutionApplicationService::new(&db);
+        let mut first=service.distillation_job_input("run","en").unwrap();
+        first["distillationInput"]["expectedJourneyRevision"]=json!(9);
+        c.execute("INSERT INTO ai_jobs_v2(id,task_kind,status,worker_id,source_revision) VALUES('report-1','run_report_distillation','running','worker-1',?)",[first["sourceRevision"].as_str().unwrap()]).unwrap();
+        let failure=finalize_run_distillation(&db,"report-1",5,&first,Ok(json!({})),"worker-1").unwrap_err();
+        assert!(failure.contains("stale_projection"),"{failure}");
+        c.execute("UPDATE ai_jobs_v2 SET status='failed' WHERE id='report-1'",[]).unwrap();
+        let second=service.distillation_job_input("run","en").unwrap();
+        assert_eq!(first["sourceRevision"],second["sourceRevision"]);
+        c.execute("INSERT INTO ai_jobs_v2(id,task_kind,status,worker_id,source_revision) VALUES('report-2','run_report_distillation','running','worker-2',?)",[second["sourceRevision"].as_str().unwrap()]).unwrap();
+        finalize_run_distillation(&db,"report-2",5,&second,Ok(json!({})),"worker-2").unwrap();
+        assert_eq!(c.query_row("SELECT count(*) FROM ai_jobs_v2 WHERE task_kind='task_journey_increment' AND status='failed'",[],|r|r.get::<_,i64>(0)).unwrap(),1);
+        assert_eq!(c.query_row("SELECT count(*) FROM ai_jobs_v2 WHERE task_kind='task_journey_increment' AND status='completed'",[],|r|r.get::<_,i64>(0)).unwrap(),1);
+        assert_eq!(c.query_row("SELECT count(*) FROM ai_jobs_v2 WHERE status='queued'",[],|r|r.get::<_,i64>(0)).unwrap(),0);
+        let before: String=c.query_row("SELECT result_json FROM ai_jobs_v2 WHERE id='report-2'",[],|r|r.get(0)).unwrap();
+        c.execute("UPDATE ai_jobs_v2 SET status='running',worker_id='new-worker' WHERE id='report-2'",[]).unwrap();
+        assert!(finalize_run_distillation(&db,"report-2",5,&second,Ok(json!({})),"worker-2").unwrap_err().contains("worker"));
+        assert_eq!(c.query_row("SELECT result_json FROM ai_jobs_v2 WHERE id='report-2'",[],|r|r.get::<_,String>(0)).unwrap(),before);
+    }
 
     #[tokio::test]
     async fn enqueue_coalesces_equivalent_active_job_with_prompt_metadata() {
@@ -1468,7 +1548,7 @@ mod image_summary_tests {
         let (base,server)=crate::workflow_foundation::structured_output::test_server::serve(versions(),200).await;
         crate::native::settings::save_provider(&settings,&json!({"base_url":base,"model":"fixture","api_key":"fixture-key"})).unwrap();
         database::open(&db).unwrap().execute("UPDATE ai_jobs_v2 SET status='queued',prompt_id='image_summary',prompt_version=1,input_json=? WHERE id='image-job'",[json!({"entityType":"task_work_log_entries","locale":"ko"}).to_string()]).unwrap();
-        run_inner(&db,&settings,root.path(),&crate::native::semantic::SemanticEngine::new(None),&CancellationToken::new(),"image-worker","image-job").await.unwrap();
+        run_inner(&db,&settings,root.path(),(&JobRegistry::default(),&crate::native::semantic::SemanticEngine::new(None)),&CancellationToken::new(),"image-worker","image-job").await.unwrap();
         let sent=server.await.unwrap();
         assert_eq!(sent["response_format"]["json_schema"]["name"],"image_summary");
         assert_eq!(sent["response_format"]["json_schema"]["strict"],true);

@@ -1505,7 +1505,7 @@ export function installDesktopScenario() {
           const restartState = await prepareTaskWorkSessionRestartScenario(scenarioHarness);
           await report({ status: "relaunch", steps, error: null, capture: JSON.stringify(restartState), coverage: coverage.report() });
         },
-        "task-codex-execution": () => runTaskCodexExecutionScenario(scenarioHarness),
+        "task-codex-execution": () => runTaskCodexExecutionScenario({...scenarioHarness,providerUrl:e2eProviderUrl}),
         "task-mcp-continuation": taskMcpContinuation,
         "global-shell": () => runShellNavigationScenario(scenarioHarness),
         "global-search": async () => {
