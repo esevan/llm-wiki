@@ -1,6 +1,8 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import type { CodexModelCapability, CodexThreadLinkResult, CodexThreadList, CodexThreadTranscript, TaskExecutionSnapshot, TaskWorkSessionAttachment } from "../types/taskWorkbench";
 
+import { applyExecutionLive, mergeExecutionSnapshot, type ExecutionLiveEvent } from "./executionStream";
+
 type NativeResponse<T> = { status: number; body: T };
 type ExecutionInput = { taskId: string; sessionId: string; runId?: string };
 const unwrap = async <T>(command: string, input: Record<string, unknown>, onSnapshot?: (snapshot: TaskExecutionSnapshot) => void) => {
@@ -16,12 +18,51 @@ const request = async <T>(command: string, input: Record<string, unknown>) => {
   return result.body;
 };
 
+export type ExecutionSubscription = Promise<TaskExecutionSnapshot> & { dispose: () => Promise<void> };
+
+function subscribe(input: ExecutionInput, onSnapshot?: (snapshot: TaskExecutionSnapshot) => void): ExecutionSubscription {
+  const subscriptionId = globalThis.crypto?.randomUUID?.() ?? `execution-subscription-${Date.now()}-${Math.random()}`;
+  let disposed = false;
+  let current: TaskExecutionSnapshot | undefined;
+  const accept = (snapshot: TaskExecutionSnapshot) => {
+    const next = mergeExecutionSnapshot(current, snapshot);
+    if (next !== current) { current = next; if (!disposed) onSnapshot?.(next); }
+    return next;
+  };
+  const onEvent = new Channel<{ kind: "snapshot"; snapshot: TaskExecutionSnapshot } | ExecutionLiveEvent>();
+  onEvent.onmessage = event => {
+    if (disposed) return;
+    if (event.kind === "snapshot") accept(event.snapshot);
+    else if (event.kind === "live") {
+      try {
+        const next = applyExecutionLive(current, event);
+        if (next && next !== current) { current = next; onSnapshot?.(next); }
+      } finally {
+        void request("task_session_execution_ack", { subscriptionId }).catch(() => { void subscription.dispose(); });
+      }
+    }
+  };
+  const ready = invoke<NativeResponse<TaskExecutionSnapshot>>("task_session_execution_subscribe", { input: { ...input, subscriptionId }, onEvent }).then(result => {
+    if (result.status < 200 || result.status >= 300) throw new Error((result.body as unknown as { error?: { message?: string } })?.error?.message ?? "Execution request failed");
+    return accept(result.body);
+  });
+  let disposal: Promise<void> | undefined;
+  const subscription = Object.assign(ready, { dispose: () => {
+    disposed = true;
+    // Registration may still be in flight. Wait for it before cancellation so
+    // close-before-ready cannot leave a late native receiver behind.
+    disposal ??= ready.then(() => request("task_session_execution_unsubscribe", { subscriptionId })).then(() => undefined, () => undefined);
+    return disposal;
+  } });
+  return subscription;
+}
+
 export const taskExecutionClient = {
   models: () => request<{ models: CodexModelCapability[] }>("task_session_models", {}),
   queue: (input: ExecutionInput & { action: "enqueue" | "edit" | "remove" | "move" | "pause" | "resume" | "cancel_drain" | "stop_then_drain"; operationId?: string; instruction?: string; attachment?: TaskWorkSessionAttachment; itemId?: string; expectedRevision?: number; direction?: "up" | "down" }) => request<TaskExecutionSnapshot>("task_session_queue", input),
   prepare: (input: ExecutionInput & {resolveReasoning?:boolean}, onSnapshot?: (snapshot: TaskExecutionSnapshot) => void) => unwrap<TaskExecutionSnapshot>("task_session_prepare", input, onSnapshot),
   execute: (input: ExecutionInput & { operationId: string; instruction: string; settingsRevision: string; retryOfRunId?: string; attachment?: TaskWorkSessionAttachment }, onSnapshot?: (snapshot: TaskExecutionSnapshot) => void) => unwrap<TaskExecutionSnapshot>("task_session_execute", input, onSnapshot),
-  subscribe: (input: ExecutionInput, onSnapshot?: (snapshot: TaskExecutionSnapshot) => void) => unwrap<TaskExecutionSnapshot>("task_session_execution_subscribe", input, onSnapshot),
+  subscribe,
   interrupt: (input: Required<ExecutionInput>) => unwrap<TaskExecutionSnapshot>("task_session_interrupt", input),
   respond: (input: Required<ExecutionInput> & { requestId: string; response: { decision?: string; answers?: Record<string, { answers: string[] }> } }) => unwrap<TaskExecutionSnapshot>("task_session_formal_response", input),
   syncWorkLog: (input: Required<ExecutionInput>) => unwrap<TaskExecutionSnapshot>("task_session_work_log_sync", input),

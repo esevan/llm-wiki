@@ -118,3 +118,44 @@ it("keeps capability and queue controls on explicit native commands with exact o
   expect(invoke).toHaveBeenCalledWith("task_session_queue",{input:{taskId:"task",sessionId:"session",action:"stop_then_drain",runId:"current"}});
   await taskExecutionClient.models();expect(invoke).toHaveBeenCalledWith("task_session_models",{input:{}});
 });
+
+it("owns one subscription, merges live updates, and disposes even when closed before ready",async()=>{
+  let resolve!:(value:unknown)=>void;
+  vi.mocked(invoke).mockImplementationOnce(()=>new Promise(done=>{resolve=done;}) as never).mockResolvedValue({status:200,body:{disposed:true}});
+  const observed=vi.fn();
+  const subscription=taskExecutionClient.subscribe({taskId:"task",sessionId:"session"},observed);
+  const channel=vi.mocked(Channel).mock.results.at(-1)!.value as {onmessage:(event:unknown)=>void};
+  const disposal=subscription.dispose();
+  expect(invoke).not.toHaveBeenCalledWith("task_session_execution_unsubscribe",expect.anything());
+  resolve({status:200,body:snapshot});await disposal;
+  channel.onmessage({kind:"snapshot",snapshot});
+  expect(observed).not.toHaveBeenCalled();
+  expect(invoke).toHaveBeenCalledWith("task_session_execution_unsubscribe",{input:{subscriptionId:expect.any(String)}});
+  const calls=vi.mocked(invoke).mock.calls.length;await subscription.dispose();expect(invoke).toHaveBeenCalledTimes(calls);
+});
+
+it("acknowledges live delivery and keeps authoritative completion newer than its tail",async()=>{
+  const active={id:"active",status:"running",evidence:[],formalRequests:[],revision:1};
+  const initial={revision:1000000001,liveRevision:1,runs:[active],selectedRun:active,activeRunId:"active"};
+  vi.mocked(invoke).mockResolvedValue({status:200,body:initial});
+  const observed=vi.fn();const subscription=taskExecutionClient.subscribe({taskId:"task",sessionId:"session"},observed);await subscription;
+  const channel=vi.mocked(Channel).mock.results.at(-1)!.value as {onmessage:(event:unknown)=>void};
+  channel.onmessage({kind:"live",runId:"active",liveRevision:2,revision:1000000002,liveStatus:{kind:"agentMessage",status:"running",text:"last fragment"}});
+  expect(observed.mock.calls.at(-1)![0].runs[0].liveStatus.text).toBe("last fragment");
+  expect(invoke).toHaveBeenCalledWith("task_session_execution_ack",{input:{subscriptionId:expect.any(String)}});
+  channel.onmessage({kind:"snapshot",snapshot:{...initial,revision:2000000003,liveRevision:3,runs:[{...active,status:"succeeded",finalReport:"Full final Markdown"}],activeRunId:null}});
+  expect(observed.mock.calls.at(-1)![0].runs[0].finalReport).toBe("Full final Markdown");
+  channel.onmessage({kind:"live",runId:"active",liveRevision:2,revision:1000000002,liveStatus:{text:"stale"}});
+  expect(observed.mock.calls.at(-1)![0].runs[0].finalReport).toBe("Full final Markdown");await subscription.dispose();
+});
+
+
+it("supports subscription ownership on WebViews without randomUUID", async()=>{
+  vi.stubGlobal("crypto", {});
+  try {
+    vi.mocked(invoke).mockResolvedValue({status:200,body:snapshot});
+    const subscription=taskExecutionClient.subscribe({taskId:"task",sessionId:"session"});await subscription;
+    expect(invoke).toHaveBeenCalledWith("task_session_execution_subscribe",expect.objectContaining({input:expect.objectContaining({subscriptionId:expect.stringMatching(/^execution-subscription-/)})}));
+    await subscription.dispose();
+  } finally { vi.unstubAllGlobals(); }
+});

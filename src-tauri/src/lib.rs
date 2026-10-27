@@ -255,11 +255,10 @@ async fn task_session_queue(runtime: tauri::State<'_,native::task_execution_runt
 async fn task_session_prepare(
     runtime: tauri::State<'_, native::task_execution_runtime::TaskExecutionRuntime>,
     input: serde_json::Value,
-    on_event: tauri::ipc::Channel<serde_json::Value>,
+    _on_event: tauri::ipc::Channel<serde_json::Value>,
 ) -> Result<NativeResponse, String> {
     let response = match runtime.prepare(&input).await {
         Ok(body) => {
-            runtime.subscribe_channel(&input, on_event)?;
             NativeResponse { status: 200, body }
         }
         Err(error) => execution_error(error),
@@ -271,11 +270,10 @@ async fn task_session_prepare(
 async fn task_session_execute(
     runtime: tauri::State<'_, native::task_execution_runtime::TaskExecutionRuntime>,
     input: serde_json::Value,
-    on_event: tauri::ipc::Channel<serde_json::Value>,
+    _on_event: tauri::ipc::Channel<serde_json::Value>,
 ) -> Result<NativeResponse, String> {
     let response = match runtime.execute(&input).await {
         Ok(body) => {
-            runtime.subscribe_channel(&input, on_event)?;
             NativeResponse { status: 200, body }
         }
         Err(error) => execution_error(error),
@@ -290,12 +288,29 @@ fn task_session_execution_subscribe(
     on_event: tauri::ipc::Channel<serde_json::Value>,
 ) -> Result<NativeResponse, String> {
     match runtime.snapshot(&input) {
-        Ok(body) => {
+        Ok(_) => {
             runtime.subscribe_channel(&input, on_event)?;
-            Ok(NativeResponse { status: 200, body })
+            // Read after registration so events in the snapshot/register window
+            // cannot leave a newly opened consumer on an obsolete baseline.
+            Ok(match runtime.snapshot(&input) {
+                Ok(body) => NativeResponse { status: 200, body },
+                Err(error) => { runtime.unsubscribe_channel(&input)?; execution_error(error) }
+            })
         }
         Err(error) => Ok(execution_error(error)),
     }
+}
+
+#[tauri::command]
+fn task_session_execution_ack(runtime: tauri::State<'_, native::task_execution_runtime::TaskExecutionRuntime>, input: serde_json::Value) -> Result<NativeResponse, String> {
+    runtime.acknowledge_channel(&input)?;
+    Ok(NativeResponse { status: 200, body: serde_json::json!({"acknowledged":true}) })
+}
+
+#[tauri::command]
+fn task_session_execution_unsubscribe(runtime: tauri::State<'_, native::task_execution_runtime::TaskExecutionRuntime>, input: serde_json::Value) -> Result<NativeResponse, String> {
+    runtime.unsubscribe_channel(&input)?;
+    Ok(NativeResponse { status: 200, body: serde_json::json!({"disposed":true}) })
 }
 
 #[tauri::command]
@@ -581,6 +596,8 @@ pub fn run() {
             task_session_external_thread_link,
             task_session_execute,
             task_session_execution_subscribe,
+            task_session_execution_unsubscribe,
+            task_session_execution_ack,
             task_session_interrupt,
             task_session_formal_response,
             task_session_work_log_sync,

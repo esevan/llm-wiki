@@ -28,10 +28,13 @@ struct Inner {
     operation: Mutex<()>,
     session_operations: StdMutex<HashMap<String, Arc<Mutex<()>>>>,
     signals: broadcast::Sender<ExecutionSignal>,
+    subscriptions: StdMutex<HashMap<String, StreamSubscription>>,
     early_events: Mutex<VecDeque<AppServerEvent>>,
     event_order: Mutex<()>,
     active_threads: Mutex<HashMap<String, ActiveThread>>,
+    live_order: StdMutex<()>,
     live_status: StdMutex<HashMap<String, Value>>,
+    terminal_tails: StdMutex<VecDeque<(String, Value)>>,
     live_revision: AtomicU64,
     queue_worker_started: AtomicBool,
     queue_shutdown: AtomicBool,
@@ -48,8 +51,16 @@ struct ActiveThread {
     settings_revision: String,
 }
 
-#[derive(Clone, Debug)]
+struct StreamSubscription {
+    cancellation: tokio_util::sync::CancellationToken,
+    in_flight: Arc<std::sync::atomic::AtomicBool>,
+}
+
+enum LiveDelivery { Sent, Busy, Closed }
+
+#[derive(Clone, Debug, Default)]
 struct ExecutionSignal {
+    ephemeral: bool,
     task_id: String,
     session_id: String,
     run_id: String,
@@ -85,10 +96,13 @@ impl TaskExecutionRuntime {
                 operation: Mutex::new(()),
                 session_operations: StdMutex::new(HashMap::new()),
                 signals,
+                subscriptions: StdMutex::new(HashMap::new()),
                 early_events: Mutex::new(VecDeque::new()),
                 event_order: Mutex::new(()),
                 active_threads: Mutex::new(HashMap::new()),
+                live_order: StdMutex::new(()),
                 live_status: StdMutex::new(HashMap::new()),
+                terminal_tails: StdMutex::new(VecDeque::new()),
                 live_revision: AtomicU64::new(0),
                 queue_worker_started: AtomicBool::new(false),
                 queue_shutdown: AtomicBool::new(false),
@@ -138,7 +152,7 @@ impl TaskExecutionRuntime {
             self.start_queue_worker();
             result?;
         }else {self.start_queue_worker();}
-        let _=self.inner.signals.send(ExecutionSignal{task_id:required(input,"taskId")?.into(),session_id:required(input,"sessionId")?.into(),run_id:String::new()});
+        let _=self.inner.signals.send(ExecutionSignal{task_id:required(input,"taskId")?.into(),session_id:required(input,"sessionId")?.into(),run_id:String::new(),..ExecutionSignal::default()});
         Ok(self.enrich_snapshot(snapshot))
     }
     fn start_queue_worker(&self){
@@ -155,7 +169,7 @@ impl TaskExecutionRuntime {
                             Err(e)=>Err(e),
                         };
                         if let Err(reason)=result {let _=runtime.inner.service.pause_queue(&session,&reason);}
-                        let _=runtime.inner.signals.send(ExecutionSignal{task_id:task,session_id:session,run_id:String::new()});
+                        let _=runtime.inner.signals.send(ExecutionSignal{task_id:task,session_id:session,run_id:String::new(),..ExecutionSignal::default()});
                     }
                 }
                 tokio::time::sleep(std::time::Duration::from_millis(400)).await;
@@ -582,6 +596,7 @@ impl TaskExecutionRuntime {
                     task_id: task_id.into(),
                     session_id: session_id.into(),
                     run_id: String::new(),
+            ..ExecutionSignal::default()
                 });
                 // Long read-only model calls must not hold the app-wide RPC lock.
                 // A session-local gate still prevents duplicate preparation/dispatch.
@@ -615,6 +630,7 @@ impl TaskExecutionRuntime {
                     task_id: task_id.into(),
                     session_id: session_id.into(),
                     run_id: String::new(),
+            ..ExecutionSignal::default()
                 });
                 *value = match result {
                     Ok(value) => value,
@@ -819,55 +835,117 @@ impl TaskExecutionRuntime {
         )?))
     }
 
-    pub(crate) fn subscribe_channel(
-        &self,
-        input: &Value,
-        channel: Channel<Value>,
-    ) -> Result<(), String> {
+    pub(crate) fn unsubscribe_channel(&self, input: &Value) -> Result<(), String> {
+        let id = required(input, "subscriptionId")?;
+        if let Some(token) = self.inner.subscriptions.lock().map_err(|_| "subscription lock failed")?.get(id) {
+            token.cancellation.cancel();
+        }
+        Ok(())
+    }
+
+    pub(crate) fn acknowledge_channel(&self, input: &Value) -> Result<(), String> {
+        let subscriptions = self.inner.subscriptions.lock().map_err(|_| "subscription lock failed")?;
+        if let Some(subscription) = subscriptions.get(required(input, "subscriptionId")?) { subscription.in_flight.store(false, Ordering::SeqCst); }
+        Ok(())
+    }
+
+    pub(crate) fn subscribe_channel(&self, input: &Value, channel: Channel<Value>) -> Result<(), String> {
         let task = required(input, "taskId")?.to_owned();
         let session = required(input, "sessionId")?.to_owned();
-        let selected = input
-            .get("runId")
-            .and_then(Value::as_str)
-            .map(str::to_owned);
+        let id = required(input, "subscriptionId")?.to_owned();
+        if id.len() > 200 { return Err("invalid_input: subscription identity too long".into()); }
+        let selected = input.get("runId").and_then(Value::as_str).map(str::to_owned);
+        let token = tokio_util::sync::CancellationToken::new();
+        let in_flight = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        {
+            let mut subscriptions = self.inner.subscriptions.lock().map_err(|_| "subscription lock failed")?;
+            if subscriptions.contains_key(&id) { return Err("conflict: subscription already exists".into()); }
+            subscriptions.insert(id.clone(), StreamSubscription { cancellation: token.clone(), in_flight: in_flight.clone() });
+        }
         let runtime = self.clone();
-        let mut signals = self.inner.signals.subscribe();
+        let signals = self.inner.signals.subscribe();
         tauri::async_runtime::spawn(async move {
-            loop {
-                match signals.recv().await {
-                    Ok(signal)
-                        if signal.task_id.is_empty()
-                            || (signal.task_id == task && signal.session_id == session) =>
-                    {
-                        let signal_run =
-                            (!signal.run_id.is_empty()).then_some(signal.run_id.as_str());
-                        if !send_channel_snapshot(
-                            &runtime,
-                            &channel,
-                            &task,
-                            &session,
-                            selected.as_deref().or(signal_run),
-                        ) {
-                            break;
-                        }
-                    }
-                    Ok(_) => continue,
-                    Err(broadcast::error::RecvError::Lagged(_)) => {
-                        if !send_channel_snapshot(
-                            &runtime,
-                            &channel,
-                            &task,
-                            &session,
-                            selected.as_deref(),
-                        ) {
-                            break;
-                        }
-                    }
-                    Err(broadcast::error::RecvError::Closed) => break,
-                }
-            }
+            runtime.stream_channel(&channel, &task, &session, selected.as_deref(), signals, &token, &in_flight).await;
+            runtime.inner.subscriptions.lock().unwrap().remove(&id);
         });
         Ok(())
+    }
+
+    async fn stream_channel(&self, channel: &Channel<Value>, task: &str, session: &str,
+        selected: Option<&str>, mut signals: broadcast::Receiver<ExecutionSignal>, token: &tokio_util::sync::CancellationToken, in_flight: &std::sync::atomic::AtomicBool) {
+        // First content and durable boundaries are immediate. Intermediate live
+        // states replace one pending slot, at most once every 32ms (~31fps).
+        let cadence = std::time::Duration::from_millis(32);
+        let mut pending: Option<ExecutionSignal> = None;
+        let mut next_live = tokio::time::Instant::now();
+        let mut known_run = String::new();
+        let mut base_revision = 0;
+        let mut content_item = String::new();
+        loop {
+            tokio::select! {
+                biased;
+                _ = token.cancelled() => break,
+                signal = signals.recv() => {
+                    let signal = match signal {
+                        Ok(signal) if signal.task_id.is_empty() || (signal.task_id == task && signal.session_id == session) => signal,
+                        Ok(_) => continue,
+                        Err(broadcast::error::RecvError::Lagged(_)) => ExecutionSignal::default(),
+                        Err(broadcast::error::RecvError::Closed) => break,
+                    };
+                    if signal.ephemeral && known_run == signal.run_id {
+                        let item = self.live_content_key(&signal.run_id);
+                        if item != content_item || tokio::time::Instant::now() >= next_live {
+                            match self.send_live(channel, &signal.run_id, base_revision, in_flight) {
+                                LiveDelivery::Closed => break,
+                                LiveDelivery::Sent => { pending = None; content_item = item; }
+                                LiveDelivery::Busy => pending = Some(signal),
+                            }
+                            next_live = tokio::time::Instant::now() + cadence;
+                        } else { pending = Some(signal); }
+                        continue;
+                    }
+                    // The scoped authoritative snapshot also includes a bounded
+                    // terminal tail, even when broadcast lag skipped live signals.
+                    pending = None;
+                    let run = selected.or_else(|| (!signal.run_id.is_empty()).then_some(signal.run_id.as_str()));
+                    let Ok(snapshot) = self.snapshot(&json!({"taskId":task,"sessionId":session,"runId":run})) else { break; };
+                    base_revision = snapshot["revision"].as_u64().unwrap_or(0) / 1_000_000_000 * 1_000_000_000;
+                    known_run = snapshot["activeRunId"].as_str().unwrap_or("").to_owned();
+                    content_item = self.live_content_key(&known_run);
+                    if channel.send(json!({"kind":"snapshot","snapshot":snapshot})).is_err() { break; }
+                    next_live = tokio::time::Instant::now() + cadence;
+                }
+                _ = tokio::time::sleep_until(next_live), if pending.is_some() => {
+                    if let Some(signal) = pending.take() {
+                        match self.send_live(channel, &signal.run_id, base_revision, in_flight) {
+                            LiveDelivery::Closed => break,
+                            LiveDelivery::Sent => content_item = self.live_content_key(&signal.run_id),
+                            LiveDelivery::Busy => pending = Some(signal),
+                        }
+                    }
+                    next_live = tokio::time::Instant::now() + cadence;
+                }
+            }
+        }
+    }
+
+    fn live_content_key(&self, run: &str) -> String {
+        let live = self.inner.live_status.lock().unwrap();
+        live.get(run).filter(|status| ["text", "output"].iter().any(|key| status[*key].as_str().is_some_and(|s| !s.is_empty())))
+            .map(|status| format!("{}:{}", status["kind"], status["itemId"])).unwrap_or_default()
+    }
+
+    fn send_live(&self, channel: &Channel<Value>, run: &str, base_revision: u64, in_flight: &std::sync::atomic::AtomicBool) -> LiveDelivery {
+        // JS acknowledges delivery. A blocked WebView can retain at most one
+        // ephemeral IPC payload per subscription, plus one replaceable signal.
+        if in_flight.swap(true, Ordering::SeqCst) { return LiveDelivery::Busy; }
+        let _live_order = self.inner.live_order.lock().unwrap();
+        let live = self.inner.live_status.lock().unwrap();
+        let status = live.get(run).cloned();
+        let revision = self.inner.live_revision.load(Ordering::SeqCst);
+        if channel.send(json!({"kind":"live","runId":run,"liveStatus":status,"liveRevision":revision,"revision":base_revision.saturating_add(revision)})).is_ok() {
+            LiveDelivery::Sent
+        } else { LiveDelivery::Closed }
     }
 
     async fn ensure_started(&self) -> Result<(), String> {
@@ -958,6 +1036,7 @@ impl TaskExecutionRuntime {
                         task_id,
                         session_id,
                         run_id,
+            ..ExecutionSignal::default()
                     });
                 }
                 Ok(None) => match self.event_may_precede_acceptance(params) {
@@ -980,12 +1059,15 @@ impl TaskExecutionRuntime {
             },
             AppServerEvent::Exited { detail, .. } => {
                 let _ = self.inner.service.mark_connection_lost(detail);
-                self.inner.live_status.lock().unwrap().clear();
+                let _live_order = self.inner.live_order.lock().unwrap();
+                let tails = std::mem::take(&mut *self.inner.live_status.lock().unwrap());
+                self.remember_tails(&tails);
                 self.inner.live_revision.fetch_add(1, Ordering::SeqCst);
                 let _ = self.inner.signals.send(ExecutionSignal {
                     task_id: String::new(),
                     session_id: String::new(),
                     run_id: String::new(),
+            ..ExecutionSignal::default()
                 });
             }
             _ => {}
@@ -1031,6 +1113,7 @@ impl TaskExecutionRuntime {
                 task_id: task,
                 session_id: session,
                 run_id: run,
+            ..ExecutionSignal::default()
             });
         }
         true
@@ -1049,6 +1132,7 @@ impl TaskExecutionRuntime {
                 task_id: String::new(),
                 session_id: String::new(),
                 run_id: String::new(),
+            ..ExecutionSignal::default()
             });
             return;
         }
@@ -1119,6 +1203,7 @@ impl TaskExecutionRuntime {
         let Some((run_id, task_id, session_id)) = self.run_for_params(params) else {
             return;
         };
+        let _live_order = self.inner.live_order.lock().unwrap();
         let kind = safe_live_kind(params);
         let item = params.get("item").unwrap_or(&Value::Null);
         self.inner.live_status.lock().unwrap().insert(
@@ -1134,9 +1219,11 @@ impl TaskExecutionRuntime {
         );
         self.inner.live_revision.fetch_add(1, Ordering::SeqCst);
         let _ = self.inner.signals.send(ExecutionSignal {
+            ephemeral: status != "completed",
             task_id,
             session_id,
             run_id,
+            ..ExecutionSignal::default()
         });
     }
 
@@ -1144,6 +1231,7 @@ impl TaskExecutionRuntime {
         let Some((run_id, task_id, session_id)) = self.run_for_params(params) else {
             return;
         };
+        let _live_order = self.inner.live_order.lock().unwrap();
         let item_id = params
             .get("itemId")
             .and_then(Value::as_str)
@@ -1172,12 +1260,14 @@ impl TaskExecutionRuntime {
         let mut combined = status[field].as_str().unwrap_or_default().to_owned();
         combined.push_str(delta);
         status[field] = json!(safe_external_text(&combined, 20_000));
-        drop(live);
         self.inner.live_revision.fetch_add(1, Ordering::SeqCst);
+        drop(live);
         let _ = self.inner.signals.send(ExecutionSignal {
+            ephemeral: true,
             task_id,
             session_id,
             run_id,
+            ..ExecutionSignal::default()
         });
     }
 
@@ -1185,19 +1275,36 @@ impl TaskExecutionRuntime {
         let Some((run_id, task_id, session_id)) = self.run_for_params(params) else {
             return;
         };
-        self.inner.live_status.lock().unwrap().remove(&run_id);
+        let _live_order = self.inner.live_order.lock().unwrap();
+        let tails: HashMap<String, Value> = self.inner.live_status.lock().unwrap().remove(&run_id).map(|tail| HashMap::from([(run_id.clone(), tail)])).unwrap_or_default();
+        self.remember_tails(&tails);
         self.inner.live_revision.fetch_add(1, Ordering::SeqCst);
         let _ = self.inner.signals.send(ExecutionSignal {
             task_id,
             session_id,
             run_id,
+            ..ExecutionSignal::default()
         });
+    }
+
+    fn remember_tails(&self, tails: &HashMap<String, Value>) {
+        let mut retained = self.inner.terminal_tails.lock().unwrap();
+        for (run, tail) in tails {
+            retained.retain(|(id, _)| id != run);
+            retained.push_back((run.clone(), tail.clone()));
+        }
+        while retained.len() > 32 { retained.pop_front(); }
     }
 
     fn enrich_snapshot(&self, mut snapshot: Value) -> Value {
         let session=snapshot["sessionId"].as_str().unwrap_or("");
         snapshot["contextPreparing"]=json!(self.inner.context_cancellations.lock().map(|m|m.contains_key(session)).unwrap_or(false));
-        let live = self.inner.live_status.lock().unwrap();
+        let _live_order = self.inner.live_order.lock().unwrap();
+        let mut live = self.inner.terminal_tails.lock().unwrap().iter().cloned().collect::<HashMap<_, _>>();
+        let active = self.inner.live_status.lock().unwrap();
+        live.extend(active.clone());
+        let live_revision = self.inner.live_revision.load(Ordering::SeqCst);
+        drop(active);
         if let Some(runs) = snapshot.get_mut("runs").and_then(Value::as_array_mut) {
             for run in runs {
                 if let Some(status) = run
@@ -1218,36 +1325,20 @@ impl TaskExecutionRuntime {
                 selected["liveStatus"] = status.clone();
             }
         }
+        snapshot["liveRevision"] = json!(live_revision);
         let durable = snapshot["revision"].as_u64().unwrap_or(0);
         snapshot["revision"] = json!(durable
             .saturating_mul(1_000_000_000)
-            .saturating_add(self.inner.live_revision.load(Ordering::SeqCst)));
+            .saturating_add(live_revision));
         snapshot
     }
 
     pub(crate) async fn shutdown(&self) {
+        for (_, subscription) in self.inner.subscriptions.lock().unwrap().drain() { subscription.cancellation.cancel(); }
         self.inner.queue_shutdown.store(true,Ordering::SeqCst);
         if let Ok(tokens)=self.inner.context_cancellations.lock(){for token in tokens.values(){token.cancel();}}
         self.inner.server.shutdown().await;
     }
-}
-
-fn send_channel_snapshot(
-    runtime: &TaskExecutionRuntime,
-    channel: &Channel<Value>,
-    task: &str,
-    session: &str,
-    run: Option<&str>,
-) -> bool {
-    let mut input = json!({"taskId":task,"sessionId":session});
-    if let Some(run) = run {
-        input["runId"] = json!(run);
-    }
-    runtime.snapshot(&input).is_ok_and(|snapshot| {
-        channel
-            .send(json!({"kind":"snapshot","snapshot":snapshot}))
-            .is_ok()
-    })
 }
 
 fn required<'a>(value: &'a Value, key: &str) -> Result<&'a str, String> {
@@ -1676,6 +1767,124 @@ mod tests {
         assert!(!requests.contains("turn/start"));
         assert!(!requests.contains("thread/resume"));
         assert!(!requests.contains("thread/start"));
+    }
+
+    fn stream_fixture() -> (tempfile::TempDir, TaskExecutionRuntime, String, String, String) {
+        let root = tempdir().unwrap();
+        let db = root.path().join("stream.sqlite3");
+        crate::native::database::initialize(&db).unwrap();
+        let tasks = TaskApplicationService::new(&db);
+        let task = tasks.execute("task.create", &json!({"operationId":"stream-task","inputText":"Stream","title":"Stream"})).unwrap()["id"].as_str().unwrap().to_owned();
+        let session = tasks.execute("task.work-session.create", &json!({"operationId":"stream-session","taskId":task,"title":"Stream"})).unwrap()["id"].as_str().unwrap().to_owned();
+        tasks.execute("task.work-session.update", &json!({"operationId":"stream-settings","taskId":task,"sessionId":session,"title":"Stream","provider":"codex","model":"gpt-5.6-sol","approvalMode":"ask","approvalsReviewer":"user","workspacePath":root.path().to_string_lossy()})).unwrap();
+        let service = TaskExecutionApplicationService::new(&db);
+        let prepared = service.prepared(&task, &session).unwrap();
+        service.bind_thread(&prepared, &json!({"id":"stream-thread","model":"gpt-5.6-sol","cwd":prepared.cwd,"approvalPolicy":"on-request","sandbox":"workspaceWrite"}), true).unwrap();
+        let (snapshot, _) = service.create_run(&json!({"taskId":task,"sessionId":session,"operationId":"stream-run","instruction":"Stream","settingsRevision":prepared.settings_revision})).unwrap();
+        let run = snapshot["selectedRun"]["id"].as_str().unwrap().to_owned();
+        service.mark_dispatch_recorded(&run).unwrap();
+        service.accept_turn(&run, "stream-thread", "stream-turn").unwrap();
+        (root, TaskExecutionRuntime::new(service, None), task, session, run)
+    }
+
+    fn recording_channel() -> (Channel<Value>, std::sync::Arc<std::sync::Mutex<Vec<Value>>>) {
+        let events = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let recorded = events.clone();
+        let channel = Channel::new(move |body| {
+            if let tauri::ipc::InvokeResponseBody::Json(raw) = body {
+                recorded.lock().unwrap().push(serde_json::from_str(&raw).unwrap());
+            }
+            Ok(())
+        });
+        (channel, events)
+    }
+
+    async fn wait_stream_events(events: &std::sync::Arc<std::sync::Mutex<Vec<Value>>>, condition: impl Fn(&[Value]) -> bool) {
+        tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            loop {
+                if condition(&events.lock().unwrap()) { break; }
+                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+            }
+        }).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn stream_subscriptions_dispose_and_bursts_preserve_terminal_tail() {
+        let (_root, runtime, task, session, run) = stream_fixture();
+        let (channel, events) = recording_channel();
+        let input = json!({"taskId":task,"sessionId":session,"subscriptionId":"owned"});
+        runtime.subscribe_channel(&input, channel).unwrap();
+        assert!(runtime.subscribe_channel(&input, recording_channel().0).is_err());
+        let params = |delta: &str| json!({"threadId":"stream-thread","turnId":"stream-turn","itemId":"agent","delta":delta});
+        runtime.update_live_delta("item/agentMessage/delta", &params("first"));
+        wait_stream_events(&events, |events| !events.is_empty()).await;
+        assert_eq!(events.lock().unwrap()[0]["snapshot"]["selectedRun"]["liveStatus"]["text"], "first");
+        for _ in 0..500 { runtime.update_live_delta("item/agentMessage/delta", &params(" x")); }
+        runtime.update_live_delta("item/agentMessage/delta", &params(" FINAL-TAIL"));
+        runtime.inner.service.finish_turn(&run, &json!({"status":"failed"})).unwrap();
+        runtime.clear_live_status(&params(""));
+        wait_stream_events(&events, |events| events.iter().any(|v| v["kind"] == "snapshot" && v["snapshot"]["selectedRun"]["status"] == "failed")).await;
+        let captured = events.lock().unwrap().clone();
+        assert!(captured.iter().filter(|v| v["kind"] == "live").count() <= 1, "paused JS must retain at most one live delivery");
+        let full = captured.iter().filter(|v| v["kind"] == "snapshot").collect::<Vec<_>>();
+        assert!(full.len() <= 4, "durable projections must not scale with deltas: {}", full.len());
+        let last = full.last().unwrap();
+        assert_eq!(last["snapshot"]["selectedRun"]["status"], "failed");
+        assert!(last["snapshot"]["selectedRun"]["liveStatus"]["text"].as_str().unwrap().ends_with(" FINAL-TAIL"));
+        assert!(runtime.inner.live_status.lock().unwrap().is_empty());
+        assert_eq!(runtime.inner.terminal_tails.lock().unwrap().len(), 1);
+        println!("stream burst: 502 deltas -> {} events, {} durable snapshots", captured.len(), full.len());
+        runtime.unsubscribe_channel(&input).unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            while !runtime.inner.subscriptions.lock().unwrap().is_empty() { tokio::task::yield_now().await; }
+        }).await.unwrap();
+        let count = events.lock().unwrap().len();
+        runtime.inner.signals.send(ExecutionSignal { task_id:task, session_id:session, run_id:run, ..ExecutionSignal::default() }).ok();
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        assert_eq!(events.lock().unwrap().len(), count);
+    }
+
+    #[tokio::test]
+    async fn stream_acknowledgement_releases_latest_state_and_disconnect_is_scoped() {
+        let (_root, runtime, task, session, run) = stream_fixture();
+        let (channel, events) = recording_channel();
+        let input = json!({"taskId":task,"sessionId":session,"subscriptionId":"acknowledged"});
+        runtime.subscribe_channel(&input, channel).unwrap();
+        let params = |text: &str| json!({"threadId":"stream-thread","turnId":"stream-turn","itemId":"agent","delta":text});
+        runtime.update_live_status(&json!({"threadId":"stream-thread","turnId":"stream-turn","item":{"id":"agent","type":"agentMessage"}}), "running");
+        wait_stream_events(&events, |events| !events.is_empty()).await;
+        runtime.update_live_delta("item/agentMessage/delta", &params("first content"));
+        wait_stream_events(&events, |events| events.iter().any(|v| v["kind"] == "live")).await;
+        assert!(events.lock().unwrap().iter().any(|v| v["kind"] == "live" && v["liveStatus"]["text"] == "first content"), "first content must bypass the 32ms cadence");
+        for _ in 0..100 { runtime.update_live_delta("item/agentMessage/delta", &params(" x")); }
+        tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+        assert_eq!(events.lock().unwrap().iter().filter(|v| v["kind"] == "live").count(), 1);
+        runtime.acknowledge_channel(&input).unwrap();
+        wait_stream_events(&events, |events| events.iter().filter(|v| v["kind"] == "live").count() == 2).await;
+        assert_eq!(events.lock().unwrap().iter().filter(|v| v["kind"] == "live").count(), 2);
+        assert!(events.lock().unwrap().iter().rev().find(|v| v["kind"] == "live").unwrap()["liveStatus"]["text"].as_str().unwrap().ends_with(" x"));
+        runtime.remember_tails(&HashMap::from([("foreign-run".into(), json!({"text":"FOREIGN SESSION SECRET"})), (run.clone(), json!({"text":"own tail"}))]));
+        runtime.inner.signals.send(ExecutionSignal::default()).unwrap();
+        wait_stream_events(&events, |events| events.iter().filter(|v| v["kind"] == "snapshot").count() >= 2).await;
+        assert!(!serde_json::to_string(&*events.lock().unwrap()).unwrap().contains("FOREIGN SESSION SECRET"));
+        runtime.unsubscribe_channel(&input).unwrap();
+    }
+
+    #[tokio::test]
+    async fn repeated_stream_subscriptions_leave_no_receivers_or_unbounded_tail_cache() {
+        let (_root, runtime, task, session, _run) = stream_fixture();
+        let baseline = runtime.inner.signals.receiver_count();
+        for index in 0..100 {
+            let input = json!({"taskId":task,"sessionId":session,"subscriptionId":format!("sub-{index}")});
+            runtime.subscribe_channel(&input, recording_channel().0).unwrap();
+            runtime.unsubscribe_channel(&input).unwrap();
+        }
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            while !runtime.inner.subscriptions.lock().unwrap().is_empty() { tokio::task::yield_now().await; }
+        }).await.unwrap();
+        assert_eq!(runtime.inner.signals.receiver_count(), baseline);
+        for i in 0..100 { runtime.remember_tails(&HashMap::from([(format!("run-{i}"), json!({"text":"tail"}))])); }
+        assert_eq!(runtime.inner.terminal_tails.lock().unwrap().len(), 32);
     }
 
     #[test]

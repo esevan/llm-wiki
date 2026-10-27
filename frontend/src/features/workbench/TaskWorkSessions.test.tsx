@@ -1096,3 +1096,58 @@ it("shows semantic preparation cost notice and routes cancellation without disca
  await waitFor(()=>expect(execution.interrupt).toHaveBeenCalledWith({taskId:task.id,sessionId:saved.id,runId:"context-preparation"}));
  expect(screen.getByDisplayValue("Keep my request")).toBeInTheDocument();expect(drafts.get(saved.id)?.body).toBe("Keep my request");expect(execution.execute).not.toHaveBeenCalled();
 });
+
+it("disposes its mounted session subscription when the conversation closes",async()=>{
+ execution.subscribe.mockReset();
+ const saved={...session("owned","Owned"),workspacePath:"/project"};
+ const dispose=vi.fn().mockResolvedValue(undefined);
+ execution.subscribe.mockImplementation(()=>Object.assign(Promise.resolve({runs:[],activeRunId:null,selectedRun:null}),{dispose}));
+ window.llmWikiApplication={request:vi.fn(async({path}:{path:string})=>path.endsWith("work-sessions")?response({sessions:[saved]}):response({session:saved,entries:[]})) as never};
+ const {unmount}=render(<TaskWorkSessions task={task}/>);
+ await waitFor(()=>expect(execution.subscribe).toHaveBeenCalledTimes(1));unmount();expect(dispose).toHaveBeenCalledTimes(1);
+});
+
+it("shows terminal status while preserving an incomplete answer tail",async()=>{
+ execution.subscribe.mockReset();
+ const saved={...session("tail","Tail"),workspacePath:"/project"};
+ const run={id:"tail-run",taskId:task.id,sessionId:saved.id,instruction:"Check",status:"failed" as const,stopRequested:true,provider:"codex" as const,model:saved.model,workspacePath:"/project",evidence:[],formalRequests:[],workLogSyncState:"synced" as const,revision:2,liveStatus:{kind:"agentMessage",status:"running" as const,text:"Preserved last fragment"}};
+ execution.subscribe.mockResolvedValue({runs:[run],activeRunId:null,selectedRun:run});
+ window.llmWikiApplication={request:vi.fn(async({path}:{path:string})=>path.endsWith("work-sessions")?response({sessions:[saved]}):response({session:saved,entries:[]})) as never};
+ render(<TaskWorkSessions task={task}/>);await screen.findByText("Preserved last fragment");
+ expect(screen.getByRole("heading",{name:"Run status: Failed"})).toBeInTheDocument();
+ expect(screen.queryByText("Agent message · Running")).not.toBeInTheDocument();
+});
+
+it("opens a newly created session after a real asynchronous busy commit",async()=>{
+ execution.subscribe.mockReset().mockResolvedValue({runs:[],activeRunId:null,selectedRun:null});
+ const created={...session("async-created","Async created"),workspacePath:"/project"};
+ let complete!:(result:unknown)=>void;
+ window.llmWikiApplication={request:vi.fn(({path,method}:{path:string;method?:string})=>{
+  if(path.endsWith("work-sessions")&&method==="POST")return new Promise(resolve=>{complete=resolve;});
+  return Promise.resolve(path.endsWith("work-sessions")?response({sessions:[]}):response({session:created,entries:[]}));
+ }) as never};
+ render(<TaskWorkSessions task={task}/>);
+ const button=await screen.findByRole("button",{name:"New session"});fireEvent.click(button);expect(button).toBeDisabled();
+ await act(async()=>complete(response(created)));
+ expect(await screen.findByLabelText("Instruction or note")).toBeEnabled();
+ expect(screen.getByLabelText("Session")).toHaveValue(created.id);
+});
+
+it("keeps one answer through completed-item and authoritative final snapshots",async()=>{
+ execution.subscribe.mockReset();
+ const saved={...session("final","Final"),workspacePath:"/project"};
+ const run={id:"final-run",taskId:task.id,sessionId:saved.id,instruction:"Check",status:"running" as const,stopRequested:false,provider:"codex" as const,model:saved.model,workspacePath:"/project",evidence:[],formalRequests:[],workLogSyncState:"synced" as const,revision:1,liveStatus:{kind:"agentMessage",status:"running" as const,itemId:"agent",text:"Complete authoritative answer"}};
+ let notify!:(snapshot:TaskExecutionSnapshot)=>void;
+ execution.subscribe.mockImplementation(async(_input:unknown,callback:typeof notify)=>{notify=callback;return{revision:1,runs:[run],activeRunId:run.id,selectedRun:run};});
+ window.llmWikiApplication={request:vi.fn(async({path}:{path:string})=>path.endsWith("work-sessions")?response({sessions:[saved]}):response({session:saved,entries:[]})) as never};
+ const {container}=render(<TaskWorkSessions task={task}/>);await screen.findByText(run.liveStatus.text);
+ const completedItem={...run,evidence:[{id:"agent",kind:"agentMessage",status:"completed",label:"agentMessage",summary:run.liveStatus.text}]};
+ await act(async()=>notify({revision:2,runs:[completedItem],activeRunId:run.id,selectedRun:completedItem}));
+ expect(screen.getAllByText(run.liveStatus.text)).toHaveLength(1);
+ const final={...completedItem,status:"succeeded" as const,finalReport:run.liveStatus.text};
+ await act(async()=>notify({revision:3,runs:[final],activeRunId:null,selectedRun:final}));
+ expect(screen.getAllByText(run.liveStatus.text)).toHaveLength(1);expect(container.querySelector('[data-answer-state="final"]')).toHaveClass("task-session-answer-settled");
+ const commentary={...final,evidence:[...final.evidence,{id:"commentary",kind:"agentMessage",status:"completed",label:"agentMessage",summary:"Separate later commentary"}],liveStatus:{...final.liveStatus,itemId:"commentary",text:"Separate later commentary"}};
+ await act(async()=>notify({revision:4,runs:[commentary],activeRunId:null,selectedRun:commentary}));
+ expect(screen.getAllByText("Separate later commentary")).toHaveLength(1);expect(screen.getAllByText(run.liveStatus.text)).toHaveLength(1);
+});

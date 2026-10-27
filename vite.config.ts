@@ -25,6 +25,9 @@ export default defineConfig(({ mode }) => ({
     },
   },
   test: {
+    // Preserve only this explicit raw stylesheet import for the reduced-motion
+    // CSSOM regression; ordinary component CSS remains stubbed in jsdom.
+    css: { include: [/task-sessions\.css\?raw$/] },
     environment: 'jsdom',
     setupFiles: ['src/test/setup.ts'],
   },

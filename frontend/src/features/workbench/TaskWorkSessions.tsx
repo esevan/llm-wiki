@@ -2,9 +2,9 @@ import { SessionQueue } from "./SessionQueue";
 import "./task-sessions.css";
 import { useTaskWorkbenchText } from "./taskWorkbenchText";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import Markdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { SessionAnswer, SessionMarkdown } from "./SessionAnswer";
 import { taskClient } from "../../services/taskClient";
+import { mergeExecutionSnapshot } from "../../services/executionStream";
 import { taskExecutionClient } from "../../services/taskExecutionClient";
 import { formatSystemTime } from "../../services/systemTime";
 import { chooseProjectFolder } from "../../services/projectFolderClient";
@@ -276,14 +276,6 @@ const readAttachment = (file: File): Promise<TaskWorkSessionAttachment> =>
     reader.readAsDataURL(file);
   });
 
-function SessionMarkdown({ children }: { children: string }) {
-  return (
-    <div className="task-session-markdown" data-user-content>
-      <Markdown remarkPlugins={[remarkGfm]} skipHtml>{children}</Markdown>
-    </div>
-  );
-}
-
 function duplicatesFinalReport(summary: string, finalReport?: string) {
   if (!finalReport) return false;
   const evidenceText = summary.trim();
@@ -339,9 +331,7 @@ export function TaskWorkSessions({
   const [retrySubmittingRunId, setRetrySubmittingRunId] = useState("");
   const [execution, setExecution] = useState<TaskExecutionSnapshot>();
   const receiveExecution = useCallback(
-    (snapshot: TaskExecutionSnapshot) => setExecution((current) =>
-      current?.revision !== undefined && snapshot.revision !== undefined && snapshot.revision < current.revision
-        ? current : snapshot),
+    (snapshot: TaskExecutionSnapshot) => setExecution(current => mergeExecutionSnapshot(current, snapshot)),
     [],
   );
   // Native snapshots include live deltas. Refresh the owning Task only when
@@ -581,13 +571,15 @@ export function TaskWorkSessions({
   useEffect(() => {
     if (!recordSessionId || activeRef.current !== recordSessionId) return;
     const expected = generation.current;
-    void taskExecutionClient.subscribe({ taskId: task.id, sessionId: recordSessionId, runId: focusExecution?.sessionId === recordSessionId ? focusExecution.runId : undefined }, (snapshot) => {
+    const subscription = taskExecutionClient.subscribe({ taskId: task.id, sessionId: recordSessionId, runId: focusExecution?.sessionId === recordSessionId ? focusExecution.runId : undefined }, (snapshot) => {
       if (generation.current === expected && activeRef.current === recordSessionId) receiveExecution(snapshot);
-    }).then((snapshot) => {
+    });
+    void subscription.then((snapshot) => {
       if (generation.current === expected && activeRef.current === recordSessionId) receiveExecution(snapshot);
     }).catch((cause) => {
       if (generation.current === expected) setError(String(cause));
     });
+    return () => { void subscription.dispose?.(); };
   }, [focusExecution?.runId, focusExecution?.sessionId, receiveExecution, recordSessionId, task.id]);
   const create = async () => {
     if (busy) return;
@@ -600,6 +592,9 @@ export function TaskWorkSessions({
       );
       if (generation.current !== expected) return;
       setSessions((current) => [created, ...(current ?? [])]);
+      // The asynchronous create committed busy=true. Release the synchronous
+      // navigation guard before opening; setState alone is still batched here.
+      busyRef.current = false;
       setBusy(false);
       await open(created.id);
     } catch (cause) {
@@ -988,7 +983,8 @@ export function TaskWorkSessions({
   ].sort((left, right) => left.timestamp - right.timestamp || left.sequence - right.sequence);
   useLayoutEffect(() => {
     const timeline = timelineRef.current;
-    if (!timeline || !followLatestRef.current) return;
+    const selection = window.getSelection();
+    if (!timeline || !followLatestRef.current || (selection && !selection.isCollapsed && timeline.contains(selection.anchorNode))) return;
     timeline.scrollTop = timeline.scrollHeight;
   }, [activeId, conversationTimeline.length, currentRun?.liveStatus?.output, currentRun?.liveStatus?.text, execution?.revision, externalTranscript?.turns.length]);
   const sessionActions = (        <div className="task-session-toolbar-actions">
@@ -1014,7 +1010,7 @@ export function TaskWorkSessions({
                         <button type="button" data-control="task-session-stop" disabled={busy || activeRun.stopRequested} onClick={() => void stop()}>{activeRun.stopRequested ? t.stopRequested : t.stop}</button>
                       )}
                     </header>
-                    <p className="task-execution-live" role="status">{activeRun.stopRequested ? t.stopRequested : activeRun.status === "awaiting_response" && activeRun.formalRequests.some((request) => ["pending", "submitting", "error"].includes(request.status)) ? (activeRun.formalRequests.some((request) => request.kind === "user_input") ? t.questionWaiting : t.approvalWaiting) : ["interrupted", "needs_attention"].includes(activeRun.status) ? t.outcomeUnknown : activeRun.liveStatus ? `${t.liveKinds[activeRun.liveStatus.kind as keyof typeof t.liveKinds] ?? t.activeRun} · ${activeRun.liveStatus.status === "completed" ? t.status.succeeded : t.status.running}` : t.status[activeRun.status]}</p>
+                    <p className="task-execution-live" role="status">{!runCanAcceptResponse ? (["interrupted", "needs_attention"].includes(activeRun.status) ? t.outcomeUnknown : t.status[activeRun.status]) : activeRun.stopRequested ? t.stopRequested : activeRun.status === "awaiting_response" && activeRun.formalRequests.some((request) => ["pending", "submitting", "error"].includes(request.status)) ? (activeRun.formalRequests.some((request) => request.kind === "user_input") ? t.questionWaiting : t.approvalWaiting) : ["interrupted", "needs_attention"].includes(activeRun.status) ? t.outcomeUnknown : activeRun.liveStatus ? `${t.liveKinds[activeRun.liveStatus.kind as keyof typeof t.liveKinds] ?? t.activeRun} · ${!["queued", "running", "awaiting_response"].includes(activeRun.status) ? t.status[activeRun.status] : activeRun.liveStatus.status === "completed" ? t.status.succeeded : t.status.running}` : t.status[activeRun.status]}</p>
                     {activeRun.formalRequests.map((request) => (
                       <section className="task-execution-request" key={request.id} aria-label={request.title}>
                         <h5>{request.title}</h5><p>{request.prompt}</p>
@@ -1035,7 +1031,7 @@ export function TaskWorkSessions({
                       </section>
                     ))}
                     {activeRun.liveStatus && (activeRun.liveStatus.command || activeRun.liveStatus.output) && <details className="task-execution-event task-execution-event-live">
-                      <summary><span className="task-execution-event-icon" aria-hidden="true">{activeRun.liveStatus.command ? ">_" : "·"}</span><strong>{activeRun.liveStatus.command ? t.runCommand : t.liveKinds[activeRun.liveStatus.kind as keyof typeof t.liveKinds] ?? t.activeRun}</strong><span className="task-execution-event-status">{activeRun.liveStatus.status === "completed" ? t.status.succeeded : t.status.running}</span></summary>
+                      <summary><span className="task-execution-event-icon" aria-hidden="true">{activeRun.liveStatus.command ? ">_" : "·"}</span><strong>{activeRun.liveStatus.command ? t.runCommand : t.liveKinds[activeRun.liveStatus.kind as keyof typeof t.liveKinds] ?? t.activeRun}</strong><span className="task-execution-event-status">{!["queued", "running", "awaiting_response"].includes(activeRun.status) ? t.status[activeRun.status] : activeRun.liveStatus.status === "completed" ? t.status.succeeded : t.status.running}</span></summary>
                       <pre>{[activeRun.liveStatus.command, activeRun.liveStatus.output].filter(Boolean).join("\n\n")}</pre>
                     </details>}
                     {activeRun.workLogEntryId && <button type="button" data-control="task-session-worklog-open" onClick={() => onOpenWorkLog?.(activeRun.workLogEntryId!)}>{t.workLog}</button>}
@@ -1319,12 +1315,11 @@ export function TaskWorkSessions({
                       <article data-entry-author="user"><header><strong>{t.user}</strong><span>{t.status[item.run.status]}</span></header><p>{item.run.instruction}</p></article>
                       {item.run.initialContext && <p role="note" className="task-execution-meta">{item.run.initialContext.mode === "summary" ? t.contextSummarized : t.contextFull} · {item.run.initialContext.delivery === "accepted" ? t.contextAccepted : item.run.initialContext.delivery === "not_dispatched" ? t.contextPending : t.contextUncertain} · {item.run.initialContext.summaryModel && <>{item.run.initialContext.summaryModel} · {item.run.initialContext.summaryCalls} {t.contextCalls} · </>}{item.run.initialContext.sourceCount} {t.contextSources} · {item.run.initialContext.sentBytes}/{item.run.initialContext.budgetBytes} {t.contextBytes} · {t.contextCaptured} {formatSystemTime(item.run.initialContext.capturedAt, document.documentElement.lang || navigator.language, {dateStyle:"short",timeStyle:"short"})}</p>}
                       {item.run.evidence.map((evidence) => evidence.kind === "agentMessage"
-                        ? duplicatesFinalReport(evidence.summary, item.run.finalReport)
+                        ? (!item.run.finalReport && evidence.id === item.run.liveStatus?.itemId && Boolean(item.run.liveStatus.text)) || duplicatesFinalReport(evidence.summary, item.run.finalReport || (!["queued", "running", "awaiting_response"].includes(item.run.status) ? item.run.liveStatus?.text : undefined))
                           ? null
                           : <article key={evidence.id} data-entry-author="assistant"><header><strong>Codex</strong></header><SessionMarkdown>{evidence.summary}</SessionMarkdown></article>
                         : <EvidenceRow key={evidence.id} evidence={evidence} runCommand={t.runCommand} />)}
-                      {item.run.id === currentRun?.id && item.run.liveStatus?.text && <article data-entry-author="assistant"><header><strong>Codex</strong><span>{t.status.running}</span></header><SessionMarkdown>{item.run.liveStatus.text}</SessionMarkdown></article>}
-                      {item.run.finalReport && <article data-entry-author="assistant"><header><strong>Codex</strong></header><SessionMarkdown>{item.run.finalReport}</SessionMarkdown></article>}
+                      {(item.run.finalReport || item.run.liveStatus?.text) && <article data-entry-author="assistant"><header><strong>Codex</strong>{["queued", "running", "awaiting_response"].includes(item.run.status) && <span>{t.status.running}</span>}</header><SessionAnswer text={item.run.finalReport || item.run.liveStatus?.text || ""} streaming={["queued", "running", "awaiting_response"].includes(item.run.status)} successful={item.run.status === "succeeded"} /></article>}
                       {!item.run.finalReport && ["succeeded", "failed", "cancelled", "interrupted", "needs_attention"].includes(item.run.status) && <p className="task-execution-meta">{t.noReport}</p>}
                       {item.run.error && <p role="alert">{item.run.error.message}</p>}
                       {["failed", "cancelled", "interrupted", "needs_attention"].includes(item.run.status) && (

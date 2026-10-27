@@ -98,8 +98,12 @@ impl TaskExecutionApplicationService {
         tx.commit().map_err(err)
     }
 
+    #[cfg(test)]
     pub(crate) fn queue_snapshot(&self, task: &str, session: &str) -> Result<Value, String> {
         let c = database::open(&self.db_path)?;
+        self.queue_snapshot_on(&c, task, session)
+    }
+    pub(crate) fn queue_snapshot_on(&self, c: &Connection, task: &str, session: &str) -> Result<Value, String> {
         owned(&c, task, session)?;
         let controller=c.query_row("SELECT mode,reason,revision,stop_run_id FROM task_session_queue_control WHERE session_id=?",[session],|r|Ok(json!({"mode":r.get::<_,String>(0)?,"reason":r.get::<_,String>(1)?,"revision":r.get::<_,i64>(2)?,"stopRunId":r.get::<_,Option<String>>(3)?}))).optional().map_err(err)?.unwrap_or(json!({"mode":"active","reason":"","revision":0}));
         let mut stmt=c.prepare("SELECT id,instruction,attachment_json,settings_json,position,revision,state,run_id FROM task_session_queue_items WHERE session_id=? AND state='pending' ORDER BY position,id").map_err(err)?;

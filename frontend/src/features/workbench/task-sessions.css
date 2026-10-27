@@ -157,3 +157,8 @@
 .task-session-space{width:100%;max-width:1248px;margin:24px auto}
 .task-session-space .task-session-layout{border-radius:var(--radius-dialog)}
 @container(max-width:760px){.task-session-space .task-session-layout{border-radius:var(--radius-panel)}}
+
+.task-session-stream-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+.task-session-answer-settled { animation: task-session-answer-settle var(--motion-fast, 150ms) ease-out; }
+@keyframes task-session-answer-settle { from { opacity: .65; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .task-session-answer-settled { animation: none; } }

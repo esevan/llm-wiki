@@ -64,7 +64,11 @@ async function createSession(h: WorkbenchScenarioHarness, label: string) {
   if (!button) throw new Error("Missing New session control");
   await h.prepareClick(button, label);
   h.click(button, label);
-  await h.waitFor(() => Boolean(document.querySelector(".task-session-layout")) && sessionId() !== previousId, `opened ${label}`);
+  try {
+    await h.waitFor(() => Boolean(document.querySelector(".task-session-layout")) && sessionId() !== previousId, `opened ${label}`);
+  } catch (error) {
+    throw new Error(`${String(error)}; selectedSession=${sessionId()}; sessionView=${document.querySelector(".task-session-space")?.outerHTML.slice(0, 8000) ?? "missing"}`);
+  }
   await waitSessionIdle(h, label);
 }
 
@@ -258,6 +262,12 @@ export async function interactWithCommittedAnswer(
  * Keep this scenario deliberately small because the live two-turn acceptance
  * is a separate gate.
  */
+async function readExecution(input: Parameters<typeof taskExecutionClient.subscribe>[0]) {
+  const subscription = taskExecutionClient.subscribe(input);
+  try { return await subscription; }
+  finally { await subscription.dispose?.(); }
+}
+
 export async function runTaskCodexExecutionScenario(h: WorkbenchScenarioHarness & { providerUrl: string }) {
   const titleA = `Codex execution A ${Date.now()}`;
   const titleB = `Codex execution B ${Date.now()}`;
@@ -280,8 +290,13 @@ export async function runTaskCodexExecutionScenario(h: WorkbenchScenarioHarness 
   if (!prepare) throw new Error("Missing Prepare conversation control");
   await h.prepareClick(prepare, "Prepare Task A Codex conversation");
   interactWithObservedControl(h, "task-session-prepare", () => h.click(prepare, "Prepare Task A Codex conversation"));
-  await h.waitFor(() => !prepare.disabled && Boolean(document.querySelector(".task-execution-effective")), "prepared Task A Codex conversation");
-  h.coverage.assertEffect("task-session-prepare", () => Boolean(document.querySelector(".task-execution-effective")));
+  await h.waitFor(() => {
+    // Preparing moves setup below the conversation; resolve the current node
+    // rather than waiting on the detached setup button.
+    const current = document.querySelector<HTMLButtonElement>('[data-control="task-session-prepare"]');
+    return Boolean(current && !current.disabled && current.textContent === "Check settings");
+  }, "prepared Task A Codex conversation");
+  h.coverage.assertEffect("task-session-prepare", () => document.querySelector('[data-control="task-session-prepare"]')?.textContent === "Check settings");
 
   const prepared = await taskExecutionClient.prepare({ taskId: taskA.id, sessionId: sessionA });
   if (!prepared.effectiveConfig?.ready || !prepared.effectiveConfig.settingsRevision) throw new Error("Prepare did not return a ready effective configuration");
@@ -293,7 +308,7 @@ export async function runTaskCodexExecutionScenario(h: WorkbenchScenarioHarness 
   await h.step("Task A prepared one controlled Codex conversation and produced one completed Run with a report and Work Log link.");
 
   await executeInstruction(h, "Run Task A follow-up", "Confirm this is a follow-up turn on the same conversation", taskA.id, sessionA, settingsRevision);
-  const followup = await taskExecutionClient.subscribe({ taskId: taskA.id, sessionId: sessionA });
+  const followup = await readExecution({ taskId: taskA.id, sessionId: sessionA });
   const runs = followup.runs.filter((run) => run.sessionId === sessionA);
   if (runs.length < 2 || runs.some((run) => run.status !== "succeeded") || runs[0]?.threadId !== threadId || runs[1]?.threadId !== threadId || !runs[0]?.turnId || !runs[1]?.turnId || runs[0].turnId === runs[1].turnId) throw new Error("Follow-up did not create a distinct completed turn on the exact Task A thread");
   const taskAAfterRuns = await h.api<{ state: string; taskRevision: number }>(`/tasks/${taskA.id}`);
@@ -307,7 +322,7 @@ export async function runTaskCodexExecutionScenario(h: WorkbenchScenarioHarness 
   const sessionB = sessionId();
   if (!sessionB) throw new Error("Task B execution session did not become active");
   await saveSettings(h, "gpt-5.6-luna", executionCwd);
-  const taskBExecution = await taskExecutionClient.subscribe({ taskId: taskB.id, sessionId: sessionB });
+  const taskBExecution = await readExecution({ taskId: taskB.id, sessionId: sessionB });
   if (taskBExecution.runs.length !== 0) throw new Error("Task A execution state leaked into Task B");
   await h.step("Task B has an isolated session with no Task A Run or thread state.");
 
@@ -315,7 +330,7 @@ export async function runTaskCodexExecutionScenario(h: WorkbenchScenarioHarness 
   await h.detail(titleA);
   await openSessions(h, "Reopen Task A execution session");
   await selectSession(h, sessionA, "Report the controlled fixture result", "run");
-  const reopened = await taskExecutionClient.subscribe({ taskId: taskA.id, sessionId: sessionA });
+  const reopened = await readExecution({ taskId: taskA.id, sessionId: sessionA });
   if (reopened.runs.length < 2 || reopened.runs.some((run) => run.status !== "succeeded")) throw new Error("Task A execution did not restore after detach and reopen");
   const workLog = await h.api<{ workLog?: Array<{ execution?: { runId?: string } }> }>(`/tasks/${taskA.id}`);
   const linkedRuns = workLog.workLog?.map((entry) => entry.execution?.runId).filter(Boolean) ?? [];
@@ -404,7 +419,9 @@ async function executeInstruction(h: WorkbenchScenarioHarness, label: string, in
       })().catch((error) => { callbackError = error instanceof Error ? error : new Error(String(error)); });
     }
   };
-  const initial = await taskExecutionClient.subscribe({ taskId, sessionId: sessionIdValue }, onSnapshot);
+  const subscription = taskExecutionClient.subscribe({ taskId, sessionId: sessionIdValue }, onSnapshot);
+  try {
+  const initial = await subscription;
   // A request can already be pending when subscription returns; the channel
   // only delivers later changes, so process this snapshot through the same path.
   onSnapshot(initial);
@@ -425,4 +442,5 @@ async function executeInstruction(h: WorkbenchScenarioHarness, label: string, in
   }
   h.coverage.assertEffect("task-session-run", () => Boolean(result.id));
   return result;
+  } finally { await subscription.dispose?.(); }
 }

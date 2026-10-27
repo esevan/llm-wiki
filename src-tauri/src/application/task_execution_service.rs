@@ -11,6 +11,8 @@ use std::path::{Path, PathBuf};
 #[derive(Clone)]
 pub(crate) struct TaskExecutionApplicationService {
     pub(super) db_path: PathBuf,
+    #[cfg(test)]
+    snapshot_after_runs: Option<std::sync::Arc<dyn Fn() + Send + Sync>>,
 }
 
 #[derive(Debug, Clone)]
@@ -87,6 +89,8 @@ impl TaskExecutionApplicationService {
     pub(crate) fn new(path: impl AsRef<Path>) -> Self {
         Self {
             db_path: path.as_ref().to_owned(),
+            #[cfg(test)]
+            snapshot_after_runs: None,
         }
     }
 
@@ -989,7 +993,11 @@ impl TaskExecutionApplicationService {
         session: &str,
         selected: Option<&str>,
     ) -> Result<Value, String> {
-        let c = database::open(&self.db_path)?;
+        let connection = database::open(&self.db_path)?;
+        // Run rows and their session revision must belong to the same SQLite
+        // snapshot. Otherwise completion can label old rows with a new revision.
+        let transaction = connection.unchecked_transaction().map_err(|e| e.to_string())?;
+        let c = &transaction;
         let owned: bool = c
             .query_row(
                 "SELECT EXISTS(SELECT 1 FROM task_work_sessions s JOIN tasks t ON t.id=s.task_id WHERE s.id=? AND s.task_id=? AND NOT EXISTS(SELECT 1 FROM deleted_entities d WHERE d.entity_type='tasks' AND d.entity_id=t.id))",
@@ -1019,6 +1027,8 @@ impl TaskExecutionApplicationService {
                 run
             })
             .collect::<Vec<_>>();
+        #[cfg(test)]
+        if let Some(after_runs) = &self.snapshot_after_runs { after_runs(); }
         let active = runs
             .iter()
             .find(|r| {
@@ -1058,7 +1068,7 @@ impl TaskExecutionApplicationService {
         {
             result["effectiveConfig"] = json!({"model":model,"cwd":cwd,"approvalPolicy":approval,"approvalsReviewer":config.3,"sandbox":sandbox,"provenance":"bound_thread","settingsRevision":settings_revision,"ready":true,"capabilities":{"structuredUserInput":config.6}});
         }
-        result["queue"] = self.queue_snapshot(task, session)?;
+        result["queue"] = self.queue_snapshot_on(c, task, session)?;
         result["sessionLabel"] = c.query_row("SELECT substr(body,1,160) FROM task_work_session_entries WHERE session_id=? AND author='user' AND trim(body)!='' ORDER BY created_at,id LIMIT 1",[session],|r|r.get::<_,String>(0)).optional().map_err(|e|e.to_string())?.map(Value::String).unwrap_or(Value::Null);
         if let Some(config) = result.get_mut("effectiveConfig") {
             config["reasoningEffort"] = c.query_row("SELECT effective_reasoning_effort FROM task_work_sessions WHERE id=?",[session],|r|r.get::<_,Option<String>>(0)).map_err(|e|e.to_string())?.map(Value::String).unwrap_or(Value::Null);
@@ -1416,6 +1426,28 @@ mod tests {
 
     fn run_input(f: &Fixture, key: &str, instruction: &str) -> Value {
         json!({"taskId":f.task,"sessionId":f.session,"operationId":key,"instruction":instruction,"settingsRevision":f.settings_revision})
+    }
+
+    #[test]
+    fn snapshot_keeps_run_rows_and_revision_consistent_during_completion() {
+        let f = fixture();
+        let (initial, _) = f.service.create_run(&run_input(&f, "consistent", "Stream")).unwrap();
+        let run = initial["selectedRun"]["id"].as_str().unwrap().to_owned();
+        f.service.mark_dispatch_recorded(&run).unwrap();
+        f.service.accept_turn(&run, "thread-a", "consistent-turn").unwrap();
+        let before = f.service.snapshot(&f.task, &f.session, Some(&run)).unwrap();
+        let mut reader = f.service.clone();
+        let writer = f.service.clone();
+        let completed_run = run.clone();
+        reader.snapshot_after_runs = Some(std::sync::Arc::new(move || {
+            writer.finish_turn(&completed_run, &json!({"status":"failed"})).unwrap();
+        }));
+        let overlapping = reader.snapshot(&f.task, &f.session, Some(&run)).unwrap();
+        assert_eq!(overlapping["selectedRun"]["status"], "running");
+        assert_eq!(overlapping["revision"], before["revision"]);
+        let completed = f.service.snapshot(&f.task, &f.session, Some(&run)).unwrap();
+        assert_eq!(completed["selectedRun"]["status"], "failed");
+        assert!(completed["revision"].as_u64().unwrap() > overlapping["revision"].as_u64().unwrap());
     }
 
     #[test]
