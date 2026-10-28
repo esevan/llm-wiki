@@ -63,6 +63,7 @@ export function WorkbenchView({ active, taskApplication, onTaskApplication, onPr
   const refinementRef = useRef<RefinementPanelHandle>(null);
   const [detailRefresh, setDetailRefresh] = useState(0);
   const [queueImageSummary, setQueueImageSummary] = useState<{ taskId: string; entryId: string }>();
+  const [queueAIOrigin,setQueueAIOrigin]=useState<{taskId:string;sessionId?:string;revision?:number;turnId?:string;view?:string}>();
   const [queueJourneyTaskId, setQueueJourneyTaskId] = useState<string>();
   const [queueKnowledgeDraft, setQueueKnowledgeDraft] = useState<({ taskId: string } & NonNullable<DetailSession["knowledgeDraft"]>)>();
   const detailSessions = useRef(new Map<string, DetailSession>());
@@ -80,6 +81,7 @@ export function WorkbenchView({ active, taskApplication, onTaskApplication, onPr
     if (id === detail && !refining) return;
     const proceed = () => {
       closeLegacyDock();
+      setQueueAIOrigin(undefined);
       setRefining(undefined);
       setDetail(id);
       if (id) detailTrigger.current = trigger ?? null;
@@ -142,6 +144,7 @@ export function WorkbenchView({ active, taskApplication, onTaskApplication, onPr
   }, [active, load]);
   useEffect(() => {
     window.llmWikiOpenKnowledgeDraft = (draft) => {
+      setQueueAIOrigin(undefined);
       const current = detailSessions.current.get(draft.taskId);
       if (current?.knowledgeReviewDirty || (current?.knowledgeDraft && current.knowledgeDraft.savedBodyMarkdown !== undefined
           && current.knowledgeDraft.bodyMarkdown !== current.knowledgeDraft.savedBodyMarkdown)) {
@@ -158,6 +161,7 @@ export function WorkbenchView({ active, taskApplication, onTaskApplication, onPr
   }, [text.saveDraftBeforeQueueResult]);
   useEffect(() => {
     window.llmWikiOpenTaskImageSummary = (taskId, entryId) => {
+      setQueueAIOrigin(undefined);
       closeLegacyDock();
       setRefining(undefined);
       setDetail(taskId);
@@ -168,6 +172,7 @@ export function WorkbenchView({ active, taskApplication, onTaskApplication, onPr
   }, []);
   useEffect(() => {
     window.llmWikiOpenTaskJourney = (taskId) => {
+      setQueueAIOrigin(undefined);
       closeLegacyDock();
       setRefining(undefined);
       setDetail(taskId);
@@ -175,6 +180,14 @@ export function WorkbenchView({ active, taskApplication, onTaskApplication, onPr
       setDetailRefresh((value) => value + 1);
     };
     return () => { delete window.llmWikiOpenTaskJourney; };
+  }, []);
+  useEffect(() => {
+    window.llmWikiOpenAIOrigin = origin => {
+      const proceed=()=>{closeLegacyDock();setRefining(undefined);setQueueJourneyTaskId(undefined);setQueueKnowledgeDraft(undefined);setQueueImageSummary(undefined);setQueueAIOrigin({...origin});setDetail(origin.taskId);setDetailRefresh(v=>v+1);};
+      const leaveTask=()=>{if(detailRef.current)detailRef.current.requestLeave(proceed);else proceed();};
+      if(refinementRef.current)refinementRef.current.requestLeave(leaveTask);else leaveTask();
+    };
+    return ()=>{delete window.llmWikiOpenAIOrigin;};
   }, []);
   const save = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -513,7 +526,7 @@ export function WorkbenchView({ active, taskApplication, onTaskApplication, onPr
           ref={detailRef}
           taskId={detail}
           onClose={() => {
-            const leave = () => { setRefining(undefined); setDetail(undefined); restoreDetailFocus(); };
+            const leave = () => { setRefining(undefined); setDetail(undefined); setQueueAIOrigin(undefined); restoreDetailFocus(); };
             if (refinementRef.current) refinementRef.current.requestLeave(leave); else leave();
           }}
           onOpenTask={(id) => selectDetail(id)}
@@ -525,6 +538,7 @@ export function WorkbenchView({ active, taskApplication, onTaskApplication, onPr
           refreshKey={detailRefresh}
           queueImageSummary={queueImageSummary?.taskId === detail ? queueImageSummary : undefined}
           openJourney={queueJourneyTaskId === detail}
+          queueAIOrigin={queueAIOrigin?.taskId===detail?queueAIOrigin:undefined}
           queueKnowledgeDraft={queueKnowledgeDraft?.taskId === detail ? queueKnowledgeDraft : undefined}
           suppressInitialFocus={false}
           onChanged={() => void load()}

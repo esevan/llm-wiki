@@ -1130,6 +1130,7 @@ pub fn finish_index(db: &Path, root: &Path, semantic: &SemanticEngine, id: &str)
                 .iter()
                 .find(|a| a.document_id == doc)
                 .ok_or("archive_target_conflict")?;
+            tx.execute("UPDATE task_publication_choices SET wont_publish=0,choice_revision=choice_revision+1,updated_at=CURRENT_TIMESTAMP WHERE task_id=? AND wont_publish=1", [required(&proposal,"taskId")?]).map_err(db_err)?;
             let changed = tx.execute("UPDATE knowledge_pointers SET published_revision=?,publication_document_id=?,publication_path=?,publication_content_hash=?,updated_at=CURRENT_TIMESTAMP WHERE task_id=? AND current_private_revision=?",params![integer(&proposal,"knowledgeRevision")?,doc,a.path,a.sha256,required(&proposal,"taskId")?,if proposal["input"]["simplePublication"]==true { proposal["input"]["expectedCurrentPrivateRevision"].as_i64().unwrap_or(integer(&proposal,"knowledgeRevision")?) } else { integer(&proposal,"knowledgeRevision")? }]).map_err(db_err)?;
             if changed != 1 { return Err("generation_snapshot_conflict: publication pointer changed".into()); }
             for link in proposal["referenceLinks"].as_array().into_iter().flatten() {
@@ -1878,6 +1879,7 @@ mod tests {
     fn archive_final_knowledge_uses_reviewed_bytes_and_defers_f_pointer_until_receipt() {
         let (_temp, db, root, input, evidence) = knowledge_fixture();
         let c = database::open(&db).unwrap();
+        c.execute("INSERT INTO task_publication_choices(task_id,wont_publish,choice_revision) VALUES('task',1,1)",[]).unwrap();
         let proposal=prepare_from_plan(&db,&root,&input,&evidence,&[],json!({"outcome":"new","path":"Knowledge/Approval.md","rationale":"Approval guide","tags":["approval"],"aliases":["Approval guide"],"mocPaths":["Index.md"]})).unwrap();
         assert_eq!(review_state(&db,"task").unwrap()["proposals"][0]["proposalId"], proposal["proposalId"]);
         let reviewed = proposal["artifacts"][0]["bytes"]
@@ -1899,7 +1901,9 @@ mod tests {
             fs::read_to_string(root.join("Knowledge/Approval.md")).unwrap(),
             reviewed
         );
+        assert_eq!(c.query_row("SELECT wont_publish FROM task_publication_choices WHERE task_id='task'",[],|r|r.get::<_,bool>(0)).unwrap(),true);
         finish_index(&db, &root, &SemanticEngine::new(None), "publish-one").unwrap();
+        assert_eq!(c.query_row("SELECT wont_publish FROM task_publication_choices WHERE task_id='task'",[],|r|r.get::<_,bool>(0)).unwrap(),false);
         assert_eq!(
             c.query_row(
                 "SELECT published_revision FROM knowledge_pointers WHERE task_id='task'",

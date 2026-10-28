@@ -97,7 +97,13 @@ export interface CaptureCard {
 }
 export type TaskContentVersions = Partial<Record<"ko" | "en", Partial<Record<"title" | "detail" | "outcome" | "scope" | "nonGoals" | "validationCriteria", string>>>>;
 
+export interface KnowledgePublicationStatus {
+  published: boolean; proposal: "none" | "generating" | "awaiting_review";
+  wontPublish: boolean; choiceRevision: number; privateRevision?: number; privateContentHash?: string;
+}
+
 export interface TaskCard {
+  knowledgePublication?: KnowledgePublicationStatus;
   contentVersions?: TaskContentVersions;
   completedAt?: string | null;
   originCaptureText?: string | null;

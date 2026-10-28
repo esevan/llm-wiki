@@ -260,16 +260,21 @@ pub(crate) async fn send_registered(
     }
     context["request"] = json!(message);
     let scope = format!("knowledge-revision:{task}:{id}");
+    let mut tracking=None;
     let result = async {
-        let token = registry.register_latest(&scope)?;
+        let model=super::settings::provider_credentials_for(settings,"completion_report").map(|(_,model,_)|model).unwrap_or_default();
+        tracking=Some(super::foreground_jobs::Tracking::start(db,registry,"knowledge_revision",&model,json!({"taskId":task,"revision":n,"turnId":id,"view":"review"}))?);
+        let observed=tracking.as_ref().unwrap();
+        let token = observed.token.clone();
         let (text_context, images) = task_assistance::image_context(&context);
-        let response = task_assistance::provider_json_with_images(
+        let response = task_assistance::provider_json_with_images_tracked(
             settings,
             "completion_report",
             PromptId::KnowledgeRevisionChat,
             text_context,
             &images,
             Some(&token),
+            Some(observed),
         )
         .await?;
         prepare_reply(&snapshot, &b, response, input["locale"] == "ko")
@@ -277,7 +282,7 @@ pub(crate) async fn send_registered(
     .await;
     registry.cancel(&format!("ephemeral:{scope}"));
     let c = database::open(db)?;
-    match result {
+    let outcome = match result {
         Ok(mut reply) => {
             let prepared = reply
                 .as_object_mut()
@@ -296,17 +301,19 @@ pub(crate) async fn send_registered(
                 "needs_evidence"
             };
             let changed=c.execute("UPDATE knowledge_revision_turns SET reply_json=?,prepared_json=?,state=? WHERE id=? AND state='running'",params![reply.to_string(),prepared.as_object().map(|_|prepared.to_string()),state,id]).map_err(|e|e.to_string())?;
-            if changed == 0 {
-                return Err("revision_chat_cancelled".into());
-            }
             let _ = expected_head;
-            Ok(reply)
+            if changed == 0 { Err("revision_chat_cancelled".into()) } else { Ok(reply) }
         }
         Err(error) => {
             c.execute("UPDATE knowledge_revision_turns SET state='failed',error=? WHERE id=? AND state='running'",params![error,id]).map_err(|e|e.to_string())?;
             Err(error)
         }
+    };
+    if let Some(tracking)=tracking {
+        let error=match &outcome {Err(error)=>Some(error.as_str()),Ok(reply) if reply["candidate"].is_object() && reply["applicable"]==false=>reply["preparationError"].as_str(),_=>None};
+        tracking.finish(error)?;
     }
+    outcome
 }
 fn prepare_reply(snapshot: &Value, b: &Value, response: Value, ko: bool) -> Result<Value, String> {
     let reply: Reply =
@@ -392,6 +399,9 @@ pub(crate) fn cancel_registered(
         required(input, "taskId")?,
         required(input, "turnId")?
     ));
+    let observed_id=super::foreground_jobs::revision_id(required(input,"turnId")?);
+    registry.cancel(&observed_id);
+    database::open(db)?.execute("UPDATE ai_jobs_v2 SET status='cancelled',execution_outcome='cancelled',finished_at=CURRENT_TIMESTAMP WHERE id=? AND status='running'",[observed_id]).map_err(|e|e.to_string())?;
     Ok(result)
 }
 pub(crate) fn decide(db: &Path, input: &Value, apply: bool) -> Result<Value, String> {
@@ -618,6 +628,15 @@ mod tests {
         let c = database::open(&db).unwrap();
         let published: Option<i64> = c.query_row("SELECT published_revision FROM knowledge_pointers WHERE task_id='task'", [], |r|r.get(0)).unwrap();
         assert_eq!(published, None);
+        let failed=super::super::jobs::get(&db,&super::super::foreground_jobs::revision_id("chat-1")).unwrap();
+        assert_eq!(failed["status"],"failed");assert_eq!(failed["calls_started"],1);assert_eq!(failed["observation_only"],true);
+        let done=super::super::jobs::get(&db,&super::super::foreground_jobs::revision_id("chat-fixed")).unwrap();
+        assert_eq!(done["status"],"completed");assert_eq!(done["calls_completed"],1);assert_eq!(done["origin"]["revision"],2);
+        // Restart reconciliation trusts a durable applied outcome, not a new call.
+        c.execute("UPDATE ai_jobs_v2 SET status='running' WHERE id=?",[super::super::foreground_jobs::revision_id("chat-fixed")]).unwrap();
+        super::super::foreground_jobs::recover(&db).unwrap();
+        let recovered=super::super::jobs::get(&db,&super::super::foreground_jobs::revision_id("chat-fixed")).unwrap();
+        assert_eq!(recovered["status"],"completed");assert_eq!(recovered["calls_started"],1);
     }
 
     #[tokio::test]
@@ -786,6 +805,30 @@ mod tests {
             "valid"
         );
     }
+    #[tokio::test]
+    async fn queue_cancel_stops_revision_without_applying_or_retrying_it() {
+        let (root,db,_,data)=fixture(false);let settings=root.path().join("settings.json");
+        let received=std::sync::Arc::new(tokio::sync::Notify::new());let release=std::sync::Arc::new(tokio::sync::Notify::new());
+        let server=controlled_provider(&settings,json!({"message":"Review only","missingEvidence":[],"candidate":data["good"]}),Some((received.clone(),release.clone()))).await;
+        let registry=super::super::jobs::JobRegistry::default();
+        let worker=registry.clone();let request=data["input"].clone();let worker_db=db.clone();let worker_settings=settings.clone();
+        let pending=tokio::spawn(async move {send_registered(&worker_db,&worker_settings,&request,&worker).await});
+        received.notified().await;
+        let publication=super::super::task_publication_status::project(&database::open(&db).unwrap()).unwrap();
+        assert_eq!(publication["task"]["proposal"],"generating");
+        let id=super::super::foreground_jobs::revision_id("chat-1");
+        super::super::jobs::cancel(&db,&registry,&id).unwrap();
+        assert!(super::super::jobs::cancel(&db,&registry,&id).is_err());
+        release.notify_one();assert!(pending.await.unwrap().is_err());server.await.unwrap();
+        assert_eq!(get(&db,&data["input"]).unwrap()["turns"][0]["state"],"cancelled");
+        assert_eq!(super::super::jobs::get(&db,&id).unwrap()["status"],"cancelled");
+        let publication=super::super::task_publication_status::project(&database::open(&db).unwrap()).unwrap();
+        assert_ne!(publication["task"]["proposal"],"generating");
+        assert_eq!(publication["task"]["published"],false);
+        assert!(decide(&db,&json!({"taskId":"task","turnId":"chat-1"}),true).is_err());
+        let c=database::open(&db).unwrap();assert_eq!(c.query_row("SELECT count(*) FROM knowledge_draft_versions",[],|r|r.get::<_,i64>(0)).unwrap(),1);
+    }
+
     #[tokio::test]
     async fn knowledge_revision_cancelled_provider_result_and_invalid_candidate_cannot_apply() {
         let (root, db, _snapshot, data) = fixture(false);

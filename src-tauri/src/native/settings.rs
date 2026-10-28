@@ -40,6 +40,7 @@ struct SavedProvider {
     report_language: String,
     async_worker_count: i64,
     request_timeout_seconds: u64,
+    context_size_bytes: u64,
     api_key: Option<String>,
 }
 
@@ -53,12 +54,14 @@ impl Default for SavedProvider {
             report_language: "ko".into(),
             async_worker_count: 2,
             request_timeout_seconds: DEFAULT_AI_TIMEOUT_SECONDS,
+            context_size_bytes: DEFAULT_CONTEXT_SIZE_BYTES,
             api_key: None,
         }
     }
 }
 
 const DEFAULT_AI_TIMEOUT_SECONDS: u64 = 180;
+pub(crate) const DEFAULT_CONTEXT_SIZE_BYTES: u64 = 64 * 1024;
 
 /// One process-wide settings owner. Paths keep isolated application/test homes separate.
 /// Readers receive snapshots; only this store can publish a persisted update.
@@ -252,6 +255,7 @@ pub fn migrate_legacy(db_path: &Path, settings_path: &Path) -> Result<(), String
                         report_language: row.get(4)?,
                         async_worker_count: row.get(5)?,
                         request_timeout_seconds: DEFAULT_AI_TIMEOUT_SECONDS,
+                        context_size_bytes: DEFAULT_CONTEXT_SIZE_BYTES,
                         api_key: None,
                     })
                 },
@@ -401,7 +405,7 @@ pub fn provider(settings_path: &Path) -> Result<Value, String> {
         );
     }
     Ok(
-        json!({"base_url":provider.base_url,"model":provider.model,"advanced_model":provider.advanced_model,"advanced_tasks":tasks,"report_language":provider.report_language,"async_worker_count":provider.async_worker_count,"request_timeout_seconds":provider.request_timeout_seconds,"api_key_configured":provider.api_key.as_ref().is_some_and(|key| !key.is_empty())}),
+        json!({"base_url":provider.base_url,"model":provider.model,"advanced_model":provider.advanced_model,"advanced_tasks":tasks,"report_language":provider.report_language,"async_worker_count":provider.async_worker_count,"request_timeout_seconds":provider.request_timeout_seconds,"context_size_bytes":provider.context_size_bytes,"api_key_configured":provider.api_key.as_ref().is_some_and(|key| !key.is_empty())}),
     )
 }
 
@@ -438,6 +442,10 @@ pub fn save_provider(settings_path: &Path, input: &Value) -> Result<Value, Strin
         value.as_u64().filter(|seconds| (1..=3600).contains(seconds))
             .ok_or("AI request timeout must be a whole number between 1 and 3600 seconds")
     }).transpose()?;
+    let context_size = input.get("context_size_bytes").map(|value| {
+        value.as_u64().filter(|bytes| (1024..=32*1024*1024).contains(bytes) && bytes % 1024 == 0)
+            .ok_or("Context Size must be a whole number of KiB between 1 and 32768")
+    }).transpose()?;
     let api_key = input
         .get("api_key")
         .and_then(Value::as_str)
@@ -458,6 +466,7 @@ pub fn save_provider(settings_path: &Path, input: &Value) -> Result<Value, Strin
             request_timeout_seconds: timeout.unwrap_or_else(|| settings.provider.as_ref()
                 .map(|provider| provider.request_timeout_seconds)
                 .unwrap_or(DEFAULT_AI_TIMEOUT_SECONDS)),
+            context_size_bytes: context_size.unwrap_or_else(|| settings.provider.as_ref().map(|p|p.context_size_bytes).unwrap_or(DEFAULT_CONTEXT_SIZE_BYTES)),
             api_key: api_key.or(existing_api_key),
         });
     })?;
@@ -475,6 +484,12 @@ pub(crate) fn provider_client(settings_path: &Path) -> Result<reqwest::Client, S
         .timeout(std::time::Duration::from_secs(seconds))
         .build()
         .map_err(|error| error.to_string())
+}
+
+pub(crate) fn context_size_bytes(settings: &Path) -> Result<usize, String> {
+    let size=read(settings)?.provider.unwrap_or_default().context_size_bytes;
+    if !(1024..=32*1024*1024).contains(&size) || size%1024!=0 {return Err("Context Size setting is invalid; save a whole KiB value from 1 to 32768 in AI settings".into());}
+    Ok(size as usize)
 }
 
 pub fn provider_credentials_for(
@@ -509,6 +524,25 @@ pub fn provider_credentials_for(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn context_size_defaults_validates_preserves_and_survives_fresh_store() {
+        let parent=Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().join(".tmp");fs::create_dir_all(&parent).unwrap();
+        let root=tempfile::tempdir_in(parent).unwrap();let path=root.path().join("settings.json");
+        assert_eq!(context_size_bytes(&path).unwrap(),65536);
+        fs::write(&path,r#"{"version":2,"provider":{"baseUrl":"https://example.test/v1","model":"old"}}"#).unwrap();
+        assert_eq!(SettingsStore::default().read(&path).unwrap().provider.unwrap().context_size_bytes,65536);
+        save_provider(&path,&json!({"base_url":"https://example.test/v1","model":"session-unchanged","context_size_bytes":98304})).unwrap();
+        assert_eq!(SettingsStore::default().read(&path).unwrap().provider.unwrap().context_size_bytes,98304);
+        save_provider(&path,&json!({"base_url":"https://example.test/v1","model":"session-unchanged"})).unwrap();assert_eq!(context_size_bytes(&path).unwrap(),98304);
+        for bad in [json!(0),json!(-1),json!(1025),json!(1.5),json!("64"),json!(33555456)] {
+            assert!(save_provider(&path,&json!({"base_url":"https://example.test/v1","context_size_bytes":bad})).is_err());
+            assert_eq!(context_size_bytes(&path).unwrap(),98304);
+        }
+        let malformed=root.path().join("malformed-settings.json");
+        fs::write(&malformed,r#"{"version":2,"provider":{"contextSizeBytes":1025}}"#).unwrap();
+        assert!(context_size_bytes(&malformed).unwrap_err().contains("Context Size setting is invalid"));
+    }
 
     #[test]
     fn singleton_reuses_snapshots_and_keeps_settings_homes_isolated() {

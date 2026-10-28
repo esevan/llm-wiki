@@ -35,7 +35,7 @@ it('CB-034 routes queue cancel/retry and result controls through their delegated
   document.body.innerHTML = '<section id="queue-list"><article data-job-id="one"><button id="cancel" data-job-action="cancel"></button><button id="result" data-job-action="result"></button></article></section>';
   const api = vi.fn().mockResolvedValue({}), refresh = vi.fn().mockResolvedValue(undefined), open = vi.fn().mockResolvedValue(undefined);
   const handler = line(jobs, "$('#queue-list').onclick").match(/\$\('#queue-list'\)\.onclick=async event=>\{.*?\};/)?.[0];
-  new Function('$', 'api', 'refreshQueue', 'openJobResult', handler!)($, api, refresh, open);
+  new Function('$', 'api', 'refreshQueue', 'openJobResult', 'pendingQueueCancels', handler!)($, api, refresh, open, new Set());
   document.querySelector<HTMLButtonElement>('#cancel')!.click();
   await new Promise((resolve) => setTimeout(resolve, 0));
   expect(api).toHaveBeenCalledWith('/jobs/one/cancel', { method: 'POST' });

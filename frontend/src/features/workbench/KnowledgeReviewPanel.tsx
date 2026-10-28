@@ -56,6 +56,7 @@ interface Props {
   completed: boolean;
   generationQueued?: boolean;
   refreshKey?: string | number;
+  preferredTurnId?: string;
   preferredRevision?: number;
   onGenerate: () => Promise<void>;
   onDirtyChange?: (dirty: boolean) => void;
@@ -142,8 +143,11 @@ const isKnowledgeProjection = (value: unknown): value is KnowledgeReviewProjecti
     && Array.isArray(candidate.ideas);
 };
 
-export function KnowledgeReviewPanel({ taskId, completed, generationQueued: externalGenerationQueued, refreshKey, preferredRevision, onGenerate, onDirtyChange, onPrepareArchive, onOrganizeArchive, onPublishArchive, onArchiveStatus, onRetryArchive, onRecoverArchive, ref }: Props) {
-  const text = useTaskWorkbenchText().knowledgeReview;
+export function KnowledgeReviewPanel({ taskId, completed, generationQueued: externalGenerationQueued, refreshKey, preferredRevision, preferredTurnId, onGenerate, onDirtyChange, onPrepareArchive, onOrganizeArchive, onPublishArchive, onArchiveStatus, onRetryArchive, onRecoverArchive, ref }: Props) {
+  const allText = useTaskWorkbenchText();
+  const text = allText.knowledgeReview;
+  const [reviewSaving, setReviewSaving] = useState(false);
+  const reviewInFlight = useRef(false);
   const [projection, setProjection] = useState<KnowledgeReviewProjection>();
   const [selected, setSelected] = useState<number>();
   type SavedCorrection = { taskId: string; revision: number; contentHash: string; bodyMarkdown: string };
@@ -576,7 +580,15 @@ export function KnowledgeReviewPanel({ taskId, completed, generationQueued: exte
     {references.length ? <details className="knowledge-provenance" data-control="knowledge-provenance"><summary>{text.provenance} · {references.length}</summary><div className="knowledge-source-list">{references.map(reference => <button type="button" data-control="knowledge-source-open" data-record-id={`${reference.documentId}:${reference.documentVersion}`} key={`${reference.documentId}:${reference.documentVersion}:${reference.section}:${reference.excerpt}`} onClick={() => setSource(reference)}><strong>{reference.title}</strong><span>{reference.section}</span><q>{reference.excerpt}</q><small>{text.openSource}</small></button>)}</div></details> : null}
     </div>
     <aside className="knowledge-controls">
-    <KnowledgeRevisionChat key={`${taskId}:${version.revision}:${chatEpoch}`} reviewContainerRef={revisionReviewTarget} versions={projection.versions} taskId={taskId} version={version} publishedRevision={projection.pointers.publishedRevision ?? undefined} onSelectPublished={projection.versions.some(item => item.revision === projection.pointers.publishedRevision) ? () => { if (projection.pointers.publishedRevision) selectVersion(projection.pointers.publishedRevision); } : undefined} disabled={bodyDirty || noteDirty || Boolean(busy && busy !== "chat")} onStateChange={chatStateChange} onApplied={async revision => { dirtyRef.current = false; setAppliedTransition({ revision, cause: "version_restore" }); setChatDirty(false); setBusy(undefined); await load(revision); }} />
+      {version.revision === currentRevision && <button type="button" data-control="knowledge-review-complete" disabled={reviewSaving || Boolean(busy) || dirty || Boolean(generationQueued)} onClick={async () => {
+        if (reviewInFlight.current) return;
+        reviewInFlight.current = true; setReviewSaving(true); setError("");
+        try { await taskClient.completeKnowledgeReview(taskId, version.revision, version.contentHash); setStatus(allText.publicationTags.reviewSaved); window.dispatchEvent(new Event('llm-wiki:task-workbench-refresh')); }
+        catch { setError(text.operationFailed); }
+        finally { reviewInFlight.current = false; setReviewSaving(false); }
+      }}>{reviewSaving ? allText.publicationTags.saving : allText.publicationTags.reviewComplete}</button>}
+
+    <KnowledgeRevisionChat preferredTurnId={preferredTurnId} key={`${taskId}:${version.revision}:${chatEpoch}`} reviewContainerRef={revisionReviewTarget} versions={projection.versions} taskId={taskId} version={version} publishedRevision={projection.pointers.publishedRevision ?? undefined} onSelectPublished={projection.versions.some(item => item.revision === projection.pointers.publishedRevision) ? () => { if (projection.pointers.publishedRevision) selectVersion(projection.pointers.publishedRevision); } : undefined} disabled={bodyDirty || noteDirty || Boolean(busy && busy !== "chat")} onStateChange={chatStateChange} onApplied={async revision => { dirtyRef.current = false; setAppliedTransition({ revision, cause: "version_restore" }); setChatDirty(false); setBusy(undefined); await load(revision); }} />
     <section className="knowledge-review-notes" aria-label={text.reviewNotes}>
       <h4>{text.reviewNotes}</h4><p>{text.reviewNotesHint}</p>
       {reviewNotes.length ? <ol>{reviewNotes.map(note => <li key={note.id}><time dateTime={note.createdAt}>{note.createdAt}</time><p>{note.body}</p></li>)}</ol> : null}

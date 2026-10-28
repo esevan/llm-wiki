@@ -76,3 +76,8 @@ describe('Task contract routing', () => {
     expect(taskOperation('DELETE', '/tasks/t1/completions', {}, 'en')).toBeUndefined();
   });
 });
+
+it('binds publication choices and exact review decisions to the URL Task', () => {
+  expect(taskOperation('POST','/tasks/original/knowledge/publication-choice',{taskId:'forged',wontPublish:true,expectedTaskRevision:3,expectedChoiceRevision:0},'ko')).toEqual({name:'task-knowledge.publication-choice',input:{taskId:'original',wontPublish:true,expectedTaskRevision:3,expectedChoiceRevision:0,locale:'ko'}});
+  expect(taskOperation('POST','/tasks/original/knowledge/review-complete',{taskId:'forged',revision:2,expectedContentHash:'hash'},'en')).toEqual({name:'task-knowledge.review-complete',input:{taskId:'original',revision:2,expectedContentHash:'hash',locale:'en'}});
+});

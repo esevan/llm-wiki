@@ -122,6 +122,9 @@ export async function runProviderSettingsScenario(harness: GlobalScenarioHarness
   const timeout = required<HTMLInputElement>('[data-control="provider-timeout"]', 'AI request timeout');
   harness.coverage.interact('provider-timeout', () => harness.enter(timeout, '240'));
   harness.coverage.assertEffect('provider-timeout', () => timeout.value === '240');
+  const contextSize=required<HTMLInputElement>('[data-control="provider-context-size"]','Context Size');
+  harness.coverage.interact('provider-context-size',()=>harness.enter(contextSize,'64'));
+  harness.coverage.assertEffect('provider-context-size',()=>contextSize.value==='64');
   const workerCount = required<HTMLInputElement>('[data-control="provider-worker-count"]', 'background worker count');
   harness.coverage.interact('provider-worker-count', () => harness.enter(workerCount, '3'));
   harness.coverage.assertEffect('provider-worker-count', () => workerCount.value === '3');

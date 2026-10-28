@@ -83,3 +83,64 @@ describe('Compass shared Task modal navigation', () => {
     expect(request.mock.calls.some(([input]) => input.path.includes('/knowledge'))).toBe(false);
   });
 });
+
+describe('Compass publication choices', () => {
+  const status = { published: false, proposal: 'none', wontPublish: false, choiceRevision: 0 };
+  const task = { kind: 'task', id: 'demo', title: 'Representative demo', state: 'completed', taskRevision: 4, completedAt: '2026-10-28' };
+  const setupChoices = () => {
+    let saved = { ...status };
+    const request = vi.fn(async ({ path, body }: { path: string; body?: string }) => {
+      if (path === '/workbench') return reply({ categories: [{ items: [{ ...task, knowledgePublication: saved }] }] });
+      if (path.endsWith('/publication-choice')) { const input = JSON.parse(body ?? '{}'); saved = { ...saved, wontPublish: input.wontPublish, choiceRevision: saved.choiceRevision + 1 }; return reply(saved); }
+      return reply({});
+    });
+    window.llmWikiApplication = { request: request as never };
+    HTMLDialogElement.prototype.showModal = function () { this.setAttribute('open', ''); };
+    render(<CompassView active />);
+    fireEvent.click(screen.getByRole('button', { name: 'Completed tasks' }));
+    return request;
+  };
+  it('keeps published facts alongside pending revisions and supplies defaults for existing rows', async () => {
+    window.llmWikiApplication = { request: vi.fn().mockResolvedValue(reply({ categories: [{ items: [
+      { ...task, id: 'old' },
+      { ...task, id: 'published', knowledgePublication: { ...status, published: true, proposal: 'awaiting_review' } },
+      { ...task, id: 'running', knowledgePublication: { ...status, proposal: 'generating' } },
+    ] }] })) };
+    render(<CompassView active />); fireEvent.click(screen.getByRole('button', { name: 'Completed tasks' }));
+    await screen.findByText('Published');
+    expect(screen.getAllByText('Publication proposal')).toHaveLength(2);
+    expect(screen.getByText('Awaiting your review')).toBeInTheDocument();
+    expect(screen.getByText('AI generating or revising')).toBeInTheDocument();
+    expect(screen.getAllByText('Unpublished')).toHaveLength(1);
+    expect(document.querySelectorAll('[data-control=compass-publication-optout]')).toHaveLength(1);
+  });
+  it('requires confirmation, preserves cancel and Escape, stores once on doubleclick, and reverses', async () => {
+    const request=setupChoices();
+    const choose = await screen.findByRole('button', { name: 'Won’t publish…' });
+    fireEvent.click(choose); expect(screen.getByRole('dialog')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(request.mock.calls.filter(([arg])=>arg.path.endsWith('/publication-choice'))).toHaveLength(0);
+    fireEvent.click(choose); fireEvent(screen.getByRole('dialog'), new Event('cancel', { cancelable: true }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    fireEvent.click(choose);
+    const confirm=screen.getByRole('button', { name: 'Won’t publish' });
+    fireEvent.click(confirm); fireEvent.click(confirm);
+    await screen.findByRole('button', { name: 'Undo' });
+    expect(request.mock.calls.filter(([arg])=>arg.path.endsWith('/publication-choice'))).toHaveLength(1);
+    expect(screen.queryByRole('dialog')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' }));
+    await screen.findByRole('button', { name: 'Won’t publish…' });
+    const calls=request.mock.calls.filter(([arg])=>arg.path.endsWith('/publication-choice'));
+    expect(JSON.parse(calls[0][0].body!)).toMatchObject({ expectedTaskRevision:4, expectedChoiceRevision:0, wontPublish:true });
+    expect(JSON.parse(calls[1][0].body!)).toMatchObject({ expectedChoiceRevision:1, wontPublish:false });
+  });
+  it('keeps failed confirmation open and does not invent a saved opt-out', async () => {
+    const request=setupChoices();
+    fireEvent.click(await screen.findByRole('button', { name: 'Won’t publish…' }));
+    request.mockImplementationOnce(async ()=>reply({error:'offline'},false));
+    fireEvent.click(screen.getByRole('button', { name:'Won’t publish' }));
+    await screen.findByRole('alert');
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    expect(screen.queryByRole('button', {name:'Undo'})).toBeNull();
+  });
+});

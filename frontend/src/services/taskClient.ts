@@ -61,6 +61,10 @@ const request = async <T>(
 };
 
 export const taskClient = {
+  publicationChoice: (taskId: string, expectedTaskRevision: number, expectedChoiceRevision: number, wontPublish: boolean) =>
+    request<import("../types/taskWorkbench").KnowledgePublicationStatus>(`/tasks/${encodeURIComponent(taskId)}/knowledge/publication-choice`, "POST", { expectedTaskRevision, expectedChoiceRevision, wontPublish }),
+  completeKnowledgeReview: (taskId: string, revision: number, expectedContentHash: string) =>
+    request(`/tasks/${encodeURIComponent(taskId)}/knowledge/review-complete`, "POST", { revision, expectedContentHash }),
   knowledgeRevisionConversation: (taskId: string, revision: number) =>
     request<KnowledgeRevisionConversation>(`/tasks/${encodeURIComponent(taskId)}/knowledge/versions/${revision}/revision-chat`),
   knowledgeRevisionSend: (taskId: string, revision: number, expectedContentHash: string, message: string, operationId: string, previousTurnId?: string) =>

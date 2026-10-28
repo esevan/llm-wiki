@@ -142,7 +142,11 @@ pub(crate) async fn provider_json_with_images(
     images: &[Value],
     token: Option<&CancellationToken>,
 ) -> Result<Value, String> {
+    provider_json_with_images_tracked(settings_path,task_kind,prompt_id,context,images,token,None).await
+}
+pub(crate) async fn provider_json_with_images_tracked(settings_path:&Path,task_kind:&str,prompt_id:PromptId,context:Value,images:&[Value],token:Option<&CancellationToken>,tracking:Option<&super::foreground_jobs::Tracking>) -> Result<Value,String> {
     let (base_url, model, api_key) = settings::provider_credentials_for(settings_path, task_kind)?;
+    if let Some(tracking)=tracking {tracking.set_model(&model)?;}
     if model.trim().is_empty() {
         return Err("Configure a model in AI setup before using AI".into());
     }
@@ -157,6 +161,7 @@ pub(crate) async fn provider_json_with_images(
         .json(&crate::workflow_foundation::structured_output::request_body(
             prompt_id, &context, &model, provider_content(prompt, images),
         )?);
+    if let Some(tracking)=tracking {tracking.call_started()?;}
     let response = if let Some(token) = token {
         tokio::select! {
             _ = token.cancelled() => return Err("cancelled".into()),
@@ -166,6 +171,7 @@ pub(crate) async fn provider_json_with_images(
         request.send().await
     }
     .map_err(|error| error.to_string())?;
+    if let Some(tracking)=tracking {tracking.call_completed()?;}
     if !response.status().is_success() {
         return Err(if images.is_empty() { crate::workflow_foundation::structured_output::http_error(response.status()) } else { format!("image_input_rejected: attached images were sent, but the provider rejected the request ({}); check model image support and provider settings", response.status()) });
     }
@@ -267,6 +273,8 @@ pub(crate) async fn execute_with_registry(
         "task-review.history" => review_history(db_path, vault_root, input),
         "task-review.cancel" => review_cancel(db_path, required(input, "runId")?),
         "task-review.decision" => review_decision(db_path, input),
+        "task-knowledge.publication-choice" => crate::native::task_publication_status::choose(db_path, input),
+        "task-knowledge.review-complete" => crate::native::task_publication_status::review(db_path, input),
         "task-knowledge.draft" => knowledge_draft(db_path, settings_path, input).await,
         "task-knowledge.get" => {
             let mut projection=knowledge_get(db_path,input)?;

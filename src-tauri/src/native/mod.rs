@@ -1,4 +1,5 @@
 mod completion;
+pub(crate) mod task_publication_status;
 pub(crate) mod capture_distillation;
 pub(crate) mod conversation_context;
 pub(crate) mod database;
@@ -6,6 +7,7 @@ mod job_results;
 pub(crate) mod knowledge_distillation;
 mod knowledge_preparation;
 pub(crate) mod knowledge_revision_chat;
+pub(crate) mod foreground_jobs;
 pub mod jobs;
 pub(crate) mod lineage;
 pub(crate) mod localization;

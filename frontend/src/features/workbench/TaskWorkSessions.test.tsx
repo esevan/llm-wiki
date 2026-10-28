@@ -1077,7 +1077,7 @@ it("discloses semantic context summary to the user without claiming uncertain de
  execution.subscribe.mockResolvedValue({runs:[run],activeRunId:null,selectedRun:run});
  window.llmWikiApplication={request:vi.fn(async({path}:{path:string})=>path.endsWith("work-sessions")?response({sessions:[saved]}):response({session:saved,entries:[]})) as never};
  render(<TaskWorkSessions task={task}/>);
- expect(await screen.findByRole("note")).toHaveTextContent("Additional context budget exceeded");
+ expect(await screen.findByRole("note")).toHaveTextContent("Context Size exceeded");
  expect(screen.getByRole("note")).toHaveTextContent("not the full original text");
  expect(screen.getByRole("note")).toHaveTextContent("Delivery is uncertain");
  expect(screen.getByRole("note")).not.toHaveTextContent("Delivered with this Run");

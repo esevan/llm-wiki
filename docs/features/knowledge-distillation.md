@@ -54,3 +54,5 @@ or node pointers. The native transaction compares the complete stored topic agai
 before publishing Work Log or Journey updates. New supported topics may still be
 added inside the candidate boundary. A rejected change preserves prior graph and
 history, and draft preparation surfaces a failed Journey prerequisite.
+
+Revision requests appear in AI Queue with model, observed API calls, status and an original-screen link. A completed request means a proposal or clarification was prepared; it does not mean the private draft was applied or published. Queue cancellation only cancels an active request. Saved proposals, user input retention and explicit private apply/publication checks keep their existing owners.

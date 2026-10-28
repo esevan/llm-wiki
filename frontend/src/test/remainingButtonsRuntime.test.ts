@@ -197,7 +197,7 @@ describe('production manual, search, and provider controls', () => {
       <form id="search-form"><input id="query" value="wiki"><input id="semantic" type="checkbox"><button>Search</button></form><div id="results"></div>
       <div id="item-detail-notes"><button data-retry-knowledge="retry.md"></button></div>
       <form id="goal-form"><input id="goal-title" value="Ship audit"><button>Save goal</button></form><div id="dashboard"></div>
-      <form id="provider-form"><details></details><input id="provider-url" value="http://local"><input id="provider-model"><input id="provider-advanced-model"><input id="provider-timeout" type="number" min="1" max="3600" required><input id="provider-key" value="secret"><input data-advanced-task="review" type="checkbox"><button>Save</button></form>
+      <form id="provider-form"><details></details><input id="provider-url" value="http://local"><input id="provider-model"><input id="provider-advanced-model"><input id="provider-timeout" type="number" min="1" max="3600" required><input id="provider-context-size" type="number" min="1" max="32768" step="1" required><input id="provider-key" value="secret"><input data-advanced-task="review" type="checkbox"><button>Save</button></form>
       <button id="provider-test"></button><div id="provider-status"></div>
     `;
     const twenty = Array.from({ length: 20 }, (_, index) => ({ path: `p${index}.md`, title: `T${index}`, snippet: '' }));
@@ -227,10 +227,13 @@ describe('production manual, search, and provider controls', () => {
     expect(($('[data-control="provider-worker-count"]') as HTMLInputElement).value).toBe('2');
     expect(($('#provider-timeout') as HTMLInputElement).value).toBe('600');
     ($('#provider-timeout') as HTMLInputElement).value = '240';
+    expect(($('#provider-context-size') as HTMLInputElement).value).toBe('64');
+    ($('#provider-context-size') as HTMLInputElement).value='96';
     ($('#provider-form button') as HTMLButtonElement).click();
     await flush();
     const saveCall = api.mock.calls.find(([path, options]) => path === '/provider/config' && options?.method === 'PUT');
     expect(JSON.parse(saveCall![1]!.body!).request_timeout_seconds).toBe(240);
+    expect(JSON.parse(saveCall![1]!.body!).context_size_bytes).toBe(98304);
     $('#provider-test').click();
     await flush();
     expect(api).toHaveBeenCalledWith('/provider/config', expect.objectContaining({ method: 'PUT' }));

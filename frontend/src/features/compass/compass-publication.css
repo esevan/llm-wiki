@@ -1,0 +1,21 @@
+.completed-task-list.compass-completed-list { background: var(--color-bg-surface); border: var(--border-default); border-radius: var(--radius-card); padding: 0 var(--space-4); }
+.compass-completed-list li { padding: var(--space-3) 0; }
+.compass-completed-list .compass-task-open { padding: var(--space-2) 0; font-size: 15px; line-height: 1.6; }
+.compass-publication-crumbs { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding-bottom: var(--space-1); }
+.compass-publication-chip { display: inline-block; padding: 3px 9px; border: var(--border-default); border-radius: 6px; background: var(--color-bg-neutral); color: var(--color-text-secondary); font-size: 12px; line-height: 1.6; }
+.compass-publication-chip.is-published { background: var(--color-positive-surface); border-color: var(--color-border-positive); color: var(--color-status-success); }
+.compass-publication-chip.is-pending { background: var(--color-highlight); color: var(--color-status-warning); }
+.compass-publication-chip.is-optout { background: var(--color-bg-surface); border-style: dashed; }
+.compass-publication-detail { font-size: 12px; color: var(--color-text-secondary); }
+.compass-publication-crumbs .compass-publication-action { display: inline-flex; width: auto; min-height: 44px; align-items: center; padding: var(--space-2); background: transparent; border: 0; color: var(--color-text-secondary); font-size: 12px; text-decoration: underline; text-underline-offset: 3px; }
+.compass-publication-crumbs .compass-publication-action:hover { background: var(--color-bg-accent-subtle); }
+.compass-publication-confirm { box-sizing: border-box; width: min(400px, calc(100vw - 32px)); max-height: calc(100vh - 40px); overflow: auto; padding: var(--space-6); border: var(--border-default); border-radius: var(--radius-dialog); background: var(--color-bg-surface); color: var(--color-text-primary); box-shadow: var(--shadow-dialog); }
+.compass-publication-confirm::backdrop { background: var(--color-overlay-veil); }
+.compass-publication-confirm h2 { font-size: 21px; line-height: 1.5; margin: 0; }
+.compass-publication-confirm p { color: var(--color-text-secondary); line-height: 1.8; overflow-wrap: anywhere; }
+.compass-confirm-task { padding: var(--space-3); margin-bottom: var(--space-4); background: var(--color-bg-primary); border: var(--border-default); border-radius: var(--radius-control); overflow-wrap: anywhere; line-height: 1.6; }
+.compass-confirm-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-5); }
+.compass-confirm-actions button { flex: 1; min-height: 44px; padding: var(--space-2) var(--space-3); border: var(--border-default); border-radius: var(--radius-control); background: var(--color-bg-surface); color: var(--color-text-primary); font: inherit; }
+.compass-confirm-actions .primary { background: var(--color-accent-strong); border-color: var(--color-accent-strong); color: var(--color-bg-surface); font-weight: 700; }
+.compass-confirm-actions button:hover:not(:disabled) { filter: brightness(.96); }
+.compass-confirm-actions button:active:not(:disabled) { transform: translateY(1px); }

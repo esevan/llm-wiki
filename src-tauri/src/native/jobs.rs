@@ -17,7 +17,7 @@ use uuid::Uuid;
 pub struct JobRegistry(Arc<Mutex<HashMap<String, (String, CancellationToken)>>>);
 
 impl JobRegistry {
-    fn register(&self, job_id: &str) -> Result<(String, CancellationToken), String> {
+    pub(super) fn register(&self, job_id: &str) -> Result<(String, CancellationToken), String> {
         let token = CancellationToken::new();
         let generation = id();
         if let Some(previous) = self
@@ -31,7 +31,7 @@ impl JobRegistry {
         Ok((generation, token))
     }
 
-    fn finish(&self, job_id: &str, generation: &str) {
+    pub(super) fn finish(&self, job_id: &str, generation: &str) {
         if let Ok(mut active) = self.0.lock() {
             if active.get(job_id).is_some_and(|entry| entry.0 == generation) {
                 active.remove(job_id);
@@ -92,10 +92,15 @@ fn job_view(row: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {
         "execution_outcome":row.get::<_,String>(16)?,
         "application_disposition":row.get::<_,String>(17)?,
         "stage":row.get::<_,Option<String>>(18)?,
+        "observation_only":super::foreground_jobs::observed(&row.get::<_,String>(1)?),
+        "model":row.get::<_,Option<String>>(19)?,
+        "origin":row.get::<_,Option<String>>(20)?.and_then(|s|serde_json::from_str::<Value>(&s).ok()),
+        "calls_started":row.get::<_,Option<i64>>(21)?.unwrap_or(0),
+        "calls_completed":row.get::<_,Option<i64>>(22)?.unwrap_or(0),
     }))
 }
 
-const JOB_SELECT: &str = "SELECT id,task_kind,entity_type,entity_id,status,progress_completed,progress_total,result_interface,error_code,error_message,created_at,started_at,finished_at,prompt_id,prompt_version,source_revision,execution_outcome,application_disposition,json_extract(input_json,'$.knowledgeStage') FROM ai_jobs_v2";
+const JOB_SELECT: &str = "SELECT id,task_kind,entity_type,entity_id,status,progress_completed,progress_total,result_interface,error_code,error_message,created_at,started_at,finished_at,prompt_id,prompt_version,source_revision,execution_outcome,application_disposition,json_extract(input_json,'$.knowledgeStage'),json_extract(input_json,'$.model'),json_extract(input_json,'$.origin'),json_extract(input_json,'$.callsStarted'),json_extract(input_json,'$.callsCompleted') FROM ai_jobs_v2";
 
 pub fn list(db_path: &Path) -> Result<Value, String> {
     let connection = database::open(db_path)?;
@@ -188,8 +193,16 @@ pub fn update_notification(
 }
 
 pub fn cancel(db_path: &Path, registry: &JobRegistry, job_id: &str) -> Result<Value, String> {
-    let connection = database::open(db_path)?;
-    if connection.execute("UPDATE ai_jobs_v2 SET status='cancelled',execution_outcome='cancelled',application_disposition=CASE WHEN application_disposition='pending' THEN 'not_applicable' ELSE application_disposition END,finished_at=CURRENT_TIMESTAMP WHERE id=? AND status IN ('queued','running','retryable')", [job_id]).map_err(|e| e.to_string())? == 0 { return Err("AI job cannot be cancelled".into()); }
+    let mut connection = database::open(db_path)?;
+    let tx=database::immediate_transaction(&mut connection)?;
+    let turn:Option<String>=tx.query_row("SELECT json_extract(input_json,'$.origin.turnId') FROM ai_jobs_v2 WHERE id=? AND task_kind='knowledge_revision'",[job_id],|r|r.get(0)).optional().map_err(|e|e.to_string())?.flatten();
+    if let Some(turn)=&turn {
+        let running:bool=tx.query_row("SELECT state='running' FROM knowledge_revision_turns WHERE id=?",[turn],|r|r.get(0)).map_err(|e|e.to_string())?;
+        if !running {return Err("The revision request already finished. Open the original screen to review its result.".into());}
+    }
+    if tx.execute("UPDATE ai_jobs_v2 SET status='cancelled',execution_outcome='cancelled',application_disposition=CASE WHEN application_disposition='pending' THEN 'not_applicable' ELSE application_disposition END,finished_at=CURRENT_TIMESTAMP WHERE id=? AND status IN ('queued','running','retryable')", [job_id]).map_err(|e| e.to_string())? == 0 { return Err("AI job cannot be cancelled".into()); }
+    if let Some(turn)=turn {tx.execute("UPDATE knowledge_revision_turns SET state='cancelled' WHERE id=? AND state='running'",[turn]).map_err(|e|e.to_string())?;}
+    tx.commit().map_err(|e|e.to_string())?;
     registry.cancel(job_id);
     get(db_path, job_id)
 }
@@ -228,6 +241,7 @@ pub async fn enqueue(
             .ok_or_else(|| format!("{key} is required"))
     };
     let task_kind = required("taskKind")?;
+    if super::foreground_jobs::observed(&task_kind) {return Err("Foreground observations are created only by their owning request".into());}
     if task_kind == "conflict_review" {
         return Err("Conflict review uses the current Chat session; start it from Chat".into());
     }
@@ -380,6 +394,9 @@ pub fn retry(
         "SELECT prompt_id,prompt_version,task_kind,entity_id,source_revision,status FROM ai_jobs_v2 WHERE id=?", [job_id],
         |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?,row.get(5)?))
     ).optional().map_err(|error| error.to_string())?.ok_or("AI job not found")?;
+    if super::foreground_jobs::observed(&task_kind) {
+        return Err("This request is tracked only. Open its original screen to review or send a new request; previous calls may have been charged.".into());
+    }
     if !prompt.is_empty() {
         let id: PromptId = prompt.parse().map_err(|error: crate::workflow_foundation::ContractError| error.to_string())?;
         if prompt_definition(id).version != prompt_version {
@@ -560,6 +577,7 @@ pub(crate) fn recover_stored(
     registry: &JobRegistry,
     semantic: &crate::native::semantic::SemanticEngine,
 ) -> Result<usize, String> {
+    super::foreground_jobs::recover(db_path)?;
     let connection = database::open(db_path)?;
     connection.execute(
         "UPDATE ai_jobs_v2 SET status='queued',worker_id='',started_at=NULL

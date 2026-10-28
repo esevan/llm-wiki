@@ -608,3 +608,14 @@ describe("Knowledge review", () => {
     } finally { document.documentElement.lang = original; }
   });
 });
+
+it('records explicit review for the exact current saved draft without publishing', async () => {
+  const request=vi.fn(async ({path}: {path:string})=>response(path==='/jobs'?{jobs:[]}:projection()));
+  window.llmWikiApplication={request:request as never};
+  render(<KnowledgeReviewPanel taskId="task-1" completed onGenerate={vi.fn()} />);
+  fireEvent.click(await screen.findByRole('button',{name:'Mark draft reviewed'}));
+  await screen.findByText('Draft reviewed. It remains private until you publish.');
+  const call=request.mock.calls.find(([arg])=>arg.path.endsWith('/review-complete'));
+  expect(JSON.parse((call![0] as {body?:string}).body!)).toMatchObject({revision:2,expectedContentHash:'content-2'});
+  expect(request.mock.calls.some(([arg])=>arg.path.includes('/publish'))).toBe(false);
+});

@@ -10,7 +10,8 @@ import "./knowledge-revision-chat.css";
 interface ChatSession { input: string; pending?: Promise<unknown>; requestId?: string; error?: string; previousTurnId?: string }
 const appChatSessions = new WeakMap<object, Map<string, ChatSession>>();
 
-export function KnowledgeRevisionChat({ taskId, version, disabled, publishedRevision, onSelectPublished, onStateChange, onApplied, reviewContainer: suppliedReviewContainer, reviewContainerRef, versions }: {
+export function KnowledgeRevisionChat({ preferredTurnId, taskId, version, disabled, publishedRevision, onSelectPublished, onStateChange, onApplied, reviewContainer: suppliedReviewContainer, reviewContainerRef, versions }: {
+  preferredTurnId?: string;
   reviewContainer?: HTMLElement | null; reviewContainerRef?: RefObject<HTMLElement | null>; versions?: KnowledgeVersion[];
   taskId: string; version: KnowledgeVersion; disabled: boolean; publishedRevision?: number; onSelectPublished?: () => void;
   onStateChange: (dirty: boolean, pending: boolean) => void;
@@ -37,6 +38,7 @@ export function KnowledgeRevisionChat({ taskId, version, disabled, publishedRevi
   const [pending, setPending] = useState(Boolean(session.pending));
   const [deciding, setDeciding] = useState(false);
   const [reviewId, setReviewId] = useState<string>();
+  useEffect(()=>{setReviewId(preferredTurnId);},[preferredTurnId]);
   const requestSequence = useRef(0);
   const [loading, setLoading] = useState(true);
   const [requestId, setRequestId] = useState<string | undefined>(session.requestId);

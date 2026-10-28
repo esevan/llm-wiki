@@ -96,6 +96,7 @@ export function TaskDetail({
   sessions,
   queueKnowledgeDraft,
   queueImageSummary,
+  queueAIOrigin,
   openJourney,
   onPrepareKnowledgeArchive,
   onOrganizeKnowledgeArchive,
@@ -121,6 +122,7 @@ export function TaskDetail({
   sessions?: Map<string, DetailSession>;
   queueKnowledgeDraft?: KnowledgeDraft;
   queueImageSummary?: { entryId: string };
+  queueAIOrigin?: {sessionId?:string;revision?:number;turnId?:string;view?:string};
   openJourney?: boolean;
   onPrepareKnowledgeArchive?: (request: KnowledgeArchivePrepareRequest) => Promise<import("../../types/taskWorkbench").KnowledgeArchiveProposal>;
   onOrganizeKnowledgeArchive?: (request: KnowledgeArchiveOrganizeRequest) => Promise<import("../../types/taskWorkbench").KnowledgeArchiveProposal>;
@@ -170,7 +172,7 @@ export function TaskDetail({
   const [knowledgeReviewDirty, setKnowledgeReviewDirty] = useState(session?.knowledgeReviewDirty ?? false);
   const [tab, setTab] = useState<DetailTab>(session?.tab ?? "work");
   const [knowledgeReviewMounted, setKnowledgeReviewMounted] = useState(session?.tab === "review");
-  const [executionFocus, setExecutionFocus] = useState<{ sessionId: string; runId: string }>();
+  const [executionFocus, setExecutionFocus] = useState<{ sessionId: string; runId?: string }>();
   const [editing, setEditing] = useState(session?.editing ?? false);
   const workSessionDrafts = useRef(session?.workSessionDrafts ?? new Map<string, WorkSessionDraft>()).current;
   const [showCompletedChecklist, setShowCompletedChecklist] = useState(false);
@@ -434,6 +436,11 @@ export function TaskDetail({
       detailScrollLock = undefined;
     };
   }, []);
+  useEffect(()=>{
+    if(!queueAIOrigin||!loaded)return;
+    if(queueAIOrigin.sessionId){setExecutionFocus({sessionId:queueAIOrigin.sessionId});setTab("sessions");}
+    else {setTab("review");setKnowledgeReviewMounted(true);}
+  },[queueAIOrigin,loaded]);
   const focusedQueueResult = useRef<KnowledgeDraft | undefined>(undefined);
   useEffect(() => {
     if (!queueKnowledgeDraft || !loaded || tab !== "review"
@@ -1144,7 +1151,8 @@ export function TaskDetail({
         taskId={task.id}
         completed={task.state === "completed"}
         refreshKey={`${refreshKey ?? 0}:${queueKnowledgeDraft?.draftRevision ?? 0}`}
-        preferredRevision={queueKnowledgeDraft?.draftRevision}
+        preferredRevision={queueAIOrigin?.revision ?? queueKnowledgeDraft?.draftRevision}
+        preferredTurnId={queueAIOrigin?.turnId}
         onGenerate={createKnowledgeDraft}
         onDirtyChange={setKnowledgeReviewDirty}
         onPrepareArchive={onPrepareKnowledgeArchive}

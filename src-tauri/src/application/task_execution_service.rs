@@ -547,7 +547,7 @@ impl TaskExecutionApplicationService {
         tx.execute("UPDATE task_work_session_runs SET reasoning_effort=? WHERE id=?", params![input.get("resolvedEffort").and_then(Value::as_str).or(prepared.reasoning_effort.as_deref()),run_id]).map_err(|e|e.to_string())?;
         if let Some(context) = input.get("initialContext").filter(|value| !value.is_null()) {
             let text=context["text"].as_str().ok_or("context_summary_failed: missing context payload")?;
-            if text.len()>super::task_session_context::CONTEXT_BUDGET_BYTES {return Err("context_summary_failed: context exceeds contribution budget".into());}
+            if text.len()>32*1024*1024 || text.len()>context["metadata"]["budgetBytes"].as_u64().unwrap_or(super::task_session_context::CONTEXT_BUDGET_BYTES as u64) as usize {return Err("context_summary_failed: context exceeds Context Size".into());}
             tx.execute("UPDATE task_work_session_runs SET initial_context_json=? WHERE id=?",params![context.to_string(),run_id]).map_err(|e|e.to_string())?;
         }
         tx.commit().map_err(|e| e.to_string())?;

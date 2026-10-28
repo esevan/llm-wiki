@@ -187,3 +187,20 @@ it('opens Task Details for a completed Task journey Queue result', async () => {
     expect(open).toHaveBeenCalledWith('task-1');
   } finally { delete window.llmWikiOpenTaskJourney; }
 });
+
+
+it('observes multi-call foreground requests without offering retry or applying a proposal',async()=>{
+  renderShell();let release!:()=>void;const pending=new Promise<void>(resolve=>{release=resolve;});
+  const open=vi.fn();window.llmWikiOpenAIOrigin=open;
+  const origin={taskId:'task',sessionId:'session',view:'sessions'};
+  const api=vi.fn(async(path:string)=>{if(path==='/jobs')return {jobs:[{id:'summary',task_kind:'session_context_summary',status:'running',observation_only:true,model:'global-summary-model',calls_started:3,calls_completed:1,origin},{id:'revision',task_kind:'knowledge_revision',status:'failed',observation_only:true,model:'revision-model',calls_started:1,calls_completed:1,origin:{taskId:'task',revision:2,turnId:'turn'},error:{message:'Invalid candidate retained'}}]};if(path==='/jobs/summary/cancel')await pending;return {notifications:[],unread_count:0};});
+  startRuntime(api);await new Promise(resolve=>setTimeout(resolve,0));
+  expect(document.querySelector('[data-job-id="summary"]')).toHaveTextContent('global-summary-model');
+  expect(document.querySelector('[data-job-id="summary"]')).toHaveTextContent('1 / 3');
+  expect(document.querySelector('[data-job-action="retry"]')).toBeNull();expect(document.querySelector('[data-job-action="result"]')).toBeNull();
+  document.querySelector<HTMLButtonElement>('[data-job-id="revision"] [data-job-action="origin"]')!.click();
+  expect(open).toHaveBeenCalledWith({taskId:'task',revision:2,turnId:'turn'});
+  const cancel=document.querySelector<HTMLButtonElement>('[data-job-id="summary"] [data-job-action="cancel"]')!;cancel.click();cancel.click();
+  expect(api.mock.calls.filter(([path])=>path==='/jobs/summary/cancel')).toHaveLength(1);release();await pending;
+  expect(api.mock.calls.some(([path])=>path.includes('/apply'))).toBe(false);delete window.llmWikiOpenAIOrigin;
+});

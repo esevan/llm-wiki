@@ -12,6 +12,16 @@ describe('Chat connection scopes',()=>{
     document.documentElement.lang = 'en';
   });
 
+  it.each(['ko','en'])('labels Context Size honestly in %s with editable KiB bounds',async lang=>{
+    window.llmWikiApplication={request:vi.fn().mockResolvedValue({ok:true,json:async()=>({connections:[]})})};
+    document.documentElement.lang=lang;render(<SettingsView active/>);
+    const input=screen.getByLabelText('Context Size (KiB)') as HTMLInputElement;
+    expect(input).toHaveValue(64);expect(input).toHaveAttribute('step','1');expect(input).toHaveAttribute('min','1');expect(input).toHaveAttribute('max','32768');
+    fireEvent.change(input,{target:{value:'96'}});expect(input).toHaveValue(96);
+    expect(document.querySelector('#provider-context-size-help')).toHaveTextContent(lang==='ko'?'토큰 수가 아닙니다':'not tokens');
+    document.documentElement.lang='en';
+  });
+
   it('shows a localized required timeout with whole-second bounds', async () => {
     window.llmWikiApplication = { request: vi.fn().mockResolvedValue({ ok: true, json: async () => ({ connections: [] }) }) };
     document.documentElement.lang = 'ko';

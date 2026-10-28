@@ -5,7 +5,7 @@ use sha2::{Digest, Sha256};
 use serde_json::{json, Map, Value};
 use std::collections::BTreeMap;
 
-pub const CURRENT_SCHEMA_VERSION: i64 = 27;
+pub const CURRENT_SCHEMA_VERSION: i64 = 28;
 
 type MigrationFunction = for<'connection> fn(&Transaction<'connection>) -> Result<(), String>;
 type LegacyLocalizationRow = (String, String, String, String, String, String, String);
@@ -120,7 +120,16 @@ const MIGRATIONS: &[Migration] = &[
     Migration { version:25, name:"add evidence-bound Knowledge revision chat", run:add_knowledge_revision_chat },
     Migration { version:26, name:"add session reasoning and follow-up queues", run:add_session_queue },
     Migration { version:27, name:"record first actual Run Task context", run:add_session_initial_context },
+    Migration { version:28, name:"add explicit Knowledge publication choices", run:add_knowledge_publication_choices },
 ];
+
+fn add_knowledge_publication_choices(tx: &Transaction<'_>) -> Result<(), String> {
+    tx.execute_batch("CREATE TABLE task_publication_choices (
+      task_id TEXT PRIMARY KEY REFERENCES tasks(id), wont_publish INTEGER NOT NULL DEFAULT 0 CHECK(wont_publish IN (0,1)),
+      choice_revision INTEGER NOT NULL DEFAULT 0, reviewed_revision INTEGER, reviewed_content_hash TEXT,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );").map_err(|e|e.to_string())
+}
 
 fn add_session_initial_context(tx: &Transaction<'_>) -> Result<(), String> {
     tx.execute_batch("ALTER TABLE task_work_session_runs ADD COLUMN initial_context_json TEXT;").map_err(|e|e.to_string())
@@ -2420,7 +2429,7 @@ mod initial_context_upgrade_tests {
         c.execute_batch("INSERT INTO task_work_session_entries(id,session_id,author,kind,body,created_at) VALUES('entry','session','user','note','Exact request','before'); INSERT INTO task_work_log_entries(id,task_id,body,created_at) VALUES('log','task','Exact original bytes','before'); INSERT INTO task_work_session_runs(id,task_id,session_id,submission_key,payload_hash,instruction,user_entry_id,work_log_entry_id,model,workspace_path,context_hash,status,final_report,created_at,updated_at) VALUES('run','task','session','operation','hash','Exact request','entry','log','model','/project','context','succeeded','Exact stored report','before','before');").unwrap();
         apply(&mut c).unwrap();
         apply(&mut c).unwrap();
-        assert_eq!(schema_version(&c).unwrap(), 27);
+        assert_eq!(schema_version(&c).unwrap(), CURRENT_SCHEMA_VERSION);
         assert_eq!(
             c.query_row(
                 "SELECT final_report FROM task_work_session_runs WHERE id='run'",
@@ -2467,5 +2476,23 @@ mod initial_context_upgrade_tests {
             .unwrap();
         assert!(apply(&mut failed).is_err());
         assert_eq!(schema_version(&failed).unwrap(), 26);
+    }
+}
+
+#[cfg(test)]
+mod publication_choices_upgrade_tests {
+    use super::*;
+    #[test]
+    fn publication_choices_upgrade_preserves_existing_tasks_without_optout() {
+        let mut c=Connection::open_in_memory().unwrap();
+        apply_plan(&mut c,&MIGRATIONS[..27],27).unwrap();
+        c.execute_batch("INSERT INTO tasks(id,current_revision,state,created_at,last_user_activity_at) VALUES('original',1,'completed','before','before');").unwrap();
+        apply(&mut c).unwrap();apply(&mut c).unwrap();
+        assert_eq!(c.query_row("SELECT state FROM tasks WHERE id='original'",[],|r|r.get::<_,String>(0)).unwrap(),"completed");
+        assert_eq!(c.query_row("SELECT count(*) FROM task_publication_choices",[],|r|r.get::<_,i64>(0)).unwrap(),0);
+        let mut failed=Connection::open_in_memory().unwrap();
+        apply_plan(&mut failed,&MIGRATIONS[..27],27).unwrap();
+        failed.execute_batch("CREATE TABLE task_publication_choices(conflicting TEXT);").unwrap();
+        assert!(apply(&mut failed).is_err());assert_eq!(schema_version(&failed).unwrap(),27);
     }
 }

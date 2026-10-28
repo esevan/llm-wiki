@@ -726,5 +726,15 @@
   "ai_setup.models_group": "Model routing",
   "ai_setup.credential_group": "Credential",
   "queue.task.refinement_preview": "Refinement preview",
-  "queue.description.refinement_preview": "Prepares a reviewable preview in the background while chat remains available."
+  "queue.description.refinement_preview": "Prepares a reviewable preview in the background while chat remains available.",
+  "ai_setup.context_size_help": "Additional stored Task and Work Log context before a Session Run. 1 KiB = 1024 UTF-8 bytes, not tokens. Default 64 KiB (65,536 bytes); range 1–32,768 KiB. Larger values may exceed provider limits. Your current request and selected Codex model are unchanged. Saved changes apply to new preparations without restart.",
+  "queue.task.session_context_summary": "Session context summary",
+  "queue.task.knowledge_revision": "Knowledge revision request",
+  "queue.open_origin": "Open original screen →",
+  "queue.observed_note": "Tracked foreground request. Calls already started may incur cost. Retry from the original screen after reviewing the outcome.",
+  "queue.calls": "API calls completed / started",
+  "queue.model": "Model",
+  "queue.description.session_context_summary": "Summarizes stored Task and Work Log context before execution. The selected Codex model still performs the work.",
+  "queue.description.knowledge_revision": "Prepares a revision proposal. Applying a private draft and publishing remain separate decisions on the original screen.",
+  "queue.origin_unavailable": "Original screen is not available yet. Try again."
 }

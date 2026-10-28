@@ -109,6 +109,8 @@ export function taskOperation(
       if (p[2] === "knowledge" && method === "GET")
         return op("task-knowledge.get", ids);
     }
+    if (p.length === 4 && p[2] === "knowledge" && ["publication-choice", "review-complete"].includes(p[3]) && method === "POST")
+      return op(`task-knowledge.${p[3]}`, ids);
     if (p.length === 6 && p[2] === "knowledge" && p[3] === "versions" && p[5] === "revision-chat" && (method === "GET" || method === "POST"))
       return op(method === "GET" ? "task-knowledge.revision-get" : "task-knowledge.revision-send", { ...ids, baseRevision: Number(p[4]) });
     if (p.length === 6 && p[2] === "knowledge" && p[3] === "revision-chat" && method === "POST" && ["apply", "cancel"].includes(p[5]))

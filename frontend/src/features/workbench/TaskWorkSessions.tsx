@@ -41,8 +41,8 @@ const models = [
 ] as const;
 const copy = {
   en: {
-    contextCalls:"summary calls", contextPreparing:"Summarizing all stored Task and Work Log text using the existing AI setup model. Additional model calls may take time and incur cost; work has not started. A separate application budget limits added context; your request is not shortened. Retrying cancelled or failed preparation may repeat paid summary calls.", contextCancel:"Cancel context preparation", contextSources: "sources", contextBytes: "bytes", contextCaptured: "Snapshot",
-    contextSummarized: "Additional context budget exceeded: Task and stored Work Log text were semantically summarized by the AI setup model. This is not the full original text.", contextFull: "Task and stored Work Log text included in full.", contextPending: "Waiting for provider acceptance", contextAccepted: "Delivered with this Run", contextUncertain: "Delivery is uncertain; do not assume it was received",
+    contextSize:"Context Size", contextCalls:"summary calls", contextPreparing:"Summarizing all stored Task and Work Log text using the existing AI setup model. Additional model calls may take time and incur cost; work has not started. Context Size limits added stored context; your request is not shortened. Retrying cancelled or failed preparation may repeat paid summary calls.", contextCancel:"Cancel context preparation", contextSources: "sources", contextBytes: "bytes", contextCaptured: "Snapshot",
+    contextSummarized: "Context Size exceeded: Task and stored Work Log text were semantically summarized by the AI setup model. This is not the full original text.", contextFull: "Task and stored Work Log text included in full.", contextPending: "Waiting for provider acceptance", contextAccepted: "Delivered with this Run", contextUncertain: "Delivery is uncertain; do not assume it was received",
     title: "Work sessions",
     connectionTitle: "Codex connection", connectionHint: "Uses Codex on this computer. A different Codex home is configured in AI setup and requires restarting the app.", saveBeforePrepare: "Save changed settings before preparing or starting work.",
     environment: "Execution environment", reasoning: "Reasoning effort", inherit: "Inherit default · Codex settings", refreshModels: "Refresh supported models", modelChanged: "The previous reasoning level is unsupported for this model. Default inheritance is selected; review and save before preparing.", enqueue: "Add to pending requests", queueHint: "Pending requests do not steer current work. Closing Task detail keeps work and pending requests intact.", boundFolder: "This conversation is bound to its project folder. Create a new session to use another folder.",
@@ -148,8 +148,8 @@ const copy = {
     remove: "Remove attachment",
   },
   ko: {
-    contextCalls:"회 요약 호출", contextPreparing:"기존 AI 설정 모델로 Task와 작업로그의 모든 구간을 요약 중입니다. 추가 호출로 시간과 비용이 들 수 있으며 작업 실행 전입니다. 앱의 별도 예산은 추가 맥락에만 적용하며 사용자 요청은 줄이지 않습니다. 취소·실패 후 재시도하면 요약 호출 비용이 다시 발생할 수 있습니다.", contextCancel:"맥락 준비 취소", contextSources: "개 출처", contextBytes: "바이트", contextCaptured: "자료 시점",
-    contextSummarized: "추가 맥락 예산을 넘어 Task와 저장된 작업로그를 AI 설정 모델로 의미 요약했습니다. 원문 전체를 전달한 것이 아닙니다.", contextFull: "Task와 저장된 작업로그 텍스트 원문 전체를 포함했습니다.", contextPending: "제공자 수락 확인 전", contextAccepted: "이번 실행에 전달됨", contextUncertain: "전달 여부가 불확실합니다. 수신 완료로 간주하지 마세요",
+    contextSize:"Context Size", contextCalls:"회 요약 호출", contextPreparing:"기존 AI 설정 모델로 Task와 작업로그의 모든 구간을 요약 중입니다. 추가 호출로 시간과 비용이 들 수 있으며 작업 실행 전입니다. Context Size는 추가 맥락에만 적용하며 사용자 요청은 줄이지 않습니다. 취소·실패 후 재시도하면 요약 호출 비용이 다시 발생할 수 있습니다.", contextCancel:"맥락 준비 취소", contextSources: "개 출처", contextBytes: "바이트", contextCaptured: "자료 시점",
+    contextSummarized: "Context Size를 넘어 Task와 저장된 작업로그를 AI 설정 모델로 의미 요약했습니다. 원문 전체를 전달한 것이 아닙니다.", contextFull: "Task와 저장된 작업로그 텍스트 원문 전체를 포함했습니다.", contextPending: "제공자 수락 확인 전", contextAccepted: "이번 실행에 전달됨", contextUncertain: "전달 여부가 불확실합니다. 수신 완료로 간주하지 마세요",
     title: "작업 세션",
     connectionTitle: "Codex 연결", connectionHint: "이 컴퓨터의 Codex를 사용합니다. 별도 Codex home은 AI 설정에서 변경하며 앱 재시작이 필요합니다.", saveBeforePrepare: "변경한 설정을 먼저 저장한 뒤 대화를 준비하거나 실행하세요.",
     environment: "실행 환경", reasoning: "추론 레벨", inherit: "기본값 상속 · Codex 설정 사용", refreshModels: "지원 모델 새로 확인", modelChanged: "이전 추론 레벨은 이 모델에서 지원하지 않습니다. 기본값 상속으로 전환했습니다. 확인 후 저장하고 대화를 준비하세요.", enqueue: "대기 요청에 추가", queueHint: "대기 요청은 현재 작업에 끼어들지 않습니다. Task를 닫아도 실행과 대기 목록은 유지됩니다.", boundFolder: "연결된 대화의 폴더입니다. 다른 폴더를 쓰려면 새 세션을 만드세요.",
@@ -310,7 +310,7 @@ export function TaskWorkSessions({
 }: {
   task: TaskAggregate;
   draftStore?: Map<string, WorkSessionDraft>;
-  focusExecution?: { sessionId: string; runId: string };
+  focusExecution?: { sessionId: string; runId?: string };
   onOpenWorkLog?: (entryId: string) => void;
   onWorkLogChanged?: () => void;
 }) {
@@ -1313,7 +1313,7 @@ export function TaskWorkSessions({
                   ) : (
                     <li className="task-session-run-turn" key={item.run.id}>
                       <article data-entry-author="user"><header><strong>{t.user}</strong><span>{t.status[item.run.status]}</span></header><p>{item.run.instruction}</p></article>
-                      {item.run.initialContext && <p role="note" className="task-execution-meta">{item.run.initialContext.mode === "summary" ? t.contextSummarized : t.contextFull} · {item.run.initialContext.delivery === "accepted" ? t.contextAccepted : item.run.initialContext.delivery === "not_dispatched" ? t.contextPending : t.contextUncertain} · {item.run.initialContext.summaryModel && <>{item.run.initialContext.summaryModel} · {item.run.initialContext.summaryCalls} {t.contextCalls} · </>}{item.run.initialContext.sourceCount} {t.contextSources} · {item.run.initialContext.sentBytes}/{item.run.initialContext.budgetBytes} {t.contextBytes} · {t.contextCaptured} {formatSystemTime(item.run.initialContext.capturedAt, document.documentElement.lang || navigator.language, {dateStyle:"short",timeStyle:"short"})}</p>}
+                      {item.run.initialContext && <p role="note" className="task-execution-meta">{item.run.initialContext.mode === "summary" ? t.contextSummarized : t.contextFull} · {item.run.initialContext.delivery === "accepted" ? t.contextAccepted : item.run.initialContext.delivery === "not_dispatched" ? t.contextPending : t.contextUncertain} · {item.run.initialContext.summaryModel && <>{item.run.initialContext.summaryModel} · {item.run.initialContext.summaryCalls} {t.contextCalls} · </>}{item.run.initialContext.sourceCount} {t.contextSources} · {t.contextSize} {item.run.initialContext.sentBytes}/{item.run.initialContext.budgetBytes} {t.contextBytes} · {t.contextCaptured} {formatSystemTime(item.run.initialContext.capturedAt, document.documentElement.lang || navigator.language, {dateStyle:"short",timeStyle:"short"})}</p>}
                       {item.run.evidence.map((evidence) => evidence.kind === "agentMessage"
                         ? (!item.run.finalReport && evidence.id === item.run.liveStatus?.itemId && Boolean(item.run.liveStatus.text)) || duplicatesFinalReport(evidence.summary, item.run.finalReport || (!["queued", "running", "awaiting_response"].includes(item.run.status) ? item.run.liveStatus?.text : undefined))
                           ? null
@@ -1422,7 +1422,7 @@ export function TaskWorkSessions({
                   >
                     {t.send}
                   </button>
-                  {task.state !== "completed" && <button className="primary" type="button" data-control="task-session-run" disabled={task.state === "on_hold" || runSubmitting || Boolean(retrySubmittingRunId) || !draft.trim() || !record.session.workspacePath.trim() || queueBusy || settingsDirty || !execution?.effectiveConfig?.ready} onClick={() => void run()}>{queueMode ? t.enqueue : t.run}</button>}
+                  {task.state !== "completed" && <button className="primary" type="button" data-control="task-session-run" disabled={task.state === "on_hold" || execution?.contextPreparing || runSubmitting || Boolean(retrySubmittingRunId) || !draft.trim() || !record.session.workspacePath.trim() || queueBusy || settingsDirty || !execution?.effectiveConfig?.ready} onClick={() => void run()}>{queueMode ? t.enqueue : t.run}</button>}
                 </footer>
                 </details>
                 {queueMode && <p className="task-execution-meta">{t.queueHint}</p>}

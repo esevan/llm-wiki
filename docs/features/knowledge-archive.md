@@ -58,3 +58,23 @@ MOC and note writes share the existing durable journal, recovery and index recei
 Topic selection is a conservative convenience, not semantic verification. Historic
 MOC links are not destructively removed when topics change. Vault-wide migration
 or a user-specific taxonomy review remains separate work.
+
+### Publication labels in Compass
+
+Compass → Completed tasks shows compact Knowledge labels: **Unpublished**,
+**Publication proposal**, and **Published**. Queued/running generation or revision
+requests and current unapplied revision proposals show the proposal label; failed,
+cancelled, superseded and applied requests do not count as pending proposals.
+A generated private draft stays pending until **Mark draft reviewed** records the
+exact saved revision and content hash, or that version is published. Viewing the
+Task alone does not mark a draft reviewed. Applying a revision proposal saves a
+reviewed private version; it does not publish it. A new unreviewed proposal can
+appear alongside **Published**, preserving the existing publication fact.
+
+For an unpublished Task without a pending proposal, **Won’t publish…** opens an
+explicit confirmation. Confirming adds a separate **Won’t publish** tag;
+**Undo** removes it. The choice survives restart and reopening the Task. No
+existing Task is automatically opted out. A later successful explicit publication
+clears the tag. Cancelling the dialog leaves the saved choice unchanged; stale
+or failed writes do not invent a saved choice. Task titles still open the
+original Task. Status refreshes while the completed list is open.

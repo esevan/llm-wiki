@@ -141,6 +141,9 @@ export function SettingsView({ active }: { active: boolean }) {
             <label htmlFor="provider-timeout" data-i18n="ai_setup.timeout_label">{t('timeout_label')}</label>
             <input id="provider-timeout" data-control="provider-timeout" type="number" min="1" max="3600" step="1" defaultValue="180" required aria-describedby="provider-timeout-help" />
             <p id="provider-timeout-help" className="meta" data-i18n="ai_setup.timeout_help">{t('timeout_help')}</p>
+            <label htmlFor="provider-context-size">Context Size (KiB)</label>
+            <input id="provider-context-size" data-control="provider-context-size" type="number" min="1" max="32768" step="1" defaultValue="64" required aria-describedby="provider-context-size-help" />
+            <p id="provider-context-size-help" className="meta" data-i18n="ai_setup.context_size_help">{t('context_size_help')}</p>
           </fieldset>
           <fieldset className="settings-group">
             <legend data-i18n="ai_setup.models_group">Model routing</legend>

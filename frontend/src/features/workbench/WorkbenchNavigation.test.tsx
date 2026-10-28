@@ -1,7 +1,11 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { WorkbenchView } from "./WorkbenchView";
-vi.mock("./TaskDetail", () => ({ TaskDetail: ({taskId,onClose}:{taskId:string;onClose:()=>void}) => <div data-testid="detail">{taskId}<button onClick={onClose}>Close test detail</button></div> }));
+const leaveGate=vi.hoisted(()=>({blocked:false,pending:undefined as (()=>void)|undefined}));
+vi.mock("./TaskDetail",async()=>{const {useImperativeHandle}=await import('react');return {TaskDetail:({taskId,onClose,queueAIOrigin,ref}:{taskId:string;onClose:()=>void;queueAIOrigin?:unknown;ref:React.Ref<unknown>})=>{
+ useImperativeHandle(ref,()=>({requestLeave:(next:()=>void)=>{if(leaveGate.blocked)leaveGate.pending=next;else next();}}));
+ return <div data-testid="detail">{taskId}<span data-testid="origin">{JSON.stringify(queueAIOrigin)}</span><button onClick={onClose}>Close test detail</button></div>;
+}}});
 vi.mock("./RefinementPanel", () => ({ RefinementPanel: ({subjectId,kind,onClose}:{subjectId:string;kind:string;onClose:()=>void}) => <div data-testid="refinement">{kind}:{subjectId}<button onClick={onClose}>Close test refinement</button></div> }));
 const task=(id:string,state='task',extra={}) => ({kind:'task',id,title:id,state,taskRevision:1,...extra});
 const items=[task('active','in_progress'),task('ready'),task('refining-task'),task('held','on_hold'),task('returned','task',{executionBacklog:true}),{kind:'capture',id:'capture',text:'capture'},{kind:'capture',id:'inbox',text:'inbox'},{kind:'refinement',id:'legacy',problemId:'problem-id',problemRevision:2,title:'legacy',sourceKind:'legacy_problem'}];
@@ -61,4 +65,18 @@ describe('Workbench card navigation',()=>{
     expect(document.querySelector('[data-lane="tasks"]')).toHaveTextContent('returned'); expect(document.querySelector('[data-lane="refining"]')).not.toHaveTextContent('returned');
     const held=document.querySelector<HTMLDetailsElement>('.workbench-held')!; expect(held.open).toBe(false); expect(held).toHaveTextContent('On hold (1)'); expect(document.querySelector('[data-lane="tasks"]')).not.toHaveTextContent('held');
   });
+ it('opens a tracked origin without executing work and honors the existing unsaved guard',async()=>{
+  const request=setup();render(<WorkbenchView active/>);await screen.findByText('ready');
+  fireEvent.click(document.querySelector('article[data-entity-id="active"] .canonical-card-title')!);
+  leaveGate.blocked=true;
+  act(()=>window.llmWikiOpenAIOrigin?.({taskId:'ready',sessionId:'saved-session',view:'sessions'}));
+  expect(screen.getByTestId('detail')).toHaveTextContent('active');expect(leaveGate.pending).toBeTypeOf('function');
+  leaveGate.blocked=false;act(()=>leaveGate.pending?.());
+  expect(screen.getByTestId('detail')).toHaveTextContent('ready');expect(screen.getByTestId('origin')).toHaveTextContent('saved-session');
+  fireEvent.click(screen.getByRole('button',{name:'Close test detail'}));
+  fireEvent.click(document.querySelector('article[data-entity-id="ready"] .canonical-card-title')!);
+  expect(screen.getByTestId('origin')).toBeEmptyDOMElement();
+  expect(request.mock.calls.some(([arg])=>arg.method==='POST')).toBe(false);leaveGate.pending=undefined;
+ });
+
 });

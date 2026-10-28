@@ -40,6 +40,7 @@ struct Inner {
     queue_shutdown: AtomicBool,
     context_cancellations: StdMutex<HashMap<String, tokio_util::sync::CancellationToken>>,
     summary_settings: Option<std::path::PathBuf>,
+    summary_observer: Option<(std::path::PathBuf,super::jobs::JobRegistry)>,
     distillation_scheduler: Option<crate::native::NativeApplication>,
 }
 
@@ -108,6 +109,7 @@ impl TaskExecutionRuntime {
                 queue_shutdown: AtomicBool::new(false),
                 context_cancellations: StdMutex::new(HashMap::new()),
                 summary_settings: distillation_scheduler.as_ref().map(|a|a.settings_path()),
+                summary_observer: distillation_scheduler.as_ref().map(|a|(a.db_path.clone(),a.jobs.clone())),
                 distillation_scheduler,
             }),
         }
@@ -558,10 +560,12 @@ impl TaskExecutionRuntime {
         // Collect before create_run adds the current request's own Work Log.
         let task_id = required(input, "taskId")?;
         let session_id = required(input, "sessionId")?;
-        let mut context = match self.inner.service.initial_task_context(
+        let context_size = match &self.inner.summary_settings {Some(settings)=>super::settings::context_size_bytes(settings)?,None=>super::settings::DEFAULT_CONTEXT_SIZE_BYTES as usize};
+        let mut context = match self.inner.service.initial_task_context_with_size(
             task_id,
             session_id,
             required(input, "instruction")?,
+            context_size,
         ) {
             Ok(value) => value,
             Err(error) => {
@@ -571,7 +575,7 @@ impl TaskExecutionRuntime {
         };
         if let Some(value) = context.as_mut() {
             let final_budget =
-                match super::session_context_summary::Budget::additional_context(&prepared.model) {
+                match super::session_context_summary::Budget::with_context_size(&prepared.model, context_size) {
                     Ok(value) => value,
                     Err(error) => {
                         self.inner.service.pause_queue(session_id, &error)?;
@@ -585,7 +589,11 @@ impl TaskExecutionRuntime {
                 self.inner
                     .service
                     .validate_context_start(&effective_input, &prepared)?;
-                let token = tokio_util::sync::CancellationToken::new();
+                let tracking = if let Some((db,registry))=&self.inner.summary_observer {
+                    let model=self.inner.summary_settings.as_ref().and_then(|settings|super::settings::provider_credentials_for(settings,"run_report_distillation").ok()).map(|(_,model,_)|model).unwrap_or_default();
+                    Some(super::foreground_jobs::Tracking::start(db,registry,"session_context_summary",&model,json!({"taskId":task_id,"sessionId":session_id,"view":"sessions"}))?)
+                } else {None};
+                let token = tracking.as_ref().map(|t|t.token.clone()).unwrap_or_else(tokio_util::sync::CancellationToken::new);
                 self.inner
                     .context_cancellations
                     .lock()
@@ -602,7 +610,7 @@ impl TaskExecutionRuntime {
                 // A session-local gate still prevents duplicate preparation/dispatch.
                 drop(operation.take());
                 let mut result = if let Some(settings) = &self.inner.summary_settings {
-                    super::session_context_summary::using_settings(value, settings, &token).await
+                    super::session_context_summary::using_settings_tracked(value, settings, &token, tracking.as_ref()).await
                 } else {
                     Err("context_summary_failed: existing AI setup is unavailable; original work was not dispatched".into())
                 };
@@ -620,6 +628,7 @@ impl TaskExecutionRuntime {
                     result =
                         Err("context_summary_cancelled: original work was not dispatched".into());
                 }
+                if let Some(tracking)=&tracking { if let Err(error)=tracking.finish(result.as_ref().err().map(String::as_str)){result=Err(error);} }
                 self.inner
                     .context_cancellations
                     .lock()
@@ -2141,6 +2150,7 @@ mod tests {
                 ),
                 "summary",
             ),
+            ("full-40k", "c".repeat(40000), "full"),
             ("long-en", "Stored original reply".to_owned(), "full"),
             ("provider-limit", "Stored original reply".to_owned(), "full"),
             ("long-ko", "저장된 원문 답변".to_owned(), "full"),
@@ -2331,6 +2341,7 @@ mod tests {
             "rejected",
             "cancelled",
             "queue_cancelled",
+            "ai_queue_cancelled",
             "settings_changed",
             "task_changed",
             "failed",
@@ -2400,7 +2411,7 @@ mod tests {
                     {
                         server_release.notified().await;
                     }
-                    if matches!(outcome, "cancelled" | "queue_cancelled") {
+                    if matches!(outcome, "cancelled" | "queue_cancelled" | "ai_queue_cancelled") {
                         std::future::pending::<()>().await;
                     }
                     let summary = if outcome == "failed" {
@@ -2415,7 +2426,7 @@ mod tests {
             let settings = root.path().join("settings.json");
             crate::native::settings::save_provider(
                 &settings,
-                &json!({"base_url":base,"model":"synthetic-summary-model","api_key":"fixture"}),
+                &json!({"base_url":base,"model":"synthetic-summary-model","api_key":"fixture","context_size_bytes":8192}),
             )
             .unwrap();
             let service = TaskExecutionApplicationService::new(&db);
@@ -2423,6 +2434,8 @@ mod tests {
             std::sync::Arc::get_mut(&mut runtime.inner)
                 .unwrap()
                 .summary_settings = Some(settings);
+            let summary_registry=super::super::jobs::JobRegistry::default();
+            std::sync::Arc::get_mut(&mut runtime.inner).unwrap().summary_observer=Some((db.clone(),summary_registry.clone()));
             let prepared = runtime
                 .prepare(&json!({"taskId":task,"sessionId":session,"resolveReasoning":true}))
                 .await
@@ -2466,7 +2479,7 @@ mod tests {
                 tasks.execute("task.work-session.update",&json!({"operationId":"changed-settings","taskId":task,"sessionId":session,"title":"Work","provider":"codex","model":"gpt-6-sol","workspacePath":root.path()})).unwrap();
                 release.notify_one();
             }
-            if matches!(outcome, "cancelled" | "queue_cancelled") {
+            if matches!(outcome, "cancelled" | "queue_cancelled" | "ai_queue_cancelled") {
                 tokio::time::timeout(std::time::Duration::from_secs(3), async {
                     loop {
                         if !requests.lock().unwrap().is_empty() {
@@ -2501,7 +2514,11 @@ mod tests {
                 .await
                 .expect("read-only summaries must not block unrelated session preparation")
                 .unwrap();
-                if outcome == "queue_cancelled" {
+                if outcome == "ai_queue_cancelled" {
+                    let list=super::super::jobs::list(&db).unwrap();
+                    let observed=list["jobs"].as_array().unwrap().iter().find(|job|job["task_kind"]=="session_context_summary").unwrap();
+                    super::super::jobs::cancel(&db,&summary_registry,observed["id"].as_str().unwrap()).unwrap();
+                } else if outcome == "queue_cancelled" {
                     runtime
                         .queue_action(&json!({"action":"pause","taskId":task,"sessionId":session}))
                         .await
@@ -2589,7 +2606,7 @@ mod tests {
                 assert_eq!(std::fs::read_to_string(&log).unwrap().lines().count(), 1);
             } else {
                 assert!(result.unwrap_err().contains(
-                    if matches!(outcome, "cancelled" | "queue_cancelled") {
+                    if matches!(outcome, "cancelled" | "queue_cancelled" | "ai_queue_cancelled") {
                         "context_summary_cancelled"
                     } else if outcome == "settings_changed" {
                         "settings_revision_conflict"
@@ -2609,6 +2626,13 @@ mod tests {
                 .snapshot(&json!({"taskId":task,"sessionId":session}))
                 .unwrap();
             assert_eq!(after["contextPreparing"], false);
+            let list=super::super::jobs::list(&db).unwrap();
+            let observed=list["jobs"].as_array().unwrap().iter().find(|job|job["task_kind"]=="session_context_summary").unwrap();
+            assert_eq!(observed["model"],"synthetic-summary-model");
+            assert_eq!(observed["origin"]["sessionId"],session);
+            assert!(observed["calls_started"].as_i64().unwrap()>=1);
+            assert_ne!(observed["status"],"running");
+            if outcome=="ai_queue_cancelled" { assert_eq!(observed["status"],"cancelled"); }
             assert_eq!(after["queue"]["control"]["mode"], "paused");
             assert!(after["queue"]["items"]
                 .as_array()
