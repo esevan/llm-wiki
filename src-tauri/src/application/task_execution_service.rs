@@ -854,6 +854,7 @@ impl TaskExecutionApplicationService {
                 }
             }
             input.affected_semantic_ids = input.semantic_target_revisions.keys().cloned().collect();
+            input.existing_topic_states = serde_json::from_value(graph["topicStates"].clone()).map_err(|e|format!("invalid recorded topic states: {e}"))?;
             // The generation context must expose every eligible stable target.
             // Raw revision payloads are unnecessary for matching prepared nodes.
             if let Some(object) = graph.as_object_mut() {

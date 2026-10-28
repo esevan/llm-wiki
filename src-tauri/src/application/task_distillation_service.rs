@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
-pub const RULES_VERSION: &str = "task-distillation-rules-v2";
+pub const RULES_VERSION: &str = "task-distillation-rules-v3";
 pub const RESULT_SCHEMA_VERSION: &str = "task-distillation-result-v2";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -54,6 +54,8 @@ pub struct DistillationInput {
     pub sources: Vec<ExactSource>,
     #[serde(default)]
     pub affected_semantic_ids: Vec<String>,
+    #[serde(default)]
+    pub existing_topic_states: Vec<TopicState>,
     pub expected_projection_revision: i64,
     #[serde(default)]
     pub expected_journey_revision: i64,
@@ -328,6 +330,7 @@ pub fn build_run_input(
         missing_primary_reason: missing_reason.map(str::to_owned),
         sources,
         affected_semantic_ids: Vec::new(),
+        existing_topic_states: Vec::new(),
         expected_projection_revision,
         expected_journey_revision: 0,
         semantic_target_revisions: BTreeMap::new(),
@@ -375,11 +378,19 @@ fn exact_quote_is_bound(citation: &SourceCitation, source: &ExactSource) -> bool
         && source.excerpt.contains(citation.quote.trim())
 }
 
+/// Topic ownership includes both current and replacement endpoints. A topic
+/// without a current node has no node-scoped mutation authority.
+pub fn topic_in_scope(topic: &TopicState, affected: &[String]) -> bool {
+    topic.current_node_id.is_some() && topic.current_node_id.iter().chain(topic.replacement_node_id.iter()).all(|id| affected.contains(id))
+}
+
 pub fn validate_result(
     input: &DistillationInput,
     result: &DistillationResult,
 ) -> Result<(), String> {
-    if input.rules_version != RULES_VERSION {
+    // v3 adds optional topic snapshots; older durable jobs keep all native
+    // scope/CAS checks and remain safe to validate without that exemption.
+    if input.rules_version != RULES_VERSION && input.rules_version != "task-distillation-rules-v2" {
         return Err("repair_required: rules version is incompatible".into());
     }
     if source_set_hash(input.primary_source.as_ref(), &input.sources) != input.source_set_hash {
@@ -701,8 +712,16 @@ pub fn validate_result(
             ));
         }
     }
+    let mut topic_keys = BTreeSet::new();
     for topic in &result.topic_states {
-        let scoped = !input.affected_semantic_ids.is_empty() || input.repair_reason.as_deref().is_some_and(|reason| reason.starts_with("targeted source change:"));
+        if !topic_keys.insert(&topic.topic_key) { return Err("duplicate topic state key".into()); }
+        let scoped = !input.existing_topic_states.is_empty() || !input.affected_semantic_ids.is_empty() || input.repair_reason.as_deref().is_some_and(|reason| reason.starts_with("targeted source change:"));
+        // Exact captured read-only topics are context, not mutations. Mutable
+        // topics still need fresh citations; native publication rechecks rows.
+        if scoped && !topic_in_scope(topic, &input.affected_semantic_ids) && input.existing_topic_states.contains(topic) { continue; }
+        if scoped && input.existing_topic_states.iter().find(|prior| prior.topic_key == topic.topic_key).is_some_and(|prior| !topic_in_scope(prior, &input.affected_semantic_ids)) {
+            return Err("topic change reaches outside the affected semantic subgraph".into());
+        }
         if scoped && topic.current_node_id.iter().chain(topic.replacement_node_id.iter()).any(|id| !candidate_ids.contains(id.as_str()) && !input.affected_semantic_ids.contains(id)) {
             return Err("topic change reaches outside the affected semantic subgraph".into());
         }

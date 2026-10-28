@@ -981,7 +981,7 @@ fn finalize_run_distillation(
     if !owns { return Err("stale_job: report worker no longer owns publication".into()); }
     let journey_id = format!("journey-{:x}", Sha256::digest(format!("{job_id}:{}",manifest.source_set_hash).as_bytes()));
     let journey_input=json!({"distillationInput":journey_manifest,"validatedResult":candidate,"sourceRunJobId":job_id});
-    tx.execute("INSERT OR IGNORE INTO ai_jobs_v2(id,task_kind,entity_type,entity_id,status,input_json,idempotency_key,prompt_id,prompt_version,source_revision,execution_outcome,application_disposition) VALUES(?,'task_journey_increment','tasks',?,'queued',?,?, 'task_journey_increment',3,?,'pending','pending')",params![&journey_id,&manifest.owner.task_id,journey_input.to_string(),format!("task-journey-increment:{job_id}:{}",manifest.source_set_hash),&manifest.source_set_hash]).map_err(|error|error.to_string())?;
+    tx.execute("INSERT OR IGNORE INTO ai_jobs_v2(id,task_kind,entity_type,entity_id,status,input_json,idempotency_key,prompt_id,prompt_version,source_revision,execution_outcome,application_disposition) VALUES(?,'task_journey_increment','tasks',?,'queued',?,?, 'task_journey_increment',?,?,'pending','pending')",params![&journey_id,&manifest.owner.task_id,journey_input.to_string(),format!("task-journey-increment:{job_id}:{}",manifest.source_set_hash),prompt_definition(PromptId::TaskJourneyIncrement).version,&manifest.source_set_hash]).map_err(|error|error.to_string())?;
     // A retry of the same report resumes its own child; a new report request
     // never attaches to an older failed child with the same source hash.
     tx.execute("UPDATE ai_jobs_v2 SET status='queued',worker_id='',execution_outcome='pending',error_code='',error_message='' WHERE id=? AND status IN ('failed','cancelled')",[&journey_id]).map_err(|e|e.to_string())?;
@@ -1013,9 +1013,9 @@ fn apply_task_journey_increment(db_path:&Path,job_id:&str,input:&Value,
     tx.execute("UPDATE ai_jobs_v2 SET status='running',worker_id=?,attempt=CASE WHEN attempt=0 THEN 1 ELSE attempt END,started_at=COALESCE(started_at,CURRENT_TIMESTAMP) WHERE id=? AND status='queued'",params![generation,job_id]).map_err(|e|e.to_string())?;
     tx.commit().map_err(|e|e.to_string())?;
     let publication=if let Some(parent)=parent {
-        crate::native::task_distillation::publish_for_parent_worker(&mut connection,job_id,&manifest,&candidate,(PromptId::TaskJourneyIncrement,3),(generation,parent))?
+        crate::native::task_distillation::publish_for_parent_worker(&mut connection,job_id,&manifest,&candidate,(PromptId::TaskJourneyIncrement,prompt_definition(PromptId::TaskJourneyIncrement).version),(generation,parent))?
     } else {
-        crate::native::task_distillation::publish_for_worker(&mut connection,job_id,&manifest,&candidate,PromptId::TaskJourneyIncrement,3,generation)?
+        crate::native::task_distillation::publish_for_worker(&mut connection,job_id,&manifest,&candidate,PromptId::TaskJourneyIncrement,prompt_definition(PromptId::TaskJourneyIncrement).version,generation)?
     };
     connection.execute("UPDATE ai_jobs_v2 SET status='completed',execution_outcome='succeeded',result_json=?,progress_completed=1,finished_at=CURRENT_TIMESTAMP WHERE id=? AND status='running' AND worker_id=?",params![json!({"projection":publication,"distillation":candidate}).to_string(),job_id,generation]).map_err(|error|error.to_string())?;
     Ok(())

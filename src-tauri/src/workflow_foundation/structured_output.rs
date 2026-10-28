@@ -467,6 +467,7 @@ pub(crate) fn schema(id: PromptId, context: &Value) -> Result<Value, String> {
     }
     let targets = ids(context, "semanticTargetRevisions");
     if matches!(id, PromptId::WorkLogDistillation | PromptId::RunReportDistillation | PromptId::TaskJourneyIncrement) {
+        value["$defs"]["TopicState"]["properties"]["topicKey"]["description"] = json!("Return changed topics only. Existing topic keys are reserved by distillationInput.existingTopicStates. Change an existing key only when its non-null current node and all replacement endpoints are inside affectedSemanticIds; otherwise omit it unchanged. New topic keys must not collide with reserved keys.");
         let target_ids = &mut value["$defs"]["NodeChange"]["properties"]["targetIds"];
         if targets.is_empty() {
             target_ids["maxItems"] = json!(0);

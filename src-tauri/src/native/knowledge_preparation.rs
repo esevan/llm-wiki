@@ -224,7 +224,7 @@ mod tests {
             crate::application::task_execution_service::TaskExecutionApplicationService::new(db)
                 .distillation_job_input("run", "en")
                 .unwrap();
-        database::open(db).unwrap().execute("INSERT INTO ai_jobs_v2(id,task_kind,entity_type,entity_id,status,input_json,idempotency_key,prompt_id,prompt_version,source_revision) VALUES('refresh','run_report_distillation','task_work_session_runs','run','running',?,'refresh','run_report_distillation',5,?)",params![input.to_string(),input["sourceRevision"].as_str().unwrap()]).unwrap();
+        database::open(db).unwrap().execute("INSERT INTO ai_jobs_v2(id,task_kind,entity_type,entity_id,status,input_json,idempotency_key,prompt_id,prompt_version,source_revision) VALUES('refresh','run_report_distillation','task_work_session_runs','run','running',?,'refresh','run_report_distillation',?,?)",params![input.to_string(),crate::workflow_foundation::prompt_definition(crate::workflow_foundation::PromptId::RunReportDistillation).version,input["sourceRevision"].as_str().unwrap()]).unwrap();
         input
     }
 

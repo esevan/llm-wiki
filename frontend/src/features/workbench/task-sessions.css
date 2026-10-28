@@ -154,7 +154,7 @@
  .task-session-space .task-session-rail .task-session-toolbar-actions{display:flex;flex-wrap:wrap;margin-bottom:12px}
  .task-session-space .task-session-rail .task-session-toolbar-actions button{width:auto}
 }
-.task-session-space{width:100%;max-width:1248px;margin:24px auto}
+.task-session-space{width:100%;max-width:none;margin:24px auto}
 .task-session-space .task-session-layout{border-radius:var(--radius-dialog)}
 @container(max-width:760px){.task-session-space .task-session-layout{border-radius:var(--radius-panel)}}
 

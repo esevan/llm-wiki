@@ -45,3 +45,12 @@ proposals missing prepared bytes are rebuilt from their persisted candidate and
 snapshot before applying. Exact base/private-head checks still reject stale work.
 Request an updated proposal to carry the saved suggestion into a new request;
 the original proposal and unsent input remain available.
+
+Topic updates use the same bounded mutation scope as semantic nodes. Existing
+keys remain reserved, including topics without a current node and topics with
+historical replacement endpoints. Unchanged read-only topic metadata is preserved
+without writing a new topic revision; it cannot be used to change status, sources,
+or node pointers. The native transaction compares the complete stored topic again
+before publishing Work Log or Journey updates. New supported topics may still be
+added inside the candidate boundary. A rejected change preserves prior graph and
+history, and draft preparation surfaces a failed Journey prerequisite.

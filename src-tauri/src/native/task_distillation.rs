@@ -38,7 +38,12 @@ fn ensure_derived_task_available(connection: &Connection, task_id: &str) -> Resu
 
 /// Keep read-only context separate from the exact mutation allowlist.
 pub(crate) fn scope_generation_input(value: &mut Value, affected: &[String]) {
-    value["readOnlySemanticGraph"] = value["existingSemanticGraph"].clone();
+    let graph = value.get("readOnlySemanticGraph").unwrap_or(&value["existingSemanticGraph"]).clone();
+    value["readOnlySemanticGraph"] = graph.clone();
+    value["existingSemanticGraph"] = graph;
+    value["distillationInput"]["existingTopicStates"] = value["existingSemanticGraph"]["topicStates"].as_array().cloned().map(Value::Array).unwrap_or(json!([]));
+    let topics: Vec<crate::application::task_distillation_service::TopicState> = serde_json::from_value(value["distillationInput"]["existingTopicStates"].clone()).unwrap_or_default();
+    value["topicMutationScope"] = json!({"mutableTopicKeys":topics.iter().filter(|topic|crate::application::task_distillation_service::topic_in_scope(topic, affected)).map(|topic|&topic.topic_key).collect::<Vec<_>>(),"readOnlyTopicKeys":topics.iter().filter(|topic|!crate::application::task_distillation_service::topic_in_scope(topic, affected)).map(|topic|&topic.topic_key).collect::<Vec<_>>()});
     value["distillationInput"]["affectedSemanticIds"] = json!(affected);
     if let Some(targets) = value["distillationInput"]["semanticTargetRevisions"].as_object_mut() {
         targets.retain(|id, _| affected.contains(id));
@@ -195,7 +200,26 @@ fn check_expected_targets(
 }
 
 fn scoped_input(input: &DistillationInput) -> bool {
-    !input.affected_semantic_ids.is_empty() || input.repair_reason.as_deref().is_some_and(|reason| reason.starts_with("targeted source change:"))
+    !input.existing_topic_states.is_empty() || !input.affected_semantic_ids.is_empty() || input.repair_reason.as_deref().is_some_and(|reason| reason.starts_with("targeted source change:"))
+}
+
+fn unchanged_topics(tx: &Transaction<'_>, input: &DistillationInput, result: &DistillationResult) -> Result<BTreeSet<String>, String> {
+    let mut unchanged = BTreeSet::new();
+    for topic in &result.topic_states {
+        let prior: Option<crate::application::task_distillation_service::TopicState> = tx.query_row(
+            "SELECT status,current_node_id,replacement_node_id,sources_json FROM task_distillation_topics WHERE task_id=? AND topic_key=?",
+            params![&input.owner.task_id,&topic.topic_key], |r| Ok(crate::application::task_distillation_service::TopicState {
+                topic_key:topic.topic_key.clone(),status:r.get(0)?,current_node_id:r.get(1)?,replacement_node_id:r.get(2)?,sources:serde_json::from_str(&r.get::<_,String>(3)?).map_err(|e|rusqlite::Error::FromSqlConversionFailure(3,rusqlite::types::Type::Text,Box::new(e)))?,
+            }),
+        ).optional().map_err(|e|e.to_string())?;
+        if let Some(prior) = prior {
+            if prior == *topic { unchanged.insert(topic.topic_key.clone()); }
+            else if scoped_input(input) && !crate::application::task_distillation_service::topic_in_scope(&prior,&input.affected_semantic_ids) {
+                return Err("topic change reaches outside the affected semantic subgraph".into());
+            }
+        }
+    }
+    Ok(unchanged)
 }
 
 fn apply_semantics(
@@ -204,6 +228,7 @@ fn apply_semantics(
     result: &DistillationResult,
     projection_revision: i64,
 ) -> Result<(), String> {
+    let unchanged = unchanged_topics(tx, input, result)?;
     let task = &input.owner.task_id;
     let claims = result
         .claims
@@ -281,12 +306,7 @@ fn apply_semantics(
         tx.execute("INSERT INTO task_distillation_relationships(task_id,relationship_id,kind,from_node_id,to_node_id,reason,sources_json,active,projection_revision) VALUES(?,?,?,?,?,?,?,1,?) ON CONFLICT(task_id,relationship_id) DO UPDATE SET kind=excluded.kind,from_node_id=excluded.from_node_id,to_node_id=excluded.to_node_id,reason=excluded.reason,sources_json=excluded.sources_json,active=1,projection_revision=excluded.projection_revision",params![task,&relationship.id,&relationship.kind,&relationship.from,&relationship.to,&relationship.reason,serde_json::to_string(&relationship.sources).map_err(|e|e.to_string())?,projection_revision]).map_err(|error|error.to_string())?;
     }
     for topic in &result.topic_states {
-        if scoped_input(input) {
-            let prior: Option<(Option<String>,Option<String>)> = tx.query_row("SELECT current_node_id,replacement_node_id FROM task_distillation_topics WHERE task_id=? AND topic_key=?",params![task,&topic.topic_key],|r|Ok((r.get(0)?,r.get(1)?))).optional().map_err(|e|e.to_string())?;
-            if prior.is_some_and(|(current,replacement)| current.is_none() || current.iter().chain(replacement.iter()).any(|id| !input.affected_semantic_ids.contains(id))) {
-                return Err("topic change reaches outside the affected semantic subgraph".into());
-            }
-        }
+        if unchanged.contains(&topic.topic_key) { continue; }
         let prior:Option<String>=tx.query_row("SELECT current_node_id FROM task_distillation_topics WHERE task_id=? AND topic_key=?",params![task,&topic.topic_key],|row|row.get(0)).optional().map_err(|e|e.to_string())?.flatten();
         if let Some(prior) = prior.filter(|id| Some(id) != topic.current_node_id.as_ref()) {
             if !result.node_changes.iter().any(|change| {
@@ -492,6 +512,7 @@ fn publish_inner(
             return Err("completion finality disagrees with canonical Task completion".into());
         }
     }
+    unchanged_topics(&tx, input, result)?;
     let revision = current + 1;
     for change in &result.node_changes {
         check_expected_targets(
@@ -748,6 +769,24 @@ mod tests {
     }
 
     #[test]
+    fn topic_prompt_scope_retains_reserved_keys_and_null_or_historical_owners() {
+        let mut value=json!({"distillationInput":{"semanticTargetRevisions":{"allowed":1,"other":2}},"existingSemanticGraph":{"nodes":[{"id":"allowed"},{"id":"other"}],"relationships":[],"topicStates":[
+            {"topicKey":"mutable","status":"unresolved","currentNodeId":"allowed","replacementNodeId":null,"sources":[]},
+            {"topicKey":"read-only","status":"unresolved","currentNodeId":"other","replacementNodeId":null,"sources":[]},
+            {"topicKey":"empty","status":"unresolved","currentNodeId":null,"replacementNodeId":null,"sources":[]},
+            {"topicKey":"historical","status":"unresolved","currentNodeId":"allowed","replacementNodeId":"other","sources":[]}
+        ]}});
+        scope_generation_input(&mut value,&["allowed".into()]);
+        assert_eq!(value["topicMutationScope"]["mutableTopicKeys"],json!(["mutable"]));
+        assert_eq!(value["topicMutationScope"]["readOnlyTopicKeys"],json!(["read-only","empty","historical"]));
+        assert_eq!(value["existingSemanticGraph"]["topicStates"].as_array().unwrap().len(),1);
+        assert_eq!(value["distillationInput"]["existingTopicStates"].as_array().unwrap().len(),4);
+        scope_generation_input(&mut value,&[]);
+        assert!(value["existingSemanticGraph"]["topicStates"].as_array().unwrap().is_empty());
+        assert_eq!(value["distillationInput"]["existingTopicStates"].as_array().unwrap().len(),4);
+    }
+
+    #[test]
     fn completed_task_derived_publication_preserves_original_and_scope_guards() {
         let (_root,db,mut input,mut result)=fixture();
         let mut c=database::open(&db).unwrap();
@@ -776,6 +815,88 @@ mod tests {
         assert_eq!(c.query_row("SELECT revision FROM task_distillation_nodes WHERE node_id='node'",[],|r|r.get::<_,i64>(0)).unwrap(),2);
         c.execute("INSERT INTO deleted_entities(entity_type,entity_id) VALUES('tasks','task')",[]).unwrap();
         assert!(terminal_run_for_repair(&c,"task",Some("run")).is_err());
+    }
+
+    #[test]
+    fn scoped_report_and_journey_preserve_read_only_topic_echoes_without_writes() {
+        let (_root, db, mut input, mut result) = fixture();
+        let mut c = database::open(&db).unwrap();
+        let kept = TopicState { topic_key:"export".into(), status:"unresolved".into(), current_node_id:Some("node".into()), replacement_node_id:None, sources:result.claims[0].sources.clone() };
+        result.topic_states = vec![kept.clone()];
+        job(&c,&input,"initial"); publish(&mut c,"initial",&input,&result,PromptId::TaskJourneyIncrement,4).unwrap();
+        c.execute("INSERT INTO task_distillation_topics(task_id,topic_key,status,sources_json,projection_revision) VALUES('task','empty-topic','unresolved','[]',1)", []).unwrap();
+        c.execute("UPDATE tasks SET state='completed' WHERE id='task'",[]).unwrap();
+        c.execute("INSERT INTO task_completions(id,task_id,task_revision,evidence,report,operation_id,created_at) VALUES('completion','task',1,'Export recorded','Implemented export','complete',CURRENT_TIMESTAMP)",[]).unwrap();
+        let mut refresh=crate::application::task_execution_service::TaskExecutionApplicationService::new(&db).distillation_job_input("run","en").unwrap();
+        refresh["distillationInput"]["repairReason"]=json!("targeted source change: completion");
+        scope_generation_input(&mut refresh,&[]);
+        input=serde_json::from_value(refresh["distillationInput"].clone()).unwrap();
+        attach_recorded_completion(&input,&mut result);
+        assert_eq!(input.expected_journey_revision,1);
+        // A genuinely new node/topic can be added while an unrelated old topic
+        // is echoed verbatim. The null-owner topic is also read-only context.
+        let completion_claim=result.claims.last().unwrap().clone();
+        result.node_changes[0].candidate_id = "new-node".into();
+        result.node_changes[0].claim_ids=vec![completion_claim.id];
+        result.node_changes[0].sources=completion_claim.sources.clone();
+        result.topic_states.push(TopicState { topic_key:"new-topic".into(), current_node_id:Some("new-node".into()), sources:completion_claim.sources, ..kept.clone() });
+        result.topic_states.push(input.existing_topic_states.iter().find(|t|t.topic_key=="empty-topic").unwrap().clone());
+        canonicalize_semantic_ids(&input,&mut result).unwrap();
+        let added_node=result.node_changes[0].candidate_id.clone();
+        input.projection_kind = "work_log".into(); input.expected_projection_revision = 0;
+        job(&c,&input,"report"); publish(&mut c,"report",&input,&result,PromptId::RunReportDistillation,6).unwrap();
+        input.projection_kind = "task_journey".into(); input.expected_projection_revision = 1;
+        job(&c,&input,"increment"); publish(&mut c,"increment",&input,&result,PromptId::TaskJourneyIncrement,4).unwrap();
+        assert_eq!(c.query_row("SELECT projection_revision FROM task_distillation_topics WHERE task_id='task' AND topic_key='export'",[],|r|r.get::<_,i64>(0)).unwrap(),1);
+        assert_eq!(c.query_row("SELECT projection_revision FROM task_distillation_topics WHERE topic_key='empty-topic'",[],|r|r.get::<_,i64>(0)).unwrap(),1);
+        assert_eq!(c.query_row("SELECT count(*) FROM task_distillation_node_history",[],|r|r.get::<_,i64>(0)).unwrap(),0);
+        assert_eq!(c.query_row("SELECT count(*) FROM task_distillation_nodes WHERE node_id=?",[&added_node],|r|r.get::<_,i64>(0)).unwrap(),1);
+        assert_eq!(current(&c,"task_journey","task").unwrap().unwrap()["projectionRevision"],2);
+        // Exercise the downstream private-draft gate with no model/provider.
+        let tx=c.transaction().unwrap();
+        let snapshot=crate::native::knowledge_distillation::capture_snapshot_tx(&tx,"task",1,"en").unwrap();
+        let article=json!({"article":{"type":"concept","title":"Export notes","bodyMarkdown":"Recorded export completion","finalOutcomes":[],"applicability":{"summary":"Export notes","representativeQuestions":["What was recorded?"],"helpsWith":["Export notes"],"conditions":[],"exclusions":[],"sourceRefs":[]},"claimBindings":[],"assumptionBindings":[]},"ideas":[],"qualityFindings":[]});
+        let prepared=crate::native::knowledge_distillation::prepared(snapshot,serde_json::from_value(article).unwrap(),"enhanced","").unwrap();
+        crate::native::knowledge_distillation::append_generated_tx(&tx,&prepared).unwrap();tx.commit().unwrap();
+        let pointers:(i64,Option<i64>)=c.query_row("SELECT current_private_revision,published_revision FROM knowledge_pointers WHERE task_id='task'",[],|r|Ok((r.get(0)?,r.get(1)?))).unwrap();
+        assert_eq!(pointers,(1,None));
+    }
+
+    #[test]
+    fn mutable_topic_enrichment_still_requires_fresh_evidence_and_target_revision() {
+        let (_root, db, mut input, mut result) = fixture(); let mut c=database::open(&db).unwrap();
+        let topic=TopicState {topic_key:"export".into(),status:"unresolved".into(),current_node_id:Some("node".into()),replacement_node_id:None,sources:result.claims[0].sources.clone()};
+        result.topic_states=vec![topic.clone()]; job(&c,&input,"initial-topic");publish(&mut c,"initial-topic",&input,&result,PromptId::TaskJourneyIncrement,4).unwrap();
+        input.existing_topic_states=vec![topic];input.affected_semantic_ids=vec!["node".into()];input.semantic_target_revisions.insert("node".into(),1);input.expected_projection_revision=1;
+        result.node_changes[0].action="enrich".into();result.node_changes[0].target_ids=vec!["node".into()];result.node_changes[0].expected_target_revisions.insert("node".into(),1);
+        result.topic_states[0].sources[0].quote="export".into();
+        job(&c,&input,"mutable-topic");publish(&mut c,"mutable-topic",&input,&result,PromptId::TaskJourneyIncrement,4).unwrap();
+        assert!(c.query_row("SELECT sources_json FROM task_distillation_topics WHERE topic_key='export'",[],|r|r.get::<_,String>(0)).unwrap().contains("\"quote\":\"export\""));
+        assert_eq!(c.query_row("SELECT revision FROM task_distillation_nodes WHERE node_id='node'",[],|r|r.get::<_,i64>(0)).unwrap(),2);
+        // Mutable echoes do not get the read-only-context exemption.
+        let mut invalid=result.clone();invalid.claims.clear();invalid.node_changes.clear();invalid.work_log_view.sections.clear();invalid.topic_states[0].sources[0].quote="not recorded".into();
+        input.existing_topic_states=invalid.topic_states.clone();
+        assert!(validate_result(&input,&invalid).is_err());
+    }
+
+    #[test]
+    fn scoped_topic_mutations_and_forged_echoes_fail_atomically() {
+        let (_root, db, mut input, mut result) = fixture(); let mut c = database::open(&db).unwrap();
+        let prior = TopicState { topic_key:"kept".into(),status:"unresolved".into(),current_node_id:Some("node".into()),replacement_node_id:None,sources:result.claims[0].sources.clone() };
+        result.topic_states = vec![prior.clone()];
+        job(&c,&input,"first-topic"); publish(&mut c,"first-topic",&input,&result,PromptId::TaskJourneyIncrement,4).unwrap();
+        input.expected_projection_revision=1; input.repair_reason=Some("targeted source change: completion".into()); input.existing_topic_states=vec![prior.clone()];
+        result.node_changes[0].candidate_id="should-rollback".into();
+        let before = task_projection(&c,"task").unwrap();
+        for kind in ["status","pointer","source","forged"] {
+            result.topic_states=vec![prior.clone()]; input.existing_topic_states=vec![prior.clone()];
+            match kind { "status"=>result.topic_states[0].status="deferred".into(), "pointer"=>result.topic_states[0].current_node_id=Some("should-rollback".into()), _=>result.topic_states[0].sources.clear() }
+            if kind=="forged" { input.existing_topic_states=result.topic_states.clone(); }
+            let id=format!("outside-{kind}"); job(&c,&input,&id);
+            assert!(publish(&mut c,&id,&input,&result,PromptId::TaskJourneyIncrement,4).unwrap_err().contains("outside the affected"));
+            assert_eq!(task_projection(&c,"task").unwrap(),before);
+            assert_eq!(c.query_row("SELECT count(*) FROM task_distillation_nodes WHERE node_id='should-rollback'",[],|r|r.get::<_,i64>(0)).unwrap(),0);
+        }
     }
 
     #[test]
