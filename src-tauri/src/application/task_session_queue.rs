@@ -41,6 +41,7 @@ fn owned(c: &Connection, task: &str, session: &str) -> Result<(), String> {
 }
 fn eligible(c: &Connection, task: &str, session: &str) -> Result<(), String> {
     owned(c, task, session)?;
+    super::task_completion::ensure_execution_allowed(c,task)?;
     super::task_service::ensure_task_mutable(c, task)?;
     let held: bool = c
         .query_row(

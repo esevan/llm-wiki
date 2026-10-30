@@ -509,6 +509,8 @@ impl TaskApplicationService {
         if state != "in_progress" {
             return Err("transition_invalid: task must be in_progress before completion".into());
         }
+        let completion_stop:Option<String>=tx.query_row("SELECT operation_id FROM task_completion_stops WHERE task_id=? AND state='stopping'",[task],|r|r.get(0)).optional().map_err(|e|e.to_string())?;
+        if completion_stop.as_deref().is_some_and(|id|input["completionStopId"].as_str()!=Some(id)){return Err("completion_pending: use the reviewed completion request or cancel it first".into());}
         if Self::has_active_execution(tx, task)? { return Err("active_task_execution: finish or stop the active execution and cancel pending requests before completing this Task".into()); }
         crate::native::task_hierarchy::ensure_children_completed(tx, task)?;
         let id = task_repository::new_id();

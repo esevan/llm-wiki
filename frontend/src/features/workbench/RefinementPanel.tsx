@@ -1361,7 +1361,9 @@ export function RefinementPanel({
               {(!referenceWorkspace?.preview || taskDefinitionEditing) && (
                 <>
                   {" "}
-                  {taskDefinition && (taskDefinitionEditing || !proposals.length) ? taskDefinition : <header>
+                  {/* A mirrored legacy proposal can arrive before the canonical WorkPreview.
+                      Keep one Task form until that exact preview version is available. */}
+                  {taskDefinition ? taskDefinition : <header>
                     <h3>{text.previewTitle}</h3>
                     <small>{text.previewUnapplied}</small>
                   </header>}
@@ -1382,7 +1384,7 @@ export function RefinementPanel({
                   {!taskDefinition && !proposals.length && !previewBusy && (
                     <p className="region-empty">{text.previewEmpty}</p>
                   )}
-                  {(taskDefinitionEditing ? [] : proposals).map((proposal) => {
+                  {(taskDefinition ? [] : proposals).map((proposal) => {
                     const payload =
                       edits[proposal.id] ?? canonicalPayload(proposal);
                     const previewValues = meaningfulPayload(payload, proposal);

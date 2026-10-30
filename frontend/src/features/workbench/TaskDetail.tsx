@@ -1,3 +1,4 @@
+import { StopAndCompleteDialog } from "./StopAndCompleteDialog";
 import { taskMoveError } from "./taskMove";
 import { ItemActionsMenu } from "./ItemActionsMenu";
 import { taskTitleLength, validTaskTitle } from "../../services/taskTitle";
@@ -152,6 +153,8 @@ export function TaskDetail({
   const refinementRef = useRef<RefinementPanelHandle>(null);
   const refinementMessages = useRef(new Map<string, string>());
   const refinementImages = useRef(new Map<string, InputImage[]>());
+  const [stopCompletion, setStopCompletion] = useState(false);
+  useEffect(() => setStopCompletion(false), [taskId]);
   const [completionEvidence, setCompletionEvidence] = useState(session?.completionEvidence ?? "");
   const [relatedTaskId, setRelatedTaskId] = useState(session?.relatedTaskId ?? "");
   const [relatedTaskSearch, setRelatedTaskSearch] = useState(session?.relatedTaskSearch ?? "");
@@ -1113,6 +1116,7 @@ export function TaskDetail({
         </details>
       </section>
       </div>
+      {stopCompletion && <StopAndCompleteDialog taskId={task.id} revision={revision} title={task.title} evidence={completionEvidence} onClose={() => setStopCompletion(false)} onComplete={() => { setStopCompletion(false); void load(); onChanged(); }} />}
       <div id="task-tab-review" aria-labelledby="task-detail-tab-review" role="tabpanel" className="task-tab-panel" data-task-tab="review" hidden={tab !== "review"}>
       <section className="task-panel" hidden={Boolean(task.completion)}>
         <h3>{text.completion}</h3>
@@ -1137,7 +1141,11 @@ export function TaskDetail({
               }
               onClick={() =>
                 void update(() =>
-                  taskClient.complete(task.id, revision, completionEvidence),
+                  taskClient.complete(task.id, revision, completionEvidence).catch(cause => {
+                    if (String(cause).includes("active_task_execution") || String(cause).includes("completion_pending")) setStopCompletion(true);
+                    else throw cause;
+                    return task;
+                  }),
                 )
               }
             >

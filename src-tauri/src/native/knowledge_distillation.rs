@@ -47,6 +47,9 @@ pub struct FinalOutcome {
 #[serde(rename_all = "camelCase")]
 pub struct ClaimBinding {
     pub claim_id: String,
+    /// Exact prose carrying this claim; original statement/quotes stay immutable.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub body_locator: String,
     pub statement: String,
     pub epistemic_state: String,
     #[serde(default)]
@@ -73,11 +76,26 @@ pub struct Applicability {
     #[serde(default)]
     pub source_refs: Vec<SourceRef>,
 }
+fn image_disposition_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    serde_json::from_value(json!({"type":"string","enum":["preserve_visual","text_integrated","omit"]})).unwrap()
+}
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageDecision {
+    pub image_ref: String,
+    #[schemars(schema_with = "image_disposition_schema")]
+    pub disposition: String,
+    pub rationale: String,
+    #[serde(default)]
+    pub body_locator: String,
+}
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Article {
     #[serde(rename = "type")]
     pub article_type: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub image_decisions: Vec<ImageDecision>,
     pub title: String,
     #[serde(default)]
     pub final_outcomes: Vec<FinalOutcome>,
@@ -384,6 +402,29 @@ pub(crate) fn capture_snapshot_tx(
             reference.clone(),
         ));
     }
+    let mut session_images=tx.prepare("SELECT e.id,e.body,e.attachment_json FROM task_work_session_entries e JOIN task_work_sessions s ON s.id=e.session_id WHERE s.task_id=? AND e.attachment_json IS NOT NULL ORDER BY e.created_at,e.id").map_err(|e|e.to_string())?;
+    let attachments=session_images.query_map([task_id],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?))).map_err(|e|e.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|e|e.to_string())?;
+    for (entry,body,raw) in attachments {
+        if let Ok(mut image)=serde_json::from_str::<Value>(&raw) {
+            if image["mediaType"].as_str().is_some_and(|m|matches!(m,"image/png"|"image/jpeg"|"image/gif"|"image/webp")) {
+                image["id"]=json!(entry);
+                let content=json!({"body":body,"image":image});
+                manifest.push(full_source("task_session_entry",&entry,&hash_value(&content),"entry","reported",content));
+            }
+        }
+    }
+    let capture: Option<String> = tx.query_row("SELECT origin_capture_id FROM tasks WHERE id=?",[task_id],|r|r.get(0)).map_err(|e|e.to_string())?;
+    if let Some(capture)=capture {
+        let text:String=tx.query_row("SELECT text FROM captures WHERE id=?",[&capture],|r|r.get(0)).map_err(|e|e.to_string())?;
+        let mut stmt=tx.prepare("SELECT CAST(rowid AS TEXT),name,media_type,data FROM input_images WHERE capture_id=? ORDER BY rowid").map_err(|e|e.to_string())?;
+        let images=stmt.query_map([&capture],|r|Ok(json!({"id":r.get::<_,String>(0)?,"name":r.get::<_,String>(1)?,"mediaType":r.get::<_,String>(2)?,"data":r.get::<_,String>(3)?}))).map_err(|e|e.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|e|e.to_string())?;
+        if !images.is_empty() {manifest.push(full_source("capture",&capture,&hash_value(&json!([text,images])),"input","reported",json!({"text":text,"images":images})));}
+    }
+    for source in &mut manifest {
+        super::knowledge_images::annotate(&mut source["content"], "image");
+        source["contentHash"]=json!(hash_value(&source["content"]));
+    }
+    super::knowledge_images::inherit_retained(tx,task_id,&mut manifest)?;
     let mut hash_manifest = manifest.clone();
     let generation_snapshot_hash = canonical_hash(&mut hash_manifest);
     Ok(
@@ -419,10 +460,11 @@ pub(crate) fn generation_context(snapshot: &Value) -> Value {
         collect(&source["content"], source, String::new(), &mut entries);
     }
     context["citationCatalog"] = json!(entries);
+    context["imageCatalog"] = json!(super::knowledge_images::catalog(snapshot));
     context["generationRules"] = json!({
         "citationSelection": "Copy a citationCatalog sourceRef as a unit. Its quote is a decoded individual string, not JSON, adjacent fields, a paraphrase, or text borrowed from another manifest source. contentPointer is diagnostic only; preserve the sourceRef locator.",
-        "applicability": "Applicability explains source-bounded reuse, not new observed facts. Keep each phrase in bodyMarkdown. When supplying source-linked applicability metadata, a nonverbatim explanation must have an assumptionBinding with assumptionId starting applicability:, bodyLocator equal to that phrase, exact supporting sourceRefs also present in applicability.sourceRefs, and a body line Reuse interpretation: <phrase> (or 활용 해석: <phrase>). Preserve source conditions and limits. Actual claims about decisions, observations, verification, effectiveness or scope require claimBindings and retain their epistemic state; do not disguise factual assertions as interpretations. Flag unsupported additions, contradictions and overreach as blocking qualityFindings.",
-        "userAuthorship": "User-authored writing and user reports are primary sources. External citations are optional. Do not add missing-reference findings merely for absent citations. Keep AI interpretations distinct and unverified.",
+        "applicability": "Applicability explains source-bounded reuse, not new observed facts. Keep each phrase in bodyMarkdown. When supplying source-linked applicability metadata, a nonverbatim explanation must have an assumptionBinding with assumptionId starting applicability:, bodyLocator equal to that phrase, exact supporting sourceRefs also present in applicability.sourceRefs, with natural guidance in the body rather than a required visible provenance label. Preserve source conditions and limits. Actual claims about decisions, observations, verification, effectiveness or scope require claimBindings and retain their epistemic state; do not disguise factual assertions as interpretations. Flag unsupported additions, contradictions and overreach as blocking qualityFindings.",
+        "userAuthorship": "User-authored writing and user reports are primary sources. External citations are optional. Do not add missing-reference findings merely for absent citations. Express AI reuse interpretations as guidance, not observed outcomes; use attribution only where it changes meaning.",
         "finality": "Task completion records workflow state only. finalOutcomes may be empty even for a completed Task. Use reported source facts and preserve unresolved topics when no current adopted topic with an authoritative decided claim exists."
     });
     context
@@ -538,11 +580,8 @@ pub(crate) fn validate_result(snapshot: &Value, result: &GenerationResult) -> Re
         let quoted = applicability.source_refs.iter()
             .any(|source| normalize(&source.quote).contains(&normalize(supported_text)));
         if !quoted {
-            // An explanation of possible reuse is not a direct quotation or a
-            // verified factual claim. Keep its explicit assumption provenance
-            // and visible label; exact citation validation still runs below.
-            let labelled = ["Reuse interpretation: ", "활용 해석: "].iter()
-                .any(|prefix| article_body.contains(&normalize(&format!("{prefix}{supported_text}"))));
+            // Source provenance is enforced structurally; document prose need not
+            // expose internal epistemic labels to explain possible reuse.
             let bound = result.article.assumption_bindings.iter().any(|binding| {
                 binding.assumption_id.starts_with("applicability:")
                     && binding.body_locator == *supported_text
@@ -550,9 +589,9 @@ pub(crate) fn validate_result(snapshot: &Value, result: &GenerationResult) -> Re
                     && binding.source_refs.iter().all(|source| applicability.source_refs.iter()
                         .any(|reference| source_citation_key(reference) == source_citation_key(source)))
             });
-            if !labelled || !bound {
+            if !bound {
                 return Err(format!(
-                    "applicability_overreach: reuse interpretation requires a labelled, source-bound assumption: {supported_text}"
+                    "applicability_overreach: reuse interpretation requires a source-bound assumption: {supported_text}"
                 ));
             }
         }
@@ -663,7 +702,7 @@ pub(crate) fn validate_result(snapshot: &Value, result: &GenerationResult) -> Re
     }
     for binding in &result.article.claim_bindings {
         check_refs(&binding.source_refs, &format!("claim {}", binding.claim_id))?;
-        let statement = normalize(&binding.statement);
+        let statement = normalize(if binding.body_locator.trim().is_empty() { &binding.statement } else { &binding.body_locator });
         if statement.is_empty()
             || (!normalize(&result.article.body_markdown).contains(&statement)
                 && !result.article.final_outcomes.iter().any(|outcome| {
@@ -901,12 +940,47 @@ fn assess_candidate(snapshot: &Value, result: &GenerationResult) -> Result<(Stri
     }
 }
 
+/// A missing model assessment preserves the visual instead of silently discarding it.
+fn preserve_images(snapshot:&Value,result:&mut GenerationResult)->Result<(),String>{
+    let catalog=super::knowledge_images::catalog(snapshot);
+    let mut seen=BTreeSet::new();
+    for decision in &result.article.image_decisions {
+        if !seen.insert(decision.image_ref.clone()) || !catalog.iter().any(|image|image["imageRef"]==decision.image_ref) {
+            return Err("invalid_knowledge: image reference is unknown or duplicated".into());
+        }
+        if !matches!(decision.disposition.as_str(),"preserve_visual"|"text_integrated"|"omit") || decision.rationale.trim().is_empty() {
+            return Err("invalid_knowledge: image assessment requires a supported disposition and reason".into());
+        }
+        if decision.disposition=="text_integrated" && (decision.body_locator.trim().is_empty() || !result.article.body_markdown.contains(&decision.body_locator)) {
+            return Err("invalid_knowledge: integrated image text is absent from the document".into());
+        }
+    }
+    for image in catalog {
+        let reference=image["imageRef"].as_str().unwrap();
+        let assessment=result.article.image_decisions.iter().find(|d|d.image_ref==reference);
+        let retain=assessment.is_none_or(|d|d.disposition=="preserve_visual");
+        if retain && !result.article.body_markdown.contains(&format!("]({reference})")) {
+            let label=if snapshot["locale"]=="ko" {"원본 이미지"} else {"Source image"};
+            result.article.body_markdown.push_str(&format!("\n\n![{label}]({reference})"));
+        }
+        if assessment.is_none() {result.article.image_decisions.push(ImageDecision {image_ref:reference.into(),disposition:"preserve_visual".into(),rationale:"Retain the original visual when no explicit content assessment was supplied".into(),body_locator:String::new()});}
+    }
+    for token in result.article.body_markdown.split(super::knowledge_images::PREFIX).skip(1) {
+        let key=token.chars().take_while(|c| !c.is_whitespace() && !matches!(c, ')' | '>' | '"' | '\'' | '`')).collect::<String>();
+        let reference=format!("{}{key}",super::knowledge_images::PREFIX);
+        if !super::knowledge_images::valid_ref(&reference) || !seen_reference(snapshot,&reference) {return Err("invalid_knowledge: image link is outside the source snapshot".into());}
+    }
+    Ok(())
+}
+fn seen_reference(snapshot:&Value,reference:&str)->bool{super::knowledge_images::catalog(snapshot).iter().any(|i|i["imageRef"]==reference)}
+
 pub(crate) fn prepared(
     snapshot: Value,
     mut result: GenerationResult,
     model_status: &str,
     model_error: &str,
 ) -> Result<Value, String> {
+    preserve_images(&snapshot, &mut result)?;
     let title_missing = result.article.title.trim().is_empty();
     if title_missing {
         result.article.title = snapshot["task"]["title"].as_str().unwrap_or("Untitled draft").to_owned();
@@ -1228,7 +1302,7 @@ mod tests {
         let claim_statement = reference.quote.clone();
         GenerationResult {
             article: Article {
-                article_type: "concept".into(),
+                article_type: "concept".into(), image_decisions: vec![],
                 title: "Offline approval".into(),
                 final_outcomes: vec![],
                 body_markdown: format!("# Offline approval\n\n{claim_statement}"),
@@ -1242,6 +1316,7 @@ mod tests {
                 },
                 claim_bindings: vec![ClaimBinding {
                     claim_id: "claim".into(),
+                    body_locator: String::new(),
                     statement: claim_statement,
                     epistemic_state: "reported".into(),
                     source_refs: vec![reference],
@@ -1277,7 +1352,7 @@ mod tests {
         validate_result(&minimal_snapshot(), &result).unwrap();
         let mut unlabelled = result.clone();
         unlabelled.article.body_markdown = unlabelled.article.body_markdown.replace("Reuse interpretation: ", "");
-        assert!(validate_result(&minimal_snapshot(), &unlabelled).unwrap_err().contains("source-bound assumption"));
+        validate_result(&minimal_snapshot(), &unlabelled).unwrap();
         let mut unbound = result.clone();
         unbound.article.assumption_bindings.clear();
         assert!(validate_result(&minimal_snapshot(), &unbound).is_err());
@@ -1287,13 +1362,72 @@ mod tests {
     }
 
     #[test]
+    fn knowledge_images_keep_visuals_and_integrate_text_only_with_an_explicit_assessment() {
+        let mut snapshot=minimal_snapshot();
+        snapshot["sourceManifest"][0]["content"]=json!({"body":"Receipt recorded; approval remains required.","images":[{"id":"map","mediaType":"image/png","data":"cG5n"},{"id":"text","mediaType":"image/png","data":"dGV4dA=="}]});
+        super::super::knowledge_images::annotate(&mut snapshot["sourceManifest"][0]["content"],"run");
+        let images=super::super::knowledge_images::catalog(&snapshot);
+        let mut result=interpreted_article();
+        let prose="Receipt recorded; approval remains required.";
+        result.article.image_decisions.push(ImageDecision {image_ref:images[1]["imageRef"].as_str().unwrap().into(),disposition:"text_integrated".into(),rationale:"This image only supplies the text already integrated in the paragraph".into(),body_locator:prose.into()});
+        let prepared=prepared(snapshot.clone(),result,"enhanced","").unwrap();
+        assert_eq!(prepared["qualityState"],"valid");
+        let body=prepared["bodyMarkdown"].as_str().unwrap();
+        assert!(body.contains(images[0]["imageRef"].as_str().unwrap()));
+        assert!(!body.contains(images[1]["imageRef"].as_str().unwrap()));
+        assert_eq!(prepared["generationResult"]["article"]["imageDecisions"].as_array().unwrap().len(),2);
+        let mut bad:GenerationResult=serde_json::from_value(prepared["generationResult"].clone()).unwrap();
+        bad.article.image_decisions[0].image_ref=format!("{}{}",super::super::knowledge_images::PREFIX,"a".repeat(64));
+        assert!(super::prepared(snapshot.clone(),bad,"enhanced","").unwrap_err().contains("unknown"));
+        let mut bad:GenerationResult=serde_json::from_value(prepared["generationResult"].clone()).unwrap();
+        bad.article.image_decisions[0].body_locator="Invisible transcription".into();
+        assert!(super::prepared(snapshot.clone(),bad,"enhanced","").unwrap_err().contains("absent"));
+        let mut malformed:GenerationResult=serde_json::from_value(prepared["generationResult"].clone()).unwrap();
+        malformed.article.body_markdown.push_str(&format!("\n![broken]({}oops)",images[0]["imageRef"].as_str().unwrap()));
+        assert!(super::prepared(snapshot,malformed,"enhanced","").unwrap_err().contains("outside"));
+    }
+
+    #[test]
+    fn reusable_work_synthesis_preserves_unsent_state_and_rejects_fabricated_success() {
+        let quote = "The user grouped unsent reply drafts by customer in drafts/ for review; sending was proposed.";
+        let snapshot = json!({"basis":"recorded_only","journey":{"topicStates":[]},
+            "sourceManifest":[{"type":"work_log","id":"log","revision":"1",
+            "locator":"body","content":quote}]});
+        let reference = SourceRef { source_type:"work_log".into(), id:"log".into(),
+            revision:"1".into(), locator:"body".into(), quote:quote.into() };
+        let mut result = article(reference.clone());
+        let reuse = "Review customer replies grouped in drafts/ before sending";
+        result.article.body_markdown = format!("Customer reply drafts were grouped by customer in drafts/ for review. Sending remains proposed.\n\n{reuse}");
+        result.article.claim_bindings[0].statement = quote.into();
+        result.article.claim_bindings[0].body_locator = "Customer reply drafts were grouped by customer in drafts/ for review. Sending remains proposed.".into();
+        result.article.applicability.summary = reuse.into();
+        result.article.applicability.helps_with = vec![reuse.into()];
+        result.article.assumption_bindings = vec![AssumptionBinding {
+            assumption_id:"applicability:draft-review".into(), body_locator:reuse.into(),
+            source_refs:vec![reference.clone()] }];
+        validate_result(&snapshot, &result).unwrap();
+        assert!(result.article.final_outcomes.is_empty());
+        let mut missing_prose = result.clone();
+        missing_prose.article.claim_bindings[0].body_locator = "Not in the document".into();
+        assert!(validate_result(&snapshot, &missing_prose).unwrap_err().contains("missing_reference"));
+        // Legacy bindings without a locator still require the exact statement.
+        let mut legacy = result.clone();
+        legacy.article.claim_bindings[0].body_locator.clear();
+        assert!(validate_result(&snapshot, &legacy).unwrap_err().contains("missing_reference"));
+        // A fluent article cannot upgrade a proposed action through a binding.
+        result.article.claim_bindings[0].statement = "All customer replies were sent successfully".into();
+        result.article.claim_bindings[0].epistemic_state = "verified".into();
+        assert!(validate_result(&snapshot, &result).unwrap_err().contains("invalid_verification"));
+    }
+
+    #[test]
     fn reuse_interpretation_never_upgrades_facts_or_discards_quality_blockers() {
         for (statement, state) in [("Approval is no longer required", "reported"),
             ("The receipt workflow is proven effective", "verified"),
             ("This works for every approval process", "reported")] {
             let mut result = interpreted_article();
             result.article.body_markdown.push_str(&format!("\n{statement}"));
-            result.article.claim_bindings.push(ClaimBinding { claim_id:"new-fact".into(),
+            result.article.claim_bindings.push(ClaimBinding { claim_id:"new-fact".into(), body_locator:String::new(),
                 statement:statement.into(),epistemic_state:state.into(),
                 source_refs:result.article.applicability.source_refs.clone() });
             assert!(validate_result(&minimal_snapshot(), &result).unwrap_err().contains("invalid_verification"));

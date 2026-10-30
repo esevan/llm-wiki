@@ -26,6 +26,8 @@ const write = (value) => process.stdout.write(`${JSON.stringify(value)}\n`);
 const response = (id, result) => write({ id, result });
 
 function completeTurn(threadId, turnId, ordinal) {
+  const turn = threads.get(threadId)?.history?.find(turn=>turn.id===turnId);
+  if (turn) turn.status = "completed";
   write({ method: "item/completed", params: {
     threadId, turnId, completedAtMs: ordinal,
     item: { id: `fixture-item-${threadId}-${turnId}`, type: "agentMessage", status: "completed", phase: "final_answer", text: `Controlled Codex fixture completed turn ${ordinal}.` },
@@ -61,6 +63,7 @@ function startTurn(threadId, input) {
   const state = threads.get(threadId);
   const turnId = `fixture-turn-${nextTurn++}`;
   state.turns += 1;
+  (state.history ??= []).push({id:turnId,status:"inProgress",items:[]});
   if (process.env.LLM_WIKI_FAKE_CODEX_BURST === "1") {
     // Exercise the legitimate pre-response path as well as the post-response burst.
     write({ method: "turn/started", params: { threadId, turnId, turn: { id: turnId, status: "inProgress" } } });
@@ -123,7 +126,7 @@ rl.on("line", (line) => {
     if (threadId !== "fixture-external-thread") response(input.id, null);
     else response(input.id, { thread: { id: threadId, name: "Fixture external conversation", preview: "Continue imported work", cwd: process.cwd(), model: "gpt-5.6-sol", modelProvider: "openai", source: "vscode", status: { type: "idle" }, ephemeral: false, createdAt: 1700000000, updatedAt: 1700000020, turns: input.params?.includeTurns ? externalThread.history : [] } });
   } else if (input.method === "thread/turns/list") {
-    const history = input.params?.threadId === "fixture-external-thread" ? [...externalThread.history].reverse() : [];
+    const history = [...(threads.get(input.params?.threadId)?.history ?? [])].reverse();
     response(input.id, { data: history, nextCursor: null });
   } else if (input.method === "thread/resume") {
     const threadId = input.params?.threadId;
@@ -140,7 +143,13 @@ rl.on("line", (line) => {
     startTurn(input.params?.threadId, input);
   } else if (input.method === "turn/interrupt") {
     response(input.id, { turn: { id: input.params?.turnId, threadId: input.params?.threadId, status: "interrupted" } });
-    const finish = () => write({ method: "turn/completed", params: { threadId: input.params?.threadId, turnId: input.params?.turnId, turn: { id: input.params?.turnId, status: "interrupted" } } });
+    const finish = () => {
+      const state = threads.get(input.params?.threadId);
+      const turn = state?.history?.find(turn=>turn.id===input.params?.turnId);
+      if (turn) turn.status = "interrupted";
+      if (state) state.pending = null;
+      write({ method: "turn/completed", params: { threadId: input.params?.threadId, turnId: input.params?.turnId, turn: { id: input.params?.turnId, status: "interrupted" } } });
+    };
     if (process.env.LLM_WIKI_FAKE_CODEX_INTERRUPT_DELAY) setTimeout(finish, Number(process.env.LLM_WIKI_FAKE_CODEX_INTERRUPT_DELAY)); else finish();
   } else if (input.id && input.method === undefined) {
     for (const [threadId, state] of threads) {

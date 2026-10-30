@@ -7,3 +7,5 @@ pub mod work_tracking_service;
 pub(crate) mod task_session_queue;
 
 pub(crate) mod task_session_context;
+
+pub(crate) mod task_completion;

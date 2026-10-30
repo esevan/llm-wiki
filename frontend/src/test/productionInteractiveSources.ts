@@ -13,6 +13,7 @@ import vaultSetup from '../features/vault-setup/VaultSetupView.tsx?raw';
 import conflictReview from '../features/workbench/ConflictReviewPanel.tsx?raw';
 import inputImage from '../features/workbench/InputImageAttachment.tsx?raw';
 import refinement from '../features/workbench/RefinementPanel.tsx?raw';
+import stopComplete from '../features/workbench/StopAndCompleteDialog.tsx?raw';
 import deleteDialog from '../features/workbench/DeleteItemDialog.tsx?raw';
 import itemActions from '../features/workbench/ItemActionsMenu.tsx?raw';
 import taskDetail from '../features/workbench/TaskDetail.tsx?raw';
@@ -68,6 +69,7 @@ export const productionInteractiveSources = new Map<string, string>([
   ['frontend/src/features/workbench/SessionQueue.tsx', sessionQueue],
   ['frontend/src/features/workbench/WorkLogDistillation.tsx', workLogDistillation],
   ['frontend/src/features/workbench/DeleteItemDialog.tsx', deleteDialog],
+  ['frontend/src/features/workbench/StopAndCompleteDialog.tsx', stopComplete],
   ['frontend/src/features/workbench/WorkbenchView.tsx', workbench],
   ['frontend/src/features/workbench/KnowledgeReviewPanel.tsx', knowledgeReview],
   ['frontend/src/features/workbench/KnowledgeRevisionChat.tsx', knowledgeRevisionChat],

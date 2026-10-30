@@ -7,7 +7,8 @@ vi.mock("./RefinementPanel", () => ({ RefinementPanel: ({taskDefinition}: {taskD
 const execution = vi.hoisted(() => ({
   subscribe: vi.fn().mockResolvedValue({ runs: [], activeRunId: null, selectedRun: null }),
 }));
-vi.mock("../../services/taskExecutionClient", () => ({ taskExecutionClient: execution }));
+const completion = vi.hoisted(() => ({preview:vi.fn(),control:vi.fn()}));
+vi.mock("../../services/taskExecutionClient", () => ({ taskExecutionClient: execution, taskCompletionClient: completion }));
 
 const task = {
   id: "task-1",
@@ -1092,4 +1093,16 @@ it("keeps refresh through the runnable Queue gap before its next Run appears",as
   expect(screen.getByText("Queued follow-up saved")).toBeVisible();
   const count=request.mock.calls.length;await act(async()=>vi.advanceTimersByTimeAsync(5000));expect(request).toHaveBeenCalledTimes(count);
  }finally{view.unmount();vi.useRealTimers();}
+});
+
+it("offers reviewed stop-and-complete from the normal Task completion button",async()=>{
+ Object.defineProperty(HTMLDialogElement.prototype,'showModal',{configurable:true,value:function(this:HTMLDialogElement){this.open=true;}});
+ Object.defineProperty(HTMLDialogElement.prototype,'close',{configurable:true,value:function(this:HTMLDialogElement){this.open=false;}});
+ completion.preview.mockResolvedValue({taskId:task.id,taskRevision:2,taskState:"in_progress",reviewHash:"review",runs:[{id:"run",instruction:"Finish draft",status:"running"}],queued:[],responses:[]});
+ window.llmWikiApplication={request:vi.fn(async request=>request.path.endsWith("/completions")?{...response({detail:"active_task_execution"}),ok:false,status:409}:response(task)) as never};
+ render(<TaskDetail taskId={task.id} onClose={vi.fn()} onChanged={vi.fn()}/>);
+ await screen.findByRole("heading",{name:task.title});fireEvent.click(screen.getByRole("tab",{name:"Review"}));
+ fireEvent.change(screen.getByRole("textbox",{name:"Completion evidence"}),{target:{value:"Report saved"}});
+ fireEvent.click(document.querySelector<HTMLButtonElement>('[data-control="task-completion-complete"]')!);
+ await screen.findByRole("heading",{name:"Stop executions and complete?"});expect(screen.getByText("Finish draft")).toBeVisible();expect(completion.control).not.toHaveBeenCalled();
 });

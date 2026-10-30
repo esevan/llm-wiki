@@ -1,3 +1,5 @@
+import { profilePreviewTransition } from "./previewTransitionProfile";
+import { taskClient } from "../services/taskClient";
 import { waitFor, waitForAsync } from "./desktopWait";
 import type { KnowledgeReviewProjection } from "../types/taskWorkbench";
 import {
@@ -1052,6 +1054,12 @@ async function publication(step: Step) {
   await selectTaskTab("Review", "Open Task Review for publication");
   await revealTaskField("Completion evidence");
   enter(field("Completion evidence"), "verified in packaged E2E");
+  const imageTask=await task(title);
+  const imageLog=await taskClient.workLog(imageTask.id,imageTask.taskRevision,"Synthetic diagram fixture: retain its original pixels beside the explanation.",{name:"diagram.png",mediaType:"image/png",data:"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j8ioAAAAASUVORK5CYII="});
+  await waitForAsync(async()=>{
+    const {jobs}=await api<{jobs:Array<{entity_id:string;task_kind:string;status:string}>}>("/jobs");
+    return jobs.some(job=>job.entity_id===imageLog.id&&job.task_kind==="image_summary"&&["completed","failed","cancelled"].includes(job.status));
+  },"image summary settled before freezing Knowledge inputs");
   await activate("#task-completion-evidence + button", "Complete Task");
   await waitFor(
     () =>
@@ -1081,6 +1089,9 @@ async function publication(step: Step) {
   const firstRevision = initial.pointers.currentPrivateRevision;
   const first = initial.versions.find(item => item.revision === firstRevision);
   if (!first?.bodyMarkdown.trim()) throw new Error("Knowledge generation returned no reviewable body");
+  if (!first.bodyMarkdown.includes("llm-wiki-image:")) throw new Error("Knowledge lost the original image reference");
+  await waitFor(()=>[...document.querySelectorAll<HTMLImageElement>('.knowledge-markdown img')].some(image=>image.complete&&image.naturalWidth>0),"frozen Knowledge image rendered beside its prose");
+
   await activate('[data-control="knowledge-version-edit"]', "Edit the current immutable Knowledge draft");
   await waitFor(() => Boolean(document.querySelector('[data-control="task-knowledge-draft-body"]')), "Knowledge editor rendered");
   const editor = document.querySelector<HTMLTextAreaElement>('[data-control="task-knowledge-draft-body"]');
@@ -1112,14 +1123,12 @@ async function publication(step: Step) {
     const saved = await knowledge();
     return saved.pointers.currentPrivateRevision !== firstRevision && saved.versions.some(item => item.bodyMarkdown === correctedBody);
   }, "immutable Knowledge correction persisted");
-  await activate('[data-control="knowledge-archive-prepare"]', "Prepare exact archive artifacts");
-  await waitFor(() => Boolean(document.querySelector('[data-control="knowledge-archive-publish"]')), "reviewable archive proposal");
-  const proposed = await knowledge();
-  const proposal = proposed.archive?.proposals.find(item => item.state === "review_needed");
-  if (!proposal || !proposal.artifacts.some(item => typeof item.bytes === "string" && item.bytes.includes("Corrected by packaged desktop E2E."))) throw new Error("Archive proposal omitted reviewed Knowledge bytes");
-  const correctedRevision = proposed.pointers.currentPrivateRevision;
-  await activate('[data-control="knowledge-archive-publish"]', "Publish the exact reviewed archive");
+  const correctedRevision = (await knowledge()).pointers.currentPrivateRevision;
+  await activate('[data-control="knowledge-archive-prepare"]', "Publish the exact reviewed Knowledge");
   await waitForAsync(async () => (await knowledge()).pointers.publishedRevision === correctedRevision, "exact index receipt and published pointer");
+  const proposed = await knowledge();
+  const proposal = proposed.archive?.proposals.find(item => item.state === "applied");
+  if (!proposal || !proposal.artifacts.some(item => typeof item.bytes === "string" && item.bytes.includes("Corrected by packaged desktop E2E.") && item.bytes.includes("llm-wiki-image:"))) throw new Error("Publication omitted reviewed Knowledge bytes or original image refs");
   const published = await knowledge();
   const target = proposal.artifacts.find(item => item.documentId === published.pointers.publicationDocumentId);
   if (!target || target.sha256 !== published.pointers.publicationContentHash) throw new Error("Publication pointer does not match the reviewed artifact hash");
@@ -1459,6 +1468,7 @@ export function installDesktopScenario() {
         "task-worklog": step => log(step, coverage),
         "task-refinement": refinement,
         "task-refinement-title-apply": refinementTitleApply,
+        "task-preview-transition-profile": () => profilePreviewTransition(scenarioHarness,e2eProviderUrl),
         "task-refinement-modal-layout": async step => {
           await refinementModalLayout(step);
           await runLegacyProblemRefinementScenario(scenarioHarness);

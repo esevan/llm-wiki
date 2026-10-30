@@ -140,6 +140,63 @@ impl TaskExecutionRuntime {
         let configured=config.as_ref().and_then(|v|v["config"]["model_reasoning_effort"].as_str()).map(str::to_owned);
         Ok(json!({"models":models,"configuredEffort":configured,"configConfirmed":confirmed}))
     }
+    pub(crate) async fn completion_control(&self,input:&Value)->Result<Value,String>{
+        match required(input,"action")? {
+            "preview"=>return self.inner.service.completion_preview(input),
+            "cancel"=>return self.inner.service.completion_cancel(input),
+            "begin"=>{let _operation=self.inner.operation.lock().await;self.inner.service.completion_begin(input)?;},
+            "poll"=>{},_=>return Err("invalid_input: unknown completion action".into())
+        }
+        let current=self.inner.service.completion_status(input)?;
+        if current["state"]!="stopping" {return Ok(current);}
+        let task=required(input,"taskId")?;
+        // Preparation may still be building context with no Run. The durable gate
+        // blocks its eventual create/dispatch even if cancellation arrives late.
+        {
+            let sessions=self.inner.service.completion_session_ids(task)?;
+            let cancellations=self.inner.context_cancellations.lock().map_err(|_|"cancellation unavailable")?;
+            for session in sessions {if let Some(token)=cancellations.get(&session){token.cancel();}}
+        }
+        let runs=current["remaining"]["runs"].as_array().cloned().unwrap_or_default();
+        let mut issues=Vec::new();
+        if !runs.is_empty() {
+            if let Err(error)=self.ensure_started().await {issues.push(format!("Could not confirm execution termination: {error}"));}
+            else {
+                for run in runs {
+                    if self.inner.service.completion_status(input)?["state"]!="stopping" {return self.inner.service.completion_status(input);}
+                    let result:Result<(),String>=async {
+                        let thread=run["threadId"].as_str().filter(|s|!s.is_empty()).ok_or("The execution has no exact provider conversation identity; its outcome remains uncertain")?;
+                        let turn_id=run["turnId"].as_str().filter(|s|!s.is_empty()).ok_or("The execution has no exact provider turn identity; its outcome remains uncertain")?;
+                        let mut cursor=Value::Null;let mut found=None;
+                        for _ in 0..10 {
+                            let mut params=json!({"threadId":thread,"limit":100,"sortDirection":"desc","itemsView":"full"});
+                            if !cursor.is_null(){params["cursor"]=cursor.clone();}
+                            let page=tokio::time::timeout(std::time::Duration::from_secs(5),self.inner.server.request("thread/turns/list",params)).await.map_err(|_|"Provider termination check timed out; retry to check again")??.1;
+                            let turns=page["data"].as_array().ok_or("Provider returned no readable turns")?;
+                            if let Some(turn)=turns.iter().find(|turn|turn["id"]==turn_id){found=Some(turn.clone());break;}
+                            cursor=page["nextCursor"].clone();if cursor.is_null(){break;}
+                        }
+                        let turn=found.ok_or("The exact execution was not found; completion remains pending")?;
+                        if matches!(turn["status"].as_str(),Some("completed"|"failed"|"interrupted"|"cancelled")){
+                            self.inner.service.completion_reconcile(&run,&turn)?;
+                            self.emit_for_run(required(&run,"id")?);
+                        }else if matches!(turn["status"].as_str(),Some("inProgress"|"in_progress"|"running"|"awaiting_response")) {
+                            if self.inner.service.completion_status(input)?["state"]!="stopping" {return Ok(());}
+                            tokio::time::timeout(std::time::Duration::from_secs(5),self.inner.server.request("turn/interrupt",json!({"threadId":thread,"turnId":turn_id}))).await.map_err(|_|"Interrupt response timed out; termination is not confirmed")??;
+                            // The ACK is deliberately not a terminal state.
+                        }else{return Err("Provider execution status is unknown; termination is not confirmed".into());}
+                        Ok(())
+                    }.await;
+                    if let Err(error)=result {issues.push(error);}
+                }
+            }
+        }
+        let mut result=self.inner.service.completion_finalize(input)?;
+        result["issues"]=json!(issues);
+        let _=self.inner.signals.send(ExecutionSignal{task_id:task.into(),..ExecutionSignal::default()});
+        Ok(result)
+    }
+
     pub(crate) async fn queue_action(&self,input:&Value)->Result<Value,String>{
         if matches!(input["action"].as_str(),Some("pause"|"cancel_drain")) {
             self.inner.service.ensure_session_owner(required(input,"taskId")?,required(input,"sessionId")?)?;
@@ -802,6 +859,7 @@ impl TaskExecutionRuntime {
 
     pub(crate) async fn respond(&self, input: &Value) -> Result<Value, String> {
         self.ensure_started().await?;
+        let _operation = self.inner.operation.lock().await;
         let generation = self.inner.server.generation().await?;
         let request_id = required(input, "requestId")?;
         let (rpc_id, _kind, provider_response) = self
@@ -1699,6 +1757,48 @@ mod tests {
             safe_external_text("Authorization: secret", 100),
             "[redacted credential-like content]"
         );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn completion_control_requires_terminal_turn_after_interrupt_ack_and_recovers_uncertain_run() {
+        use std::os::unix::fs::PermissionsExt;
+        let directory=std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().join(".tmp");std::fs::create_dir_all(&directory).unwrap();
+        let root=tempfile::tempdir_in(directory).unwrap();let db=root.path().join("state.sqlite3");crate::native::database::initialize(&db).unwrap();
+        let tasks=TaskApplicationService::new(&db);
+        let task=tasks.execute("task.create",&json!({"operationId":"task","inputText":"Work","title":"Complete safely"})).unwrap()["id"].as_str().unwrap().to_owned();
+        let session=tasks.execute("task.work-session.create",&json!({"operationId":"session","taskId":task,"title":"Work"})).unwrap()["id"].as_str().unwrap().to_owned();
+        tasks.execute("task.work-session.update",&json!({"operationId":"settings","taskId":task,"sessionId":session,"title":"Work","provider":"codex","model":"gpt-5.6-sol","approvalMode":"auto","workspacePath":root.path().to_str().unwrap()})).unwrap();
+        tasks.execute("task.transition",&json!({"operationId":"start-task","taskId":task,"expectedTaskRevision":1,"to":"in_progress"})).unwrap();
+        let service=TaskExecutionApplicationService::new(&db);let prepared=service.prepared(&task,&session).unwrap();
+        service.bind_thread(&prepared,&json!({"id":"thread","model":"gpt-5.6-sol","cwd":prepared.cwd,"approvalPolicy":"on-request","sandbox":"workspace-write"}),true).unwrap();
+        let (created,_)=service.create_run(&json!({"taskId":task,"sessionId":session,"operationId":"run","instruction":"Preserve result","settingsRevision":prepared.settings_revision})).unwrap();let run=created["selectedRun"]["id"].as_str().unwrap();
+        service.mark_dispatch_recorded(run).unwrap();service.accept_turn(run,"thread","turn").unwrap();service.recover_nonterminal().unwrap();
+        let flag=root.path().join("terminal");let log=root.path().join("rpc.log");let fake=root.path().join("fake.cjs");
+        let script=r#"#!/usr/bin/env node
+const fs=require('node:fs'),readline=require('node:readline');
+readline.createInterface({input:process.stdin}).on('line',line=>{
+ const input=JSON.parse(line);if(input.id===undefined)return;
+ fs.appendFileSync(LOG,input.method+'\n');
+ let result={};
+ if(input.method==='initialize')result={capabilities:{experimentalApi:true}};
+ if(input.method==='thread/turns/list')result={data:[{id:'turn',status:fs.existsSync(FLAG)?'interrupted':'inProgress',items:[]}],nextCursor:null};
+ process.stdout.write(JSON.stringify({id:input.id,result})+'\n');
+});
+"#.replace("LOG",&serde_json::to_string(log.to_str().unwrap()).unwrap()).replace("FLAG",&serde_json::to_string(flag.to_str().unwrap()).unwrap());
+        std::fs::write(&fake,script).unwrap();std::fs::set_permissions(&fake,std::fs::Permissions::from_mode(0o700)).unwrap();
+        let runtime=TaskExecutionRuntime::with_test_server(service,fake);
+        let preview=runtime.completion_control(&json!({"action":"preview","taskId":task})).await.unwrap();
+        let begin=json!({"action":"begin","taskId":task,"operationId":"stop","expectedTaskRevision":1,"reviewHash":preview["reviewHash"],"evidence":"Work preserved"});
+        let waiting=runtime.completion_control(&begin).await.unwrap();assert_eq!(waiting["state"],"stopping");assert!(waiting["issues"].as_array().unwrap().is_empty(),"{waiting}");
+        assert!(std::fs::read_to_string(&log).unwrap().contains("turn/interrupt"));
+        let c=crate::native::database::open(&db).unwrap();assert_eq!(c.query_row("SELECT state FROM tasks WHERE id=?",[&task],|r|r.get::<_,String>(0)).unwrap(),"in_progress");
+        c.execute("UPDATE task_work_session_runs SET provider_turn_id=NULL WHERE id=?",[run]).unwrap();
+        let poll=json!({"action":"poll","taskId":task,"operationId":"stop"});let uncertain=runtime.completion_control(&poll).await.unwrap();assert_eq!(uncertain["state"],"stopping");assert!(!uncertain["issues"].as_array().unwrap().is_empty());
+        c.execute("UPDATE task_work_session_runs SET provider_turn_id='turn' WHERE id=?",[run]).unwrap();std::fs::write(&flag,"ended").unwrap();
+        let completed=runtime.completion_control(&poll).await.unwrap();assert_eq!(completed["state"],"completed","{completed}");
+        assert!(!std::fs::read_to_string(&log).unwrap().contains("turn/start"));
+        assert_eq!(c.query_row("SELECT count(*) FROM task_completions",[],|r|r.get::<_,i64>(0)).unwrap(),1);
     }
 
     #[cfg(unix)]

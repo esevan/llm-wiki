@@ -2641,7 +2641,7 @@ async fn generate_knowledge_candidate(
             "issue": candidate["modelError"],
             "findings": candidate["generationResult"]["qualityFindings"],
             "rejectedCandidate": candidate["generationResult"],
-            "sourcePolicy": "Use only exact original sourceManifest quotes. Do not concatenate JSON fields as a quote. Completion alone is not proof of a decided or verified claim. Keep unsupported conclusions out; retain supported reported facts, unresolved work and limits. Never invent or change evidence."
+            "sourcePolicy": "Use only exact original sourceManifest quotes. Do not concatenate JSON fields as a quote. Completion alone is not proof of a decided or verified claim. Keep unsupported conclusions out; retain supported reported facts, unresolved work and limits. Repair bindings without replacing useful subject matter with recording commentary or blanket verification disclaimers. Keep supported prose synthesis using bodyLocator while retaining original statement and quotes. Never invent or change evidence."
         });
     }
     unreachable!("bounded Knowledge generation loop always returns")

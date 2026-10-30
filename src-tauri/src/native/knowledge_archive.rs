@@ -1825,6 +1825,70 @@ mod tests {
         assert!(fs::read_to_string(root.join("Knowledge/Approval.md")).unwrap().contains("Approval flow"));
     }
 
+    // Realistic deterministic provider-shaped fixture; this is not a real model evaluation.
+    #[tokio::test]
+    async fn realistic_fixture_knowledge_contract_parses_applies_revises_and_publishes_original_images() {
+        use crate::workflow_foundation::{PromptId,normalize_prompt_output,validate_prompt_output};
+        let (_temp,db,_)=seed_knowledge_context();let root=_temp.path().join("vault");fs::create_dir(&root).unwrap();
+        let mut c=database::open(&db).unwrap();
+        c.execute("INSERT INTO input_images(capture_id,name,media_type,data) VALUES('capture','architecture.png','image/png','Y2FwdHVyZQ==')",[]).unwrap();
+        c.execute("INSERT INTO task_attachments(id,task_id,entry_id,name,media_type,data,created_at) VALUES('diagram','task','log','flow.png','image/png','ZGlhZ3JhbQ==',CURRENT_TIMESTAMP)",[]).unwrap();
+        c.execute("INSERT INTO task_work_log_entries(id,task_id,body,image_data,image_media_type,created_at) VALUES('text-log','task','Approval remains required','dGV4dA==','image/png',CURRENT_TIMESTAMP)",[]).unwrap();
+        let tx=c.transaction().unwrap();let snapshot=knowledge_distillation::capture_snapshot_tx(&tx,"task",1,"en").unwrap();tx.commit().unwrap();
+        let images=super::super::knowledge_images::catalog(&snapshot);assert_eq!(images.len(),3);
+        let text_image=images.iter().find(|i|i["source"]["id"]=="text-log").unwrap();
+        let source=json!({"type":"task_revision","id":"task","revision":"1","locator":"definition","quote":"Approval flow"});
+        let prose="Organize the work around an explicit approval step.";
+        let mut response=json!({"article":{"type":"guide","title":"Approval flow","bodyMarkdown":format!("# Approval flow\n\n{prose}\n\nApproval remains required."),
+          "applicability":{"summary":"Approval flow","representativeQuestions":["How should approval work be organized?"],"helpsWith":["Approval flow"],"sourceRefs":[source]},
+          "claimBindings":[{"claimId":"work-summary","statement":"Approval flow","bodyLocator":prose,"epistemicState":"reported","sourceRefs":[source],"futureOptionalField":"ignored"}],
+          "imageDecisions":[{"imageRef":text_image["imageRef"],"disposition":"text_integrated","rationale":"Only text is needed; preserve its instruction in the article","bodyLocator":"Approval remains required."}]} });
+        normalize_prompt_output(PromptId::KnowledgeDraft,&mut response);
+        validate_prompt_output(PromptId::KnowledgeDraft,&response).unwrap();
+        let result:knowledge_distillation::GenerationResult=serde_json::from_value(response.clone()).unwrap();
+        let prepared=knowledge_distillation::prepared(snapshot.clone(),result,"fixture","").unwrap();assert_eq!(prepared["qualityState"],"valid","{prepared}");
+        let tx=c.transaction().unwrap();let first=knowledge_distillation::append_generated_tx(&tx,&prepared).unwrap();tx.commit().unwrap();
+        assert_eq!(first["draftRevision"],1);
+        // Absent optional fields keep persisted payloads readable; wrong types fail explicitly.
+        let mut legacy=response.clone();legacy["article"]["claimBindings"][0].as_object_mut().unwrap().remove("bodyLocator");legacy["article"].as_object_mut().unwrap().remove("imageDecisions");
+        assert!(serde_json::from_value::<knowledge_distillation::GenerationResult>(legacy).is_ok());
+        let mut invalid=response.clone();invalid["article"]["claimBindings"][0]["bodyLocator"]=Value::Null;
+        assert!(validate_prompt_output(PromptId::KnowledgeDraft,&invalid).is_err());
+        let mut candidate=prepared["generationResult"].clone();candidate["article"]["title"]=json!("Approval review guide");
+        let reply=json!({"message":"Clarified the title; preserved the work and visuals","missingEvidence":[],"candidate":candidate});
+        validate_prompt_output(PromptId::KnowledgeRevisionChat,&reply).unwrap();
+        c.execute("INSERT INTO knowledge_revision_turns(id,task_id,base_revision,base_content_hash,expected_private_revision,request_hash,user_message,source_snapshot_json,state) VALUES('image-revision','task',1,?,1,'fixture','Clarify the title',?,'running')",params![first["contentHash"].as_str(),snapshot.to_string()]).unwrap();
+        let tx=c.transaction().unwrap();let revision_snapshot=knowledge_distillation::capture_snapshot_tx(&tx,"task",1,"en").unwrap();tx.commit().unwrap();
+        let revised=knowledge_distillation::prepared(revision_snapshot,serde_json::from_value(reply["candidate"].clone()).unwrap(),"fixture","").unwrap();assert_eq!(revised["qualityState"],"valid");
+        c.execute("UPDATE knowledge_revision_turns SET prepared_json=?,state='proposed' WHERE id='image-revision'",[revised.to_string()]).unwrap();
+        let app=crate::NativeApplication::isolated(&root,&db).unwrap();
+        let applied=app.execute_workflow(crate::NativeOperation{name:"task-knowledge.revision-apply".into(),input:json!({"taskId":"task","turnId":"image-revision"})}).await;
+        assert_eq!(applied.status,200,"{}",applied.body);assert_eq!(applied.body["draftRevision"],2);
+        let input=json!({"operationId":"image-publication","taskId":"task","knowledgeRevision":2,"expectedCurrentPrivateRevision":2,"expectedKnowledgeContentHash":applied.body["contentHash"],"expectedGenerationSnapshotHash":applied.body["sourceHash"],"simplePublication":true,"selectedIdeaRevisionIds":[]});
+        let proposal=prepare(&db,Path::new("no-provider"),&root,&SemanticEngine::new(None),&input).await.unwrap();
+        publish(&db,&root,&publish_input(&proposal)).unwrap();finish_index(&db,&root,&SemanticEngine::new(None),"publish-one").unwrap();
+        let published=fs::read_to_string(root.join(proposal["target"]["path"].as_str().unwrap())).unwrap();
+        assert!(published.contains(prose));
+        for image in &images {
+            let reference=image["imageRef"].as_str().unwrap();
+            if reference==text_image["imageRef"].as_str().unwrap(){assert!(!published.contains(reference));}else{assert!(published.contains(reference));}
+            assert!(super::super::knowledge_images::read(&db,reference).unwrap()["dataUrl"].as_str().unwrap().starts_with("data:image/png;base64,"));
+        }
+        c.execute("DELETE FROM task_attachments",[]).unwrap();c.execute("DELETE FROM input_images",[]).unwrap();
+        for image in &images {assert!(super::super::knowledge_images::read(&db,image["imageRef"].as_str().unwrap()).is_ok());}
+        let tx=c.transaction().unwrap();let after_removal=knowledge_distillation::capture_snapshot_tx(&tx,"task",1,"en").unwrap();tx.commit().unwrap();
+        let retained=super::super::knowledge_images::catalog(&after_removal);
+        for image in images.iter().filter(|image|image["imageRef"]!=text_image["imageRef"]){assert!(retained.iter().any(|item|item["imageRef"]==image["imageRef"]));}
+        // The text-integrated source may be gone; retain only still-embedded visual assessments.
+        let mut repaired:knowledge_distillation::GenerationResult=serde_json::from_value(revised["generationResult"].clone()).unwrap();
+        repaired.article.image_decisions.retain(|decision|decision.disposition=="preserve_visual");
+        let tx=c.transaction().unwrap();let after_removal=knowledge_distillation::capture_snapshot_tx(&tx,"task",1,"en").unwrap();tx.commit().unwrap();
+        assert!(knowledge_distillation::prepared(after_removal,repaired,"fixture","").is_ok());
+
+        assert!(super::super::knowledge_images::read(&db,"../../secrets").is_err());
+        assert!(super::super::knowledge_images::read(&db,&format!("llm-wiki-image:{}","f".repeat(64))).unwrap_err().contains("missing"));
+    }
+
     #[tokio::test]
     async fn knowledge_revision_chat_republishes_only_after_approval_and_preserves_external_edits() {
         for external_edit in ["none","before_prepare","after_prepare"] {

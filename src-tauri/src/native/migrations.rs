@@ -5,7 +5,7 @@ use sha2::{Digest, Sha256};
 use serde_json::{json, Map, Value};
 use std::collections::BTreeMap;
 
-pub const CURRENT_SCHEMA_VERSION: i64 = 28;
+pub const CURRENT_SCHEMA_VERSION: i64 = 29;
 
 type MigrationFunction = for<'connection> fn(&Transaction<'connection>) -> Result<(), String>;
 type LegacyLocalizationRow = (String, String, String, String, String, String, String);
@@ -121,6 +121,7 @@ const MIGRATIONS: &[Migration] = &[
     Migration { version:26, name:"add session reasoning and follow-up queues", run:add_session_queue },
     Migration { version:27, name:"record first actual Run Task context", run:add_session_initial_context },
     Migration { version:28, name:"add explicit Knowledge publication choices", run:add_knowledge_publication_choices },
+    Migration { version:29, name:"add reviewed Task completion stops", run:add_task_completion_stops },
 ];
 
 fn add_knowledge_publication_choices(tx: &Transaction<'_>) -> Result<(), String> {
@@ -133,6 +134,10 @@ fn add_knowledge_publication_choices(tx: &Transaction<'_>) -> Result<(), String>
 
 fn add_session_initial_context(tx: &Transaction<'_>) -> Result<(), String> {
     tx.execute_batch("ALTER TABLE task_work_session_runs ADD COLUMN initial_context_json TEXT;").map_err(|e|e.to_string())
+}
+
+fn add_task_completion_stops(tx:&Transaction<'_>)->Result<(),String>{
+    tx.execute_batch("CREATE TABLE task_completion_stops(operation_id TEXT PRIMARY KEY,task_id TEXT NOT NULL REFERENCES tasks(id),state TEXT NOT NULL CHECK(state IN ('stopping','cancelled','completed')),request_json TEXT NOT NULL,review_json TEXT NOT NULL,created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP); CREATE UNIQUE INDEX task_completion_one_active ON task_completion_stops(task_id) WHERE state='stopping';").map_err(|e|e.to_string())
 }
 
 fn add_session_queue(tx: &Transaction<'_>) -> Result<(), String> {

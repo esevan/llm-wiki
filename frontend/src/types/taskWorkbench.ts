@@ -308,6 +308,7 @@ export interface KnowledgeSourceRef {
 }
 export interface KnowledgeClaimBinding {
   claimId: string;
+  bodyLocator?: string;
   statement: string;
   epistemicState: string;
   sourceRefs: KnowledgeSourceRef[];
@@ -346,6 +347,7 @@ export interface KnowledgeVersion {
       bodyMarkdown: string;
       applicability: KnowledgeApplicability;
       claimBindings: KnowledgeClaimBinding[];
+      imageDecisions?: { imageRef: string; disposition: "preserve_visual" | "text_integrated" | "omit"; rationale: string; bodyLocator?: string }[];
       assumptionBindings: Array<{ assumptionId: string; bodyLocator: string; sourceRefs: KnowledgeSourceRef[] }>;
     };
     ideas?: KnowledgeIdea[];

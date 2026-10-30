@@ -40,7 +40,7 @@ function FullImage({ src, alt, close, text }: { src: string; alt: string; close:
   useEffect(() => { const previous=document.activeElement as HTMLElement; closeButton.current?.focus(); return () => previous?.focus(); },[]);
   return createPortal(<div className="vault-image-overlay" role="presentation" onClick={close}><div ref={panel} role="dialog" aria-modal="true" aria-label={alt || text.imageOpen} onClick={event=>event.stopPropagation()}><button data-control="vault-image-close" ref={closeButton} onClick={close}>{text.close} ✕</button><img src={src} alt={alt}/></div></div>,document.body);
 }
-function VaultImage({ path, source, alt, text }: { path: string; source: string; alt: string; text: VaultText }) {
+export function VaultImage({ path, source, alt, text }: { path: string; source: string; alt: string; text: VaultText }) {
   const [data, setData]=useState(''); const [error,setError]=useState(false); const [retry,setRetry]=useState(0); const [open,setOpen]=useState(false);
   useEffect(()=>{let cancelled=false; void vaultClient.image(path,source).then(result=>{if(!cancelled)setData(result.dataUrl);}).catch(()=>{if(!cancelled)setError(true);});return()=>{cancelled=true;};},[path,source,retry]);
   if (error) return <span className="vault-inline-error" role="status"><strong>{text.imageError}</strong><span>{alt || source}</span><span>{text.imageHint}</span><button data-control="vault-image-retry" onClick={()=>{setError(false);setRetry(value=>value+1);}}>{text.retry}</button></span>;
@@ -48,7 +48,7 @@ function VaultImage({ path, source, alt, text }: { path: string; source: string;
   return <><button data-control="vault-image-open" className="vault-image-button" aria-label={text.imageOpen + ': ' + alt} onClick={()=>setOpen(true)}><img src={data} alt={alt} onError={()=>setError(true)}/></button>{open&&<FullImage src={data} alt={alt} text={text} close={()=>setOpen(false)}/>}</>;
 }
 export function VaultMarkdown({ markdown, path, notes, onNavigate, text, isMoc=false }: { isMoc?: boolean; markdown: string; path: string; notes: VaultNote[]; onNavigate: (path: string, heading?: string) => void; text: VaultText }) {
-  return <div className="vault-markdown" data-user-content><Markdown remarkPlugins={[remarkGfm,remarkFrontmatter,remarkVaultLinks,...(isMoc?[remarkMocRows]:[])]} skipHtml urlTransform={url=>defaultUrlTransform(url)} components={{
+  return <div className="vault-markdown" data-user-content><Markdown remarkPlugins={[remarkGfm,remarkFrontmatter,remarkVaultLinks,...(isMoc?[remarkMocRows]:[])]} skipHtml urlTransform={(url,key)=>key==="src" && /^llm-wiki-image:[a-f0-9]{64}$/.test(url)?url:defaultUrlTransform(url)} components={{
     pre: ({ children })=><>{children}</>,
     code: ({ className, children })=>className==='language-mermaid'?<VaultDiagram key={String(children)} source={String(children).trim()} text={text}/>:className?<pre><code className={className}>{children}</code></pre>:<code>{children}</code>,
     img: ({ src, alt })=><VaultImage key={path+String(src)} path={path} source={String(src||'')} alt={alt||''} text={text}/>,

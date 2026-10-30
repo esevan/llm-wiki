@@ -1,3 +1,4 @@
+import { Profiler } from 'react';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { App } from './App';
@@ -6,10 +7,11 @@ vi.mock('../features/workbench/useModalInteraction', () => ({ useModalInteractio
 vi.mock('../features/settings/SettingsView', () => ({ SettingsView: () => null }));
 vi.mock('../features/search/SearchView', () => ({ SearchView: () => null }));
 const reply = (body: unknown, status = 200) => ({ ok: status < 400, status, json: async <T,>() => body as T, text: async () => '', body: null });
-function fixture(state = 'task', fail = false, kind = 'task', sessionState = 'active') {
+function fixture(state = 'task', fail = false, kind = 'task', sessionState = 'active', profileManual = false) {
+  let previewReady=!profileManual,legacyReady=false,legacyReads=0;
   let applied = false, hold = false;
   let release!: () => void;
-  const task = () => ({ kind:'task', id:'source', title:applied ? 'Applied work' : 'Source work', state, taskRevision:applied ? 2 : 1, refinedRevision:applied ? 2 : undefined, workLog:[], checklist:[], decisions:[], readinessEntries:[] });
+  const task = () => ({ kind:'task', id:'source', title:applied ? 'Applied work' : 'Source work', state, taskRevision:applied ? 2 : 1, refinedRevision:applied ? 2 : undefined, detail:profileManual?'사용자 조사와 판단 기준 / Research and decision criteria. '.repeat(20):'', workLog:[], checklist:[], decisions:[], readinessEntries:[] });
   const board = () => ({ revision:applied ? 2 : 1, activeShortcuts:state === 'in_progress' ? [{kind:'task',id:'source',taskRevision:1}] : [], refiningShortcuts:!applied && state === 'task' ? [{kind,id:'source',draftRevision:1}] : [], categories:[{id:'General',label:'General',items:[kind === "capture" && !applied ? {kind:"capture",id:"source",text:"Source capture"} : task()]}] });
   const workspace = fixtureWorkspace(1);
   const request = vi.fn(async ({path}: {path:string}) => {
@@ -19,9 +21,9 @@ function fixture(state = 'task', fail = false, kind = 'task', sessionState = 'ac
       return reply(snapshot);
     }
     if (path === '/tasks/source') return reply(task());
-    if (path.endsWith('/refinement')) return reply({id:'session',taskId:kind === 'task' ? 'source' : undefined,state:sessionState,currentDraftRevision:1,inputDraft:'',messages:[],responseStatus:'completed',previewStatus:'completed'});
-    if (path.endsWith('/reference-workspace')) return reply(workspace);
-    if (path.endsWith('/proposals')) return reply([]);
+    if (path.endsWith('/refinement')) return reply({id:'session',taskId:kind === 'task' ? 'source' : undefined,state:sessionState,currentDraftRevision:1,inputDraft:'',messages:[],responseStatus:'completed',previewStatus:previewReady?'completed':'running'});
+    if (path.endsWith('/reference-workspace')) return reply(previewReady?workspace:{...workspace,preview:undefined,generation:{status:'running'}});
+    if (path.endsWith('/proposals')) { if(profileManual&&legacyReady){legacyReads++;return reply([{id:'mirrored',type:'task_patch',payload:{taskId:'source',expectedTaskRevision:1,patch:{title:'Intermediate legacy form'}}}]);}return reply([]);}
     if (path.endsWith('/apply')) {
       if (fail) return reply({error:'preview_head_conflict'},409);
       applied = true;
@@ -33,7 +35,7 @@ function fixture(state = 'task', fail = false, kind = 'task', sessionState = 'ac
     return reply({connections:[]});
   });
   window.llmWikiApplication = {request};
-  return {request, holdNext:()=>{hold=true;}, release:()=>release(), applied:()=>applied};
+  return {request, revealLegacy:()=>{legacyReady=true;},legacyReadCount:()=>legacyReads, revealPreview:()=>{previewReady=true;window.dispatchEvent(new CustomEvent('llm-wiki:queue-changed',{detail:[{id:'profile-job',entity_id:'session',task_kind:'refinement_preview',status:'completed'}]}));}, holdNext:()=>{hold=true;}, release:()=>release(), applied:()=>applied};
 }
 async function open() {
   await waitFor(() => expect(document.querySelector('[data-control="task-shortcut-refine"], [data-control="task-card-open"]')).not.toBeNull());
@@ -91,8 +93,8 @@ describe('App unified Task workspace', () => {
   });
   it('shows Capture refinement alone until Apply creates the Task workspace',async()=>{
     const f=fixture('task',false,'capture');render(<App/>);
-    await waitFor(()=>expect(document.querySelector('[data-control="task-shortcut-refine"]')).not.toBeNull());
-    fireEvent.click(document.querySelector('[data-control="task-shortcut-refine"]')!);
+    await waitFor(()=>expect(document.querySelector('[data-control="task-shortcut-refine"], [data-control="task-card-open"]')).not.toBeNull());
+    fireEvent.click(document.querySelector('[data-control="task-shortcut-refine"], [data-control="task-card-open"]')!);
     const apply=await screen.findByRole('button',{name:'Apply to Task'});
     expect(screen.queryByRole('tab',{name:'Work'})).toBeNull();
     expect(document.querySelector('.task-detail')).toBeNull();
@@ -123,4 +125,39 @@ it('reopens a completed refinement session as a preview within the Task tabs',as
   expect(screen.getByRole('button',{name:'Apply to Task'})).toBeVisible();
   expect(screen.queryByRole('tab',{name:'Work status'})).toBeNull();
   expect(screen.getAllByRole('dialog')).toHaveLength(1);
+});
+
+
+describe('manual to AI preview profiling fixture',()=>{
+  for(const locale of ['en','ko']) it(`measures actual App commits and preserves modal/composer identity (${locale})`,async()=>{
+    document.documentElement.lang=locale;
+    const f=fixture('task',false,'task','active',true);
+    const commits:{phase:string;duration:number}[]=[];
+    render(<Profiler id="preview-fixture" onRender={(_id,phase,duration)=>commits.push({phase,duration})}><App/></Profiler>);
+    await waitFor(()=>expect(document.querySelector('[data-control="task-shortcut-refine"], [data-control="task-card-open"]')).not.toBeNull());
+    fireEvent.click(document.querySelector('[data-control="task-shortcut-refine"], [data-control="task-card-open"]')!);
+    await waitFor(()=>expect(document.querySelector('[data-control="task-detail-tab-details"]')).not.toBeNull());
+    fireEvent.click(document.querySelector('[data-control="task-detail-tab-details"]')!);
+    await waitFor(()=>expect(document.querySelector('[data-control="task-definition-fallback"]')).not.toBeNull());
+    const manual=document.querySelector('[data-control="task-definition-fallback"]')!;
+    const panel=document.querySelector('.refinement-panel')!;
+    const composer=document.querySelector<HTMLTextAreaElement>('[data-control="refinement-message"]')!;
+    fireEvent.change(composer,{target:{value:'Preserve my unsent question / 작성 중인 질문'}});
+    const legacyStart=commits.length;act(()=>f.revealLegacy());
+    await waitFor(()=>expect(f.legacyReadCount()).toBeGreaterThan(0),{timeout:3000});
+    await act(async()=>{await Promise.resolve();});
+    expect(manual.isConnected).toBe(true);
+    expect(document.querySelector('[data-control="refinement-proposal-accept"]')).toBeNull();
+    expect(screen.queryByText('Intermediate legacy form')).toBeNull();
+    const legacyCommits=commits.length-legacyStart;
+    const initial=commits.length;const started=performance.now();
+    act(()=>f.revealPreview());
+    await waitFor(()=>expect(document.querySelector('[data-control="reference-preview-apply"]')).not.toBeNull(),{timeout:4000});
+    const elapsed=performance.now()-started;
+    expect(manual.isConnected).toBe(false);expect(document.querySelector('.refinement-panel')).toBe(panel);
+    expect(document.querySelector('[data-control="refinement-message"]')).toBe(composer);expect(composer.value).toBe('Preserve my unsent question / 작성 중인 질문');
+    const transition=commits.slice(initial);
+    console.log(`PreviewTransition jsdom fixture locale=${locale} initialCommits=${initial} mirroredProposalCommits=${legacyCommits} manualPreservedUntilCanonical=true transitionCommits=${transition.length} reactDurationMs=${transition.reduce((sum,commit)=>sum+commit.duration,0).toFixed(2)} elapsedIncludingPollMs=${elapsed.toFixed(2)} panelPreserved=true composerPreserved=true manualSubtreeReplaced=true`);
+    document.documentElement.lang='en';
+  });
 });

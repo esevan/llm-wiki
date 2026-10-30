@@ -1,5 +1,74 @@
 # LLM Wiki — Continuation handoff
 
+## Knowledge writing quality (2026-10-30)
+
+Implementation is in `.worktrees/knowledge-writing-quality`, branch
+`fix/knowledge-writing-quality`, based on main `7556166`. Generation v9 and
+revision chat v6 share subject-focused writing guidance. Optional claim
+`bodyLocator` separates synthesized prose from immutable source statements
+and quotes. Empty locators preserve legacy serialization; a title-only edit
+still cannot silently remove retained findings. Reuse interpretations keep
+source-bound assumptions without requiring visible labels. Citation repair
+feedback follows the same writing direction. English/Korean feature guides
+include representative before/after examples.
+
+Verification: the final native suite passes 483 tests (three synthetic
+benchmarks ignored); all 560 frontend tests and auxiliary npm checks passed;
+typecheck, lint and whitespace checks passed. Fake-provider tests need local
+listener permission. The initial writing-only change skipped desktop E2E. The added image and
+execution changes use the focused packaged verification described below. Real-model qualitative
+writing evaluation remains unavailable; structural tests do not measure prose
+quality or prove semantic equivalence of arbitrary model paraphrases.
+
+The additional image and completion scopes are now implemented in the same
+worktree, in separate local change units. Image refs resolve original bytes from
+immutable Knowledge snapshots in draft and Vault readers, including images from
+Capture, Work Log, and session entries. Older responses default to preserving
+visuals; explicit text integration/omission carries an assessment. Previously used
+originals remain available for revision after mutable source removal. Draft v9
+and revision chat v6 use one schema, with realistic-fixture parse/validate/private
+apply/revision/publication coverage; this is not real-model generation evidence.
+
+Schema 29 adds reviewed completion attempts. The standard completion action opens
+a stop-and-complete review on an active-execution guard. Exact review hashes,
+transactional queue cancellation, dispatch gates, provider turn reconciliation,
+cancellation tombstones and canonical Task completion guards protect the flow.
+Interrupt ACK alone never completes a Task. Missing exact identities or provider
+access remain pending; an approved pending completion can be reopened. Results and
+Work Log are retained. Cancellation does not undo already sent interrupts or
+cancelled queue entries and does not resume queues.
+
+Selected packaged verification uses `task-publication` (image generation/
+rendering/publication), `task-codex-execution` (reviewed stop/queue cancellation/
+completion), and `task-preview-transition-profile` (four English/Korean,
+wide/narrow transition measurements). They are selected because native IPC/image
+rendering and actual termination notifications are material boundaries that unit
+and fixture tests alone do not cover. The entire E2E suite is unnecessary for this
+bounded change. A qualitative real-model evaluation needs an approved provider,
+model and cost scope; no real external model or user records are used here.
+
+Final focused app checks: `task-publication` and `task-codex-execution` pass.
+The preview profile cannot measure paint: baseline requestAnimationFrame does
+not fire for five seconds with visibility=hidden and focus=false. Its bounded
+failure reports that environment limitation; no WKWebView timing is claimed.
+React fixtures reproduce and prevent the legacy-before-canonical form replacement
+and retain the composer/unsent text. Repeat only the profile scenario in a visible,
+unlocked test session for the four paint receipts.
+
+Manual screenshot review is blocked because the Mac is locked. The profiling
+fixture uses the isolated packaged WKWebView and reports DOM/paint receipts; it
+is not visual screenshot approval. See [preview diagnosis](testing/preview-path-diagnosis.md).
+
+No live Task, user document, image asset, publication or installed app was
+changed. Main integration and a normal push were subsequently authorized.
+The integration check repeats all 560 frontend tests, typecheck and lint.
+Repository-wide Rust formatting remains a pre-existing failure (also observed
+in all three jobs for the baseline main CI run 40730815466). Strict clippy
+likewise reports existing debt; the new completion request serialization warning
+was corrected without changing its retry contract. Keep these failures distinct
+from passing local native tests and focused packaged scenarios. Remote CI results
+must be reported for the exact pushed commit, including skipped downstream stages.
+
 ## Simple publication, chat sessions and images (2026-10-21)
 
 Current task: .worktrees/simple-knowledge-publication, base origin/main 0589850.

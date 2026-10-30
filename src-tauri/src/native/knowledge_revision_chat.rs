@@ -69,8 +69,8 @@ fn suggestion(kind: &str, ko: bool) -> &'static str {
         ("material_omission" | "validation_material_omission",false)=>"Restore the missing condition, failure or unresolved matter; keep it unresolved without new evidence.",
         ("invalid_finality"|"invalid_verification",true)=>"완료 상태와 실적 증거를 구분하세요. 확정·검증 표현을 근거 수준에 맞추거나 해당 주장을 삭제하세요.",
         ("invalid_finality"|"invalid_verification",false)=>"Match the claim to the recorded evidence state; remove unsupported decided or verified wording.",
-        ("applicability_overreach",true)=>"활용 범위를 근거 안으로 좁히고 해석은 출처와 연결해 '활용 해석'으로 구분하세요.",
-        ("applicability_overreach",false)=>"Narrow reuse to supported scope and label source-bound interpretations separately.",
+        ("applicability_overreach",true)=>"활용 범위를 출처가 뒷받침하는 범위로 좁히고, 해당 단계에서 적용 조건을 설명하세요.",
+        ("applicability_overreach",false)=>"Narrow reuse to supported scope and explain its practical conditions beside the affected guidance.",
         (_,true)=>"인용문을 원문에 맞추거나 직접 인용 표시를 제거하세요. 사용자 경험은 진술로 남기고 AI 해석과 구분할 수 있습니다.",
         (_,false)=>"Correct the direct quote or remove its quotation attribution. Keep user experience as a user report and distinguish AI interpretation.",
     }
@@ -334,6 +334,10 @@ fn prepare_reply(snapshot: &Value, b: &Value, response: Value, ko: bool) -> Resu
     let preparation = reply
         .candidate
         .map(|mut r| {
+            // Retain prior image assessments when an older provider omits the optional field.
+            if r.article.image_decisions.is_empty() {
+                r.article.image_decisions=serde_json::from_value(b["result"]["article"]["imageDecisions"].clone()).unwrap_or_default();
+            }
             // A model may repair bindings, not erase unchanged known blocking findings.
             let mut before = b["result"]["article"].clone();
             let mut after = serde_json::to_value(&r.article).map_err(|e| e.to_string())?;

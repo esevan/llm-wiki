@@ -180,6 +180,7 @@ impl TaskExecutionApplicationService {
         let mut connection = database::open(&self.db_path)?;
         let tx = database::immediate_transaction(&mut connection)?;
         super::task_service::ensure_task_mutable(&tx, task_id)?;
+        super::task_completion::ensure_execution_allowed(&tx,task_id)?;
         let task_exists: bool = tx
             .query_row(
                 "SELECT EXISTS(SELECT 1 FROM tasks t WHERE t.id=? AND NOT EXISTS(SELECT 1 FROM deleted_entities d WHERE d.entity_type='tasks' AND d.entity_id=t.id))",
@@ -450,6 +451,7 @@ impl TaskExecutionApplicationService {
         let mut c = database::open(&self.db_path)?;
         let tx = c.transaction().map_err(|e| e.to_string())?;
         super::task_service::ensure_task_mutable(&tx, &prepared.task_id)?;
+        super::task_completion::ensure_execution_allowed(&tx,&prepared.task_id)?;
         if req(input, "settingsRevision")? != prepared.settings_revision {
             return Err(
                 "settings_revision_conflict: check settings before context preparation".into(),
@@ -506,6 +508,7 @@ impl TaskExecutionApplicationService {
         let mut connection = database::open(&self.db_path)?;
         let tx = database::immediate_transaction(&mut connection)?;
         super::task_service::ensure_task_mutable(&tx, task_id)?;
+        super::task_completion::ensure_execution_allowed(&tx,task_id)?;
         let epoch:String=tx.query_row("SELECT CAST(settings_epoch AS TEXT) FROM task_work_sessions WHERE id=?",[session_id],|r|r.get(0)).map_err(|e|e.to_string())?;
         if epoch!=prepared.settings_epoch {return Err("settings_revision_conflict: settings changed before dispatch".into());}
         if let Some((stored,run_id))=tx.query_row("SELECT payload_hash,id FROM task_work_session_runs WHERE session_id=? AND submission_key=?",params![session_id,operation_id],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?))).optional().map_err(|e|e.to_string())? {
@@ -555,7 +558,7 @@ impl TaskExecutionApplicationService {
     }
 
     pub(crate) fn mark_dispatch_recorded(&self, run_id: &str) -> Result<(), String> {
-        self.update_owned(run_id,"UPDATE task_work_session_runs SET dispatch_state='dispatch_recorded',status='running',started_at=COALESCE(started_at,CURRENT_TIMESTAMP),updated_at=CURRENT_TIMESTAMP,revision=revision+1 WHERE id=? AND status='queued'")
+        self.update_owned(run_id,"UPDATE task_work_session_runs SET dispatch_state='dispatch_recorded',status='running',started_at=COALESCE(started_at,CURRENT_TIMESTAMP),updated_at=CURRENT_TIMESTAMP,revision=revision+1 WHERE id=? AND status='queued' AND NOT EXISTS(SELECT 1 FROM task_completion_stops g WHERE g.task_id=task_work_session_runs.task_id AND g.state='stopping')")
     }
     pub(crate) fn mark_context_sent(
         &self,
@@ -657,7 +660,7 @@ impl TaskExecutionApplicationService {
             tx.commit().map_err(|e| e.to_string())?;
             return Ok(());
         }
-        let nonterminal:bool=tx.query_row("SELECT status IN ('queued','running','awaiting_response') FROM task_work_session_runs WHERE id=?",[run_id],|r|r.get(0)).optional().map_err(|e|e.to_string())?.ok_or("ownership_failure: Run not found")?;
+        let nonterminal:bool=tx.query_row("SELECT status IN ('queued','running','awaiting_response','needs_attention') FROM task_work_session_runs WHERE id=?",[run_id],|r|r.get(0)).optional().map_err(|e|e.to_string())?.ok_or("ownership_failure: Run not found")?;
         if !nonterminal {
             return Err("stale_run: completed item arrived after terminal state".into());
         }
@@ -688,7 +691,7 @@ impl TaskExecutionApplicationService {
         let mut c = database::open(&self.db_path)?;
         let tx = database::immediate_transaction(&mut c)?;
         ensure_run_mutable(&tx, run_id)?;
-        let changed=tx.execute("UPDATE task_work_session_runs SET status=?,error_code=CASE WHEN ?='failed' THEN 'turn_failed' ELSE error_code END,error_message=COALESCE(?,error_message),finished_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP,revision=revision+1 WHERE id=? AND status IN ('queued','running','awaiting_response')",params![status,status,error,run_id]).map_err(|e|e.to_string())?;
+        let changed=tx.execute("UPDATE task_work_session_runs SET status=?,error_code=CASE WHEN ?='failed' THEN 'turn_failed' ELSE error_code END,error_message=COALESCE(?,error_message),finished_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP,revision=revision+1 WHERE id=? AND status IN ('queued','running','awaiting_response','needs_attention')",params![status,status,error,run_id]).map_err(|e|e.to_string())?;
         if changed == 0 {
             return Ok(());
         }
@@ -919,6 +922,7 @@ impl TaskExecutionApplicationService {
         let mut c = database::open(&self.db_path)?;
         let tx = database::immediate_transaction(&mut c)?;
         ensure_run_mutable(&tx, run)?;
+        super::task_completion::ensure_execution_allowed(&tx,task)?;
         let row=tx.query_row("SELECT f.provider_request_id,f.connection_generation,f.kind,f.request_json,f.status,r.status FROM task_work_session_formal_requests f JOIN task_work_session_runs r ON r.id=f.run_id WHERE f.id=? AND f.run_id=? AND f.task_id=? AND f.session_id=?",params![request,run,task,session],|r|Ok((r.get::<_,String>(0)?,r.get::<_,i64>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?,r.get::<_,String>(4)?,r.get::<_,String>(5)?))).optional().map_err(|e|e.to_string())?.ok_or("ownership_failure: formal request not found")?;
         if row.1 != current_generation {
             return Err("stale_request: provider connection changed".into());

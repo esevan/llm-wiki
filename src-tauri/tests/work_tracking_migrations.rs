@@ -1,7 +1,7 @@
 use llm_wiki_desktop::NativeApplication;
 use tempfile::tempdir;
 
-const CURRENT_SCHEMA_VERSION: i64 = 24;
+const CURRENT_SCHEMA_VERSION: i64 = 29;
 
 #[test]
 fn work_tracking_schema_is_complete_and_idempotent() {
@@ -24,6 +24,7 @@ fn work_tracking_schema_is_complete_and_idempotent() {
         "work_tracking_links",
         "knowledge_drafts",
         "knowledge_publication_decisions",
+        "task_completion_stops",
     ] {
         let count: i64 = connection
             .query_row(

@@ -349,9 +349,42 @@ export async function runTaskCodexExecutionScenario(h: WorkbenchScenarioHarness 
   const draft = document.querySelector<HTMLButtonElement>('[data-control="task-knowledge-draft"]')!;
   await h.prepareClick(draft,"Prepare private draft from completed Runs");h.click(draft,"Prepare private draft from completed Runs");
   await h.waitFor(()=>Boolean(document.querySelector('.knowledge-review[data-content-hash]')),"one-action Run-backed private draft");
-  const knowledge=await h.api<{versions:unknown[];pointers:{publishedRevision?:number}}>(`/tasks/${taskA.id}/knowledge`);
-  if(knowledge.versions.length!==1 || knowledge.pointers.publishedRevision!==undefined) throw new Error("Run-backed preparation must create exactly one private draft without publication");
+  const knowledge=await h.api<{versions:unknown[];pointers:{publishedRevision?:number|null}}>(`/tasks/${taskA.id}/knowledge`);
+  if(knowledge.versions.length!==1 || knowledge.pointers.publishedRevision!=null) throw new Error("Run-backed preparation must create exactly one private draft without publication");
   await h.step("One private-draft action refreshed completed Run evidence and Journey, rendered the exact draft inline, and left publication untouched.");
+
+  await closeDetail(h);
+  const b = await h.task(titleB);
+  await taskClient.transition(taskB.id,b.taskRevision,"in_progress");
+  const readyB=await taskExecutionClient.prepare({taskId:taskB.id,sessionId:sessionB,resolveReasoning:true});
+  await taskExecutionClient.execute({taskId:taskB.id,sessionId:sessionB,operationId:crypto.randomUUID(),instruction:"Wait for an approval before finishing",settingsRevision:readyB.effectiveConfig!.settingsRevision});
+  await taskExecutionClient.queue({action:"enqueue",taskId:taskB.id,sessionId:sessionB,operationId:crypto.randomUUID(),instruction:"This pending follow-up must never dispatch"});
+  await taskExecutionClient.queue({action:"resume",taskId:taskB.id,sessionId:sessionB});
+  await h.detail(titleB);
+  const reviewB=document.querySelector<HTMLButtonElement>('[data-control="task-detail-tab-review"]')!;
+  await h.prepareClick(reviewB,"Review completion with a live execution");h.click(reviewB,"Review completion with a live execution");
+  const evidenceB=document.querySelector<HTMLTextAreaElement>('[data-control="task-completion-evidence"]')!;h.enter(evidenceB,"Existing output is sufficient; cancel the pending follow-up.");
+  const completeB=document.querySelector<HTMLButtonElement>('[data-control="task-completion-complete"]')!;
+  await h.prepareClick(completeB,"Request completion with active work");h.click(completeB,"Request completion with active work");
+  await h.waitFor(()=>Boolean(document.querySelector('.task-stop-complete-dialog[open]')),"reviewed stop and complete dialog");
+  await h.waitFor(()=>Boolean(document.querySelector('.task-stop-complete-dialog')?.textContent?.includes("This pending follow-up must never dispatch")),"exact queued request in completion review");
+  const cancelB=document.querySelector<HTMLButtonElement>('[data-control="task-stop-complete-cancel"]')!;
+  h.coverage.observe(document,"task-codex-execution","stop-complete-review");
+  interactWithObservedControl(h,"task-stop-complete-cancel",()=>h.click(cancelB,"Cancel completion review"));
+  await h.waitFor(()=>!document.querySelector('.task-stop-complete-dialog'),"completion review cancelled without stopping");
+  h.coverage.assertEffect("task-stop-complete-cancel",()=>!document.querySelector('.task-stop-complete-dialog'));
+  await h.prepareClick(completeB,"Request completion again");h.click(completeB,"Request completion again");
+  await h.waitFor(()=>Boolean(document.querySelector<HTMLButtonElement>('[data-control="task-stop-complete-confirm"]:not(:disabled)')),"current completion confirmation");
+  const confirmB=document.querySelector<HTMLButtonElement>('[data-control="task-stop-complete-confirm"]')!;
+  h.coverage.observe(document,"task-codex-execution","stop-complete-confirm");
+  interactWithObservedControl(h,"task-stop-complete-confirm",()=>h.click(confirmB,"Stop execution and complete Task B"));
+  await h.waitForAsync(async()=>(await h.task(titleB)).state==="completed","Task B completed only after provider termination");
+  await h.waitFor(()=>!document.querySelector('.task-stop-complete-dialog'),"completion confirmation closed");
+  h.coverage.assertEffect("task-stop-complete-confirm",()=>!document.querySelector('.task-stop-complete-dialog'));
+  const stoppedB=await readExecution({taskId:taskB.id,sessionId:sessionB});
+  if(stoppedB.runs.length!==1||stoppedB.runs[0].status!=="cancelled"||stoppedB.queue?.items.length!==0)throw new Error("Completion lost termination or dispatched cancelled queued work");
+  await h.step("Reviewed exact live execution and pending follow-up, cancelled review once, then stopped and completed only after termination without dispatching the queue.");
+
 
 }
 

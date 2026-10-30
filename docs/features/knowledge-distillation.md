@@ -56,3 +56,42 @@ added inside the candidate boundary. A rejected change preserves prior graph and
 history, and draft preparation surfaces a failed Journey prerequisite.
 
 Revision requests appear in AI Queue with model, observed API calls, status and an original-screen link. A completed request means a proposal or clarification was prepared; it does not mean the private draft was applied or published. Queue cancellation only cancels an active request. Saved proposals, user input retention and explicit private apply/publication checks keep their existing owners.
+
+## Writing for reuse
+
+Draft generation and revision chat organize supported background, work performed,
+outputs and their organization, and decisions with alternatives and criteria into
+a standalone document. Structure follows the subject; empty headings and routine
+recording commentary are unnecessary. User reports do not need external proof.
+Proposals remain distinct from executed actions, and consequential limitations
+appear beside the step or result they affect. Reuse guidance retains exact source
+bindings without requiring visible provenance labels in the article.
+
+For example, replace “I recorded customer reply drafts; this is not a verified
+workflow” with “Customer reply drafts are organized by customer in `drafts/` for
+review. Check recipients and content before sending.” This does not claim the
+replies were sent. Likewise, a recorded choice of CSV for a spreadsheet recipient
+should explain that handoff criterion, rather than inventing a performance result.
+
+### Original images
+
+Capture, Work Log and session-note images are frozen with the Knowledge source
+snapshot. Generation and revision receive an image catalog and assess each visual
+for its documentary value and user intent. Meaningful visuals stay beside their
+explanation as original images; text-only screenshots can be integrated into prose
+with an explicit assessment. Missing assessments retain the original visual.
+Revisions preserve existing assessments when an older response omits the field.
+
+Image links use immutable `llm-wiki-image:` references resolved locally by the
+app from saved snapshots. They render in draft and published Vault reading views,
+including full-size viewing and inline retry on failure. Editing or removing the
+original attachment does not change a saved image. References outside the supplied
+snapshot are rejected. No temporary paths, remote uploads or tracking URLs are
+created. These internal links require the local app database when reading exported
+Markdown; they are not standalone image files for other Markdown readers.
+
+`claimBindings.bodyLocator` is optional for older payloads. It identifies exact
+paraphrased prose while source statements and quotes remain unchanged. Optional
+`article.imageDecisions` holds imageRef, disposition (`preserve_visual`,
+`text_integrated`, `omit`), rationale and an optional bodyLocator. Integrated text
+must occur in the body. These fields use the same schema in generation and revision.

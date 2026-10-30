@@ -5,6 +5,7 @@ pub(crate) mod conversation_context;
 pub(crate) mod database;
 mod job_results;
 pub(crate) mod knowledge_distillation;
+mod knowledge_images;
 mod knowledge_preparation;
 pub(crate) mod knowledge_revision_chat;
 pub(crate) mod foreground_jobs;
@@ -686,7 +687,9 @@ impl NativeApplication {
                     .unwrap_or(false),
             )?,
             "vault.browse" => vault_navigation::browse(&self.vault)?,
-            "vault.image" => vault_navigation::image(&self.vault, id("path")?, id("source")?)?,
+            "vault.image" => if id("source")?.starts_with(knowledge_images::PREFIX) {
+                knowledge_images::read(&self.db_path, id("source")?)?
+            } else { vault_navigation::image(&self.vault, id("path")?, id("source")?)? },
             "knowledge.read" => vault::read(
                 &self.vault,
                 id("path")?,

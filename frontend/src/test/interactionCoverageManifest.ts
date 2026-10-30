@@ -10,6 +10,7 @@ const task = (id: string, family: `F${number}`, source: string, effect: string, 
 const existing = (id: string, family: `F${number}`, selector: string, source: string, evidence: string, effect: string, disabledReason?: string): ControlSpec => ({ id, family, kind: 'button', selector, source, sourceEvidence: evidence, scenario: 'designated-interactive-suite', effect, disabledReason });
 
 const manifest: readonly ControlSpec[] = [
+  ...['task-stop-complete-confirm','task-stop-complete-cancel'].map(id=>task(id,'F74','frontend/src/features/workbench/StopAndCompleteDialog.tsx','reviewed execution stop, confirmed Task completion or cancellation preserves existing work','confirmation waits for an exact current review and any pending request')),
 
   ...['vault-folder-disclose','vault-folder-select','vault-note-open','vault-tab','vault-refresh','vault-browse-retry','vault-moc-open','vault-search-retry','vault-list-back','vault-source','vault-read-cancel','vault-history-back','vault-filter'].map(id => task(id, 'F36', 'frontend/src/features/search/SearchView.tsx', 'Vault navigation, filtering, read-only source, selection and recovery update the visible reader', 'pending reads and refreshes disable actions that require their result')),
   ...['vault-diagram-details','vault-diagram-source','vault-image-close','vault-image-retry','vault-image-open','vault-note-link'].map(id => task(id, 'F36', 'frontend/src/features/search/VaultMarkdown.tsx', 'diagram source, local image detail or Vault note link becomes visible')),

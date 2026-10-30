@@ -247,6 +247,10 @@ async fn task_session_models(runtime: tauri::State<'_,native::task_execution_run
     Ok(match runtime.model_catalog().await {Ok(body)=>NativeResponse{status:200,body},Err(e)=>execution_error(e)})
 }
 #[tauri::command]
+async fn task_completion_control(runtime: tauri::State<'_,native::task_execution_runtime::TaskExecutionRuntime>,input:serde_json::Value)->Result<NativeResponse,String>{
+    Ok(match runtime.completion_control(&input).await {Ok(body)=>NativeResponse{status:200,body},Err(e)=>execution_error(e)})
+}
+#[tauri::command]
 async fn task_session_queue(runtime: tauri::State<'_,native::task_execution_runtime::TaskExecutionRuntime>,input:serde_json::Value) -> Result<NativeResponse,String> {
     Ok(match runtime.queue_action(&input).await {Ok(body)=>NativeResponse{status:200,body},Err(e)=>execution_error(e)})
 }
@@ -591,6 +595,7 @@ pub fn run() {
             task_session_prepare,
             task_session_models,
             task_session_queue,
+            task_completion_control,
             task_session_external_threads_list,
             task_session_external_thread_read,
             task_session_external_thread_link,

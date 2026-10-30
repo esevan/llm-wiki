@@ -103,3 +103,29 @@ The exact initial payload is frozen with its Run. Its delivery marker uses the c
 This supplies stored text, not binary attachments, image pixels or arbitrary files. Previously bounded/redacted saved reports cannot restore provider text that was never stored. No MCP tools or broader Task-reading capability are added. Synthetic transport, persistence and UI tests cover this contract; actual provider execution and rendered desktop acceptance remain unverified.
 
 Execution-before-run summaries now appear in AI Queue as tracked foreground requests with their actual model and started/completed API call counts. The selected Codex model still performs the work. Queue cancellation reaches the original summary; calls already started may still be charged. Open original screen returns to the owning Task/session. Queue Retry is not offered: review the outcome and explicitly send a new request from that screen. On restart, interrupted observations fail visibly and are never automatically re-executed. The existing in-memory unsent Session draft retention does not become restart persistence.
+
+## Completing a Task with active work
+
+Use the usual Task completion action and keep your completion evidence. If an
+execution or a queued request still blocks completion, a review lists the exact
+executions, queued instructions and pending responses affected by **Stop and
+complete**. Cancelling this review makes no changes. Confirmation pauses every
+Task session queue, cancels the reviewed pending items and prevents new dispatches
+while termination is checked. Existing outputs and Work Log remain available.
+
+An interrupt acknowledgment does not complete the Task. The app checks the exact
+saved provider conversation and turn, recovers a safely identified terminal result
+when only its local status is stale, and completes only after all runs have ended.
+A missing turn identity, unavailable provider or unknown result stays pending with
+a retryable explanation. The app never marks an uncertain execution completed.
+A new/replaced execution or an edited queued request requires a fresh review;
+ordinary streaming checkpoints do not invalidate a reviewed Run. Pending provider
+responses cannot be approved after stopping begins. Changed Task definitions
+continue to use the Task revision guard.
+
+**Cancel completion** remains available while a response is delayed. It leaves the
+Task in progress and prevents late replies from completing it. Interrupts already
+sent and cancelled queue items are not undone; queues stay paused for an explicit
+user decision. Reopening completion resumes an already approved pending request
+without sending a duplicate begin. Completing a Task remains separate from
+Knowledge publication.

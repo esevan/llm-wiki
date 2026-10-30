@@ -57,6 +57,18 @@ function subscribe(input: ExecutionInput, onSnapshot?: (snapshot: TaskExecutionS
   return subscription;
 }
 
+export interface CompletionReview {
+  taskId: string; taskRevision: number; taskState: string; reviewHash: string; activeOperationId?: string; activeEvidence?: string;
+  runs: { id: string; instruction: string; status: string }[];
+  queued: { id: string; instruction: string }[];
+  responses: { id: string; title: string; kind: string }[];
+}
+export interface CompletionProgress { state: "stopping" | "cancelled" | "completed"; review: CompletionReview; remaining: CompletionReview; issues?: string[] }
+export const taskCompletionClient = {
+  preview: (taskId: string) => request<CompletionReview>("task_completion_control", { action: "preview", taskId }),
+  control: (input: { action: "begin" | "poll" | "cancel"; taskId: string; operationId: string; expectedTaskRevision?: number; reviewHash?: string; evidence?: string }) => request<CompletionProgress>("task_completion_control", input),
+};
+
 export const taskExecutionClient = {
   models: () => request<{ models: CodexModelCapability[] }>("task_session_models", {}),
   queue: (input: ExecutionInput & { action: "enqueue" | "edit" | "remove" | "move" | "pause" | "resume" | "cancel_drain" | "stop_then_drain"; operationId?: string; instruction?: string; attachment?: TaskWorkSessionAttachment; itemId?: string; expectedRevision?: number; direction?: "up" | "down" }) => request<TaskExecutionSnapshot>("task_session_queue", input),

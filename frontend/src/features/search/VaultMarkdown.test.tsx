@@ -30,3 +30,11 @@ it('follows aliased wikilinks and Markdown headings but leaves unsafe or ambiguo
  fireEvent.click(screen.getByRole('link',{name:'Read the map'}));expect(navigate).toHaveBeenCalledWith('Map.md','Start');fireEvent.click(screen.getByRole('link',{name:'heading'}));expect(navigate).toHaveBeenCalledWith('Guide.md','Heading');expect(screen.queryByRole('link',{name:'external'})).toBeNull();expect(document.querySelector('[href^="javascript:"]')).toBeNull();
  await waitFor(()=>expect(screen.getByText(/external/)).toHaveAttribute('title'));
 });
+it('resolves frozen Knowledge image refs locally after publication and leaves invalid schemes inert',async()=>{
+ const ref='llm-wiki-image:'+ 'a'.repeat(64);
+ render(<Fixture body={`Diagram context.\n\n![Architecture](${ref})\n\n![Unsafe](javascript:alert)`}/>);
+ await screen.findByRole('img',{name:'Architecture'});
+ expect(vaultClient.image).toHaveBeenCalledWith('Guide.md',ref);
+ expect(document.querySelector('img[src^="llm-wiki-image:"]')).toBeNull();
+ expect(document.querySelector('[src^="javascript:"]')).toBeNull();
+});

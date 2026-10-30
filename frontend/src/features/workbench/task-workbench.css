@@ -1517,3 +1517,12 @@ main:has(.task-workbench.active :is(.task-detail, .refinement-panel)) {
 @media (max-width: 800px) {
   .refinement-panel:is([role="dialog"], [role="region"]):has(.reference-aware-preview) .refinement-support-rail .refinement-conversation { max-height: none; }
 }
+
+.task-stop-complete-dialog { width: min(560px, calc(100vw - 40px)); }
+.task-stop-complete-dialog h3 { font-size: var(--font-size-md); margin: var(--space-4) 0 var(--space-2); }
+.task-stop-complete-dialog ul { max-height: 24vh; overflow: auto; padding-left: var(--space-5); }
+.task-stop-complete-dialog p { white-space: pre-wrap; }
+
+.task-stop-complete-dialog [data-control="task-stop-complete-confirm"] { background: var(--color-accent-strong); border-color: var(--color-accent-strong); color: var(--color-bg-surface); }
+.task-stop-complete-dialog [data-control="task-stop-complete-confirm"]:hover:not(:disabled) { background: var(--color-accent-primary); }
+.task-stop-complete-dialog button:focus-visible { outline: 3px solid var(--color-accent-primary); outline-offset: 2px; }
