@@ -1103,6 +1103,8 @@ it("offers reviewed stop-and-complete from the normal Task completion button",as
  render(<TaskDetail taskId={task.id} onClose={vi.fn()} onChanged={vi.fn()}/>);
  await screen.findByRole("heading",{name:task.title});fireEvent.click(screen.getByRole("tab",{name:"Review"}));
  fireEvent.change(screen.getByRole("textbox",{name:"Completion evidence"}),{target:{value:"Report saved"}});
- fireEvent.click(document.querySelector<HTMLButtonElement>('[data-control="task-completion-complete"]')!);
- await screen.findByRole("heading",{name:"Stop executions and complete?"});expect(screen.getByText("Finish draft")).toBeVisible();expect(completion.control).not.toHaveBeenCalled();
+ await act(async()=>{fireEvent.click(document.querySelector<HTMLButtonElement>('[data-control="task-completion-complete"]')!);});
+ await waitFor(()=>expect(completion.preview).toHaveBeenCalledWith(task.id));
+ expect(screen.getByRole("heading",{name:"Stop executions and complete?"})).toBeVisible();
+ expect(screen.getByText("Finish draft")).toBeVisible();expect(completion.control).not.toHaveBeenCalled();
 });
