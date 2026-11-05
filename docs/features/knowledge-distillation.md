@@ -4,6 +4,35 @@
 
 ![Knowledge revision comparison](images/integrated-knowledge-compare.en.jpg)
 
+## Detailed experience essays and optional claims (2026-11-05)
+
+New drafts and chat revisions request detailed first-person experience essays:
+what I tried, what I did, recorded alternatives and decisions, what happened,
+failed attempts, limits and lessons. AI/tool work stays accurately attributed;
+plans and reported outcomes are not rewritten as independently verified results.
+Sparse records do not justify invented details.
+
+Claim/assumption metadata is optional. Missing or malformed optional entries are
+retained as diagnostic warnings instead of discarding the article. Natural
+reported paraphrases need not reproduce a source quote word for word. Available
+source identities and exact quotations remain provenance; they do not certify a
+paraphrase. A paraphrase warning includes the proposed wording and recorded
+quotes together so possible contradictions can be reviewed; it is not an
+established fact. Optional applicability/body-location gaps are advisory. Forged
+verification or final decision authority, invalid sources, material omissions,
+and genuine blocking findings still require review; stale heads, ownership and
+transaction guards remain enforced.
+
+If model semantics prevent preparation of a completed Task, the worker retains
+its saved Run report, known failed evidence and canonical recorded completion as
+a factual fallback, with a warning. Raw reports and completed command evidence
+from other Runs are collected even without their semantic projection. It does not infer successful verification or
+rewrite Task/completion records. Once running a build containing this fix, explicitly request
+a new Knowledge draft. Queue retry is available for requests with a currently
+registered prompt version; older-version requests require a new draft request.
+Review the resulting essay and warnings before applying or publishing it.
+
+
 ## Publication and source policy update (2026-10-21)
 
 User experience and explanation are primary user-reported sources.
@@ -74,6 +103,8 @@ replies were sent. Likewise, a recorded choice of CSV for a spreadsheet recipien
 should explain that handoff criterion, rather than inventing a performance result.
 
 ### Original images
+
+Generation status refreshes preserve unchanged source images and an open full-size viewer. A changed image reference loads the new source; closing the viewer restores focus to its opener.
 
 Capture, Work Log and session-note images are frozen with the Knowledge source
 snapshot. Generation and revision receive an image catalog and assess each visual

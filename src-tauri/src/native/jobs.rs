@@ -566,7 +566,7 @@ fn run(
 }
 
 fn transient_error(error: &str) -> bool {
-    !["invalid_prompt", "invalid_result", "prompt version", "missing", "required", "stale", "cancelled", "not valid JSON", "knowledge_preparation_failed", "outside the affected", "task_completed"]
+    !["invalid_prompt", "invalid_result", "prompt version", "missing", "required", "stale", "cancelled", "not valid JSON", "knowledge_preparation_failed", "outside the affected", "task_completed", "completion snapshot requires"]
         .iter().any(|marker| error.to_ascii_lowercase().contains(marker))
 }
 
@@ -978,12 +978,30 @@ fn finalize_run_distillation(
         factual_fallback(&manifest,input.get("runStatus").and_then(Value::as_str).unwrap_or("unknown"),
         )
     } else {
-        let value=outcome?;
-        validate_prompt_output(PromptId::RunReportDistillation,&value).map_err(|error|error.to_string())?;
-        serde_json::from_value::<DistillationResult>(value).map_err(|error|format!("invalid Distillation result: {error}"))?
+        let parsed = outcome.and_then(|value| {
+            validate_prompt_output(PromptId::RunReportDistillation, &value)
+                .map_err(|error| error.to_string())?;
+            serde_json::from_value::<DistillationResult>(value).map_err(|error| error.to_string())
+        });
+        match parsed {
+            Ok(result) => result,
+            Err(issue) => {
+                let mut fallback = factual_fallback(&manifest, "unknown");
+                fallback.warnings.push(format!("Semantic metadata unavailable; saved Run report and evidence retained: {issue}"));
+                fallback
+            }
+        }
     };
     crate::application::task_distillation_service::attach_recorded_completion(&manifest, &mut candidate);
-    canonicalize_semantic_ids(&manifest,&mut candidate)?;
+    let semantic = canonicalize_semantic_ids(&manifest, &mut candidate)
+        .and_then(|_| crate::application::task_distillation_service::validate_result(&manifest, &candidate));
+    if let Err(issue) = semantic {
+        // Only model semantics fall back. Publication below still enforces exact
+        // sources, task revisions, worker ownership and projection transactions.
+        candidate = factual_fallback(&manifest, "unknown");
+        candidate.warnings.push(format!("Semantic metadata unavailable; saved Run report and evidence retained: {issue}"));
+        canonicalize_semantic_ids(&manifest, &mut candidate)?;
+    }
     let mut connection=database::open(db_path)?;
     let work_log=crate::native::task_distillation::publish_for_worker(&mut connection,job_id,&manifest,&candidate,PromptId::RunReportDistillation,prompt_version,
         generation,
@@ -1460,6 +1478,75 @@ mod registry_tests {
 #[cfg(test)]
 mod foundation_queue_tests {
     use super::*;
+
+    #[test]
+    fn deterministic_completion_validation_is_not_a_transient_retry() {
+        for error in ["completion snapshot requires claims bound to its canonical completion", "completion snapshot requires its exact canonical completion source"] {
+            assert!(!transient_error(error));
+        }
+        assert!(transient_error("temporary provider connection timeout"));
+    }
+
+    #[test]
+    fn knowledge_preparation_retains_recorded_completion_when_model_claims_are_unusable() {
+        for case in ["unbound", "empty", "malformed", "provider_parse", "wrong_revision", "collision", "fake_verified", "valid"] {
+        let root=tempfile::tempdir().unwrap();let db=root.path().join("state.sqlite3");database::initialize(&db).unwrap();
+        let c=database::open(&db).unwrap();
+        c.execute_batch("INSERT INTO tasks(id,current_revision,state,created_at,last_user_activity_at) VALUES('task',1,'completed','2026-01-01','2026-01-01');
+            INSERT INTO task_revisions(task_id,revision,title,content_hash,created_at) VALUES('task',1,'Work','hash','2026-01-01');
+            INSERT INTO task_completions(id,task_id,task_revision,evidence,report,operation_id,created_at) VALUES('completion','task',1,'Recorded evidence','Finished','complete','2026-01-02');
+            INSERT INTO task_work_log_entries(id,task_id,body,created_at) VALUES('log','task','Original','2026-01-01');
+            INSERT INTO task_work_sessions(id,task_id,title,created_at,updated_at) VALUES('session','task','Work','2026-01-01','2026-01-01');
+            INSERT INTO task_work_session_entries(id,session_id,author,kind,body,created_at) VALUES('entry','session','user','note','Inspect','2026-01-01');
+            INSERT INTO task_work_session_runs(id,task_id,session_id,submission_key,payload_hash,instruction,user_entry_id,work_log_entry_id,model,workspace_path,context_hash,status,revision,created_at,updated_at) VALUES('run','task','session','key','hash','Inspect','entry','log','model','','hash','failed',1,'2026-01-01','2026-01-01');").unwrap();
+
+        c.execute("UPDATE task_work_session_runs SET status='succeeded',final_report='I tried the local export and chose SQLite. The command was not independently verified.' WHERE id='run'",[]).unwrap();
+        c.execute("INSERT INTO task_work_log_entries(id,task_id,body,created_at) VALUES('older-log','task','Earlier attempt','2025-12-01')",[]).unwrap();
+        c.execute("INSERT INTO task_work_session_entries(id,session_id,author,kind,body,created_at) VALUES('older-entry','session','user','note','Earlier attempt','2025-12-01')",[]).unwrap();
+        c.execute("INSERT INTO task_work_session_runs(id,task_id,session_id,submission_key,payload_hash,instruction,user_entry_id,work_log_entry_id,model,workspace_path,context_hash,status,final_report,revision,created_at,updated_at) SELECT 'older-run',task_id,session_id,'older-key',payload_hash,instruction,'older-entry','older-log',model,workspace_path,context_hash,'failed','I tried an earlier approach without a semantic projection.',1,'2025-12-01','2025-12-01' FROM task_work_session_runs WHERE id='run'",[]).unwrap();
+        c.execute("INSERT INTO task_work_session_run_items(run_id,provider_item_id,provider_order,kind,status,content_json,created_at,completed_at) VALUES('run','check',0,'commandExecution','completed',?,'2026-01-01','2026-01-01')",[json!({"command":"check export","exitCode":1,"aggregatedOutput":"Export check failed"}).to_string()]).unwrap();
+        c.execute("INSERT INTO task_work_session_run_items(run_id,provider_item_id,provider_order,kind,status,content_json,created_at,completed_at) SELECT 'older-run','older-check',provider_order,kind,status,content_json,created_at,completed_at FROM task_work_session_run_items WHERE run_id='run'",[]).unwrap();
+        let service=crate::application::task_execution_service::TaskExecutionApplicationService::new(&db);
+        let input=service.distillation_job_input("run","en").unwrap();
+        let manifest=distillation_input(&input).unwrap();
+        let result=crate::application::task_distillation_service::factual_fallback(&manifest,"succeeded");
+        let mut candidate=serde_json::to_value(result).unwrap();
+        match case {
+            "unbound" => candidate["completionSnapshots"][0]["claimIds"]=json!(["missing-model-claim"]),
+            "empty" => candidate["completionSnapshots"][0]["claimIds"]=json!([]),
+            "malformed" => candidate["claims"]=Value::Null,
+            "wrong_revision" => candidate["completionSnapshots"][0]["completionRevision"]=json!("0"),
+            "collision" => {candidate["claims"][0]["statement"]=json!("Paraphrased completion");},
+            "provider_parse" | "valid" => {},
+            "fake_verified" => candidate["claims"][0]["epistemicState"]=json!("verified"),
+            _ => unreachable!(),
+        }
+        candidate["warnings"].as_array_mut().unwrap().push(json!("model fixture marker"));
+        let original:String=c.query_row("SELECT evidence||report FROM task_completions WHERE id='completion'",[],|r|r.get(0)).unwrap();
+        c.execute("INSERT INTO ai_jobs_v2(id,task_kind,status,worker_id,source_revision) VALUES('report','run_report_distillation','running','worker',?)",[input["sourceRevision"].as_str().unwrap()]).unwrap();
+        let outcome=if case=="provider_parse" {Err("invalid provider claim schema".into())} else {Ok(candidate)};
+        finalize_run_distillation(&db,"report",prompt_definition(PromptId::RunReportDistillation).version,&input,outcome,"worker").unwrap();
+        let raw:String=c.query_row("SELECT result_json FROM ai_jobs_v2 WHERE id='report' AND status='completed'",[],|r|r.get(0)).unwrap();
+        let saved:Value=serde_json::from_str(&raw).unwrap();
+        assert_eq!(saved["completionSnapshots"][0]["verificationState"],"recorded");
+        assert!(!saved["claims"].as_array().unwrap().iter().any(|claim|claim["epistemicState"]=="verified"));
+        if !matches!(case,"unbound"|"empty"|"valid") {
+            assert!(saved["warnings"].to_string().contains("Semantic metadata unavailable"),"{case}");
+        } else {
+            assert!(!saved["warnings"].to_string().contains("Semantic metadata unavailable"),"{case}");
+            assert!(saved["warnings"].to_string().contains("model fixture marker"),"{case}");
+        }
+        let mut connection=database::open(&db).unwrap();let tx=connection.transaction().unwrap();
+        let snapshot=crate::native::knowledge_distillation::capture_snapshot_tx(&tx,"task",1,"en").unwrap();
+        assert!(snapshot["sourceManifest"].as_array().unwrap().iter().any(|source|source["type"]=="run_final_report"&&source["content"].as_str().unwrap_or("").contains("chose SQLite")));
+        assert!(snapshot["sourceManifest"].as_array().unwrap().iter().any(|source|source["type"]=="run_completed_item"&&source["role"]=="failed_check"));
+        assert!(saved["claims"].to_string().contains("Export check failed"));
+        assert!(snapshot["sourceManifest"].as_array().unwrap().iter().any(|source|source["type"]=="run_final_report"&&source["id"]=="older-run"));
+        assert!(snapshot["sourceManifest"].as_array().unwrap().iter().any(|source|source["type"]=="run_completed_item"&&source["id"]=="older-check"));
+        assert_eq!(c.query_row("SELECT evidence||report FROM task_completions WHERE id='completion'",[],|r|r.get::<_,String>(0)).unwrap(),original);
+        assert_eq!(c.query_row("SELECT current_revision FROM tasks WHERE id='task'",[],|r|r.get::<_,i64>(0)).unwrap(),1);
+        }
+    }
 
     #[test]
     fn failed_downstream_refresh_does_not_trap_the_next_same_source_request() {

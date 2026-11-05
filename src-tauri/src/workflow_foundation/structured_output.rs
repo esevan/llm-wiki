@@ -649,11 +649,15 @@ pub(crate) fn parse_completion(
     // Capture limits apply after trimming, matching its canonical validator.
     // Normalize with that validator before local schema bounds to avoid rejecting
     // an otherwise valid boundary value solely for surrounding whitespace.
-    let parsed = if id == PromptId::CaptureDistillation {
+    let mut parsed = if id == PromptId::CaptureDistillation {
         crate::native::capture_distillation::validate_result(&parsed, usize::MAX, usize::MAX)?
     } else {
         parsed
     };
+    // Optional Knowledge metadata may be malformed even when useful prose is
+    // complete. Repair it before shape validation, retaining rejected values as
+    // warnings; all core/schema and domain authority checks still run below.
+    super::output_defaults::normalize_knowledge_metadata(id, &mut parsed);
     let mut schema = schema(id, context)?;
     // Keep rejected revision ideas as inspectable, repairable proposals. The
     // strict provider contract remains unchanged; the domain preparation gate
@@ -870,6 +874,91 @@ mod tests {
     fn completion(value: Value) -> Value {
         json!({"choices":[{"finish_reason":"stop","message":{"content":value.to_string()}}]})
     }
+    fn knowledge_candidate() -> Value {
+        json!({"article":{"type":"concept","title":"My experience","bodyMarkdown":"I tried the local export and left its outcome unverified.","applicability":{"summary":"","representativeQuestions":[],"helpsWith":[],"conditions":[],"exclusions":[],"sourceRefs":[]},"claimBindings":[],"assumptionBindings":[],"finalOutcomes":[]},"ideas":[],"qualityFindings":[]})
+    }
+
+    fn knowledge_reply(id: PromptId, candidate: Value) -> Value {
+        if id == PromptId::KnowledgeDraft { candidate }
+        else { json!({"message":"A grounded experience essay","missingEvidence":[],"candidate":candidate}) }
+    }
+
+    #[test]
+    fn knowledge_provider_pipeline_preserves_prose_with_malformed_optional_claims() {
+        for id in [PromptId::KnowledgeDraft, PromptId::KnowledgeRevisionChat] {
+            for field in ["claimBindings", "assumptionBindings", "finalOutcomes"] {
+                for malformed in [Value::Null, json!("bad metadata"), json!({}), json!([{"claimId":"incomplete"}]), json!([42])] {
+                    let mut candidate = knowledge_candidate();
+                    candidate["article"][field] = malformed.clone();
+                    let payload = completion(knowledge_reply(id, candidate));
+                    // This is the same API envelope -> parse -> normalization ->
+                    // typed validation sequence used by the native provider.
+                    let mut parsed = parse_completion(id, &json!({}), &payload).unwrap();
+                    super::super::normalize_prompt_output(id, &mut parsed);
+                    super::super::validate_prompt_output(id, &parsed).unwrap();
+                    let article = if id == PromptId::KnowledgeDraft { &parsed } else { &parsed["candidate"] };
+                    assert_eq!(article["article"]["bodyMarkdown"], knowledge_candidate()["article"]["bodyMarkdown"]);
+                    assert_eq!(article["article"][field], json!([]));
+                    assert_eq!(article["qualityFindings"].as_array().unwrap().len(), 1);
+                    assert_eq!(article["qualityFindings"][0]["severity"], "warning");
+                    for rejected in malformed.as_array().cloned().unwrap_or_else(|| vec![malformed.clone()]) {
+                        assert!(article["qualityFindings"][0]["message"].as_str().unwrap().contains(&rejected.to_string()));
+                    }
+                    let again = parse_completion(id, &json!({}), &completion(parsed.clone())).unwrap();
+                    assert_eq!(again, parsed);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn knowledge_provider_pipeline_keeps_core_and_quality_shape_failures_fatal() {
+        for id in [PromptId::KnowledgeDraft, PromptId::KnowledgeRevisionChat] {
+            for field in ["bodyMarkdown", "qualityFindings"] {
+                let mut candidate = knowledge_candidate();
+                candidate["article"]["claimBindings"] = Value::Null;
+                if field == "bodyMarkdown" { candidate["article"][field] = json!(42); }
+                else {
+                    candidate[field] = json!({"severity":"blocking","message":"Must not disappear"});
+                    let original = candidate.clone();
+                    super::super::output_defaults::normalize_knowledge_metadata(PromptId::KnowledgeDraft, &mut candidate);
+                    assert_eq!(candidate, original);
+                    candidate["article"]["claimBindings"] = json!([]);
+                }
+                let error = parse_completion(id, &json!({}), &completion(knowledge_reply(id, candidate))).unwrap_err();
+                assert!(error.contains(if id == PromptId::KnowledgeRevisionChat { ".candidate" } else { field }), "{error}");
+            }
+        }
+    }
+
+    #[test]
+    fn knowledge_provider_pipeline_does_not_create_verified_authority_or_remove_blockers() {
+        for id in [PromptId::KnowledgeDraft, PromptId::KnowledgeRevisionChat] {
+            for mode in ["verified", "blocking"] {
+                let mut candidate = knowledge_candidate();
+                candidate["article"]["assumptionBindings"] = Value::Null;
+                if mode == "verified" {
+                    candidate["article"]["claimBindings"] = json!([{"claimId":"fake","statement":"I verified the export","epistemicState":"verified","sourceRefs":[]}]);
+                } else {
+                    candidate["qualityFindings"] = json!([{"kind":"unsupported_addition","severity":"blocking","locator":"article","message":"Unsupported outcome","sourceRefs":[]}]);
+                }
+                let mut parsed = parse_completion(id, &json!({}), &completion(knowledge_reply(id, candidate))).unwrap();
+                super::super::normalize_prompt_output(id, &mut parsed);
+                super::super::validate_prompt_output(id, &parsed).unwrap();
+                let article = if id == PromptId::KnowledgeDraft { &parsed } else { &parsed["candidate"] };
+                let result = serde_json::from_value(article.clone()).unwrap();
+                let snapshot = json!({"sourceManifest":[],"journey":{"topicStates":[]}});
+                let prepared = crate::native::knowledge_distillation::prepared(snapshot,result,"fixture","").unwrap();
+                assert_ne!(prepared["qualityState"], "valid", "{mode}: {prepared}");
+                if mode == "verified" {
+                    assert_eq!(prepared["generationResult"]["article"]["claimBindings"][0]["epistemicState"], "verified");
+                } else {
+                    assert!(prepared["generationResult"]["qualityFindings"].as_array().unwrap().iter().any(|finding| finding["severity"]=="blocking"));
+                }
+            }
+        }
+    }
+
     fn sample(root: &Value, s: &Value) -> Value {
         if let Some(r) = s["$ref"].as_str() {
             return sample(root, root.pointer(&r[1..]).unwrap());

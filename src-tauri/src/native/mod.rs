@@ -690,11 +690,11 @@ impl NativeApplication {
             "vault.image" => if id("source")?.starts_with(knowledge_images::PREFIX) {
                 knowledge_images::read(&self.db_path, id("source")?)?
             } else { vault_navigation::image(&self.vault, id("path")?, id("source")?)? },
-            "knowledge.read" => vault::read(
-                &self.vault,
-                id("path")?,
-                input.get("locale").and_then(Value::as_str).unwrap_or("en"),
-            )?,
+            "knowledge.read" => {
+                let mut document = vault::read(&self.vault, id("path")?, input.get("locale").and_then(Value::as_str).unwrap_or("en"))?;
+                document["tasks"] = vault_navigation::associated_tasks(&self.db_path, id("path")?)?;
+                document
+            },
             "locale.get" => settings::locale(
                 &self.settings_path,
                 input

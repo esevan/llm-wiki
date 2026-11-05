@@ -526,6 +526,7 @@ fn vault_navigation_reads_live_notes_and_bounded_local_images_without_crossing_d
     let note = h.call("vault", "knowledge.read", json!({"path":"Guides/read.md", "locale":"en"}));
     assert_eq!(note.status, 200);
     assert!(note.body["markdown"].as_str().unwrap().contains("flowchart LR"));
+    assert_eq!(note.body["tasks"],json!([]));
     let image = h.call("vault", "vault.image", json!({"path":"Guides/read.md", "source":"../pixel.png"}));
     assert_eq!(image.status, 200);
     assert!(image.body["dataUrl"].as_str().unwrap().starts_with("data:image/png;base64,"));

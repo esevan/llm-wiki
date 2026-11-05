@@ -3352,7 +3352,7 @@ mod tests {
             let expected_hash = snapshot["generationSnapshotHash"].clone();
             let server = tokio::spawn(async move {
                 let mut requests = Vec::new();
-                for attempt in 0..2 {
+                for attempt in 0..if applicability_only { 1 } else { 2 } {
                     let (mut socket, _) = listener.accept().await.unwrap();
                     let mut request = Vec::new();
                     let mut buffer = [0_u8; 4096];
@@ -3398,9 +3398,9 @@ mod tests {
             let candidate = generate_knowledge_candidate(&settings_path, snapshot)
                 .await
                 .unwrap();
-            let requests = server.await.unwrap();
-            assert_eq!(requests.len(), 2);
-            assert!(requests[1].contains("validationFeedback"));
+            let requests = tokio::time::timeout(std::time::Duration::from_secs(5), server).await.unwrap().unwrap();
+            assert_eq!(requests.len(), if applicability_only { 1 } else { 2 });
+            if !applicability_only { assert!(requests[1].contains("validationFeedback")); }
             assert!(requests.iter().all(|request| request.contains("citationCatalog") && request.contains("generationRules")));
             if retry_fails {
                 assert!(candidate["modelError"]
@@ -3412,7 +3412,7 @@ mod tests {
             assert!(candidate["generationSnapshot"]
                 .get("validationFeedback")
                 .is_none());
-            assert_eq!(candidate["qualityState"] == "valid", repair_succeeds);
+            assert_eq!(candidate["qualityState"] == "valid", repair_succeeds || applicability_only);
             assert_eq!(
                 candidate["generationResult"]["article"]["finalOutcomes"],
                 json!([])

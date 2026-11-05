@@ -1064,11 +1064,38 @@ pub fn canonicalize_semantic_ids(
 /// Attach only the exact latest completion; never infer verification or new evidence.
 pub fn attach_recorded_completion(input: &DistillationInput, result: &mut DistillationResult) {
     let Some(id) = input.required_completion_id.as_ref() else { return; };
-    if result.completion_snapshots.iter().any(|snapshot| snapshot.completion_id == *id) { return; }
     let Some(source) = input.sources.iter().find(|source| source.source_type == "task_completion" && source.evidence_state == "explicit_completion" && source.id == *id) else { return; };
     let citation = SourceCitation { source_type: source.source_type.clone(), id: source.id.clone(), revision: source.revision.clone(), locator: source.locator.clone(), quote: source.excerpt.clone() };
-    let claim = stable_semantic_id(&input.owner.task_id,"completion",id,&source.revision);
+    let has_snapshot = result.completion_snapshots.iter().any(|snapshot| snapshot.completion_id == *id);
+    let needs_binding = |snapshot: &CompletionSnapshot| {
+        snapshot.completion_id == *id && snapshot.completion_revision == source.revision
+            && (snapshot.claim_ids.is_empty() || snapshot.claim_ids.iter().any(|claim_id| {
+                result.claims.iter().find(|claim| claim.id == *claim_id).is_none_or(|claim| {
+                    !claim.sources.iter().any(|bound| bound.source_type == "task_completion"
+                        && bound.id == *id
+                        && bound.revision == source.revision && bound.quote == claim.statement)
+                })
+            }))
+    };
+    let repairs = result.completion_snapshots.iter().enumerate()
+        .filter_map(|(index, snapshot)| needs_binding(snapshot).then_some(index)).collect::<Vec<_>>();
+    // A different revision is not repaired into current authority. All original
+    // claims and non-binding snapshot fields still pass through strict validation.
+    if has_snapshot && repairs.is_empty() { return; }
+    let existing_claim = result.claims.iter().find(|claim|
+        claim.statement == source.excerpt && claim.sources.contains(&citation)).map(|claim| claim.id.clone());
+    let claim = existing_claim.clone().unwrap_or_else(|| stable_semantic_id(&input.owner.task_id,"completion",id,&source.revision));
+    if existing_claim.is_none() {
     result.claims.push(DistilledClaim { id: claim.clone(), kind: "completion".into(), statement: source.excerpt.clone(), actor: "user".into(), epistemic_state: "performed".into(), status: "current".into(), topic_key: None, sources: vec![citation.clone()], contradicted_by: vec![] });
+    }
+    if has_snapshot {
+        for index in repairs {
+            let snapshot = &mut result.completion_snapshots[index];
+            snapshot.claim_ids = vec![claim.clone()];
+            if snapshot.sources.is_empty() { snapshot.sources = vec![citation.clone()]; }
+        }
+        return;
+    }
     result.completion_snapshots.push(CompletionSnapshot {
         id: stable_semantic_id(&input.owner.task_id,"completion_snapshot",id,&source.revision),
         completion_id: id.clone(), completion_revision: source.revision.clone(),
@@ -1487,6 +1514,73 @@ mod tests {
         assert!(validate_result(&scoped, &result)
             .unwrap_err()
             .contains("outside the affected"));
+    }
+
+    fn recorded_completion_input() -> DistillationInput {
+        let mut input = build_run_input(owner(), None, Some("no final report"), [], 0, "en").unwrap();
+        let excerpt = "Evidence: saved result\nReport: user completed the task";
+        input.sources.push(ExactSource {
+            source_type: "task_completion".into(), id: "completion".into(), revision: "3".into(),
+            locator: "evidence".into(), content_hash: content_hash(excerpt), role: "task_context".into(),
+            evidence_state: "explicit_completion".into(), omission: None, subject: None, excerpt: excerpt.into(),
+        });
+        input.required_completion_id = Some("completion".into());
+        input.source_set_hash = source_set_hash(input.primary_source.as_ref(), &input.sources);
+        input
+    }
+
+    #[test]
+    fn recorded_completion_repairs_unbound_snapshots_without_promoting_model_claims() {
+        let input = recorded_completion_input();
+        for case in ["empty", "missing", "paraphrased", "no_sources"] {
+            let mut result = factual_fallback(&input, "failed");
+            let snapshot = &mut result.completion_snapshots[0];
+            match case {
+                "empty" => snapshot.claim_ids.clear(),
+                "missing" => { snapshot.claim_ids = vec!["absent".into()]; result.claims.clear(); }
+                "paraphrased" => { result.claims[0].kind = "result".into(); result.claims[0].statement = "AI paraphrase".into(); }
+                "no_sources" => { snapshot.claim_ids.clear(); snapshot.sources.clear(); }
+                _ => unreachable!(),
+            }
+            assert!(validate_result(&input, &result).is_err(), "{case}");
+            attach_recorded_completion(&input, &mut result);
+            canonicalize_semantic_ids(&input, &mut result).unwrap();
+            validate_result(&input, &result).unwrap();
+            assert_eq!(result.completion_snapshots[0].verification_state, "recorded");
+            let bound = result.claims.iter().find(|claim| result.completion_snapshots[0].claim_ids.contains(&claim.id)).unwrap();
+            assert_eq!(bound.statement, input.sources[0].excerpt);
+            assert_eq!(bound.epistemic_state, "performed");
+            if case == "paraphrased" { assert!(result.claims.iter().any(|claim| claim.statement == "AI paraphrase")); }
+            let before = serde_json::to_value(&result).unwrap();
+            attach_recorded_completion(&input, &mut result);
+            canonicalize_semantic_ids(&input, &mut result).unwrap();
+            assert_eq!(serde_json::to_value(&result).unwrap(), before);
+        }
+    }
+
+    #[test]
+    fn recorded_completion_keeps_invalid_authority_rejected_and_valid_results_unchanged() {
+        let input = recorded_completion_input();
+        let valid = factual_fallback(&input, "failed");
+        validate_result(&input, &valid).unwrap();
+        let mut unchanged = valid.clone();
+        attach_recorded_completion(&input, &mut unchanged);
+        assert_eq!(serde_json::to_value(&unchanged).unwrap(), serde_json::to_value(&valid).unwrap());
+        for case in ["revision", "verification", "verified_claim", "source", "stale_manifest"] {
+            let mut result = valid.clone();
+            let mut manifest = input.clone();
+            result.completion_snapshots[0].claim_ids.clear();
+            match case {
+                "revision" => result.completion_snapshots[0].completion_revision = "2".into(),
+                "verification" => result.completion_snapshots[0].verification_state = "verified".into(),
+                "verified_claim" => result.claims[0].epistemic_state = "verified".into(),
+                "source" => result.claims[0].sources[0].id = "fabricated".into(),
+                "stale_manifest" => manifest.sources[0].excerpt = "changed".into(),
+                _ => unreachable!(),
+            }
+            attach_recorded_completion(&manifest, &mut result);
+            assert!(validate_result(&manifest, &result).is_err(), "{case}");
+        }
     }
 
     #[test]

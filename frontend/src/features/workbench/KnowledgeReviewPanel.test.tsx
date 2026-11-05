@@ -53,6 +53,36 @@ const projection = (versions = [version(1), version(2)]) => ({
 });
 
 describe("Knowledge review", () => {
+  it("keeps images and an open full-size view stable during the real generation status timer", async () => {
+    const body = `![Recorded image](llm-wiki-image:${"a".repeat(64)})`;
+    const request = vi.fn(async ({ path }: { path: string }) => response(path.startsWith("/vault/image")
+      ? { dataUrl: "data:image/png;base64,cG5n" }
+      : path === "/jobs"
+        ? { jobs: [{ id: "generation", task_kind: "knowledge_draft", entity_id: "task-1", status: "running", stage: "generating" }] }
+        : projection([version(2, body)])));
+    window.llmWikiApplication = { request };
+    vi.useFakeTimers();
+    const view = render(<KnowledgeReviewPanel taskId="task-1" completed onGenerate={vi.fn()} />);
+    try {
+      await act(async () => { for (let i = 0; i < 10; i++) await Promise.resolve(); });
+      const image = screen.getByRole("img", { name: "Recorded image" });
+      const opener = screen.getByRole("button", { name: "Open full-size image: Recorded image" });
+      opener.focus(); fireEvent.click(opener);
+      const dialog = screen.getByRole("dialog");
+      const imageReads = () => request.mock.calls.filter(([input]) => input.path.startsWith("/vault/image")).length;
+      const initialReads = imageReads();
+      await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+      expect(request.mock.calls.filter(([input]) => input.path === "/jobs").length).toBeGreaterThanOrEqual(4);
+      expect(request.mock.calls.filter(([input]) => input.path === "/tasks/task-1/knowledge")).toHaveLength(1);
+      expect(imageReads()).toBe(initialReads);
+      expect(document.querySelector(".knowledge-markdown img")).toBe(image);
+      expect(screen.getByRole("dialog")).toBe(dialog);
+      fireEvent.keyDown(document, { key: "Escape" });
+      expect(screen.queryByRole("dialog")).toBeNull();
+      expect(opener).toHaveFocus();
+    } finally { view.unmount(); vi.useRealTimers(); }
+  });
+
   it("resumes durable preparation, shows stages and retries a failure in place", async () => {
     let jobs = [{ id: "generation", task_kind: "knowledge_draft", entity_id: "task-1", status: "running", stage: "preparing" }];
     let stored = projection([]);

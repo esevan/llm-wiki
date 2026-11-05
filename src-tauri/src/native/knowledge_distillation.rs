@@ -323,33 +323,18 @@ pub(crate) fn capture_snapshot_tx(
         manifest.push(full_source("task_work_log",log["id"].as_str().unwrap_or(""),
             &hash_value(&log),"record","reported",log.clone()));
     }
-    for (owner, revision, source_hash, run_id, result_json) in rows.into_iter().filter(|_| has_run) {
-        let result: Value = serde_json::from_str(&result_json).unwrap_or(json!({}));
-        let mut item = json!({"id":owner,"revision":revision,"sourceSetHash":source_hash,"runId":run_id,"result":result});
-        if let Some(run) = item["runId"].as_str().map(str::to_owned) {
-            let report = tx
-                .query_row(
-                    "SELECT final_report FROM task_work_session_runs WHERE id=?",
-                    [&run],
-                    |row| row.get::<_, Option<String>>(0),
-                )
-                .optional()
-                .map_err(|e| e.to_string())?
-                .flatten();
-            item["primaryFinalReport"] = report.clone().map(Value::String).unwrap_or(Value::Null);
-            if let Some(report) = report {
-                manifest.push(full_source(
-                    "run_final_report",
-                    &run,
-                    &revision.to_string(),
-                    "final_report",
-                    "primary",
-                    Value::String(report),
-                ));
-            }
+    // Raw Run records are available even when semantic extraction failed or
+    // only another Run has a current distillation. Never lose the experience.
+    let mut runs = tx.prepare("SELECT id,revision,final_report FROM task_work_session_runs WHERE task_id=? ORDER BY created_at,id").map_err(|e|e.to_string())?;
+    let recorded_runs = runs.query_map([task_id], |row| Ok((row.get::<_,String>(0)?,row.get::<_,i64>(1)?,row.get::<_,Option<String>>(2)?))).map_err(|e|e.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|e|e.to_string())?;
+    drop(runs);
+    for (run, revision, report) in &recorded_runs {
+        if let Some(report) = report {
+            manifest.push(full_source("run_final_report",run,&revision.to_string(),"final_report","primary",Value::String(report.clone())));
+        }
             let mut evidence=tx.prepare("SELECT provider_item_id,kind,content_json FROM task_work_session_run_items WHERE run_id=? AND status='completed' AND kind IN ('commandExecution','fileChange') ORDER BY provider_order,provider_item_id").map_err(|e|e.to_string())?;
             let evidence_rows = evidence
-                .query_map([&run], |row| {
+                .query_map([run], |row| {
                     Ok((
                         row.get::<_, String>(0)?,
                         row.get::<_, String>(1)?,
@@ -377,7 +362,11 @@ pub(crate) fn capture_snapshot_tx(
                     content,
                 ));
             }
-        }
+    }
+    for (owner, revision, source_hash, run_id, result_json) in rows.into_iter().filter(|_| has_run) {
+        let result: Value = serde_json::from_str(&result_json).unwrap_or(json!({}));
+        let report = run_id.as_ref().and_then(|id| recorded_runs.iter().find(|(run, _, _)| run == id)).and_then(|(_, _, report)| report.clone());
+        let item = json!({"id":owner,"revision":revision,"sourceSetHash":source_hash,"runId":run_id,"result":result,"primaryFinalReport":report});
         manifest.push(full_source(
             "work_log_distillation",
             &owner,
@@ -463,7 +452,8 @@ pub(crate) fn generation_context(snapshot: &Value) -> Value {
     context["imageCatalog"] = json!(super::knowledge_images::catalog(snapshot));
     context["generationRules"] = json!({
         "citationSelection": "Copy a citationCatalog sourceRef as a unit. Its quote is a decoded individual string, not JSON, adjacent fields, a paraphrase, or text borrowed from another manifest source. contentPointer is diagnostic only; preserve the sourceRef locator.",
-        "applicability": "Applicability explains source-bounded reuse, not new observed facts. Keep each phrase in bodyMarkdown. When supplying source-linked applicability metadata, a nonverbatim explanation must have an assumptionBinding with assumptionId starting applicability:, bodyLocator equal to that phrase, exact supporting sourceRefs also present in applicability.sourceRefs, with natural guidance in the body rather than a required visible provenance label. Preserve source conditions and limits. Actual claims about decisions, observations, verification, effectiveness or scope require claimBindings and retain their epistemic state; do not disguise factual assertions as interpretations. Flag unsupported additions, contradictions and overreach as blocking qualityFindings.",
+        "applicability": "Optional source-bounded reuse guidance. It may be empty for an experience essay. Do not require claim formatting, source-quote wording or assumption bindings to write natural grounded prose. Retain actual source identities when supplied; preserve material limits and never fabricate decisions, verified results or experiences.",
+        "writingStyle": "Detailed first-person experience essay: what I did, recorded decisions and reasons, results, failed attempts, uncertainty and lessons. Natural grounded paraphrases are allowed; do not invent experiences or imply independent verification.",
         "userAuthorship": "User-authored writing and user reports are primary sources. External citations are optional. Do not add missing-reference findings merely for absent citations. Express AI reuse interpretations as guidance, not observed outcomes; use attribution only where it changes meaning.",
         "finality": "Task completion records workflow state only. finalOutcomes may be empty even for a completed Task. Use reported source facts and preserve unresolved topics when no current adopted topic with an authoritative decided claim exists."
     });
@@ -559,6 +549,11 @@ pub(crate) fn validate_result(snapshot: &Value, result: &GenerationResult) -> Re
         return Err("Knowledge title and body are required".into());
     }
     let applicability = &result.article.applicability;
+    let article_body = normalize(&result.article.body_markdown);
+    let has_applicability = !applicability.summary.trim().is_empty()
+        || !applicability.helps_with.is_empty() || !applicability.conditions.is_empty()
+        || !applicability.exclusions.is_empty() || !applicability.source_refs.is_empty();
+    if has_applicability {
     if applicability.summary.trim().is_empty()
         || applicability.representative_questions.is_empty()
         || applicability.helps_with.is_empty()
@@ -566,7 +561,6 @@ pub(crate) fn validate_result(snapshot: &Value, result: &GenerationResult) -> Re
         return Err("applicability_overreach: complete supported applicability is required".into());
     }
     check_refs(&applicability.source_refs, "applicability")?;
-    let article_body = normalize(&result.article.body_markdown);
     for supported_text in std::iter::once(&applicability.summary)
         .chain(&applicability.helps_with)
         .chain(&applicability.conditions)
@@ -595,6 +589,7 @@ pub(crate) fn validate_result(snapshot: &Value, result: &GenerationResult) -> Re
                 ));
             }
         }
+    }
     }
     let topics = snapshot["journey"]["topicStates"]
         .as_array()
@@ -751,16 +746,10 @@ pub(crate) fn validate_result(snapshot: &Value, result: &GenerationResult) -> Re
                     binding.claim_id
                 ));
             }
-            if !binding
-                .source_refs
-                .iter()
-                .any(|source| source.quote.trim() == binding.statement.trim())
-            {
-                return Err(format!(
-                    "invalid_verification: reported claim {} must retain an exact source quote",
-                    binding.claim_id
-                ));
-            }
+            // Reported experience may paraphrase its exact cited source. The
+            // source identity and quote remain validated above; this does not
+            // confer decided/verified authority on natural-language prose.
+
         }
     }
     for assumption in &result.article.assumption_bindings {
@@ -936,6 +925,22 @@ fn assess_candidate(snapshot: &Value, result: &GenerationResult) -> Result<(Stri
     }
     match validate_result(snapshot,result) {
         Ok(()) => Ok(("valid".into(),String::new())),
+        Err(issue) if issue.starts_with("applicability_overreach:")
+            || issue.starts_with("missing_reference: applicability")
+            || issue.starts_with("missing_reference: bound claim")
+            || issue.starts_with("missing_reference: claim ") => {
+            // Recheck the rest of the candidate, so optional metadata cannot
+            // hide forged verification, finality, failed evidence or findings.
+            let mut checked = result.clone();
+            checked.article.applicability = Applicability { summary: String::new(), representative_questions: vec![], helps_with: vec![], conditions: vec![], exclusions: vec![], source_refs: vec![] };
+            checked.article.claim_bindings.retain(|binding| binding.epistemic_state != "reported"
+                || checked.article.final_outcomes.iter().any(|outcome| outcome.claim_ids.contains(&binding.claim_id))
+                || (!binding.source_refs.is_empty() && normalize(&checked.article.body_markdown).contains(&normalize(if binding.body_locator.is_empty() { &binding.statement } else { &binding.body_locator }))));
+            match validate_result(snapshot, &checked) {
+                Ok(()) => Ok(("valid".into(), format!("Optional metadata warning: {issue}"))),
+                Err(other) => Ok((if other.contains("omission") { "blocked_omission" } else { "blocked_unsupported" }.into(), other)),
+            }
+        },
         Err(issue) => Ok((if issue.contains("omission") {"blocked_omission"} else {"blocked_unsupported"}.into(),issue)),
     }
 }
@@ -986,7 +991,20 @@ pub(crate) fn prepared(
         result.article.title = snapshot["task"]["title"].as_str().unwrap_or("Untitled draft").to_owned();
     }
     quarantine_rejected_quotes(&snapshot, &mut result)?;
+    for binding in &result.article.claim_bindings {
+        if binding.epistemic_state == "reported" && !binding.source_refs.iter().any(|reference| reference.quote.trim() == binding.statement.trim()) {
+            let locator = format!("article.claimBindings:{}",binding.claim_id);
+            let quotes = binding.source_refs.iter().map(|source| source.quote.as_str()).collect::<Vec<_>>();
+            let message = format!("Reported paraphrase: retained for user review, not established fact; its cited source does not independently verify this wording. Check for contradiction. Candidate: {}. Exact recorded quotes: {}", binding.statement, serde_json::to_string(&quotes).unwrap());
+            if !result.quality_findings.iter().any(|finding| finding.locator == locator && finding.message == message) {
+                result.quality_findings.push(QualityFinding { kind: "missing_reference".into(), severity: "warning".into(), locator, source_refs: binding.source_refs.clone(), message: message.into() });
+            }
+        }
+    }
     let (quality_state, issue) = assess_candidate(&snapshot, &result)?;
+    if issue.starts_with("Optional metadata warning:") && !result.quality_findings.iter().any(|finding| finding.message == issue) {
+        result.quality_findings.push(QualityFinding { kind: "missing_reference".into(), severity: "warning".into(), locator: "article".into(), source_refs: vec![], message: issue.clone() });
+    }
     let issues = [model_error, issue.as_str(), if title_missing {"article.title was missing; temporary Task title retained"} else {""}]
         .into_iter().filter(|v| !v.is_empty()).collect::<Vec<_>>().join("; ");
     let body_markdown = result.article.body_markdown.clone();
@@ -1346,6 +1364,32 @@ mod tests {
     }
 
     #[test]
+    fn experience_essay_accepts_optional_and_paraphrased_claim_metadata_without_verification() {
+        let snapshot = minimal_snapshot();
+        let mut result = article(SourceRef { source_type:"task".into(), id:"task".into(), revision:"1".into(), locator:"record".into(), quote:"Receipt recorded; approval remains required.".into() });
+        result.article.body_markdown="I kept approval local. I considered the recorded option and left its effect unverified.".into();
+        result.article.applicability=Applicability { summary:String::new(), representative_questions:vec![], helps_with:vec![], conditions:vec![], exclusions:vec![], source_refs:vec![] };
+        result.article.claim_bindings.clear();
+        let without=prepared(snapshot.clone(),result.clone(),"fixture","").unwrap();
+        assert_eq!(without["bodyMarkdown"],result.article.body_markdown);
+        assert_eq!(without["qualityState"],"valid");
+        // Use the exact fixture source while allowing its reported claim to paraphrase.
+        let reference=SourceRef {source_type:snapshot["sourceManifest"][0]["type"].as_str().unwrap().into(),id:snapshot["sourceManifest"][0]["id"].as_str().unwrap().into(),revision:snapshot["sourceManifest"][0]["revision"].as_str().unwrap().into(),locator:snapshot["sourceManifest"][0]["locator"].as_str().unwrap().into(),quote:"Receipt recorded; approval remains required.".into()};
+        result.article.claim_bindings=vec![ClaimBinding {claim_id:"optional".into(),body_locator:"I kept approval local.".into(),statement:"I kept approval local.".into(),epistemic_state:"reported".into(),source_refs:vec![reference]}];
+        let paraphrased=prepared(snapshot.clone(),result.clone(),"fixture","").unwrap();
+        assert_eq!(paraphrased["qualityState"],"valid", "{paraphrased}");
+        let repeated = prepared(snapshot.clone(), serde_json::from_value(paraphrased["generationResult"].clone()).unwrap(), "fixture", "").unwrap();
+        assert_eq!(repeated["generationResult"], paraphrased["generationResult"]);
+        result.article.claim_bindings[0].source_refs.clear();
+        let missing_refs = prepared(snapshot.clone(), result.clone(), "fixture", "").unwrap();
+        assert_eq!(missing_refs["qualityState"], "valid");
+        assert!(missing_refs["modelError"].as_str().unwrap().contains("Optional metadata warning"));
+        result.article.claim_bindings[0].epistemic_state="verified".into();
+        let fake=prepared(snapshot,result,"fixture","").unwrap();
+        assert_ne!(fake["qualityState"],"valid");
+    }
+
+    #[test]
     fn source_bound_reuse_interpretation_is_not_required_to_be_a_quote() {
         let result = interpreted_article();
         assert!(!result.article.applicability.source_refs[0].quote.contains(&result.article.applicability.summary));
@@ -1430,7 +1474,13 @@ mod tests {
             result.article.claim_bindings.push(ClaimBinding { claim_id:"new-fact".into(), body_locator:String::new(),
                 statement:statement.into(),epistemic_state:state.into(),
                 source_refs:result.article.applicability.source_refs.clone() });
-            assert!(validate_result(&minimal_snapshot(), &result).unwrap_err().contains("invalid_verification"));
+            if state == "verified" {
+                assert!(validate_result(&minimal_snapshot(), &result).unwrap_err().contains("invalid_verification"));
+            } else {
+                let prepared = prepared(minimal_snapshot(), result, "fixture", "").unwrap();
+                assert_eq!(prepared["qualityState"], "valid");
+                assert!(prepared["generationResult"]["qualityFindings"].to_string().contains("does not independently verify"));
+            }
         }
         // Existing quality assessment findings remain authoritative blockers;
         // this is not an automated natural-language contradiction detector.
@@ -1472,7 +1522,7 @@ mod tests {
     }
 
     #[test]
-    fn receipt_report_cannot_be_promoted_to_approval() {
+    fn reported_paraphrase_does_not_gain_verified_approval_authority() {
         let source = SourceRef {
             source_type: "run_final_report".into(),
             id: "run".into(),
@@ -1486,9 +1536,16 @@ mod tests {
             .article
             .body_markdown
             .push_str("\n\nApproved for release");
-        assert!(validate_result(&minimal_snapshot(), &result)
-            .unwrap_err()
-            .contains("exact source quote"));
+        let prepared = prepared(minimal_snapshot(), result.clone(), "fixture", "").unwrap();
+        assert_eq!(prepared["qualityState"], "valid");
+        assert!(prepared["generationResult"]["qualityFindings"].to_string().contains("Reported paraphrase"));
+        assert!(prepared["generationResult"]["qualityFindings"].as_array().unwrap().iter().any(|finding| {
+            let message = finding["message"].as_str().unwrap_or("");
+            message.contains("Approved for release") && message.contains("approval remains required") && message.contains("not established fact")
+        }));
+        assert_eq!(prepared["generationResult"]["article"]["claimBindings"][0]["epistemicState"], "reported");
+        result.article.claim_bindings[0].epistemic_state = "verified".into();
+        assert!(validate_result(&minimal_snapshot(), &result).is_err());
     }
     #[test]
     fn opposite_polarity_cannot_rewrite_an_authoritative_claim() {
@@ -1992,7 +2049,8 @@ mod tests {
         .unwrap();
         tx.commit().unwrap();
         assert_eq!(unverified["draftRevision"],3);
-        assert_ne!(c.query_row("SELECT quality_state FROM knowledge_draft_versions WHERE revision=3",[],|r|r.get::<_,String>(0)).unwrap(),"valid");
+        assert_eq!(c.query_row("SELECT quality_state FROM knowledge_draft_versions WHERE revision=3",[],|r|r.get::<_,String>(0)).unwrap(),"valid");
+        assert!(c.query_row("SELECT model_error FROM knowledge_draft_versions WHERE revision=3",[],|r|r.get::<_,String>(0)).unwrap().contains("Optional metadata warning"));
         assert_eq!(
             c.query_row("SELECT count(*) FROM knowledge_draft_versions", [], |row| {
                 row.get::<_, i64>(0)

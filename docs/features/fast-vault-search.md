@@ -16,6 +16,8 @@ Selecting a note keeps its relative breadcrumb visible while the list and reader
 
 The reader supports basic/GFM Markdown, fenced code, tables, Mermaid and local PNG, JPEG, GIF and WebP images. Mermaid runs locally with strict configuration and sanitized SVG; executable HTML, callbacks, embedded HTML labels, configuration overrides and remote resources are not enabled. Invalid diagrams expose escaped source and leave the rest of the note readable. Large diagrams, code and tables scroll inside their own frames. Images resolve relative to the note, may use parent paths only while remaining inside the configured Vault, and open at full size in a closable viewer. External images, SVG, absolute paths and symlink escapes are rejected. Images retain their separate 10 MiB limit. Canonical/original note reads and navigation metadata reads accept files up to and including 10 MiB (10,485,760 bytes); larger notes show an error without changing the source. Navigation supports up to 10,000 Markdown notes. The former 2 MiB guard bounded data before native file reading; it was not a browser standard or a measured rendering cutoff. Large-Markdown UI rendering performance has not been measured.
 
+Unchanged background updates preserve image and diagram DOM, open image viewers and diagram disclosures. Language changes update controls without reloading media; changing the image, diagram source or document still updates the displayed content.
+
 `[[note|label]]`, `[[note#Heading]]` and relative Markdown note links open in the same reader. Short filenames must resolve uniquely; missing or ambiguous links remain inert. External links are displayed without opening a browser from this reader. Loading, empty folders, search failures, note failures and inline image/diagram failures retain context and provide appropriate retry or cancellation controls. Note history and scroll positions are kept in the mounted view, not persisted across app restart.
 
 Tab and current-note selection surfaces update immediately, and the active tab always names the displayed list.
@@ -38,3 +40,5 @@ the source revision changed during inference.
 
 Related Spec Kit: [001 — Fast Vault Search](../../specs/001-fast-vault-search/spec.md),
 [018 — Multi-aspect Knowledge Retrieval](../../specs/018-multiaspect-knowledge-retrieval/spec.md)
+
+The selected note shows Associated tasks above its contents. Links use stored publication lineage, including tasks that contributed to the current published document; unrelated notes show an explicit empty state. Archived tasks and withdrawn documents are excluded. Opening a task uses the existing Task detail dialog, preserving the Vault query, selected note, and scroll position. Closing the dialog returns keyboard focus to its task button.

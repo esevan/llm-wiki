@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, expect, it, vi } from 'vitest';
 import { SearchView } from './SearchView';
 import { vaultClient, type VaultNote } from './vaultClient';
+vi.mock('../workbench/TaskDetail',()=>({TaskDetail:({taskId,onClose}:{taskId:string;onClose:()=>void})=><div role="dialog" aria-label="Task detail">{taskId}<button onClick={onClose}>Close task</button></div>}));
 vi.mock('./VaultMarkdown',()=>({VaultMarkdown:({markdown,onNavigate}:{markdown:string;onNavigate:(path:string)=>void})=><div data-testid="rendered-note">{markdown}<button onClick={()=>onNavigate('MOCs/Map.md')}>Follow MOC</button></div>}));
 vi.mock('./vaultClient',async importOriginal=>({...await importOriginal<typeof import('./vaultClient')>(),vaultClient:{browse:vi.fn(),read:vi.fn(),search:vi.fn()}}));
 const notes:VaultNote[]=[{path:'Guides/Guide.md',title:'Guide',isMoc:false,modifiedAt:1,managed:true,readable:true},{path:'MOCs/Map.md',title:'Map',isMoc:true,modifiedAt:1,managed:false,readable:true}];
@@ -55,4 +56,19 @@ it('keeps every tab selection aligned with its displayed content and preserves t
  fireEvent.click(document.querySelector('[data-control="search-submit"]')!);await screen.findByRole('button',{name:'Guides/Guide.md Guide'});fireEvent.click(screen.getByRole('button',{name:'Guides/Guide.md Guide'}));await waitFor(()=>expect(document.querySelector('[data-control="search-result-open"][aria-current="page"]')).toHaveClass('is-selected'));
  fireEvent.click(screen.getByRole('tab',{name:'Folders'}));assertTab('Folders');expect(document.querySelector('[data-control="vault-note-open"][aria-current="page"]')).toHaveClass('is-selected');
  fireEvent.click(document.querySelector('[data-control="vault-list-back"]')!);expect(document.querySelector('.vault-search')).not.toHaveClass('is-reading');expect(document.querySelector('[data-control="vault-note-open"][aria-current="page"]')).toHaveClass('is-selected');
+});
+
+it('opens associated tasks and returns to the selected search result on repeated visits',async()=>{
+ vi.mocked(vaultClient.search).mockResolvedValue({results:[{path:'Guides/Guide.md',title:'Guide'}]});
+ vi.mocked(vaultClient.read).mockResolvedValue({path:'Guides/Guide.md',markdown:'Knowledge body',canonical_locale:'en',served_locale:'en',translated:false,tasks:[{id:'task-1',title:'Investigate rendering',state:'completed'},{id:'task-2',title:'Follow up',state:'in_progress'}]});
+ render(<SearchView active/>);fireEvent.change(screen.getByRole('textbox',{name:'Search vault'}),{target:{value:'rendering'}});fireEvent.click(document.querySelector('[data-control="search-submit"]')!);
+ fireEvent.click(await screen.findByRole('button',{name:'Guides/Guide.md Guide'}));
+ for(const [title,id] of [['Investigate rendering','task-1'],['Follow up','task-2'],['Investigate rendering','task-1']]){
+  const button=await screen.findByRole('button',{name:new RegExp(title)});fireEvent.click(button);expect(screen.getByRole('dialog')).toHaveTextContent(id);fireEvent.click(screen.getByText('Close task'));await waitFor(()=>expect(button).toHaveFocus());
+  expect(screen.getByRole('textbox',{name:'Search vault'})).toHaveValue('rendering');expect(document.querySelector('[aria-current="page"][data-control="search-result-open"]')).toHaveTextContent('Guide');
+ }
+});
+it('shows no associated tasks for an ordinary note without invented navigation',async()=>{
+ render(<SearchView active/>);fireEvent.click(screen.getByRole('tab',{name:'MOC'}));fireEvent.click(await screen.findByRole('button',{name:'Map MOCs/Map.md'}));
+ await screen.findByText('No linked tasks for this note.');expect(document.querySelector('[data-control="vault-task-open"]')).toBeNull();
 });

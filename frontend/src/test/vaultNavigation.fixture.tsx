@@ -8,7 +8,7 @@ import reviewImage from '../../../docs/features/images/current-workbench.ko.jpg?
 import '../theme/tokens.css';
 import '../theme/legacy-components.css';
 import '../theme/refresh.css';
-const params=new URLSearchParams(location.search || ({'moc.html':'moc','list.html':'list','error.html':'error','media-error.html':'media-error','empty.html':'empty','loading.html':'loading','en.html':'lang=en','search.html':'search'}[location.pathname.split('/').at(-1)!] || ''));document.documentElement.lang=params.get('lang')||'ko';
+const params=new URLSearchParams(location.search || ({'moc.html':'moc','list.html':'list','error.html':'error','media-error.html':'media-error','empty.html':'empty','loading.html':'loading','en.html':'lang=en','search.html':'search','tasks-en.html':'search=&tasks=&lang=en','tasks-ko.html':'search=&tasks=&lang=ko'}[location.pathname.split('/').at(-1)!] || ''));document.documentElement.lang=params.get('lang')||'ko';
 const markdown=`# 좋은 Knowledge를 남기는 방법
 
 작업의 결론만큼 중요한 것은, 다음에 같은 문제를 만났을 때 다시 사용할 수 있는 맥락입니다.
@@ -79,7 +79,10 @@ Knowledge를 오래 쓸 수 있게 만드는 안내서입니다.
 const notes=[['Knowledge/Guides/knowledge-writing.md','좋은 Knowledge를 남기는 방법'],['Knowledge/Guides/capture.md','Capture에서 Task로'],['Knowledge/Guides/publish.md','발행 전에 확인할 것'],['Knowledge/Guides/images.md','이미지와 출처 남기기'],['Knowledge/MOCs/Guide.md','Knowledge 운영 가이드'],['Knowledge/MOCs/Product.md','제품 설계'],['Knowledge/MOCs/Engineering.md','Engineering'],['Knowledge/MOCs/Research.md','리서치 노트']].map(([path,title])=>({path,title,isMoc:path.includes('/MOCs/'),managed:true,readable:true,modifiedAt:1792540800}));
 window.llmWikiApplication={request:async({path})=>{const u=new URL(path,'http://fixture');let body:unknown={};let ok=true;
 if(u.pathname==='/vault/browse')body={notes,folders:['Knowledge','Knowledge/Guides','Knowledge/Engineering','Knowledge/Research','Knowledge/MOCs','Empty']};
-if(u.pathname==='/knowledge') {if(params.has('error'))ok=false;if(params.has('loading'))await new Promise(()=>{});body={path:u.searchParams.get('path'),markdown:u.searchParams.get('path')?.includes('/MOCs/')?moc:params.has('media-error')?markdown.replace('flowchart LR','invalid diagram'):markdown,canonical_locale:'original',served_locale:'original',translated:false};}
+if(u.pathname==='/knowledge') {if(params.has('error'))ok=false;if(params.has('loading'))await new Promise(()=>{});body={tasks:params.has('tasks')?[{id:'task-one',title:'Knowledge publication: investigate image rendering and preserve the full decision history across repeated task visits — 긴 작업 제목에서도 연결 맥락 보존',state:'completed'},{id:'task-two',title:'Follow up on reusable Knowledge',state:'in_progress'}]:[],path:u.searchParams.get('path'),markdown:u.searchParams.get('path')?.includes('/MOCs/')?moc:params.has('media-error')?markdown.replace('flowchart LR','invalid diagram'):markdown,canonical_locale:'original',served_locale:'original',translated:false};}
+if(/^\/tasks\/task-(one|two)$/.test(u.pathname))body={id:u.pathname.split('/').at(-1),kind:'task',taskRevision:1,state:'completed',title:'Knowledge publication investigation',detail:'Investigated rendering and preserved the decision history.',workLog:[],checklist:[],decisions:[],readinessEntries:[]};
+if(u.pathname.endsWith('/lineage'))body={nodes:[],edges:[]};
+if(u.pathname.endsWith('/execution'))body={runs:[],activeRunId:null,selectedRun:null};
 if(u.pathname==='/vault/image'){if(params.has('media-error'))ok=false;const dataUrl=reviewImage;body={dataUrl};}
 if(u.pathname==='/search')body={results:notes.map(note=>({...note,snippet:'검증한 결과를 Knowledge로 연결합니다.'})),has_more:false};
 return {ok,status:ok?200:404,json:async<T,>()=>body as T,text:async()=>JSON.stringify(body),body:null};}};

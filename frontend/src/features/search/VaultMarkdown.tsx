@@ -1,5 +1,5 @@
-import { useEffect, useId, useRef, useState } from 'react';
-import Markdown, { defaultUrlTransform } from 'react-markdown';
+import { createContext, memo, useContext, useEffect, useId, useMemo, useRef, useState, type ComponentProps } from 'react';
+import Markdown, { defaultUrlTransform, type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkFrontmatter from 'remark-frontmatter';
 import { safeDiagramSource, sanitizeDiagram } from './diagramSecurity';
@@ -18,6 +18,7 @@ mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', suppressErrorR
 export function VaultDiagram({ source, text }: { source: string; text: VaultText }) {
   const id = useId().replace(/[^a-z\d]/gi, '');
   const [svg, setSvg] = useState(''); const [error, setError] = useState(false);
+  const markup = useMemo(() => ({ __html: svg }), [svg]);
   useEffect(() => {
     let cancelled = false;
     if (!safeDiagramSource(source)) return;
@@ -28,7 +29,7 @@ export function VaultDiagram({ source, text }: { source: string; text: VaultText
   }, [id, source]);
   return <figure className="vault-diagram">
     {error || !safeDiagramSource(source) ? <div className="vault-inline-error" role="status"><strong>{text.diagramError}</strong><p>{text.diagramHint}</p></div>
-      : svg ? <div className="vault-diagram-scroll" tabIndex={0} role="img" aria-label={text.diagram + ': ' + source.slice(0, 120)} title={text.diagramScroll} dangerouslySetInnerHTML={{ __html: svg }} />
+      : svg ? <div className="vault-diagram-scroll" tabIndex={0} role="img" aria-label={text.diagram + ': ' + source.slice(0, 120)} title={text.diagramScroll} dangerouslySetInnerHTML={markup} />
         : <p role="status">{text.diagramLoading}</p>}
     <figcaption title={text.diagramScroll}>{text.diagram}</figcaption>
     <details data-control="vault-diagram-details"><summary data-control="vault-diagram-source">{text.showSource}</summary><pre><code>{source}</code></pre></details>
@@ -47,14 +48,44 @@ export function VaultImage({ path, source, alt, text }: { path: string; source: 
   if (!data) return <span role="status">{text.imageLoading}</span>;
   return <><button data-control="vault-image-open" className="vault-image-button" aria-label={text.imageOpen + ': ' + alt} onClick={()=>setOpen(true)}><img src={data} alt={alt} onError={()=>setError(true)}/></button>{open&&<FullImage src={data} alt={alt} text={text} close={()=>setOpen(false)}/>}</>;
 }
+type VaultRenderContext = {
+  path: string;
+  notes: VaultNote[];
+  onNavigate: (path: string, heading?: string) => void;
+  text: VaultText;
+};
+const RenderContext = createContext<VaultRenderContext | null>(null);
+function useRenderContext() {
+  const value = useContext(RenderContext);
+  if (!value) throw new Error("Vault Markdown renderer requires its context");
+  return value;
+}
+function VaultPre({ children }: ComponentProps<'pre'>) { return <>{children}</>; }
+function VaultCode({ className, children }: ComponentProps<'code'>) {
+  const { text } = useRenderContext();
+  const source = String(children).trim();
+  return className === 'language-mermaid' ? <VaultDiagram key={source} source={source} text={text} />
+    : className ? <pre><code className={className}>{children}</code></pre> : <code>{children}</code>;
+}
+function VaultImageRenderer({ src, alt }: ComponentProps<'img'>) {
+  const { path, text } = useRenderContext();
+  return <VaultImage key={JSON.stringify([path, src])} path={path} source={String(src || '')} alt={alt || ''} text={text} />;
+}
+function VaultLink({ href, children }: ComponentProps<'a'>) {
+  const { path, notes, onNavigate, text } = useRenderContext();
+  const target = href ? resolveNoteLink(path, href, notes) : null;
+  return target ? <a data-control="vault-note-link" href={'#' + encodeURIComponent(target.heading)} onClick={event => { event.preventDefault(); onNavigate(target.path, target.heading); }}>{children}</a>
+    : <span className="vault-unresolved" title={/^[a-z]+:/i.test(href || '') ? text.external : text.unresolved}>{children} ↗</span>;
+}
+const components: Components = { pre: VaultPre, code: VaultCode, img: VaultImageRenderer, a: VaultLink };
+const plugins = [remarkGfm, remarkFrontmatter, remarkVaultLinks];
+const mocPlugins = [...plugins, remarkMocRows];
+const transformUrl = (url: string, key: string) => key === 'src' && /^llm-wiki-image:[a-f0-9]{64}$/.test(url) ? url : defaultUrlTransform(url);
+const VaultMarkdownBody = memo(function VaultMarkdownBody({ markdown, isMoc }: { markdown: string; isMoc: boolean }) {
+  return <Markdown remarkPlugins={isMoc ? mocPlugins : plugins} skipHtml urlTransform={transformUrl} components={components}>{markdown}</Markdown>;
+});
 export function VaultMarkdown({ markdown, path, notes, onNavigate, text, isMoc=false }: { isMoc?: boolean; markdown: string; path: string; notes: VaultNote[]; onNavigate: (path: string, heading?: string) => void; text: VaultText }) {
-  return <div className="vault-markdown" data-user-content><Markdown remarkPlugins={[remarkGfm,remarkFrontmatter,remarkVaultLinks,...(isMoc?[remarkMocRows]:[])]} skipHtml urlTransform={(url,key)=>key==="src" && /^llm-wiki-image:[a-f0-9]{64}$/.test(url)?url:defaultUrlTransform(url)} components={{
-    pre: ({ children })=><>{children}</>,
-    code: ({ className, children })=>className==='language-mermaid'?<VaultDiagram key={String(children)} source={String(children).trim()} text={text}/>:className?<pre><code className={className}>{children}</code></pre>:<code>{children}</code>,
-    img: ({ src, alt })=><VaultImage key={path+String(src)} path={path} source={String(src||'')} alt={alt||''} text={text}/>,
-    a: ({ href, children })=>{
-      const target=href?resolveNoteLink(path,href,notes):null;
-      return target?<a data-control="vault-note-link" href={'#'+encodeURIComponent(target.heading)} onClick={event=>{event.preventDefault();onNavigate(target.path,target.heading);}}>{children}</a>:<span className="vault-unresolved" title={/^[a-z]+:/i.test(href||'')?text.external:text.unresolved}>{children} ↗</span>;
-    },
-  }}>{markdown}</Markdown></div>;
+  return <RenderContext.Provider value={{ path, notes, onNavigate, text }}>
+    <div className="vault-markdown" data-user-content><VaultMarkdownBody markdown={markdown} isMoc={isMoc} /></div>
+  </RenderContext.Provider>;
 }

@@ -1,6 +1,7 @@
 export interface VaultNote { path: string; title: string; isMoc: boolean; modifiedAt: number | null; managed: boolean; readable: boolean }
 export interface VaultListing { notes: VaultNote[]; folders: string[] }
-export interface VaultDocument { path: string; markdown: string; canonical_locale: string; served_locale: string; translated: boolean }
+export interface VaultTask { id: string; title: string; state: string }
+export interface VaultDocument { tasks?: VaultTask[]; path: string; markdown: string; canonical_locale: string; served_locale: string; translated: boolean }
 export interface VaultResult { path: string; title: string; snippet?: string }
 async function request<T>(path: string): Promise<T> {
   const response = await window.llmWikiApplication.request({ path });

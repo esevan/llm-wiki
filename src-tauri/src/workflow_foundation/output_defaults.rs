@@ -1,4 +1,5 @@
-//! Fill absent optional fields only; never repair types or manufacture evidence.
+//! Fill optional fields without manufacturing evidence. Malformed Knowledge
+//! claim metadata is preserved diagnostically instead of discarding prose.
 use super::PromptId;
 use serde_json::{json, Value};
 
@@ -12,7 +13,47 @@ fn defaults(value: &mut Value, fields: &[(&str, Value)]) {
     }
 }
 
+fn normalize_knowledge_claims(value: &mut Value) {
+    // Never erase or replace malformed quality assessments while repairing
+    // optional claim metadata. The provider schema must still reject them.
+    if value.get("qualityFindings").is_some_and(|findings| !findings.is_array()) {
+        return;
+    }
+    let mut warnings = Vec::new();
+    if let Some(article) = value.get_mut("article").and_then(Value::as_object_mut) {
+        for key in ["claimBindings", "assumptionBindings", "finalOutcomes"] {
+            let Some(raw) = article.remove(key) else { continue; };
+            let candidates = raw.as_array().cloned().unwrap_or_else(|| vec![raw]);
+            let kept = candidates.into_iter().filter(|item| {
+                let valid = match key {
+                    "claimBindings" => serde_json::from_value::<crate::native::knowledge_distillation::ClaimBinding>(item.clone()).is_ok(),
+                    "assumptionBindings" => serde_json::from_value::<crate::native::knowledge_distillation::AssumptionBinding>(item.clone()).is_ok(),
+                    _ => serde_json::from_value::<crate::native::knowledge_distillation::FinalOutcome>(item.clone()).is_ok(),
+                };
+                if !valid { warnings.push(json!({"kind":"missing_reference","severity":"warning","locator":format!("article.{key}"),"sourceRefs":[],"message":format!("Unusable optional metadata retained for review: {item}")})); }
+                valid
+            }).collect::<Vec<_>>();
+            article.insert(key.into(), json!(kept));
+        }
+    }
+    if !warnings.is_empty() {
+        let mut findings = value.get("qualityFindings").and_then(Value::as_array).cloned().unwrap_or_default();
+        findings.extend(warnings);
+        value["qualityFindings"] = json!(findings);
+    }
+}
+
+// Narrow pre-schema repair: only optional Knowledge claim metadata, never
+// article prose, quality assessments, source authority or other prompt kinds.
+pub(super) fn normalize_knowledge_metadata(id: PromptId, value: &mut Value) {
+    if id == PromptId::KnowledgeDraft { normalize_knowledge_claims(value); }
+    if id == PromptId::KnowledgeRevisionChat {
+        if let Some(candidate) = value.get_mut("candidate").filter(|v| v.is_object()) { normalize_knowledge_claims(candidate); }
+    }
+}
+
 pub(crate) fn normalize_prompt_output(id: PromptId, value: &mut Value) {
+    normalize_knowledge_metadata(id, value);
     match id {
         PromptId::WorkPreviewReply => defaults(value, &[("usedFindingIds", json!([]))]),
         PromptId::WorkPreviewPlanner | PromptId::WorkPreviewFinalizer => {
@@ -74,6 +115,33 @@ mod tests {
     fn preview() -> Value {
         json!({"preview":{"description":"Keep approval before export","goal":"Review CSV offline"},
             "optionalInvestigation":{"needed":false,"reason":"No remaining question"}})
+    }
+
+    #[test]
+    fn optional_knowledge_claim_format_does_not_discard_experience_prose() {
+        for id in [PromptId::KnowledgeDraft, PromptId::KnowledgeRevisionChat] {
+            let candidate = json!({"article":{"type":"concept","title":"My experience","bodyMarkdown":"I tried the export, chose the local option, and left its outcome unverified.","applicability":{"summary":"","representativeQuestions":[],"helpsWith":[]},"claimBindings":[{"claimId":"incomplete"}],"assumptionBindings":null,"finalOutcomes":"malformed"},"ideas":[],"qualityFindings":[]});
+            let mut value = if id == PromptId::KnowledgeDraft {candidate.clone()} else {json!({"message":"A grounded experience essay","missingEvidence":[],"candidate":candidate})};
+            normalize_prompt_output(id, &mut value);
+            let result = if id == PromptId::KnowledgeDraft {&value} else {&value["candidate"]};
+            assert_eq!(result["article"]["bodyMarkdown"],"I tried the export, chose the local option, and left its outcome unverified.");
+            assert_eq!(result["article"]["claimBindings"],json!([]));
+            assert_eq!(result["article"]["finalOutcomes"],json!([]));
+            assert!(result["qualityFindings"].as_array().unwrap().iter().all(|finding| finding["severity"]=="warning"));
+            assert!(result["qualityFindings"].to_string().contains("incomplete"));
+            super::super::validate_prompt_output(id, &value).unwrap();
+        }
+    }
+
+    #[test]
+    fn knowledge_prompts_request_detailed_grounded_first_person_essays() {
+        for id in [PromptId::KnowledgeDraft, PromptId::KnowledgeRevisionChat] {
+            let text=super::super::prompt_definition(id).instructions;
+            assert!(text.contains("first-person experience essay"));
+            assert!(text.contains("decisions"));
+            assert!(text.contains("optional"));
+            assert!(text.contains("Do not invent") || text.contains("never invent"));
+        }
     }
 
     #[test]

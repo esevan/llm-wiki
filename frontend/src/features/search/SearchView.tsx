@@ -2,11 +2,19 @@ import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { VaultMarkdown } from './VaultMarkdown';
 import { noteLinkTargets, resolveNoteLink, vaultClient, type VaultDocument, type VaultListing, type VaultResult } from './vaultClient';
 import { useVaultText } from './vaultText';
+import { TaskDetail, type TaskDetailHandle, type DetailSession } from '../workbench/TaskDetail';
+import { taskClient } from '../../services/taskClient';
+import '../workbench/task-workbench.css';
 import './vault-search.css';
 
 type Tab = 'search' | 'moc' | 'folders';
 export function SearchView({ active }: { active: boolean }) {
   const text=useVaultText();
+  const [taskId,setTaskId]=useState<string>();
+  const taskDetail=useRef<TaskDetailHandle>(null);
+  const taskSessions=useRef(new Map<string,DetailSession>());
+  const taskTrigger=useRef<HTMLButtonElement | null>(null);
+  const closeTask=()=>{setTaskId(undefined);requestAnimationFrame(()=>taskTrigger.current?.focus({preventScroll:true}));};
   const [tab,setTab]=useState<Tab>('search'); const [filter,setFilter]=useState('');
   const [listing,setListing]=useState<VaultListing>(); const [browseError,setBrowseError]=useState(false); const [browseBusy,setBrowseBusy]=useState(false);
   const [folder,setFolder]=useState(''); const [expanded,setExpanded]=useState<Set<string>>(new Set(['']));
@@ -100,10 +108,15 @@ export function SearchView({ active }: { active: boolean }) {
           <div className="vault-eyebrow">{current?.isMoc?text.map:text.knowledge}</div>
           <h1 data-user-content tabIndex={-1}>{current?.title||selected.split('/').at(-1)?.replace(/\.md$/,'')}</h1>
           <div className="vault-note-meta"><span className="vault-status">{current?.isMoc?'MOC':current?.managed?text.published:text.original}</span>{current?.modifiedAt&&<span>{new Intl.DateTimeFormat(globalThis.document.documentElement.lang,{year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(current.modifiedAt*1000))} {text.updated}</span>}{current?.isMoc&&<span>{new Set(mocLinks.map(link=>link!.path)).size} {text.linkCount}</span>}{document.canonical_locale==='en'&&globalThis.document.documentElement.lang.startsWith('ko')&&<span>{text.originalNotice}</span>}</div>
+          <section className="vault-associated-tasks" aria-label={text.tasks}>
+            <h2>{text.tasks}</h2>
+            {document.tasks?.length?<ul>{document.tasks.map(task=><li key={task.id}><button type="button" data-control="vault-task-open" onClick={event=>{taskTrigger.current=event.currentTarget;setTaskId(task.id);}}><span data-user-content>{task.title}</span><small>{text.taskStates[task.state as keyof typeof text.taskStates]??task.state} <span aria-hidden="true">↗</span></small></button></li>)}</ul>:<p>{text.noTasks}</p>}
+          </section>
           {history.length>0&&<button data-control="vault-history-back" className="vault-history" onClick={()=>{const previous=history.at(-1)!;setHistory(value=>value.slice(0,-1));if(reader.current)readerScroll.current[selected]=reader.current.scrollTop;setSelected(previous);setRaw(false);}}>{text.backHistory}</button>}
           {raw?<><p>{text.sourceNotice}</p><pre className="vault-raw" data-user-content>{document.markdown}</pre></>:<VaultMarkdown key={selected} markdown={document.markdown.replace(/^(---\r?\n[\s\S]*?\r?\n---\r?\n)?\s*# [^\n]+\n/, '$1')} path={selected} isMoc={current?.isMoc} notes={notes} onNavigate={navigate} text={text}/>}
         </>:<div className="vault-reader-state"><h2>{folder&&!notes.some(note=>note.path.startsWith(folder+'/'))?text.empty:text.choose}</h2><p>{folder&&!notes.some(note=>note.path.startsWith(folder+'/'))?text.emptyBody:text.chooseBody}</p></div>}
       </article>
     </section>
+    {taskId&&<TaskDetail key={taskId} ref={taskDetail} taskId={taskId} initialTab="work" sessions={taskSessions.current} onClose={closeTask} onChanged={()=>{setReload(value=>value+1);window.dispatchEvent(new Event('llm-wiki:task-workbench-refresh'));}} onOpenTask={id=>taskDetail.current?.requestLeave(()=>setTaskId(id))} onPrepareKnowledgeArchive={taskClient.prepareKnowledgeArchive} onOrganizeKnowledgeArchive={taskClient.organizeKnowledgeArchive} onPublishKnowledgeArchive={taskClient.publishKnowledgeArchive} onKnowledgeArchiveStatus={taskClient.knowledgeArchiveStatus} onRetryKnowledgeArchive={taskClient.retryKnowledgeArchive} onRecoverKnowledgeArchive={taskClient.recoverKnowledgeArchive}/>}
   </section>;
 }

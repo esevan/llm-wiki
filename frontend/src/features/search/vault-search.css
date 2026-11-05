@@ -38,3 +38,12 @@
 /* Navigation and note selection must reflect the displayed content immediately.
    Shared background transitions can retain the previous selection in WebKit. */
 .vault-tabs button,.vault-note-row,.vault-moc-row,.vault-result-row{transition:none}
+
+.vault-associated-tasks{margin:var(--space-6) 0;padding:var(--space-4);border:var(--border-default);border-radius:var(--radius-card);background:var(--color-bg-primary)}
+.vault-associated-tasks h2{font-size:15px;margin:0 0 var(--space-2)}
+.vault-associated-tasks p{font-size:14px;margin:0;color:var(--color-text-muted)}
+.vault-associated-tasks ul{list-style:none;padding:0;margin:0;display:grid;gap:var(--space-2)}
+.vault-associated-tasks button{display:flex;align-items:center;justify-content:space-between;gap:var(--space-3);width:100%;min-height:44px;padding:var(--space-2);border:var(--border-default);background:var(--color-bg-surface);overflow-wrap:anywhere}
+.vault-associated-tasks button>span{min-width:0;font-weight:700}
+.vault-associated-tasks small{flex:none;color:var(--color-text-muted);font-size:12px}
+@media(max-width:650px){.vault-associated-tasks button{align-items:flex-start;flex-direction:column}}

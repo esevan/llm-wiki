@@ -219,3 +219,81 @@ mod tests {
         }
     }
 }
+
+/// Resolve stored publication lineage, never titles or authored Markdown links.
+pub fn associated_tasks(db: &Path, path: &str) -> Result<Value, String> {
+    let connection = super::database::open(db)?;
+    let mut statement = connection
+        .prepare(
+            "SELECT DISTINCT t.id,r.title,t.state
+         FROM tasks t JOIN task_revisions r
+           ON r.task_id=t.id AND r.revision=t.current_revision
+         WHERE t.archived_at IS NULL AND t.id IN (
+           SELECT task_id FROM knowledge_pointers
+           WHERE publication_path=?1 COLLATE NOCASE AND published_revision IS NOT NULL
+           UNION
+           SELECT p.task_id FROM knowledge_archive_current c
+           JOIN knowledge_archive_revisions v ON v.document_id=c.document_id
+           JOIN knowledge_archive_operations o ON o.operation_id=v.operation_id
+           JOIN knowledge_archive_proposals p ON p.proposal_id=o.proposal_id
+           WHERE c.path=?1 COLLATE NOCASE AND c.withdrawn=0 AND v.withdrawn=0
+             AND c.kind='knowledge'
+         ) ORDER BY r.title,t.id",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = statement.query_map([path], |row| Ok(json!({"id":row.get::<_,String>(0)?,"title":row.get::<_,String>(1)?,"state":row.get::<_,String>(2)?}))).map_err(|e|e.to_string())?;
+    let tasks = rows
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
+    Ok(json!(tasks))
+}
+
+#[cfg(test)]
+mod associated_task_tests {
+    use super::*;
+    #[test]
+    fn publication_links_use_current_task_revisions_and_exclude_archived_or_unpublished_tasks() {
+        let root = tempfile::tempdir().unwrap();
+        let db = root.path().join("state.sqlite3");
+        super::super::database::initialize(&db).unwrap();
+        let c = super::super::database::open(&db).unwrap();
+        c.execute(
+            "INSERT INTO knowledge_applicability VALUES('app','','[]','[]','[]','[]')",
+            [],
+        )
+        .unwrap();
+        for (id, archived, published) in [
+            ("one", None, Some(1)),
+            ("two", None, Some(1)),
+            ("archived", Some("now"), Some(1)),
+            ("draft", None, None),
+        ] {
+            c.execute("INSERT INTO tasks(id,current_revision,archived_at,created_at,last_user_activity_at) VALUES(?,2,?,'now','now')",rusqlite::params![id,archived]).unwrap();
+            c.execute("INSERT INTO task_revisions(task_id,revision,title,content_hash,created_at) VALUES(?,2,?,'hash','now')",rusqlite::params![id,format!("Current {id}")]).unwrap();
+            c.execute("INSERT INTO knowledge_draft_versions(task_id,revision,derivation_kind,article_type,title,body_markdown,content_hash,applicability_id,result_json,quality_state,model_status) VALUES(?,1,'legacy','guide','Guide','Body','hash','app','{}','valid','supplied')",[id]).unwrap();
+            c.execute("INSERT INTO knowledge_pointers(task_id,published_revision,publication_path) VALUES(?,?,'Knowledge/Guide.md')",rusqlite::params![id,published]).unwrap();
+        }
+        let tasks = associated_tasks(&db, "Knowledge/Guide.md").unwrap();
+        assert_eq!(tasks.as_array().unwrap().len(), 2);
+        assert_eq!(tasks[0]["title"], "Current one");
+        assert_eq!(tasks[1]["id"], "two");
+        assert_eq!(associated_tasks(&db, "Unrelated.md").unwrap(), json!([]));
+        for (index, id) in [(1, "one"), (2, "two")] {
+            c.execute("INSERT INTO knowledge_archive_proposals(proposal_id,request_id,request_hash,task_id,knowledge_revision,proposal_hash,outcome,payload_json) VALUES(?1,?1,'hash',?2,1,'hash','ready','{}')",rusqlite::params![format!("p{index}"),id]).unwrap();
+            c.execute("INSERT INTO knowledge_archive_operations(operation_id,proposal_id,proposal_version,payload_hash,state) VALUES(?1,?2,1,'hash','completed')",rusqlite::params![format!("o{index}"),format!("p{index}")]).unwrap();
+            c.execute("INSERT INTO knowledge_archive_revisions(document_id,revision,path,kind,body,operation_id) VALUES('doc',?1,'Knowledge/Old.md','knowledge','body',?2)",rusqlite::params![format!("r{index}"),format!("o{index}")]).unwrap();
+        }
+        c.execute("INSERT INTO knowledge_archive_current(document_id,revision,path,kind) VALUES('doc','r2','Knowledge/Moved.md','knowledge')",[]).unwrap();
+        assert_eq!(associated_tasks(&db, "Knowledge/Moved.md").unwrap(), tasks);
+        assert_eq!(
+            associated_tasks(&db, "Knowledge/Old.md").unwrap(),
+            json!([])
+        );
+        c.execute("UPDATE knowledge_archive_current SET withdrawn=1", [])
+            .unwrap();
+        assert_eq!(
+            associated_tasks(&db, "Knowledge/Moved.md").unwrap(),
+            json!([])
+        );
+    }
+}
