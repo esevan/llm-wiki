@@ -203,3 +203,11 @@ restores its remembered tab and drafts without a second modal or focus trap.
 Task tabs own a shared section spacing rule: the first panel starts one spacing
 step below Task actions, and subsequent panels use the same spacing without
 adding their own top margin. This applies to Refine, Work, Sessions, and Review.
+
+## Automatic incoming preparation
+
+While the app window is running, regardless of the selected screen, incoming Captures are prepared oldest first, one at a time. An existing running refinement pauses the automatic queue. Existing sessions, saved previews, failed generations and user conversations are not automatically overwritten or retried. Switching screens does not stop preparation. Closing the app stops picking new items; saved native job state is checked when reopened. Incoming items added through native tools are detected within five seconds. Unchanged polling results preserve card rendering.
+
+Cards show the refinement round and current state: refining, awaiting your review, or needs attention. Generated drafts wait for user review and explicit adoption. This queue does not apply proposals, create Tasks, or publish Knowledge. Further rounds use the existing refinement conversation.
+
+The existing Capture title/content preparation runs first. Automatic refinement waits for its current-source result to finish and be applied; failed, stale, or pending title jobs are not bypassed. It uses that saved context and does not write back to or regenerate the Capture title.

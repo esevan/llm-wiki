@@ -1,3 +1,4 @@
+import { advanceAutomaticRefinement, type RefinementProgress } from "./automaticRefinement";
 import { taskMoveError } from "./taskMove";
 import { ItemActionsMenu, type TaskMove } from "./ItemActionsMenu";
 import { taskTitleLength, validTaskTitle } from "../../services/taskTitle";
@@ -129,6 +130,40 @@ export function WorkbenchView({ active, taskApplication, onTaskApplication, onPr
       if (sequence === boardLoadSequence.current) setError(String(e instanceof Error ? e.message : e));
     }
   }, []);
+  const [refinementProgress, setRefinementProgress] = useState<Record<string, RefinementProgress>>({});
+  const automaticAttempts = useRef(new Set<string>());
+  const automaticBusy = useRef(false);
+  const automaticallyOpened = useRef(new Set<string>());
+  useEffect(() => {
+    let stopped = false;
+    const tick = async () => {
+      if (stopped || automaticBusy.current) return;
+      automaticBusy.current = true;
+      try {
+        const fetched = await taskClient.workbench();
+        if (stopped) return;
+        const next = { ...fetched, categories: fetched.categories ?? [], refiningShortcuts: fetched.refiningShortcuts ?? [], activeShortcuts: fetched.activeShortcuts ?? [] };
+        // Polling observes native/MCP arrivals, but identical data must not redraw cards.
+        setSnapshot(current => JSON.stringify(current) === JSON.stringify(next) ? current : next);
+        const changed = await advanceAutomaticRefinement(taskClient, next, automaticAttempts.current,
+          () => !stopped,
+          (key, progress) => { if (!stopped) setRefinementProgress(current =>
+            current[key]?.round === progress.round && current[key]?.state === progress.state ? current : { ...current, [key]: progress }); }, automaticallyOpened.current);
+        if (changed && !stopped) await load();
+      } catch (cause) {
+        if (!stopped) { await load(); setError(String(cause instanceof Error ? cause.message : cause)); }
+      } finally { automaticBusy.current = false; }
+    };
+    const refresh = () => void tick();
+    const timer = window.setInterval(refresh, 5000);
+    window.addEventListener("llm-wiki:task-workbench-refresh", refresh);
+    window.addEventListener("llm-wiki:queue-changed", refresh);
+    return () => {
+      stopped = true; window.clearInterval(timer);
+      window.removeEventListener("llm-wiki:task-workbench-refresh", refresh);
+      window.removeEventListener("llm-wiki:queue-changed", refresh);
+    };
+  }, [load]);
   useEffect(() => {
     if (active) void load();
     else closeLegacyDock();
@@ -322,6 +357,14 @@ export function WorkbenchView({ active, taskApplication, onTaskApplication, onPr
               ? text.captureOrganized : ""}
       </small>}
       {item.kind === "task" && item.originCaptureText && <p className="workbench-card-category workbench-card-preview">{text.originalCapture}: {item.originCaptureText}</p>}
+      {refinementProgress[`${item.kind}:${item.id}`] && (
+        <small className="refinement-card-progress" role="status">
+          {text.inbox}<span aria-hidden="true"> › </span>
+          {text.refinementRound.replace("{round}", String(refinementProgress[`${item.kind}:${item.id}`].round))}
+          <span aria-hidden="true"> › </span>
+          {text.refinementStates[refinementProgress[`${item.kind}:${item.id}`].state]}
+        </small>
+      )}
       {item.kind === "capture" && item.hasImage && <small>{text.attachedImage}</small>}
       {item.kind === "task" && item.parentTaskId && <small>{text.subtask}</small>}
       <p className="workbench-card-category">{categoryLabels.get(`${item.kind}:${item.id}`)}</p>
